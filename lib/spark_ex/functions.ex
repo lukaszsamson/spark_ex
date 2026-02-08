@@ -2,6 +2,9 @@ defmodule SparkEx.Functions do
   @moduledoc """
   Expression constructors for Spark DataFrame operations.
 
+  Provides core constructors (`col/1`, `lit/1`, `expr/1`) and a comprehensive
+  set of Spark SQL functions generated from a declarative registry.
+
   These functions create `SparkEx.Column` structs that can be used in
   DataFrame transforms like `select/2`, `filter/2`, `with_column/3`, etc.
 
@@ -14,9 +17,12 @@ defmodule SparkEx.Functions do
       |> SparkEx.DataFrame.filter(col("age") |> SparkEx.Column.gt(lit(18)))
   """
 
-  alias SparkEx.Column
+  import Kernel, except: [abs: 1, ceil: 1, floor: 1, round: 1, length: 1, struct: 1, struct: 2]
 
-  # --- Core constructors ---
+  alias SparkEx.Column
+  require SparkEx.Macros.FunctionGen
+
+  # ── Core constructors (hand-written) ──
 
   @doc """
   Creates a column reference by name.
@@ -69,7 +75,7 @@ defmodule SparkEx.Functions do
     %Column{expr: {:star}}
   end
 
-  # --- Sort helpers ---
+  # ── Sort helpers (hand-written delegates) ──
 
   @doc "Sort ascending by the given column"
   @spec asc(Column.t()) :: Column.t()
@@ -79,37 +85,18 @@ defmodule SparkEx.Functions do
   @spec desc(Column.t()) :: Column.t()
   defdelegate desc(col), to: Column
 
-  # --- Aggregate functions ---
+  # ── Generated functions from registry ──
 
-  @doc "Count the number of non-null values"
-  @spec count(Column.t()) :: Column.t()
-  def count(%Column{} = col), do: agg_fn("count", col)
+  SparkEx.Macros.FunctionGen.generate_functions()
 
-  @doc "Sum of values"
-  @spec sum(Column.t()) :: Column.t()
-  def sum(%Column{} = col), do: agg_fn("sum", col)
+  # ── Internal helpers (used by generated functions) ──
 
-  @doc "Average of values"
-  @spec avg(Column.t()) :: Column.t()
-  def avg(%Column{} = col), do: agg_fn("avg", col)
+  @doc false
+  def to_expr(%Column{expr: e}), do: e
+  def to_expr(name) when is_binary(name), do: {:col, name}
+  def to_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
 
-  @doc "Minimum value"
-  @spec min(Column.t()) :: Column.t()
-  def min(%Column{} = col), do: agg_fn("min", col)
-
-  @doc "Maximum value"
-  @spec max(Column.t()) :: Column.t()
-  def max(%Column{} = col), do: agg_fn("max", col)
-
-  @doc "Count of distinct non-null values"
-  @spec count_distinct(Column.t()) :: Column.t()
-  def count_distinct(%Column{} = col) do
-    %Column{expr: {:fn, "count", [col.expr], true}}
-  end
-
-  # --- Private ---
-
-  defp agg_fn(name, %Column{} = col) do
-    %Column{expr: {:fn, name, [col.expr], false}}
-  end
+  @doc false
+  def lit_expr(%Column{expr: e}), do: e
+  def lit_expr(value), do: {:lit, value}
 end
