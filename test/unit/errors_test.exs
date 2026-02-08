@@ -26,6 +26,67 @@ defmodule SparkEx.Connect.ErrorsTest do
     end
   end
 
+  describe "from_grpc_error/2 with ErrorInfo details" do
+    test "maps metadata into structured remote error without fetch call" do
+      error_info = %Google.Rpc.ErrorInfo{
+        reason: "spark",
+        domain: "spark",
+        metadata: %{
+          "errorClass" => "ANALYSIS.ERROR",
+          "sqlState" => "42000",
+          "message" => "analysis failed",
+          "messageParameters" => ~s({"a":"1"})
+        }
+      }
+
+      details = [
+        %Google.Protobuf.Any{
+          type_url: "type.googleapis.com/google.rpc.ErrorInfo",
+          value: Protobuf.encode(error_info)
+        }
+      ]
+
+      grpc_error = %GRPC.RPCError{status: 3, message: "bad request", details: details}
+      session = build_fake_session()
+
+      error = Errors.from_grpc_error(grpc_error, session)
+
+      assert %Remote{} = error
+      assert error.error_class == "ANALYSIS.ERROR"
+      assert error.sql_state == "42000"
+      assert error.server_message == "analysis failed"
+      assert error.message_parameters == %{"a" => "1"}
+      assert error.grpc_status == 3
+    end
+
+    test "falls back to base metadata when errorId exists but fetch is unavailable" do
+      error_info = %Google.Rpc.ErrorInfo{
+        reason: "spark",
+        domain: "spark",
+        metadata: %{
+          "errorId" => "id-1",
+          "errorClass" => "ANALYSIS.ERROR"
+        }
+      }
+
+      details = [
+        %Google.Protobuf.Any{
+          type_url: "type.googleapis.com/google.rpc.ErrorInfo",
+          value: Protobuf.encode(error_info)
+        }
+      ]
+
+      grpc_error = %GRPC.RPCError{status: 3, message: "bad request", details: details}
+      session = build_fake_session()
+
+      error = Errors.from_grpc_error(grpc_error, session)
+
+      assert %Remote{} = error
+      assert error.error_class == "ANALYSIS.ERROR"
+      assert error.grpc_status == 3
+    end
+  end
+
   describe "SparkEx.Error.Remote exception" do
     test "message/1 formats error with class and sql_state" do
       error = %Remote{

@@ -26,6 +26,12 @@ defmodule SparkEx.DataFrameTest do
       df = SparkEx.sql(self(), "SELECT ?", args: [42])
       assert %DataFrame{plan: {:sql, "SELECT ?", [42]}} = df
     end
+
+    test "raises for invalid SQL args type" do
+      assert_raise ArgumentError, ~r/expected :args to be a list, map, or nil/, fn ->
+        SparkEx.sql(self(), "SELECT ?", args: MapSet.new([1, 2, 3]))
+      end
+    end
   end
 
   describe "SparkEx.range/3" do

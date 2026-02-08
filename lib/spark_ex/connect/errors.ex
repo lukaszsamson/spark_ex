@@ -136,12 +136,16 @@ defmodule SparkEx.Connect.Errors do
       error_id: error_id
     }
 
-    case Stub.fetch_error_details(session.channel, request) do
-      {:ok, %FetchErrorDetailsResponse{} = resp} ->
-        {:ok, resp}
+    try do
+      case Stub.fetch_error_details(session.channel, request) do
+        {:ok, %FetchErrorDetailsResponse{} = resp} ->
+          {:ok, resp}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
+    rescue
+      e -> {:error, e}
     end
   end
 

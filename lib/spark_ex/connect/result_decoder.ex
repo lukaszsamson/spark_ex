@@ -19,7 +19,8 @@ defmodule SparkEx.Connect.ResultDecoder do
           {:missing_dependency, :explorer}
           | {:incomplete_arrow_batch, map()}
           | {:invalid_arrow_batch, String.t()}
-          | {:invalid_arrow_batch_row_count, %{expected: non_neg_integer(), got: non_neg_integer()}}
+          | {:invalid_arrow_batch_row_count,
+             %{expected: non_neg_integer(), got: non_neg_integer()}}
           | {:arrow_decode_failed, term()}
 
   @doc """
@@ -170,7 +171,8 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
-  defp validate_batch_start_offset(_state, %ExecutePlanResponse.ArrowBatch{start_offset: nil}), do: :ok
+  defp validate_batch_start_offset(_state, %ExecutePlanResponse.ArrowBatch{start_offset: nil}),
+    do: :ok
 
   defp validate_batch_start_offset(state, %ExecutePlanResponse.ArrowBatch{start_offset: offset})
        when is_integer(offset) do

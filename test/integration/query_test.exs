@@ -40,6 +40,24 @@ defmodule SparkEx.Integration.QueryTest do
       assert {:ok, rows} = SparkEx.DataFrame.collect(df)
       assert length(rows) == 3
     end
+
+    test "SQL with named args", %{session: session} do
+      df = SparkEx.sql(session, "SELECT :id AS id, :name AS name", args: %{id: 7, name: "alice"})
+      assert {:ok, rows} = SparkEx.DataFrame.collect(df)
+      assert [%{"id" => 7, "name" => "alice"}] = rows
+    end
+
+    test "SQL with positional args", %{session: session} do
+      df = SparkEx.sql(session, "SELECT ? AS id, ? AS name", args: [9, "bob"])
+      assert {:ok, rows} = SparkEx.DataFrame.collect(df)
+      assert [%{"id" => 9, "name" => "bob"}] = rows
+    end
+
+    test "SQL with invalid args type raises", %{session: session} do
+      assert_raise ArgumentError, ~r/expected :args to be a list, map, or nil/, fn ->
+        SparkEx.sql(session, "SELECT 1", args: MapSet.new([1, 2, 3]))
+      end
+    end
   end
 
   describe "range" do
@@ -95,6 +113,21 @@ defmodule SparkEx.Integration.QueryTest do
       assert {:ok, explain_str} = SparkEx.DataFrame.explain(df, :extended)
       assert is_binary(explain_str)
     end
+
+    test "all explain modes return non-empty output", %{session: session} do
+      df = SparkEx.sql(session, "SELECT 1 AS n")
+
+      for mode <- [:simple, :extended, :codegen, :cost, :formatted] do
+        assert {:ok, explain_str} = SparkEx.DataFrame.explain(df, mode)
+        assert is_binary(explain_str)
+        assert String.length(explain_str) > 0
+      end
+    end
+
+    test "invalid explain mode returns error", %{session: session} do
+      df = SparkEx.sql(session, "SELECT 1 AS n")
+      assert {:error, {:invalid_explain_mode, :unknown}} = SparkEx.DataFrame.explain(df, :unknown)
+    end
   end
 
   describe "config" do
@@ -102,6 +135,48 @@ defmodule SparkEx.Integration.QueryTest do
       assert :ok = SparkEx.config_set(session, [{"spark.sql.shuffle.partitions", "10"}])
       assert {:ok, pairs} = SparkEx.config_get(session, ["spark.sql.shuffle.partitions"])
       assert [{"spark.sql.shuffle.partitions", "10"}] = pairs
+    end
+
+    test "unknown key returns structured error", %{session: session} do
+      key = "spark_ex.this.key.should.not.exist"
+      assert {:error, %SparkEx.Error.Remote{} = error} = SparkEx.config_get(session, [key])
+      assert error.error_class == "SQL_CONF_NOT_FOUND"
+      assert error.sql_state == "42K0I"
+    end
+  end
+
+  describe "session continuity" do
+    test "tracks server-side session id across requests", %{session: session} do
+      state_before = SparkEx.Session.get_state(session)
+      assert state_before.server_side_session_id in [nil, ""]
+
+      assert {:ok, _} = SparkEx.spark_version(session)
+      state_after_version = SparkEx.Session.get_state(session)
+      assert is_binary(state_after_version.server_side_session_id)
+      assert state_after_version.server_side_session_id != ""
+
+      _ = SparkEx.sql(session, "SELECT 1") |> SparkEx.DataFrame.collect()
+      state_after_collect = SparkEx.Session.get_state(session)
+
+      assert state_after_collect.server_side_session_id ==
+               state_after_version.server_side_session_id
+    end
+  end
+
+  describe "chunking behavior" do
+    test "collect succeeds for query shape likely to trigger chunking", %{session: session} do
+      :ok =
+        SparkEx.config_set(session, [
+          {"spark.connect.session.resultChunking.maxChunkSize", "1024"}
+        ])
+
+      df =
+        SparkEx.sql(session, "SELECT id, CAST(id + 0.5 AS DOUBLE) AS d FROM range(0, 2000, 1, 4)")
+
+      assert {:ok, rows} = SparkEx.DataFrame.collect(df)
+      assert length(rows) == 2000
+      assert hd(rows)["id"] == 0
+      assert List.last(rows)["id"] == 1999
     end
   end
 

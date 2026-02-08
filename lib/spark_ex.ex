@@ -53,6 +53,7 @@ defmodule SparkEx do
   @spec sql(GenServer.server(), String.t(), keyword()) :: SparkEx.DataFrame.t()
   def sql(session, query, opts \\ []) do
     args = Keyword.get(opts, :args, nil)
+    validate_sql_args!(args)
     %SparkEx.DataFrame{session: session, plan: {:sql, query, args}}
   end
 
@@ -94,5 +95,14 @@ defmodule SparkEx do
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get(session, keys) do
     SparkEx.Session.config_get(session, keys)
+  end
+
+  defp validate_sql_args!(nil), do: :ok
+  defp validate_sql_args!(args) when is_list(args), do: :ok
+  defp validate_sql_args!(args) when is_map(args) and not is_struct(args), do: :ok
+
+  defp validate_sql_args!(args) do
+    raise ArgumentError,
+          "expected :args to be a list, map, or nil, got: #{inspect(args)}"
   end
 end

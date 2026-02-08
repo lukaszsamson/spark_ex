@@ -120,8 +120,7 @@ defmodule SparkEx.Connect.Client do
       request_options: [
         %ExecutePlanRequest.RequestOption{
           request_option:
-            {:result_chunking_options,
-             %ResultChunkingOptions{allow_arrow_batch_chunking: true}}
+            {:result_chunking_options, %ResultChunkingOptions{allow_arrow_batch_chunking: true}}
         }
       ]
     }

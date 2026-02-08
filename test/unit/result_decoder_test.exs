@@ -97,6 +97,134 @@ defmodule SparkEx.Connect.ResultDecoderTest do
       assert message =~ "Expected chunk index 0"
     end
 
+    test "returns error for invalid continuation chunk index" do
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: <<1>>,
+                start_offset: 0,
+                chunk_index: 0,
+                num_chunks_in_batch: 2
+              }}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: <<2>>,
+                start_offset: 0,
+                chunk_index: 2,
+                num_chunks_in_batch: 2
+              }}
+         }}
+      ]
+
+      assert {:error, {:invalid_arrow_batch, message}} = ResultDecoder.decode_stream(stream)
+      assert message =~ "Expected chunk index 1"
+    end
+
+    test "returns error for mismatched continuation num_chunks_in_batch" do
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: <<1>>,
+                start_offset: 0,
+                chunk_index: 0,
+                num_chunks_in_batch: 2
+              }}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: <<2>>,
+                start_offset: 0,
+                chunk_index: 1,
+                num_chunks_in_batch: 3
+              }}
+         }}
+      ]
+
+      assert {:error, {:invalid_arrow_batch, message}} = ResultDecoder.decode_stream(stream)
+      assert message =~ "Expected num_chunks_in_batch 2"
+    end
+
+    test "returns error for mismatched continuation row_count" do
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: <<1>>,
+                start_offset: 0,
+                chunk_index: 0,
+                num_chunks_in_batch: 2
+              }}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 2,
+                data: <<2>>,
+                start_offset: 0,
+                chunk_index: 1,
+                num_chunks_in_batch: 2
+              }}
+         }}
+      ]
+
+      assert {:error, {:invalid_arrow_batch, message}} = ResultDecoder.decode_stream(stream)
+      assert message =~ "Expected consistent row_count 1"
+    end
+
+    test "returns error for mismatched continuation start_offset" do
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: <<1>>,
+                start_offset: 0,
+                chunk_index: 0,
+                num_chunks_in_batch: 2
+              }}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: <<2>>,
+                start_offset: 10,
+                chunk_index: 1,
+                num_chunks_in_batch: 2
+              }}
+         }}
+      ]
+
+      assert {:error, {:invalid_arrow_batch, message}} = ResultDecoder.decode_stream(stream)
+      assert message =~ "Expected consistent start_offset"
+    end
+
     test "enriches streamed grpc errors when session is provided" do
       stream = [{:error, %GRPC.RPCError{status: 3, message: "bad request"}}]
 
@@ -107,7 +235,9 @@ defmodule SparkEx.Connect.ResultDecoderTest do
         client_type: "test"
       }
 
-      assert {:error, %SparkEx.Error.Remote{} = error} = ResultDecoder.decode_stream(stream, session)
+      assert {:error, %SparkEx.Error.Remote{} = error} =
+               ResultDecoder.decode_stream(stream, session)
+
       assert error.grpc_status == 3
       assert error.message == "bad request"
     end
