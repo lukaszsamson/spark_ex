@@ -6,7 +6,7 @@ Targets Spark 4.1.1. See `SPEC_V1.md` for the full design.
 
 ## Status
 
-Milestones 0 through 5 are complete (328 tests passing against Spark 4.1.1).
+Milestones 0 through 6 are complete (355 tests passing against Spark 4.1.1).
 
 ### Milestone 0 &mdash; Foundations
 
@@ -61,6 +61,15 @@ Milestones 0 through 5 are complete (328 tests passing against Spark 4.1.1).
 - `SparkEx.interrupt_operation/2` &mdash; interrupt a specific operation by ID
 - `DataFrame.tag/2` &mdash; attach operation tags to DataFrames (propagated to `ExecutePlanRequest.tags`)
 - Telemetry spans for `release_session` and `interrupt` RPCs
+
+### Milestone 6 &mdash; Reattachable Execute
+
+- Reattachable execution enabled by default &mdash; `ExecutePlanRequest` includes `operation_id` and `ReattachOptions{reattachable: true}`
+- Mid-stream disconnect recovery via `ReattachExecute` RPC with `last_response_id` tracking
+- Automatic `ReleaseExecute` RPC after successful stream consumption to free server-side cached results
+- Exponential backoff with jitter between reattach attempts (reuses retry parameters)
+- Opt-out via `reattachable: false` option (falls back to simple retry-from-scratch)
+- Telemetry events: `[:spark_ex, :reattach, :attempt]`, `[:spark_ex, :rpc, :start/stop]` for `release_execute`
 
 ## Quick start
 
@@ -332,8 +341,8 @@ notebooks/
   spark_ex_demo.livemd             # Interactive Livebook demo (Kino.Render, preview, etc.)
 
 test/
-  unit/                            # Unit tests (no server needed, 225 tests)
-  integration/                     # Integration tests (tagged :integration, 64 tests)
+  unit/                            # Unit tests (no server needed, 263 tests)
+  integration/                     # Integration tests (tagged :integration, 92 tests)
   spark-4.1.1-bin-hadoop3-connect/ # Spark distribution (download separately, gitignored)
   run_integration.sh               # One-command integration test runner
 ```
