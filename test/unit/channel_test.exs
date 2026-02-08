@@ -35,6 +35,18 @@ defmodule SparkEx.Connect.ChannelTest do
       assert opts.token == "mytoken123"
     end
 
+    test "parses auth_transport parameter" do
+      assert {:ok, opts} =
+               Channel.parse_uri("sc://localhost:15002/;token=mytoken123;auth_transport=metadata")
+
+      assert opts.auth_transport == :metadata
+    end
+
+    test "rejects invalid auth_transport parameter" do
+      assert {:error, {:invalid_auth_transport, "invalid"}} =
+               Channel.parse_uri("sc://localhost:15002/;auth_transport=invalid")
+    end
+
     test "parses multiple parameters" do
       uri = "sc://spark-host:15002/;use_ssl=true;token=abc123;custom_key=custom_value"
       assert {:ok, opts} = Channel.parse_uri(uri)
@@ -42,6 +54,7 @@ defmodule SparkEx.Connect.ChannelTest do
       assert opts.port == 15002
       assert opts.use_ssl == true
       assert opts.token == "abc123"
+      assert opts.auth_transport == :auto
       assert opts.extra_params == %{"custom_key" => "custom_value"}
     end
 
@@ -84,6 +97,7 @@ defmodule SparkEx.Connect.ChannelTest do
         port: 15002,
         use_ssl: false,
         token: "abc",
+        auth_transport: :auto,
         extra_params: %{"x-my-header" => "v1", "custom" => "v2"}
       }
 
@@ -100,6 +114,7 @@ defmodule SparkEx.Connect.ChannelTest do
         port: 15002,
         use_ssl: false,
         token: "abc",
+        auth_transport: :auto,
         extra_params: %{
           "session_id" => "123",
           "user_agent" => "ua",
@@ -126,11 +141,27 @@ defmodule SparkEx.Connect.ChannelTest do
         port: 15002,
         use_ssl: false,
         token: "abc",
+        auth_transport: :auto,
         extra_params: %{}
       }
 
       grpc_opts = Channel.build_grpc_opts(opts)
       assert %GRPC.Credential{} = Keyword.fetch!(grpc_opts, :cred)
+    end
+
+    test "token authorization overrides custom authorization header" do
+      opts = %{
+        host: "host",
+        port: 15002,
+        use_ssl: true,
+        token: "abc",
+        auth_transport: :metadata,
+        extra_params: %{"authorization" => "Basic 123"}
+      }
+
+      grpc_opts = Channel.build_grpc_opts(opts)
+      assert %{metadata: md} = Enum.into(grpc_opts, %{})
+      assert md["authorization"] == "Bearer abc"
     end
   end
 end

@@ -23,6 +23,8 @@ defmodule SparkEx do
   - `:user_id` — user identifier (default: `"spark_ex"`)
   - `:client_type` — client type string (default: auto-generated)
   - `:session_id` — custom session UUID (default: auto-generated)
+  - `:allow_arrow_batch_chunking` — allow server-side Arrow chunk splitting (default: `true`)
+  - `:preferred_arrow_chunk_size` — preferred chunk size in bytes (default: `nil`)
   """
   @spec connect(keyword()) :: {:ok, pid()} | {:error, term()}
   def connect(opts) do
@@ -131,6 +133,70 @@ defmodule SparkEx do
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get(session, keys) do
     SparkEx.Session.config_get(session, keys)
+  end
+
+  @doc """
+  Gets Spark configuration values with fallback defaults.
+  """
+  @spec config_get_with_default(GenServer.server(), [{String.t(), String.t()}]) ::
+          {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
+  def config_get_with_default(session, pairs) do
+    SparkEx.Session.config_get_with_default(session, pairs)
+  end
+
+  @doc """
+  Gets optional Spark configuration values (returns nil for unset keys).
+  """
+  @spec config_get_option(GenServer.server(), [String.t()]) ::
+          {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
+  def config_get_option(session, keys) do
+    SparkEx.Session.config_get_option(session, keys)
+  end
+
+  @doc """
+  Gets all Spark configuration values, optionally filtered by prefix.
+  """
+  @spec config_get_all(GenServer.server(), String.t() | nil) ::
+          {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
+  def config_get_all(session, prefix \\ nil) do
+    SparkEx.Session.config_get_all(session, prefix)
+  end
+
+  @doc """
+  Unsets Spark configuration values.
+  """
+  @spec config_unset(GenServer.server(), [String.t()]) :: :ok | {:error, term()}
+  def config_unset(session, keys) do
+    SparkEx.Session.config_unset(session, keys)
+  end
+
+  @doc """
+  Checks whether configuration keys are modifiable at runtime.
+  """
+  @spec config_is_modifiable(GenServer.server(), [String.t()]) ::
+          {:ok, [{String.t(), String.t()}]} | {:error, term()}
+  def config_is_modifiable(session, keys) do
+    SparkEx.Session.config_is_modifiable(session, keys)
+  end
+
+  @doc """
+  Checks existence of artifacts on the server.
+  """
+  @spec artifact_status(GenServer.server(), [String.t()]) ::
+          {:ok, %{String.t() => boolean()}} | {:error, term()}
+  def artifact_status(session, names) do
+    SparkEx.Session.artifact_status(session, names)
+  end
+
+  @doc """
+  Uploads artifacts to the server.
+
+  Artifacts are provided as a list of `{name, data}` tuples.
+  """
+  @spec add_artifacts(GenServer.server(), [{String.t(), binary()}]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_artifacts(session, artifacts) do
+    SparkEx.Session.add_artifacts(session, artifacts)
   end
 
   @doc """

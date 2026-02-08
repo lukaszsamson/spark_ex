@@ -10,6 +10,7 @@ defmodule SparkEx.Connect.Channel do
           port: non_neg_integer(),
           use_ssl: boolean(),
           token: String.t() | nil,
+          auth_transport: :auto | :metadata,
           extra_params: %{String.t() => String.t()}
         }
 
@@ -25,6 +26,7 @@ defmodule SparkEx.Connect.Channel do
   Supported parameters:
   - `use_ssl` — `"true"` enables TLS (default: `false`)
   - `token` — bearer token for auth
+  - `auth_transport` — `"auto"` (default) or `"metadata"`
 
   ## Examples
 
@@ -37,7 +39,8 @@ defmodule SparkEx.Connect.Channel do
   @spec parse_uri(String.t()) :: {:ok, connect_opts()} | {:error, term()}
   def parse_uri(uri_string) when is_binary(uri_string) do
     with {:ok, {host, port, params_string}} <- split_uri(uri_string),
-         {:ok, params} <- parse_params(params_string) do
+         {:ok, params} <- parse_params(params_string),
+         {:ok, auth_transport, params} <- pop_auth_transport(params) do
       {token, rest} = Map.pop(params, "token")
       {use_ssl_str, rest} = Map.pop(rest, "use_ssl", "false")
 
@@ -47,6 +50,7 @@ defmodule SparkEx.Connect.Channel do
          port: port,
          use_ssl: use_ssl_str == "true",
          token: token,
+         auth_transport: auth_transport,
          extra_params: rest
        }}
     end
@@ -91,13 +95,14 @@ defmodule SparkEx.Connect.Channel do
           grpc_opts
 
         {token, 0} when is_binary(token) ->
-          Keyword.put(grpc_opts, :metadata, %{"authorization" => "Bearer #{token}"})
+          auth_metadata = auth_metadata_fallback(opts, token)
+          Keyword.put(grpc_opts, :metadata, auth_metadata)
 
         {nil, _} ->
           Keyword.put(grpc_opts, :metadata, extra_metadata)
 
         {token, _} ->
-          md = Map.put(extra_metadata, "authorization", "Bearer #{token}")
+          md = Map.merge(extra_metadata, auth_metadata_fallback(opts, token))
           Keyword.put(grpc_opts, :metadata, md)
       end
 
@@ -166,6 +171,27 @@ defmodule SparkEx.Connect.Channel do
     case pairs do
       {:error, _} = err -> err
       map when is_map(map) -> {:ok, map}
+    end
+  end
+
+  defp pop_auth_transport(params) do
+    {value, rest} = Map.pop(params, "auth_transport", "auto")
+
+    case String.downcase(value) do
+      "auto" -> {:ok, :auto, rest}
+      "metadata" -> {:ok, :metadata, rest}
+      invalid -> {:error, {:invalid_auth_transport, invalid}}
+    end
+  end
+
+  defp auth_metadata_fallback(opts, token) when is_binary(token) do
+    case Map.get(opts, :auth_transport, :auto) do
+      :metadata ->
+        %{"authorization" => "Bearer #{token}"}
+
+      :auto ->
+        # grpc-elixir currently has no call-credential support; use metadata fallback.
+        %{"authorization" => "Bearer #{token}"}
     end
   end
 end

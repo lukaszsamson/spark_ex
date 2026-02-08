@@ -6,7 +6,7 @@ Targets Spark 4.1.1. See `SPEC_V1.md` for the full design.
 
 ## Status
 
-Milestones 0 through 6 are complete (355 tests passing against Spark 4.1.1).
+Milestones 0 through 7 are complete (313 unit tests + integration tests passing against Spark 4.1.1).
 
 ### Milestone 0 &mdash; Foundations
 
@@ -70,6 +70,18 @@ Milestones 0 through 6 are complete (355 tests passing against Spark 4.1.1).
 - Exponential backoff with jitter between reattach attempts (reuses retry parameters)
 - Opt-out via `reattachable: false` option (falls back to simple retry-from-scratch)
 - Telemetry events: `[:spark_ex, :reattach, :attempt]`, `[:spark_ex, :rpc, :start/stop]` for `release_execute`
+
+### Milestone 7 &mdash; Protocol Completion Foundation
+
+- Full `AnalyzePlan` coverage (14/14 operations): `tree_string`, `is_local`, `is_streaming`, `input_files`, `ddl_parse`, `json_to_ddl`, `same_semantics`, `semantic_hash`, `persist`, `unpersist`, `get_storage_level` (plus existing `spark_version`, `schema`, `explain`)
+- Full `Config` coverage (7/7 operations): `get_with_default`, `get_option`, `get_all`, `unset`, `is_modifiable` (plus existing `set`, `get`)
+- `AddArtifacts` RPC &mdash; client-streaming artifact upload with mixed batch/chunked mode and CRC verification
+- `ArtifactStatus` RPC &mdash; check existence of artifacts on the server
+- Configurable execute chunking options: `allow_arrow_batch_chunking` and `preferred_arrow_chunk_size`
+- `DataFrame.persist/2`, `unpersist/2`, `storage_level/1` &mdash; cache/persistence management
+- `DataFrame.tree_string/2`, `is_local/1`, `is_streaming/1`, `input_files/1` &mdash; plan introspection
+- `DataFrame.same_semantics/2`, `semantic_hash/1` &mdash; semantic comparison
+- `SparkEx.config_get_with_default/2`, `config_get_option/2`, `config_get_all/2`, `config_unset/2`, `config_is_modifiable/2` &mdash; expanded config API
 
 ## Quick start
 
@@ -341,8 +353,8 @@ notebooks/
   spark_ex_demo.livemd             # Interactive Livebook demo (Kino.Render, preview, etc.)
 
 test/
-  unit/                            # Unit tests (no server needed, 263 tests)
-  integration/                     # Integration tests (tagged :integration, 92 tests)
+  unit/                            # Unit tests (no server needed, 313 tests)
+  integration/                     # Integration tests (tagged :integration, 122 tests)
   spark-4.1.1-bin-hadoop3-connect/ # Spark distribution (download separately, gitignored)
   run_integration.sh               # One-command integration test runner
 ```

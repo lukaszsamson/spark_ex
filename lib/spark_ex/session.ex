@@ -21,6 +21,8 @@ defmodule SparkEx.Session do
     :server_side_session_id,
     :user_id,
     :client_type,
+    allow_arrow_batch_chunking: true,
+    preferred_arrow_chunk_size: nil,
     plan_id_counter: 0,
     released: false
   ]
@@ -32,6 +34,8 @@ defmodule SparkEx.Session do
           server_side_session_id: String.t() | nil,
           user_id: String.t(),
           client_type: String.t(),
+          allow_arrow_batch_chunking: boolean(),
+          preferred_arrow_chunk_size: non_neg_integer() | nil,
           plan_id_counter: non_neg_integer(),
           released: boolean()
         }
@@ -47,6 +51,8 @@ defmodule SparkEx.Session do
   - `:user_id` — user identifier (default: `"spark_ex"`)
   - `:client_type` — client type string (default: auto-generated)
   - `:session_id` — custom session UUID (default: auto-generated)
+  - `:allow_arrow_batch_chunking` — allow server-side Arrow chunk splitting (default: `true`)
+  - `:preferred_arrow_chunk_size` — preferred chunk size in bytes (default: `nil`)
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -171,6 +177,167 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Gets Spark configuration values with fallback defaults.
+  """
+  @spec config_get_with_default(GenServer.server(), [{String.t(), String.t()}]) ::
+          {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
+  def config_get_with_default(session, pairs) do
+    GenServer.call(session, {:config_get_with_default, pairs})
+  end
+
+  @doc """
+  Gets optional Spark configuration values (returns nil for unset keys).
+  """
+  @spec config_get_option(GenServer.server(), [String.t()]) ::
+          {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
+  def config_get_option(session, keys) do
+    GenServer.call(session, {:config_get_option, keys})
+  end
+
+  @doc """
+  Gets all Spark configuration values, optionally filtered by prefix.
+  """
+  @spec config_get_all(GenServer.server(), String.t() | nil) ::
+          {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
+  def config_get_all(session, prefix \\ nil) do
+    GenServer.call(session, {:config_get_all, prefix})
+  end
+
+  @doc """
+  Unsets Spark configuration values.
+  """
+  @spec config_unset(GenServer.server(), [String.t()]) :: :ok | {:error, term()}
+  def config_unset(session, keys) do
+    GenServer.call(session, {:config_unset, keys})
+  end
+
+  @doc """
+  Checks whether configuration keys are modifiable at runtime.
+  """
+  @spec config_is_modifiable(GenServer.server(), [String.t()]) ::
+          {:ok, [{String.t(), String.t()}]} | {:error, term()}
+  def config_is_modifiable(session, keys) do
+    GenServer.call(session, {:config_is_modifiable, keys})
+  end
+
+  @doc """
+  Returns the tree-string representation of a plan.
+  """
+  @spec analyze_tree_string(GenServer.server(), term(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def analyze_tree_string(session, plan, opts \\ []) do
+    GenServer.call(session, {:analyze_tree_string, plan, opts})
+  end
+
+  @doc """
+  Checks if a plan is local (i.e., can be computed locally without Spark).
+  """
+  @spec analyze_is_local(GenServer.server(), term()) :: {:ok, boolean()} | {:error, term()}
+  def analyze_is_local(session, plan) do
+    GenServer.call(session, {:analyze_is_local, plan})
+  end
+
+  @doc """
+  Checks if a plan represents a streaming query.
+  """
+  @spec analyze_is_streaming(GenServer.server(), term()) :: {:ok, boolean()} | {:error, term()}
+  def analyze_is_streaming(session, plan) do
+    GenServer.call(session, {:analyze_is_streaming, plan})
+  end
+
+  @doc """
+  Returns the input files for a plan.
+  """
+  @spec analyze_input_files(GenServer.server(), term()) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def analyze_input_files(session, plan) do
+    GenServer.call(session, {:analyze_input_files, plan})
+  end
+
+  @doc """
+  Parses a DDL string into a DataType.
+  """
+  @spec analyze_ddl_parse(GenServer.server(), String.t()) :: {:ok, term()} | {:error, term()}
+  def analyze_ddl_parse(session, ddl_string) do
+    GenServer.call(session, {:analyze_ddl_parse, ddl_string})
+  end
+
+  @doc """
+  Converts a JSON schema string to DDL format.
+  """
+  @spec analyze_json_to_ddl(GenServer.server(), String.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def analyze_json_to_ddl(session, json_string) do
+    GenServer.call(session, {:analyze_json_to_ddl, json_string})
+  end
+
+  @doc """
+  Checks if two plans have the same semantics.
+  """
+  @spec analyze_same_semantics(GenServer.server(), term(), term()) ::
+          {:ok, boolean()} | {:error, term()}
+  def analyze_same_semantics(session, plan1, plan2) do
+    GenServer.call(session, {:analyze_same_semantics, plan1, plan2})
+  end
+
+  @doc """
+  Returns the semantic hash of a plan.
+  """
+  @spec analyze_semantic_hash(GenServer.server(), term()) ::
+          {:ok, integer()} | {:error, term()}
+  def analyze_semantic_hash(session, plan) do
+    GenServer.call(session, {:analyze_semantic_hash, plan})
+  end
+
+  @doc """
+  Persists a DataFrame's underlying relation with optional storage level.
+  """
+  @spec analyze_persist(GenServer.server(), term(), keyword()) :: :ok | {:error, term()}
+  def analyze_persist(session, plan, opts \\ []) do
+    GenServer.call(session, {:analyze_persist, plan, opts})
+  end
+
+  @doc """
+  Unpersists a DataFrame's underlying relation.
+  """
+  @spec analyze_unpersist(GenServer.server(), term(), keyword()) :: :ok | {:error, term()}
+  def analyze_unpersist(session, plan, opts \\ []) do
+    GenServer.call(session, {:analyze_unpersist, plan, opts})
+  end
+
+  @doc """
+  Returns the storage level of a persisted relation.
+  """
+  @spec analyze_get_storage_level(GenServer.server(), term()) ::
+          {:ok, Spark.Connect.StorageLevel.t()} | {:error, term()}
+  def analyze_get_storage_level(session, plan) do
+    GenServer.call(session, {:analyze_get_storage_level, plan})
+  end
+
+  @doc """
+  Checks existence of artifacts on the server.
+
+  Returns a map of artifact name to boolean.
+  """
+  @spec artifact_status(GenServer.server(), [String.t()]) ::
+          {:ok, %{String.t() => boolean()}} | {:error, term()}
+  def artifact_status(session, names) do
+    GenServer.call(session, {:artifact_status, names})
+  end
+
+  @doc """
+  Uploads artifacts to the server.
+
+  Artifacts are provided as a list of `{name, data}` tuples.
+  Returns a list of `{name, crc_successful?}` tuples.
+  """
+  @spec add_artifacts(GenServer.server(), [{String.t(), binary()}]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_artifacts(session, artifacts) do
+    GenServer.call(session, {:add_artifacts, artifacts})
+  end
+
+  @doc """
   Executes a ShowString plan and returns the formatted string.
   """
   @spec execute_show(GenServer.server(), term()) ::
@@ -241,6 +408,8 @@ defmodule SparkEx.Session do
     client_type = Keyword.get(opts, :client_type, default_client_type())
     session_id = Keyword.get(opts, :session_id, generate_uuid())
     observed_server_session_id = Keyword.get(opts, :server_side_session_id, nil)
+    allow_arrow_batch_chunking = Keyword.get(opts, :allow_arrow_batch_chunking, true)
+    preferred_arrow_chunk_size = Keyword.get(opts, :preferred_arrow_chunk_size, nil)
 
     with {:ok, connect_opts} <- resolve_connect_opts(url_opt, connect_opts_opt),
          {:ok, channel} <- Channel.connect(connect_opts) do
@@ -250,7 +419,9 @@ defmodule SparkEx.Session do
         session_id: session_id,
         server_side_session_id: observed_server_session_id,
         user_id: user_id,
-        client_type: client_type
+        client_type: client_type,
+        allow_arrow_batch_chunking: allow_arrow_batch_chunking,
+        preferred_arrow_chunk_size: preferred_arrow_chunk_size
       }
 
       {:ok, state}
@@ -279,7 +450,9 @@ defmodule SparkEx.Session do
           user_id: state.user_id,
           client_type: state.client_type,
           session_id: clone_info.new_session_id,
-          server_side_session_id: clone_info.new_server_side_session_id
+          server_side_session_id: clone_info.new_server_side_session_id,
+          allow_arrow_batch_chunking: state.allow_arrow_batch_chunking,
+          preferred_arrow_chunk_size: state.preferred_arrow_chunk_size
         ]
 
         case __MODULE__.start_link(clone_opts) do
@@ -448,6 +621,232 @@ defmodule SparkEx.Session do
       {:ok, result, server_side_session_id} ->
         state = maybe_update_server_session(state, server_side_session_id)
         {:reply, {:ok, result}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:config_get_with_default, pairs}, _from, state) do
+    case Client.config_get_with_default(state, pairs) do
+      {:ok, result, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, result}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:config_get_option, keys}, _from, state) do
+    case Client.config_get_option(state, keys) do
+      {:ok, result, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, result}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:config_get_all, prefix}, _from, state) do
+    case Client.config_get_all(state, prefix) do
+      {:ok, result, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, result}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:config_unset, keys}, _from, state) do
+    case Client.config_unset(state, keys) do
+      {:ok, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, :ok, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:config_is_modifiable, keys}, _from, state) do
+    case Client.config_is_modifiable(state, keys) do
+      {:ok, result, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, result}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_tree_string, plan, opts}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.analyze_tree_string(state, proto_plan, opts) do
+      {:ok, str, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, str}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_is_local, plan}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.analyze_is_local(state, proto_plan) do
+      {:ok, is_local, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, is_local}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_is_streaming, plan}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.analyze_is_streaming(state, proto_plan) do
+      {:ok, is_streaming, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, is_streaming}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_input_files, plan}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.analyze_input_files(state, proto_plan) do
+      {:ok, files, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, files}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_ddl_parse, ddl_string}, _from, state) do
+    case Client.analyze_ddl_parse(state, ddl_string) do
+      {:ok, parsed, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, parsed}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_json_to_ddl, json_string}, _from, state) do
+    case Client.analyze_json_to_ddl(state, json_string) do
+      {:ok, ddl, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, ddl}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_same_semantics, plan1, plan2}, _from, state) do
+    {proto_plan1, counter} = PlanEncoder.encode(plan1, state.plan_id_counter)
+    {proto_plan2, counter} = PlanEncoder.encode(plan2, counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.analyze_same_semantics(state, proto_plan1, proto_plan2) do
+      {:ok, result, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, result}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_semantic_hash, plan}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.analyze_semantic_hash(state, proto_plan) do
+      {:ok, hash, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, hash}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_persist, plan, opts}, _from, state) do
+    {relation, counter} = PlanEncoder.encode_relation(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.analyze_persist(state, relation, opts) do
+      {:ok, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, :ok, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_unpersist, plan, opts}, _from, state) do
+    {relation, counter} = PlanEncoder.encode_relation(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.analyze_unpersist(state, relation, opts) do
+      {:ok, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, :ok, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_get_storage_level, plan}, _from, state) do
+    {relation, counter} = PlanEncoder.encode_relation(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.analyze_get_storage_level(state, relation) do
+      {:ok, storage_level, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, storage_level}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:artifact_status, names}, _from, state) do
+    case Client.artifact_status(state, names) do
+      {:ok, statuses, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, statuses}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:add_artifacts, artifacts}, _from, state) do
+    case Client.add_artifacts(state, artifacts) do
+      {:ok, summaries, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, summaries}, state}
 
       {:error, _} = error ->
         {:reply, error, state}

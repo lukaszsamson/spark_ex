@@ -9,8 +9,12 @@ defmodule SparkEx.Connect.Client do
   alias Spark.Connect.SparkConnectService.Stub
 
   alias Spark.Connect.{
+    AddArtifactsRequest,
+    AddArtifactsResponse,
     AnalyzePlanRequest,
     AnalyzePlanResponse,
+    ArtifactStatusesRequest,
+    ArtifactStatusesResponse,
     ConfigRequest,
     ConfigResponse,
     ExecutePlanRequest,
@@ -26,6 +30,7 @@ defmodule SparkEx.Connect.Client do
     ReleaseSessionRequest,
     ReleaseSessionResponse,
     ResultChunkingOptions,
+    StorageLevel,
     KeyValue,
     Plan,
     UserContext
@@ -44,6 +49,7 @@ defmodule SparkEx.Connect.Client do
   @default_max_retries 3
   @default_initial_backoff_ms 100
   @default_max_backoff_ms 5_000
+  @artifact_chunk_size 32 * 1024
 
   # --- AnalyzePlan RPCs ---
 
@@ -121,6 +127,301 @@ defmodule SparkEx.Connect.Client do
     end
   end
 
+  @doc """
+  Calls `AnalyzePlan` with `TreeString` to get a tree-string representation of a plan.
+
+  ## Options
+
+  - `:level` — tree depth level (optional, default: server decides)
+  """
+  @spec analyze_tree_string(SparkEx.Session.t(), Plan.t(), keyword()) ::
+          {:ok, String.t(), String.t() | nil} | {:error, term()}
+  def analyze_tree_string(session, plan, opts \\ []) do
+    level = Keyword.get(opts, :level, nil)
+
+    tree_string_msg =
+      if level do
+        %AnalyzePlanRequest.TreeString{plan: plan, level: level}
+      else
+        %AnalyzePlanRequest.TreeString{plan: plan}
+      end
+
+    request =
+      build_analyze_request(session,
+        analyze: {:tree_string, tree_string_msg}
+      )
+
+    case Stub.analyze_plan(session.channel, request) do
+      {:ok, %AnalyzePlanResponse{result: {:tree_string, %{tree_string: str}}} = resp} ->
+        {:ok, str, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Calls `AnalyzePlan` with `IsLocal` to check if a plan is local.
+  """
+  @spec analyze_is_local(SparkEx.Session.t(), Plan.t()) ::
+          {:ok, boolean(), String.t() | nil} | {:error, term()}
+  def analyze_is_local(session, plan) do
+    request =
+      build_analyze_request(session,
+        analyze: {:is_local, %AnalyzePlanRequest.IsLocal{plan: plan}}
+      )
+
+    case Stub.analyze_plan(session.channel, request) do
+      {:ok, %AnalyzePlanResponse{result: {:is_local, %{is_local: is_local}}} = resp} ->
+        {:ok, is_local, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Calls `AnalyzePlan` with `IsStreaming` to check if a plan is streaming.
+  """
+  @spec analyze_is_streaming(SparkEx.Session.t(), Plan.t()) ::
+          {:ok, boolean(), String.t() | nil} | {:error, term()}
+  def analyze_is_streaming(session, plan) do
+    request =
+      build_analyze_request(session,
+        analyze: {:is_streaming, %AnalyzePlanRequest.IsStreaming{plan: plan}}
+      )
+
+    case Stub.analyze_plan(session.channel, request) do
+      {:ok, %AnalyzePlanResponse{result: {:is_streaming, %{is_streaming: is_streaming}}} = resp} ->
+        {:ok, is_streaming, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Calls `AnalyzePlan` with `InputFiles` to get the input files of a plan.
+  """
+  @spec analyze_input_files(SparkEx.Session.t(), Plan.t()) ::
+          {:ok, [String.t()], String.t() | nil} | {:error, term()}
+  def analyze_input_files(session, plan) do
+    request =
+      build_analyze_request(session,
+        analyze: {:input_files, %AnalyzePlanRequest.InputFiles{plan: plan}}
+      )
+
+    case Stub.analyze_plan(session.channel, request) do
+      {:ok, %AnalyzePlanResponse{result: {:input_files, %{files: files}}} = resp} ->
+        {:ok, files, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Calls `AnalyzePlan` with `DDLParse` to parse a DDL string into a DataType.
+  """
+  @spec analyze_ddl_parse(SparkEx.Session.t(), String.t()) ::
+          {:ok, term(), String.t() | nil} | {:error, term()}
+  def analyze_ddl_parse(session, ddl_string) do
+    request =
+      build_analyze_request(session,
+        analyze: {:ddl_parse, %AnalyzePlanRequest.DDLParse{ddl_string: ddl_string}}
+      )
+
+    case Stub.analyze_plan(session.channel, request) do
+      {:ok, %AnalyzePlanResponse{result: {:ddl_parse, %{parsed: parsed}}} = resp} ->
+        {:ok, parsed, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Calls `AnalyzePlan` with `JsonToDDL` to convert a JSON schema string to DDL.
+  """
+  @spec analyze_json_to_ddl(SparkEx.Session.t(), String.t()) ::
+          {:ok, String.t(), String.t() | nil} | {:error, term()}
+  def analyze_json_to_ddl(session, json_string) do
+    request =
+      build_analyze_request(session,
+        analyze: {:json_to_ddl, %AnalyzePlanRequest.JsonToDDL{json_string: json_string}}
+      )
+
+    case Stub.analyze_plan(session.channel, request) do
+      {:ok, %AnalyzePlanResponse{result: {:json_to_ddl, %{ddl_string: ddl}}} = resp} ->
+        {:ok, ddl, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Calls `AnalyzePlan` with `SameSemantics` to check if two plans have the same semantics.
+  """
+  @spec analyze_same_semantics(SparkEx.Session.t(), Plan.t(), Plan.t()) ::
+          {:ok, boolean(), String.t() | nil} | {:error, term()}
+  def analyze_same_semantics(session, target_plan, other_plan) do
+    request =
+      build_analyze_request(session,
+        analyze:
+          {:same_semantics,
+           %AnalyzePlanRequest.SameSemantics{
+             target_plan: target_plan,
+             other_plan: other_plan
+           }}
+      )
+
+    case Stub.analyze_plan(session.channel, request) do
+      {:ok, %AnalyzePlanResponse{result: {:same_semantics, %{result: result}}} = resp} ->
+        {:ok, result, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Calls `AnalyzePlan` with `SemanticHash` to get the semantic hash of a plan.
+  """
+  @spec analyze_semantic_hash(SparkEx.Session.t(), Plan.t()) ::
+          {:ok, integer(), String.t() | nil} | {:error, term()}
+  def analyze_semantic_hash(session, plan) do
+    request =
+      build_analyze_request(session,
+        analyze: {:semantic_hash, %AnalyzePlanRequest.SemanticHash{plan: plan}}
+      )
+
+    case Stub.analyze_plan(session.channel, request) do
+      {:ok, %AnalyzePlanResponse{result: {:semantic_hash, %{result: hash}}} = resp} ->
+        {:ok, hash, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Calls `AnalyzePlan` with `Persist` to persist a relation with optional storage level.
+
+  ## Options
+
+  - `:storage_level` — a `Spark.Connect.StorageLevel` struct (optional)
+  """
+  @spec analyze_persist(SparkEx.Session.t(), Spark.Connect.Relation.t(), keyword()) ::
+          {:ok, String.t() | nil} | {:error, term()}
+  def analyze_persist(session, relation, opts \\ []) do
+    storage_level = Keyword.get(opts, :storage_level, nil)
+
+    request =
+      build_analyze_request(session,
+        analyze:
+          {:persist,
+           %AnalyzePlanRequest.Persist{
+             relation: relation,
+             storage_level: storage_level
+           }}
+      )
+
+    case Stub.analyze_plan(session.channel, request) do
+      {:ok, %AnalyzePlanResponse{result: {:persist, _}} = resp} ->
+        {:ok, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Calls `AnalyzePlan` with `Unpersist` to unpersist a relation.
+
+  ## Options
+
+  - `:blocking` — whether to block until unpersisted (default: false)
+  """
+  @spec analyze_unpersist(SparkEx.Session.t(), Spark.Connect.Relation.t(), keyword()) ::
+          {:ok, String.t() | nil} | {:error, term()}
+  def analyze_unpersist(session, relation, opts \\ []) do
+    blocking = Keyword.get(opts, :blocking, nil)
+
+    request =
+      build_analyze_request(session,
+        analyze:
+          {:unpersist,
+           %AnalyzePlanRequest.Unpersist{
+             relation: relation,
+             blocking: blocking
+           }}
+      )
+
+    case Stub.analyze_plan(session.channel, request) do
+      {:ok, %AnalyzePlanResponse{result: {:unpersist, _}} = resp} ->
+        {:ok, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Calls `AnalyzePlan` with `GetStorageLevel` to get the storage level of a persisted relation.
+  """
+  @spec analyze_get_storage_level(SparkEx.Session.t(), Spark.Connect.Relation.t()) ::
+          {:ok, StorageLevel.t(), String.t() | nil} | {:error, term()}
+  def analyze_get_storage_level(session, relation) do
+    request =
+      build_analyze_request(session,
+        analyze: {:get_storage_level, %AnalyzePlanRequest.GetStorageLevel{relation: relation}}
+      )
+
+    case Stub.analyze_plan(session.channel, request) do
+      {:ok,
+       %AnalyzePlanResponse{result: {:get_storage_level, %{storage_level: storage_level}}} =
+           resp} ->
+        {:ok, storage_level, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # --- ExecutePlan RPC ---
 
   @doc """
@@ -140,7 +441,7 @@ defmodule SparkEx.Connect.Client do
     reattachable = Keyword.get(opts, :reattachable, true)
     operation_id = if reattachable, do: generate_operation_id(), else: nil
 
-    request = build_execute_request(session, plan, tags, operation_id, reattachable)
+    request = build_execute_request(session, plan, tags, operation_id, reattachable, opts)
     metadata = %{rpc: :execute_plan, session_id: session.session_id, operation_id: operation_id}
 
     rpc_telemetry_span(metadata, fn ->
@@ -184,7 +485,7 @@ defmodule SparkEx.Connect.Client do
     reattachable = Keyword.get(opts, :reattachable, true)
     operation_id = if reattachable, do: generate_operation_id(), else: nil
 
-    request = build_execute_request(session, plan, tags, operation_id, reattachable)
+    request = build_execute_request(session, plan, tags, operation_id, reattachable, opts)
 
     metadata = %{
       rpc: :execute_plan_explorer,
@@ -264,6 +565,154 @@ defmodule SparkEx.Connect.Client do
     case Stub.config(session.channel, request) do
       {:ok, %ConfigResponse{pairs: pairs} = resp} ->
         result = Enum.map(pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
+        {:ok, result, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Gets Spark configuration values with defaults for the given key-value pairs.
+
+  When the config key has no value set, the provided default is returned.
+  Returns a list of `{key, value}` pairs.
+  """
+  @spec config_get_with_default(SparkEx.Session.t(), [{String.t(), String.t()}]) ::
+          {:ok, [{String.t(), String.t() | nil}], String.t() | nil} | {:error, term()}
+  def config_get_with_default(session, pairs) do
+    kv_pairs = Enum.map(pairs, fn {k, v} -> %KeyValue{key: k, value: v} end)
+
+    request =
+      build_config_request(session,
+        operation: %ConfigRequest.Operation{
+          op_type: {:get_with_default, %ConfigRequest.GetWithDefault{pairs: kv_pairs}}
+        }
+      )
+
+    case Stub.config(session.channel, request) do
+      {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
+        result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
+        {:ok, result, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Gets optional Spark configuration values for the given keys.
+
+  Returns a list of `{key, value}` pairs. When a key is not set, the value
+  is nil (unlike `config_get/2` which may raise on the server).
+  """
+  @spec config_get_option(SparkEx.Session.t(), [String.t()]) ::
+          {:ok, [{String.t(), String.t() | nil}], String.t() | nil} | {:error, term()}
+  def config_get_option(session, keys) do
+    request =
+      build_config_request(session,
+        operation: %ConfigRequest.Operation{
+          op_type: {:get_option, %ConfigRequest.GetOption{keys: keys}}
+        }
+      )
+
+    case Stub.config(session.channel, request) do
+      {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
+        result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
+        {:ok, result, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Gets all Spark configuration values, optionally filtered by prefix.
+
+  Returns a list of `{key, value}` pairs.
+  """
+  @spec config_get_all(SparkEx.Session.t(), String.t() | nil) ::
+          {:ok, [{String.t(), String.t() | nil}], String.t() | nil} | {:error, term()}
+  def config_get_all(session, prefix \\ nil) do
+    get_all_msg =
+      if prefix do
+        %ConfigRequest.GetAll{prefix: prefix}
+      else
+        %ConfigRequest.GetAll{}
+      end
+
+    request =
+      build_config_request(session,
+        operation: %ConfigRequest.Operation{
+          op_type: {:get_all, get_all_msg}
+        }
+      )
+
+    case Stub.config(session.channel, request) do
+      {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
+        result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
+        {:ok, result, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Unsets Spark configuration values for the given keys.
+  """
+  @spec config_unset(SparkEx.Session.t(), [String.t()]) ::
+          {:ok, String.t() | nil} | {:error, term()}
+  def config_unset(session, keys) do
+    request =
+      build_config_request(session,
+        operation: %ConfigRequest.Operation{
+          op_type: {:unset, %ConfigRequest.Unset{keys: keys}}
+        }
+      )
+
+    case Stub.config(session.channel, request) do
+      {:ok, %ConfigResponse{} = resp} ->
+        {:ok, resp.server_side_session_id}
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Checks whether the given configuration keys are modifiable at runtime.
+
+  Returns a list of `{key, value}` pairs where value is `"true"` or `"false"`.
+  """
+  @spec config_is_modifiable(SparkEx.Session.t(), [String.t()]) ::
+          {:ok, [{String.t(), String.t()}], String.t() | nil} | {:error, term()}
+  def config_is_modifiable(session, keys) do
+    request =
+      build_config_request(session,
+        operation: %ConfigRequest.Operation{
+          op_type: {:is_modifiable, %ConfigRequest.IsModifiable{keys: keys}}
+        }
+      )
+
+    case Stub.config(session.channel, request) do
+      {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
+        result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
         {:ok, result, resp.server_side_session_id}
 
       {:error, %GRPC.RPCError{} = error} ->
@@ -406,6 +855,128 @@ defmodule SparkEx.Connect.Client do
       interrupt_type: :INTERRUPT_TYPE_OPERATION_ID,
       interrupt: {:operation_id, id}
     }
+  end
+
+  # --- Artifact RPCs ---
+
+  @doc """
+  Calls `ArtifactStatus` to check existence of artifacts on the server.
+
+  Returns a map of artifact name to boolean (exists or not).
+  """
+  @spec artifact_status(SparkEx.Session.t(), [String.t()]) ::
+          {:ok, %{String.t() => boolean()}, String.t() | nil} | {:error, term()}
+  def artifact_status(session, names) do
+    request = %ArtifactStatusesRequest{
+      session_id: session.session_id,
+      client_observed_server_side_session_id: session.server_side_session_id,
+      user_context: %UserContext{user_id: session.user_id},
+      client_type: session.client_type,
+      names: names
+    }
+
+    metadata = %{rpc: :artifact_status, session_id: session.session_id}
+
+    rpc_telemetry_span(metadata, fn ->
+      case Stub.artifact_status(session.channel, request) do
+        {:ok, %ArtifactStatusesResponse{} = resp} ->
+          statuses =
+            Map.new(resp.statuses, fn {name, %{exists: exists}} -> {name, exists} end)
+
+          {:ok, statuses, resp.server_side_session_id}
+
+        {:error, %GRPC.RPCError{} = error} ->
+          {:error, Errors.from_grpc_error(error, session)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
+  Calls `AddArtifacts` (client-streaming) to upload artifacts to the server.
+
+  Artifacts are provided as a list of `{name, data}` tuples where `data` is
+  binary content. Small artifacts are batched; large artifacts are streamed
+  in chunks (`begin_chunk` + `chunk` payloads).
+
+  Returns a list of `{name, crc_successful?}` tuples.
+  """
+  @spec add_artifacts(SparkEx.Session.t(), [{String.t(), binary()}]) ::
+          {:ok, [{String.t(), boolean()}], String.t() | nil} | {:error, term()}
+  def add_artifacts(session, artifacts) when is_list(artifacts) do
+    requests = build_add_artifacts_requests(session, artifacts)
+
+    metadata = %{rpc: :add_artifacts, session_id: session.session_id}
+
+    rpc_telemetry_span(metadata, fn ->
+      case requests do
+        [] ->
+          {:ok, [], session.server_side_session_id}
+
+        _ ->
+          stream =
+            session.channel
+            |> Stub.add_artifacts()
+            |> send_add_artifacts_requests(requests)
+
+          case GRPC.Stub.recv(stream) do
+            {:ok, %AddArtifactsResponse{} = resp} ->
+              summaries =
+                Enum.map(resp.artifacts, fn summary ->
+                  {summary.name, summary.is_crc_successful}
+                end)
+
+              {:ok, summaries, resp.server_side_session_id}
+
+            {:error, %GRPC.RPCError{} = error} ->
+              {:error, Errors.from_grpc_error(error, session)}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+      end
+    end)
+  end
+
+  @doc false
+  @spec build_add_artifacts_requests(SparkEx.Session.t(), [{String.t(), binary()}], pos_integer()) ::
+          [AddArtifactsRequest.t()]
+  def build_add_artifacts_requests(session, artifacts, chunk_size \\ @artifact_chunk_size)
+      when is_list(artifacts) and is_integer(chunk_size) and chunk_size > 0 do
+    artifact_entries = validate_artifacts!(artifacts)
+
+    {requests, pending_batch, _pending_size} =
+      Enum.reduce(artifact_entries, {[], [], 0}, fn {name, data}, {acc, batch, batch_size} ->
+        data_size = byte_size(data)
+
+        if data_size > chunk_size do
+          acc =
+            case batch do
+              [] -> acc
+              _ -> [build_batch_request(session, batch) | acc]
+            end
+
+          chunked = build_chunked_requests(session, name, data, chunk_size)
+          {Enum.reverse(chunked) ++ acc, [], 0}
+        else
+          if batch_size + data_size > chunk_size and batch != [] do
+            acc = [build_batch_request(session, batch) | acc]
+            {acc, [{name, data}], data_size}
+          else
+            {acc, [{name, data} | batch], batch_size + data_size}
+          end
+        end
+      end)
+
+    requests =
+      case pending_batch do
+        [] -> requests
+        _ -> [build_batch_request(session, pending_batch) | requests]
+      end
+
+    Enum.reverse(requests)
   end
 
   # --- ReattachExecute / ReleaseExecute RPCs ---
@@ -640,12 +1211,33 @@ defmodule SparkEx.Connect.Client do
     end
   end
 
-  defp build_execute_request(session, plan, tags, operation_id, reattachable) do
+  @doc false
+  @spec build_execute_request(
+          SparkEx.Session.t(),
+          Plan.t(),
+          [String.t()],
+          String.t() | nil,
+          boolean(),
+          keyword()
+        ) :: ExecutePlanRequest.t()
+  def build_execute_request(session, plan, tags, operation_id, reattachable, opts \\ []) do
+    allow_arrow_batch_chunking =
+      Keyword.get(opts, :allow_arrow_batch_chunking, session.allow_arrow_batch_chunking)
+
+    preferred_arrow_chunk_size =
+      opts
+      |> Keyword.get(:preferred_arrow_chunk_size, session.preferred_arrow_chunk_size)
+      |> normalize_preferred_arrow_chunk_size()
+
     request_options =
       [
         %ExecutePlanRequest.RequestOption{
           request_option:
-            {:result_chunking_options, %ResultChunkingOptions{allow_arrow_batch_chunking: true}}
+            {:result_chunking_options,
+             %ResultChunkingOptions{
+               allow_arrow_batch_chunking: allow_arrow_batch_chunking,
+               preferred_arrow_chunk_size: preferred_arrow_chunk_size
+             }}
         }
       ] ++
         if reattachable do
@@ -668,6 +1260,109 @@ defmodule SparkEx.Connect.Client do
       operation_id: operation_id,
       request_options: request_options
     }
+  end
+
+  defp normalize_preferred_arrow_chunk_size(nil), do: nil
+
+  defp normalize_preferred_arrow_chunk_size(size) when is_integer(size) and size > 0, do: size
+
+  defp normalize_preferred_arrow_chunk_size(size) do
+    raise ArgumentError,
+          "expected :preferred_arrow_chunk_size to be a positive integer or nil, got: #{inspect(size)}"
+  end
+
+  defp send_add_artifacts_requests(stream, requests) do
+    total = length(requests)
+
+    Enum.with_index(requests, 1)
+    |> Enum.reduce(stream, fn {request, idx}, acc_stream ->
+      GRPC.Stub.send_request(acc_stream, request, end_stream: idx == total)
+    end)
+  end
+
+  defp validate_artifacts!(artifacts) do
+    Enum.map(artifacts, fn
+      {name, data} when is_binary(name) and is_binary(data) ->
+        {name, data}
+
+      other ->
+        raise ArgumentError,
+              "expected artifacts as list of {name, binary} tuples, got: #{inspect(other)}"
+    end)
+  end
+
+  defp build_batch_request(session, artifacts) do
+    single_chunks =
+      artifacts
+      |> Enum.reverse()
+      |> Enum.map(fn {name, data} ->
+        %AddArtifactsRequest.SingleChunkArtifact{
+          name: name,
+          data: %AddArtifactsRequest.ArtifactChunk{
+            data: data,
+            crc: :erlang.crc32(data)
+          }
+        }
+      end)
+
+    %AddArtifactsRequest{
+      session_id: session.session_id,
+      client_observed_server_side_session_id: session.server_side_session_id,
+      user_context: %UserContext{user_id: session.user_id},
+      client_type: session.client_type,
+      payload: {:batch, %AddArtifactsRequest.Batch{artifacts: single_chunks}}
+    }
+  end
+
+  defp build_chunked_requests(session, name, data, chunk_size) do
+    chunks = chunk_binary(data, chunk_size)
+
+    [first_chunk | rest] = chunks
+
+    begin_request = %AddArtifactsRequest{
+      session_id: session.session_id,
+      client_observed_server_side_session_id: session.server_side_session_id,
+      user_context: %UserContext{user_id: session.user_id},
+      client_type: session.client_type,
+      payload:
+        {:begin_chunk,
+         %AddArtifactsRequest.BeginChunkedArtifact{
+           name: name,
+           total_bytes: byte_size(data),
+           num_chunks: length(chunks),
+           initial_chunk: %AddArtifactsRequest.ArtifactChunk{
+             data: first_chunk,
+             crc: :erlang.crc32(first_chunk)
+           }
+         }}
+    }
+
+    chunk_requests =
+      Enum.map(rest, fn chunk ->
+        %AddArtifactsRequest{
+          session_id: session.session_id,
+          client_observed_server_side_session_id: session.server_side_session_id,
+          user_context: %UserContext{user_id: session.user_id},
+          client_type: session.client_type,
+          payload:
+            {:chunk, %AddArtifactsRequest.ArtifactChunk{data: chunk, crc: :erlang.crc32(chunk)}}
+        }
+      end)
+
+    [begin_request | chunk_requests]
+  end
+
+  defp chunk_binary(data, chunk_size), do: do_chunk_binary(data, chunk_size, [])
+
+  defp do_chunk_binary(<<>>, _chunk_size, acc), do: Enum.reverse(acc)
+
+  defp do_chunk_binary(data, chunk_size, acc) when byte_size(data) <= chunk_size do
+    Enum.reverse([data | acc])
+  end
+
+  defp do_chunk_binary(data, chunk_size, acc) do
+    <<chunk::binary-size(chunk_size), rest::binary>> = data
+    do_chunk_binary(rest, chunk_size, [chunk | acc])
   end
 
   defp release_execute_best_effort(release_execute_fun, opts \\ []) do

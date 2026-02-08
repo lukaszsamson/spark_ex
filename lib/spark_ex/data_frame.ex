@@ -414,6 +414,91 @@ defmodule SparkEx.DataFrame do
     SparkEx.Session.execute_show(df.session, show_plan)
   end
 
+  @doc """
+  Returns the tree-string representation of the plan.
+
+  ## Options
+
+  - `:level` — tree depth level (optional)
+  """
+  @spec tree_string(t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  def tree_string(%__MODULE__{} = df, opts \\ []) do
+    SparkEx.Session.analyze_tree_string(df.session, df.plan, opts)
+  end
+
+  @doc """
+  Checks if the plan is local (can be computed without Spark).
+  """
+  @spec is_local(t()) :: {:ok, boolean()} | {:error, term()}
+  def is_local(%__MODULE__{} = df) do
+    SparkEx.Session.analyze_is_local(df.session, df.plan)
+  end
+
+  @doc """
+  Checks if the plan represents a streaming query.
+  """
+  @spec is_streaming(t()) :: {:ok, boolean()} | {:error, term()}
+  def is_streaming(%__MODULE__{} = df) do
+    SparkEx.Session.analyze_is_streaming(df.session, df.plan)
+  end
+
+  @doc """
+  Returns the input files for the plan.
+  """
+  @spec input_files(t()) :: {:ok, [String.t()]} | {:error, term()}
+  def input_files(%__MODULE__{} = df) do
+    SparkEx.Session.analyze_input_files(df.session, df.plan)
+  end
+
+  @doc """
+  Checks if this DataFrame has the same semantics as another.
+  """
+  @spec same_semantics(t(), t()) :: {:ok, boolean()} | {:error, term()}
+  def same_semantics(%__MODULE__{} = df1, %__MODULE__{} = df2) do
+    ensure_same_session!(df1, df2, :same_semantics)
+    SparkEx.Session.analyze_same_semantics(df1.session, df1.plan, df2.plan)
+  end
+
+  @doc """
+  Returns the semantic hash of the plan.
+  """
+  @spec semantic_hash(t()) :: {:ok, integer()} | {:error, term()}
+  def semantic_hash(%__MODULE__{} = df) do
+    SparkEx.Session.analyze_semantic_hash(df.session, df.plan)
+  end
+
+  @doc """
+  Persists the DataFrame with optional storage level.
+
+  ## Options
+
+  - `:storage_level` — a `Spark.Connect.StorageLevel` struct
+  """
+  @spec persist(t(), keyword()) :: :ok | {:error, term()}
+  def persist(%__MODULE__{} = df, opts \\ []) do
+    SparkEx.Session.analyze_persist(df.session, df.plan, opts)
+  end
+
+  @doc """
+  Unpersists the DataFrame.
+
+  ## Options
+
+  - `:blocking` — whether to block until unpersisted (default: false)
+  """
+  @spec unpersist(t(), keyword()) :: :ok | {:error, term()}
+  def unpersist(%__MODULE__{} = df, opts \\ []) do
+    SparkEx.Session.analyze_unpersist(df.session, df.plan, opts)
+  end
+
+  @doc """
+  Returns the storage level of a persisted DataFrame.
+  """
+  @spec storage_level(t()) :: {:ok, Spark.Connect.StorageLevel.t()} | {:error, term()}
+  def storage_level(%__MODULE__{} = df) do
+    SparkEx.Session.analyze_get_storage_level(df.session, df.plan)
+  end
+
   # ── Private helpers ──
 
   defp merge_tags(%__MODULE__{tags: []}, opts), do: opts
