@@ -235,13 +235,17 @@ defmodule SparkEx.Connect.PlanEncoder do
   # --- Milestone 2: Sort ---
 
   def encode_relation({:sort, child_plan, sort_orders}, counter) do
+    encode_relation({:sort, child_plan, sort_orders, true}, counter)
+  end
+
+  def encode_relation({:sort, child_plan, sort_orders, is_global}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
     orders = Enum.map(sort_orders, &encode_sort_order/1)
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
-      rel_type: {:sort, %Spark.Connect.Sort{input: child, order: orders, is_global: true}}
+      rel_type: {:sort, %Spark.Connect.Sort{input: child, order: orders, is_global: is_global}}
     }
 
     {relation, counter}
@@ -254,11 +258,19 @@ defmodule SparkEx.Connect.PlanEncoder do
     {child, counter} = encode_relation(child_plan, counter)
 
     alias_protos =
-      Enum.map(aliases, fn {:alias, expr, name} ->
-        %Expression.Alias{
-          expr: encode_expression(expr),
-          name: [name]
-        }
+      Enum.map(aliases, fn
+        {:alias, expr, name} ->
+          %Expression.Alias{
+            expr: encode_expression(expr),
+            name: [name]
+          }
+
+        {:alias, expr, name, metadata} ->
+          %Expression.Alias{
+            expr: encode_expression(expr),
+            name: [name],
+            metadata: metadata
+          }
       end)
 
     relation = %Relation{
@@ -360,6 +372,13 @@ defmodule SparkEx.Connect.PlanEncoder do
   # --- Milestone 3: Deduplicate ---
 
   def encode_relation({:deduplicate, child_plan, column_names, all_columns}, counter) do
+    encode_relation({:deduplicate, child_plan, column_names, all_columns, false}, counter)
+  end
+
+  def encode_relation(
+        {:deduplicate, child_plan, column_names, all_columns, within_watermark},
+        counter
+      ) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
@@ -370,7 +389,8 @@ defmodule SparkEx.Connect.PlanEncoder do
          %Spark.Connect.Deduplicate{
            input: child,
            column_names: column_names || [],
-           all_columns_as_keys: all_columns
+           all_columns_as_keys: all_columns,
+           within_watermark: within_watermark
          }}
     }
 
@@ -380,6 +400,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   # --- Milestone 3: SetOperation ---
 
   def encode_relation({:set_operation, left_plan, right_plan, op_type, is_all}, counter) do
+    encode_relation({:set_operation, left_plan, right_plan, op_type, is_all, []}, counter)
+  end
+
+  def encode_relation({:set_operation, left_plan, right_plan, op_type, is_all, opts}, counter) do
     {plan_id, counter} = next_id(counter)
     {left, counter} = encode_relation(left_plan, counter)
     {right, counter} = encode_relation(right_plan, counter)
@@ -393,9 +417,241 @@ defmodule SparkEx.Connect.PlanEncoder do
            right_input: right,
            set_op_type: encode_set_op_type(op_type),
            is_all: is_all,
-           by_name: false,
-           allow_missing_columns: false
+           by_name: Keyword.get(opts, :by_name, false),
+           allow_missing_columns: Keyword.get(opts, :allow_missing_columns, false)
          }}
+    }
+
+    {relation, counter}
+  end
+
+  # --- Milestone 10: DataFrame Parity Pack A ---
+
+  def encode_relation({:offset, child_plan, n}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:offset, %Spark.Connect.Offset{input: child, offset: n}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:tail, child_plan, n}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:tail, %Spark.Connect.Tail{input: child, limit: n}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:to_df, child_plan, column_names}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:to_df, %Spark.Connect.ToDF{input: child, column_names: column_names}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:with_columns_renamed, child_plan, renames}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    rename_protos =
+      Enum.map(renames, fn {old_name, new_name} ->
+        %Spark.Connect.WithColumnsRenamed.Rename{
+          col_name: to_string(old_name),
+          new_col_name: to_string(new_name)
+        }
+      end)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:with_columns_renamed,
+         %Spark.Connect.WithColumnsRenamed{input: child, renames: rename_protos}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:repartition, child_plan, num_partitions, shuffle}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:repartition,
+         %Spark.Connect.Repartition{
+           input: child,
+           num_partitions: num_partitions,
+           shuffle: shuffle
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:repartition_by_expression, child_plan, exprs, num_partitions}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:repartition_by_expression,
+         %Spark.Connect.RepartitionByExpression{
+           input: child,
+           partition_exprs: Enum.map(exprs, &encode_expression/1),
+           num_partitions: num_partitions
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation(
+        {:sample, child_plan, lower_bound, upper_bound, with_replacement, seed,
+         deterministic_order},
+        counter
+      ) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:sample,
+         %Spark.Connect.Sample{
+           input: child,
+           lower_bound: lower_bound,
+           upper_bound: upper_bound,
+           with_replacement: with_replacement,
+           seed: seed,
+           deterministic_order: deterministic_order
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:hint, child_plan, name, parameters}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:hint,
+         %Spark.Connect.Hint{
+           input: child,
+           name: name,
+           parameters: Enum.map(parameters, &encode_expression/1)
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation(
+        {:unpivot, child_plan, ids, values, variable_column_name, value_column_name},
+        counter
+      ) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    values_proto =
+      case values do
+        nil ->
+          nil
+
+        vals when is_list(vals) ->
+          %Spark.Connect.Unpivot.Values{values: Enum.map(vals, &encode_expression/1)}
+      end
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:unpivot,
+         %Spark.Connect.Unpivot{
+           input: child,
+           ids: Enum.map(ids, &encode_expression/1),
+           values: values_proto,
+           variable_column_name: variable_column_name,
+           value_column_name: value_column_name
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:transpose, child_plan, index_columns}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:transpose,
+         %Spark.Connect.Transpose{
+           input: child,
+           index_columns: Enum.map(index_columns, &encode_expression/1)
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:html_string, child_plan, num_rows, truncate}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:html_string,
+         %Spark.Connect.HtmlString{input: child, num_rows: num_rows, truncate: truncate}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:with_watermark, child_plan, event_time, delay_threshold}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:with_watermark,
+         %Spark.Connect.WithWatermark{
+           input: child,
+           event_time: event_time,
+           delay_threshold: delay_threshold
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:subquery_alias, child_plan, alias_name}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:subquery_alias, %Spark.Connect.SubqueryAlias{input: child, alias: alias_name}}
     }
 
     {relation, counter}
@@ -529,6 +785,11 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
+  def encode_expression({:subquery, _plan, _kind}) do
+    raise ArgumentError,
+          "subquery expressions require relation-reference encoding which is not yet wired"
+  end
+
   # --- Private ---
 
   defp next_id(counter), do: {counter, counter + 1}
@@ -550,6 +811,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_sql_argument({:cast, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:star} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:star, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:subquery, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument(value), do: encode_literal_expression(value)
 
   defp encode_literal(nil),

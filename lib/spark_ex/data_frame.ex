@@ -298,6 +298,500 @@ defmodule SparkEx.DataFrame do
     }
   end
 
+  # ── M10: Projection/Rename ──
+
+  @doc """
+  Projects columns using SQL expression strings.
+
+  Each string is parsed as a SQL expression by Spark.
+
+  ## Examples
+
+      df |> DataFrame.select_expr(["name", "age + 1 AS age_plus"])
+  """
+  @spec select_expr(t(), [String.t()]) :: t()
+  def select_expr(%__MODULE__{} = df, exprs) when is_list(exprs) do
+    expr_nodes = Enum.map(exprs, fn e -> {:expr, e} end)
+    %__MODULE__{df | plan: {:project, df.plan, expr_nodes}}
+  end
+
+  @doc """
+  Adds or replaces multiple columns at once.
+
+  Accepts a list of `{name, column}` tuples or a list of aliased Column expressions.
+
+  ## Examples
+
+      import SparkEx.Functions, only: [col: 1, lit: 1]
+
+      df |> DataFrame.with_columns([
+        {"doubled", Column.multiply(col("x"), lit(2))},
+        {"const", lit(42)}
+      ])
+  """
+  @spec with_columns(t(), [{String.t(), Column.t()}]) :: t()
+  def with_columns(%__MODULE__{} = df, columns) when is_list(columns) do
+    aliases =
+      Enum.map(columns, fn
+        {name, %Column{} = col} when is_binary(name) -> {:alias, col.expr, name}
+        %Column{expr: {:alias, _, _} = expr} -> expr
+      end)
+
+    %__MODULE__{df | plan: {:with_columns, df.plan, aliases}}
+  end
+
+  @doc """
+  Renames all columns in the DataFrame.
+
+  ## Examples
+
+      df |> DataFrame.to_df(["id", "full_name", "years"])
+  """
+  @spec to_df(t(), [String.t()]) :: t()
+  def to_df(%__MODULE__{} = df, column_names) when is_list(column_names) do
+    %__MODULE__{df | plan: {:to_df, df.plan, column_names}}
+  end
+
+  @doc """
+  Renames a single column.
+
+  ## Examples
+
+      df |> DataFrame.with_column_renamed("old_name", "new_name")
+  """
+  @spec with_column_renamed(t(), String.t(), String.t()) :: t()
+  def with_column_renamed(%__MODULE__{} = df, existing, new_name)
+      when is_binary(existing) and is_binary(new_name) do
+    %__MODULE__{df | plan: {:with_columns_renamed, df.plan, [{existing, new_name}]}}
+  end
+
+  @doc """
+  Renames multiple columns using a map of old -> new names.
+
+  ## Examples
+
+      df |> DataFrame.with_columns_renamed(%{"old1" => "new1", "old2" => "new2"})
+  """
+  @spec with_columns_renamed(t(), %{String.t() => String.t()}) :: t()
+  def with_columns_renamed(%__MODULE__{} = df, rename_map) when is_map(rename_map) do
+    %__MODULE__{df | plan: {:with_columns_renamed, df.plan, Map.to_list(rename_map)}}
+  end
+
+  # ── M10: Extended Set Operations ──
+
+  @doc """
+  Union by column name rather than position.
+
+  ## Options
+
+  - `:allow_missing` — if true, missing columns are filled with nulls (default: false)
+
+  ## Examples
+
+      DataFrame.union_by_name(df1, df2)
+      DataFrame.union_by_name(df1, df2, allow_missing: true)
+  """
+  @spec union_by_name(t(), t(), keyword()) :: t()
+  def union_by_name(%__MODULE__{} = left, %__MODULE__{} = right, opts \\ []) do
+    ensure_same_session!(left, right, :union_by_name)
+    allow_missing = Keyword.get(opts, :allow_missing, false)
+
+    %__MODULE__{
+      left
+      | plan:
+          {:set_operation, left.plan, right.plan, :union, true,
+           by_name: true, allow_missing_columns: allow_missing}
+    }
+  end
+
+  @doc """
+  Returns rows in this DataFrame that are not in the other, preserving duplicates
+  (equivalent to SQL `EXCEPT ALL`).
+  """
+  @spec except_all(t(), t()) :: t()
+  def except_all(%__MODULE__{} = left, %__MODULE__{} = right) do
+    ensure_same_session!(left, right, :except_all)
+    %__MODULE__{left | plan: {:set_operation, left.plan, right.plan, :except, true}}
+  end
+
+  @doc """
+  Returns rows common to both DataFrames, preserving duplicates
+  (equivalent to SQL `INTERSECT ALL`).
+  """
+  @spec intersect_all(t(), t()) :: t()
+  def intersect_all(%__MODULE__{} = left, %__MODULE__{} = right) do
+    ensure_same_session!(left, right, :intersect_all)
+    %__MODULE__{left | plan: {:set_operation, left.plan, right.plan, :intersect, true}}
+  end
+
+  # ── M10: Partitioning ──
+
+  @doc """
+  Repartitions the DataFrame.
+
+  When `cols` is empty, does a hash repartition to `num_partitions`.
+  When `cols` is provided, repartitions by those expressions.
+
+  ## Examples
+
+      df |> DataFrame.repartition(10)
+      df |> DataFrame.repartition(10, [col("key")])
+  """
+  @spec repartition(t(), pos_integer(), [Column.t() | String.t() | atom()]) :: t()
+  def repartition(%__MODULE__{} = df, num_partitions, cols \\ [])
+      when is_integer(num_partitions) do
+    case cols do
+      [] ->
+        %__MODULE__{df | plan: {:repartition, df.plan, num_partitions, true}}
+
+      cols when is_list(cols) ->
+        exprs = Enum.map(cols, &normalize_column_expr/1)
+        %__MODULE__{df | plan: {:repartition_by_expression, df.plan, exprs, num_partitions}}
+    end
+  end
+
+  @doc """
+  Reduces the number of partitions without shuffling data.
+
+  ## Examples
+
+      df |> DataFrame.coalesce(1)
+  """
+  @spec coalesce(t(), pos_integer()) :: t()
+  def coalesce(%__MODULE__{} = df, num_partitions) when is_integer(num_partitions) do
+    %__MODULE__{df | plan: {:repartition, df.plan, num_partitions, false}}
+  end
+
+  @doc """
+  Sorts within each partition by the given columns.
+
+  ## Examples
+
+      df |> DataFrame.sort_within_partitions(["key"])
+  """
+  @spec sort_within_partitions(t(), [Column.t() | String.t() | atom()]) :: t()
+  def sort_within_partitions(%__MODULE__{} = df, columns) when is_list(columns) do
+    sort_exprs = Enum.map(columns, &normalize_sort_expr/1)
+    %__MODULE__{df | plan: {:sort, df.plan, sort_exprs, false}}
+  end
+
+  # ── M10: Sampling ──
+
+  @doc """
+  Returns a random sample of rows.
+
+  ## Options
+
+  - `:with_replacement` — sample with replacement (default: false)
+  - `:seed` — random seed (default: nil)
+
+  ## Examples
+
+      df |> DataFrame.sample(0.1)
+      df |> DataFrame.sample(0.5, with_replacement: true, seed: 42)
+  """
+  @spec sample(t(), float(), keyword()) :: t()
+  def sample(%__MODULE__{} = df, fraction, opts \\ []) when is_float(fraction) do
+    with_replacement = Keyword.get(opts, :with_replacement, false)
+    seed = Keyword.get(opts, :seed, nil)
+
+    %__MODULE__{
+      df
+      | plan: {:sample, df.plan, 0.0, fraction, with_replacement, seed, false}
+    }
+  end
+
+  @doc """
+  Randomly splits the DataFrame into multiple DataFrames using normalized weights.
+  """
+  @spec random_split(t(), [number()], integer() | nil) :: [t()]
+  def random_split(%__MODULE__{} = df, weights, seed \\ nil) when is_list(weights) do
+    Enum.each(weights, fn w ->
+      if not is_number(w) or w < 0.0 do
+        raise ArgumentError, "weights must be non-negative numbers"
+      end
+    end)
+
+    total = Enum.sum(weights)
+
+    if total <= 0.0 do
+      raise ArgumentError, "sum(weights) must be > 0"
+    end
+
+    resolved_seed =
+      case seed do
+        nil -> System.unique_integer([:positive])
+        s when is_integer(s) -> s
+      end
+
+    normalized = Enum.map(weights, &(&1 / total))
+
+    {splits, _} =
+      Enum.map_reduce(normalized, 0.0, fn w, lower ->
+        upper = lower + w
+
+        split = %__MODULE__{
+          df
+          | plan: {:sample, df.plan, lower, upper, false, resolved_seed, true}
+        }
+
+        {split, upper}
+      end)
+
+    splits
+  end
+
+  # ── M10: Row Operations ──
+
+  @doc """
+  Skips the first `n` rows.
+
+  ## Examples
+
+      df |> DataFrame.offset(10)
+  """
+  @spec offset(t(), non_neg_integer()) :: t()
+  def offset(%__MODULE__{} = df, n) when is_integer(n) and n >= 0 do
+    %__MODULE__{df | plan: {:offset, df.plan, n}}
+  end
+
+  @doc """
+  Returns the last `n` rows.
+
+  ## Examples
+
+      df |> DataFrame.tail(5)
+  """
+  @spec tail(t(), pos_integer()) :: t()
+  def tail(%__MODULE__{} = df, n) when is_integer(n) and n > 0 do
+    %__MODULE__{df | plan: {:tail, df.plan, n}}
+  end
+
+  @doc """
+  Returns the first `n` rows as a list of maps.
+
+  Equivalent to `take/3` but follows PySpark naming.
+  """
+  @spec head(t(), pos_integer(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  def head(%__MODULE__{} = df, n \\ 1, opts \\ []) when is_integer(n) and n > 0 do
+    take(df, n, opts)
+  end
+
+  @doc """
+  Returns the first row as a map, or `nil` if empty.
+  """
+  @spec first(t(), keyword()) :: {:ok, map() | nil} | {:error, term()}
+  def first(%__MODULE__{} = df, opts \\ []) do
+    case take(df, 1, opts) do
+      {:ok, [row]} -> {:ok, row}
+      {:ok, []} -> {:ok, nil}
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
+  Returns true if the DataFrame has no rows.
+  """
+  @spec is_empty(t()) :: {:ok, boolean()} | {:error, term()}
+  def is_empty(%__MODULE__{} = df) do
+    case take(df, 1) do
+      {:ok, []} -> {:ok, true}
+      {:ok, [_ | _]} -> {:ok, false}
+      {:error, _} = err -> err
+    end
+  end
+
+  # ── M10: Query Shaping ──
+
+  @doc """
+  Adds a query optimization hint.
+
+  Supports primitive values, `Column`s, and lists of primitive values.
+  """
+  @spec hint(t(), String.t(), term()) :: t()
+  def hint(%__MODULE__{} = df, name, parameters \\ []) when is_binary(name) do
+    %__MODULE__{df | plan: {:hint, df.plan, name, normalize_hint_parameters(parameters)}}
+  end
+
+  @doc """
+  Adds or replaces metadata for an existing column.
+  """
+  @spec with_metadata(t(), String.t(), map()) :: t()
+  def with_metadata(%__MODULE__{} = df, column_name, metadata)
+      when is_binary(column_name) and is_map(metadata) do
+    metadata_json = Jason.encode!(metadata)
+
+    %__MODULE__{
+      df
+      | plan:
+          {:with_columns, df.plan, [{:alias, {:col, column_name}, column_name, metadata_json}]}
+    }
+  end
+
+  @doc """
+  Adds a watermark for streaming event-time processing.
+
+  ## Examples
+
+      df |> DataFrame.with_watermark("event_time", "10 minutes")
+  """
+  @spec with_watermark(t(), String.t(), String.t()) :: t()
+  def with_watermark(%__MODULE__{} = df, event_time, delay_threshold)
+      when is_binary(event_time) and is_binary(delay_threshold) do
+    %__MODULE__{df | plan: {:with_watermark, df.plan, event_time, delay_threshold}}
+  end
+
+  @doc """
+  Drops duplicate rows based on a subset of columns.
+
+  When `subset` is empty, deduplicates on all columns (like `distinct/1`).
+
+  ## Examples
+
+      df |> DataFrame.drop_duplicates(["id", "name"])
+  """
+  @spec drop_duplicates(t(), [String.t()]) :: t()
+  def drop_duplicates(%__MODULE__{} = df, subset \\ []) when is_list(subset) do
+    case subset do
+      [] -> distinct(df)
+      cols -> %__MODULE__{df | plan: {:deduplicate, df.plan, cols, false}}
+    end
+  end
+
+  @doc """
+  Drops duplicate rows within the watermark window.
+  """
+  @spec drop_duplicates_within_watermark(t(), [String.t()]) :: t()
+  def drop_duplicates_within_watermark(%__MODULE__{} = df, subset \\ []) when is_list(subset) do
+    case subset do
+      [] -> %__MODULE__{df | plan: {:deduplicate, df.plan, [], true, true}}
+      cols -> %__MODULE__{df | plan: {:deduplicate, df.plan, cols, false, true}}
+    end
+  end
+
+  # ── M10: Reshaping ──
+
+  @doc """
+  Unpivots a DataFrame from wide to long format.
+
+  ## Parameters
+
+  - `ids` — columns to keep as identifier columns
+  - `values` — columns to unpivot (nil for all non-id columns)
+  - `variable_column_name` — name for the variable column
+  - `value_column_name` — name for the value column
+
+  ## Examples
+
+      df |> DataFrame.unpivot(["id"], ["col1", "col2"], "variable", "value")
+  """
+  @spec unpivot(
+          t(),
+          [Column.t() | String.t() | atom()],
+          [Column.t() | String.t() | atom()] | nil,
+          String.t(),
+          String.t()
+        ) :: t()
+  def unpivot(%__MODULE__{} = df, ids, values, variable_column_name, value_column_name) do
+    id_exprs = Enum.map(ids, &normalize_column_expr/1)
+
+    value_exprs =
+      case values do
+        nil -> nil
+        vals -> Enum.map(vals, &normalize_column_expr/1)
+      end
+
+    %__MODULE__{
+      df
+      | plan: {:unpivot, df.plan, id_exprs, value_exprs, variable_column_name, value_column_name}
+    }
+  end
+
+  @doc """
+  Transposes the DataFrame.
+
+  ## Options
+
+  - `:index_column` — column(s) to use as index (default: nil)
+  """
+  @spec transpose(t(), keyword()) :: t()
+  def transpose(%__MODULE__{} = df, opts \\ []) do
+    index_columns =
+      case Keyword.get(opts, :index_column) do
+        nil -> []
+        col when is_binary(col) -> [{:col, col}]
+        cols when is_list(cols) -> Enum.map(cols, &normalize_column_expr/1)
+      end
+
+    %__MODULE__{df | plan: {:transpose, df.plan, index_columns}}
+  end
+
+  @doc """
+  Aliases this DataFrame for use in subqueries.
+
+  ## Examples
+
+      df |> DataFrame.alias("t")
+  """
+  @spec alias_(t(), String.t()) :: t()
+  def alias_(%__MODULE__{} = df, name) when is_binary(name) do
+    %__MODULE__{df | plan: {:subquery_alias, df.plan, name}}
+  end
+
+  # ── M10: Convenience Aliases ──
+
+  @doc "Alias for `filter/2`."
+  @spec where(t(), Column.t()) :: t()
+  def where(%__MODULE__{} = df, condition), do: filter(df, condition)
+
+  @doc "Alias for `union/2`."
+  @spec union_all(t(), t()) :: t()
+  def union_all(%__MODULE__{} = left, %__MODULE__{} = right), do: union(left, right)
+
+  @doc "Cross join — shorthand for `join(df, other, [], :cross)`."
+  @spec cross_join(t(), t()) :: t()
+  def cross_join(%__MODULE__{} = left, %__MODULE__{} = right) do
+    join(left, right, [], :cross)
+  end
+
+  # ── M10: Display ──
+
+  @doc """
+  Prints the schema tree, mirroring PySpark `printSchema`.
+
+  ## Options
+
+  - `:level` — tree depth level (optional)
+  """
+  @spec print_schema(t(), keyword()) :: :ok | {:error, term()}
+  def print_schema(%__MODULE__{} = df, opts \\ []) do
+    case tree_string(df, opts) do
+      {:ok, str} ->
+        IO.puts(str)
+        :ok
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  @doc """
+  Returns an HTML string representation of the DataFrame.
+
+  ## Options
+
+  - `:num_rows` — number of rows (default: 20)
+  - `:truncate` — column width truncation (default: 20)
+  """
+  @spec html_string(t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  def html_string(%__MODULE__{} = df, opts \\ []) do
+    num_rows = Keyword.get(opts, :num_rows, 20)
+    truncate = Keyword.get(opts, :truncate, 20)
+
+    html_plan = {:html_string, df.plan, num_rows, truncate}
+    SparkEx.Session.execute_show(df.session, html_plan)
+  end
+
   # ── Writer entry points ──
 
   @doc """
@@ -407,6 +901,32 @@ defmodule SparkEx.DataFrame do
   def tag(%__MODULE__{} = df, tag) when is_binary(tag) do
     validate_tag!(tag)
     %{df | tags: df.tags ++ [tag]}
+  end
+
+  # ── M10: Subquery/DataFrame Expression Helpers ──
+
+  @doc """
+  Returns this DataFrame as a table-argument wrapper.
+  """
+  @spec as_table(t()) :: SparkEx.TableArg.t()
+  def as_table(%__MODULE__{} = df) do
+    %SparkEx.TableArg{plan: df.plan}
+  end
+
+  @doc """
+  Returns this DataFrame as a scalar subquery expression.
+  """
+  @spec scalar(t()) :: Column.t()
+  def scalar(%__MODULE__{} = df) do
+    %Column{expr: {:subquery, df.plan, :scalar}}
+  end
+
+  @doc """
+  Returns this DataFrame as an EXISTS subquery expression.
+  """
+  @spec exists(t()) :: Column.t()
+  def exists(%__MODULE__{} = df) do
+    %Column{expr: {:subquery, df.plan, :exists}}
   end
 
   # ── Actions (execute against Spark) ──
@@ -604,6 +1124,28 @@ defmodule SparkEx.DataFrame do
 
     :ok
   end
+
+  defp normalize_hint_parameters(parameters) do
+    parameters
+    |> List.wrap()
+    |> Enum.flat_map(fn
+      vals when is_list(vals) -> if(Enum.all?(vals, &primitive_hint?/1), do: vals, else: [vals])
+      val -> [val]
+    end)
+    |> Enum.map(fn
+      %Column{} = c ->
+        c.expr
+
+      v ->
+        if primitive_hint?(v) do
+          {:lit, v}
+        else
+          raise ArgumentError, "invalid hint parameter: #{inspect(v)}"
+        end
+    end)
+  end
+
+  defp primitive_hint?(v), do: is_binary(v) or is_integer(v) or is_float(v)
 
   defp normalize_column_expr(%Column{} = col), do: col.expr
   defp normalize_column_expr(name) when is_binary(name), do: {:col, name}

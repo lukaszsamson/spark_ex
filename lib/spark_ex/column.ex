@@ -31,6 +31,7 @@ defmodule SparkEx.Column do
           | {:cast, expr(), String.t()}
           | {:star}
           | {:star, String.t()}
+          | {:subquery, term(), :scalar | :exists}
 
   # --- Comparisons ---
 
