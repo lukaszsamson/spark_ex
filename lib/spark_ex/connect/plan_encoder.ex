@@ -8,7 +8,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   """
 
   alias Spark.Connect.{
+    CachedLocalRelation,
+    ChunkedCachedLocalRelation,
     Expression,
+    LocalRelation,
     Plan,
     Relation,
     RelationCommon,
@@ -96,6 +99,46 @@ defmodule SparkEx.Connect.PlanEncoder do
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
       rel_type: {:range, range}
+    }
+
+    {relation, counter}
+  end
+
+  # --- Local relation types ---
+
+  def encode_relation({:local_relation, data, schema}, counter) do
+    {plan_id, counter} = next_id(counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:local_relation, %LocalRelation{data: data, schema: schema}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:cached_local_relation, hash}, counter) do
+    {plan_id, counter} = next_id(counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:cached_local_relation, %CachedLocalRelation{hash: hash}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:chunked_cached_local_relation, data_hashes, schema_hash}, counter) do
+    {plan_id, counter} = next_id(counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:chunked_cached_local_relation,
+         %ChunkedCachedLocalRelation{
+           dataHashes: data_hashes,
+           schemaHash: schema_hash
+         }}
     }
 
     {relation, counter}

@@ -113,7 +113,9 @@ defmodule SparkEx.Unit.AnalyzePlanTest do
       resp = %AnalyzePlanResponse{
         session_id: "s",
         server_side_session_id: "ss",
-        result: {:tree_string, %AnalyzePlanResponse.TreeString{tree_string: "== Physical Plan ==\nRange(0,100,1)"}}
+        result:
+          {:tree_string,
+           %AnalyzePlanResponse.TreeString{tree_string: "== Physical Plan ==\nRange(0,100,1)"}}
       }
 
       assert {:tree_string, %{tree_string: str}} = resp.result
@@ -213,8 +215,7 @@ defmodule SparkEx.Unit.AnalyzePlanTest do
       resp = %AnalyzePlanResponse{
         session_id: "s",
         result:
-          {:get_storage_level,
-           %AnalyzePlanResponse.GetStorageLevel{storage_level: storage_level}}
+          {:get_storage_level, %AnalyzePlanResponse.GetStorageLevel{storage_level: storage_level}}
       }
 
       assert {:get_storage_level, %{storage_level: sl}} = resp.result

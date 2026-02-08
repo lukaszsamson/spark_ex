@@ -6,7 +6,7 @@ Targets Spark 4.1.1. See `SPEC_V1.md` for the full design.
 
 ## Status
 
-Milestones 0 through 7 are complete (313 unit tests + integration tests passing against Spark 4.1.1).
+Milestones 0 through 8 are complete (347 unit tests + integration tests passing against Spark 4.1.1).
 
 ### Milestone 0 &mdash; Foundations
 
@@ -82,6 +82,16 @@ Milestones 0 through 7 are complete (313 unit tests + integration tests passing 
 - `DataFrame.tree_string/2`, `is_local/1`, `is_streaming/1`, `input_files/1` &mdash; plan introspection
 - `DataFrame.same_semantics/2`, `semantic_hash/1` &mdash; semantic comparison
 - `SparkEx.config_get_with_default/2`, `config_get_option/2`, `config_get_all/2`, `config_unset/2`, `config_is_modifiable/2` &mdash; expanded config API
+
+### Milestone 8 &mdash; Local Data + Artifact Manager
+
+- `SparkEx.create_dataframe/3` &mdash; create DataFrames from local Elixir data (`Explorer.DataFrame`, list of maps, or column-oriented map)
+- Inline `LocalRelation` for small payloads; `ChunkedCachedLocalRelation` with artifact-backed cache for larger data
+- `SparkEx.Connect.TypeMapper.to_spark_ddl_type/1`, `explorer_schema_to_ddl/1` &mdash; reverse type mapping (Explorer dtype &rarr; Spark DDL)
+- `SparkEx.add_jars/2`, `add_files/2`, `add_archives/2` &mdash; artifact category helpers with automatic name prefixing
+- `SparkEx.copy_from_local_to_fs/3` &mdash; copy local files to the Spark driver filesystem
+- SHA-256 cache keying for local relation deduplication
+- Full filter/join/select support on locally-created DataFrames
 
 ## Quick start
 

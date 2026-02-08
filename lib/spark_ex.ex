@@ -200,6 +200,80 @@ defmodule SparkEx do
   end
 
   @doc """
+  Uploads JAR artifacts to the server.
+
+  Artifact names are automatically prefixed with `jars/`.
+  """
+  @spec add_jars(GenServer.server(), [{String.t(), binary()}]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_jars(session, artifacts) do
+    SparkEx.Session.add_jars(session, artifacts)
+  end
+
+  @doc """
+  Uploads file artifacts to the server.
+
+  Artifact names are automatically prefixed with `files/`.
+  """
+  @spec add_files(GenServer.server(), [{String.t(), binary()}]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_files(session, artifacts) do
+    SparkEx.Session.add_files(session, artifacts)
+  end
+
+  @doc """
+  Uploads archive artifacts to the server.
+
+  Artifact names are automatically prefixed with `archives/`.
+  """
+  @spec add_archives(GenServer.server(), [{String.t(), binary()}]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_archives(session, artifacts) do
+    SparkEx.Session.add_archives(session, artifacts)
+  end
+
+  @doc """
+  Copies a local file to the Spark driver filesystem.
+
+  Reads the file at `local_path` and uploads it to the server via `AddArtifacts`.
+  """
+  @spec copy_from_local_to_fs(GenServer.server(), String.t(), String.t()) ::
+          :ok | {:error, term()}
+  def copy_from_local_to_fs(session, local_path, dest_path) do
+    SparkEx.Session.copy_from_local_to_fs(session, local_path, dest_path)
+  end
+
+  @doc """
+  Creates a DataFrame from local Elixir data.
+
+  Accepts `Explorer.DataFrame`, a list of maps, or a column-oriented map.
+  Small payloads are embedded directly; larger data is uploaded to the server
+  cache via `AddArtifacts`.
+
+  ## Options
+
+  - `:schema` — DDL schema string (e.g. `"id INT, name STRING"`)
+  - `:cache_threshold` — byte size above which data is cached (default: 4 MB)
+
+  ## Examples
+
+      # From Explorer.DataFrame
+      explorer_df = Explorer.DataFrame.new!(%{"id" => [1, 2], "name" => ["Alice", "Bob"]})
+      {:ok, df} = SparkEx.create_dataframe(session, explorer_df)
+
+      # From list of maps
+      {:ok, df} = SparkEx.create_dataframe(session, [%{"id" => 1, "name" => "Alice"}])
+
+      # With explicit schema
+      {:ok, df} = SparkEx.create_dataframe(session, [%{"id" => 1}], schema: "id INT")
+  """
+  @spec create_dataframe(GenServer.server(), term(), keyword()) ::
+          {:ok, SparkEx.DataFrame.t()} | {:error, term()}
+  def create_dataframe(session, data, opts \\ []) do
+    SparkEx.Session.create_dataframe(session, data, opts)
+  end
+
+  @doc """
   Interrupts all running operations on the session.
 
   Returns the list of interrupted operation IDs.

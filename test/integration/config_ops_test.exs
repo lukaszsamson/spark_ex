@@ -81,7 +81,9 @@ defmodule SparkEx.Integration.ConfigOpsTest do
   describe "config_unset" do
     test "unsets a previously set config key", %{session: session} do
       :ok = SparkEx.config_set(session, [{"spark.test.unset.key.m7", "value"}])
-      assert {:ok, [{"spark.test.unset.key.m7", "value"}]} = SparkEx.config_get(session, ["spark.test.unset.key.m7"])
+
+      assert {:ok, [{"spark.test.unset.key.m7", "value"}]} =
+               SparkEx.config_get(session, ["spark.test.unset.key.m7"])
 
       :ok = SparkEx.config_unset(session, ["spark.test.unset.key.m7"])
 

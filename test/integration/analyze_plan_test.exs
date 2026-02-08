@@ -79,7 +79,8 @@ defmodule SparkEx.Integration.AnalyzePlanTest do
 
   describe "analyze_json_to_ddl" do
     test "converts JSON schema to DDL", %{session: session} do
-      json = ~s({"type":"struct","fields":[{"name":"id","type":"integer","nullable":true,"metadata":{}}]})
+      json =
+        ~s({"type":"struct","fields":[{"name":"id","type":"integer","nullable":true,"metadata":{}}]})
 
       assert {:ok, ddl} = SparkEx.Session.analyze_json_to_ddl(session, json)
       assert is_binary(ddl)

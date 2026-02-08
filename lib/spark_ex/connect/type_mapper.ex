@@ -98,4 +98,62 @@ defmodule SparkEx.Connect.TypeMapper do
 
   # Catch-all for future types
   defp map_kind(_unknown, _dt), do: :string
+
+  # --- Reverse mapping: Explorer dtype → Spark DDL type string ---
+
+  @doc """
+  Converts an Explorer dtype to a Spark DDL type string.
+
+  ## Examples
+
+      iex> TypeMapper.to_spark_ddl_type(:boolean)
+      "BOOLEAN"
+
+      iex> TypeMapper.to_spark_ddl_type({:s, 32})
+      "INT"
+  """
+  @spec to_spark_ddl_type(atom() | {atom(), term()}) :: String.t()
+  def to_spark_ddl_type(:null), do: "VOID"
+  def to_spark_ddl_type(:boolean), do: "BOOLEAN"
+  def to_spark_ddl_type({:s, 8}), do: "BYTE"
+  def to_spark_ddl_type({:s, 16}), do: "SHORT"
+  def to_spark_ddl_type({:s, 32}), do: "INT"
+  def to_spark_ddl_type({:s, 64}), do: "LONG"
+  def to_spark_ddl_type({:u, 8}), do: "SHORT"
+  def to_spark_ddl_type({:u, 16}), do: "INT"
+  def to_spark_ddl_type({:u, 32}), do: "LONG"
+  def to_spark_ddl_type({:u, 64}), do: "LONG"
+  def to_spark_ddl_type({:f, 32}), do: "FLOAT"
+  def to_spark_ddl_type({:f, 64}), do: "DOUBLE"
+  def to_spark_ddl_type(:string), do: "STRING"
+  def to_spark_ddl_type(:binary), do: "BINARY"
+  def to_spark_ddl_type(:date), do: "DATE"
+  def to_spark_ddl_type({:datetime, _}), do: "TIMESTAMP"
+  def to_spark_ddl_type({:naive_datetime, _}), do: "TIMESTAMP_NTZ"
+  def to_spark_ddl_type({:time, _}), do: "STRING"
+  def to_spark_ddl_type({:duration, _}), do: "STRING"
+  def to_spark_ddl_type(:category), do: "STRING"
+  def to_spark_ddl_type(_other), do: "STRING"
+
+  @doc """
+  Converts an Explorer.DataFrame schema to a Spark DDL schema string.
+
+  ## Examples
+
+      iex> TypeMapper.explorer_schema_to_ddl(%{"id" => {:s, 64}, "name" => :string})
+      "id LONG, name STRING"
+  """
+  @spec explorer_schema_to_ddl(map() | [{String.t(), atom() | {atom(), term()}}]) :: String.t()
+  def explorer_schema_to_ddl(dtypes) when is_map(dtypes) do
+    dtypes
+    |> Map.to_list()
+    |> explorer_schema_to_ddl()
+  end
+
+  def explorer_schema_to_ddl(dtypes) when is_list(dtypes) do
+    dtypes
+    |> Enum.map_join(", ", fn {name, dtype} ->
+      "#{name} #{to_spark_ddl_type(dtype)}"
+    end)
+  end
 end

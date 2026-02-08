@@ -8,11 +8,12 @@ defmodule SparkEx.Session do
 
   use GenServer
 
-  @compile {:no_warn_undefined, Explorer.DataFrame}
+  @compile {:no_warn_undefined, [Explorer.DataFrame, Explorer.Series]}
 
   alias SparkEx.Connect.Channel
   alias SparkEx.Connect.Client
   alias SparkEx.Connect.PlanEncoder
+  alias SparkEx.Connect.TypeMapper
 
   defstruct [
     :channel,
@@ -335,6 +336,80 @@ defmodule SparkEx.Session do
           {:ok, [{String.t(), boolean()}]} | {:error, term()}
   def add_artifacts(session, artifacts) do
     GenServer.call(session, {:add_artifacts, artifacts})
+  end
+
+  @doc """
+  Uploads JAR artifacts to the server.
+
+  Artifact names are automatically prefixed with `jars/`.
+  """
+  @spec add_jars(GenServer.server(), [{String.t(), binary()}]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_jars(session, artifacts) do
+    prefixed = Enum.map(artifacts, fn {name, data} -> {"jars/#{name}", data} end)
+    add_artifacts(session, prefixed)
+  end
+
+  @doc """
+  Uploads file artifacts to the server.
+
+  Artifact names are automatically prefixed with `files/`.
+  """
+  @spec add_files(GenServer.server(), [{String.t(), binary()}]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_files(session, artifacts) do
+    prefixed = Enum.map(artifacts, fn {name, data} -> {"files/#{name}", data} end)
+    add_artifacts(session, prefixed)
+  end
+
+  @doc """
+  Uploads archive artifacts to the server.
+
+  Artifact names are automatically prefixed with `archives/`.
+  """
+  @spec add_archives(GenServer.server(), [{String.t(), binary()}]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_archives(session, artifacts) do
+    prefixed = Enum.map(artifacts, fn {name, data} -> {"archives/#{name}", data} end)
+    add_artifacts(session, prefixed)
+  end
+
+  @doc """
+  Copies a local file to the Spark driver filesystem.
+
+  Reads the file at `local_path` and uploads it as a Spark Connect
+  forward-to-filesystem artifact.
+  """
+  @spec copy_from_local_to_fs(GenServer.server(), String.t(), String.t()) ::
+          :ok | {:error, term()}
+  def copy_from_local_to_fs(session, local_path, dest_path) do
+    with :ok <- validate_forward_dest_path(dest_path),
+         {:ok, data} <- read_local_file(local_path),
+         {:ok, _summaries} <-
+           add_artifacts(session, [{forward_to_fs_artifact_name(dest_path), data}]) do
+      :ok
+    end
+  end
+
+  @doc """
+  Creates a DataFrame from local data.
+
+  For small data (under the cache threshold), the data is embedded directly
+  in the plan as a `LocalRelation`. For larger data, the Arrow IPC bytes
+  are uploaded to the server via `AddArtifacts` and referenced via
+  `CachedLocalRelation`.
+
+  ## Options
+
+  - `:schema` — DDL schema string (e.g. `"id INT, name STRING"`). If omitted,
+    inferred from the Explorer.DataFrame or from the data.
+  - `:cache_threshold` — byte size threshold above which data is cached on the
+    server instead of inlined (default: 4 MB)
+  """
+  @spec create_dataframe(GenServer.server(), term(), keyword()) ::
+          {:ok, SparkEx.DataFrame.t()} | {:error, term()}
+  def create_dataframe(session, data, opts \\ []) do
+    GenServer.call(session, {:create_dataframe, data, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -853,6 +928,48 @@ defmodule SparkEx.Session do
     end
   end
 
+  def handle_call({:create_dataframe, data, opts}, from, state) do
+    case prepare_local_data(data, opts) do
+      {:ok, arrow_ipc, schema_ddl} ->
+        cache_threshold = Keyword.get(opts, :cache_threshold, 4 * 1024 * 1024)
+
+        if byte_size(arrow_ipc) <= cache_threshold do
+          plan = {:local_relation, arrow_ipc, schema_ddl}
+          df = %SparkEx.DataFrame{session: self(), plan: plan}
+          {:reply, {:ok, df}, state}
+        else
+          handle_call({:create_dataframe_chunked_cache, arrow_ipc, schema_ddl}, from, state)
+        end
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:create_dataframe_chunked_cache, arrow_ipc, schema_ddl}, _from, state) do
+    # Upload data as cache artifact
+    data_hash = :crypto.hash(:sha256, arrow_ipc) |> Base.encode16(case: :lower)
+    data_artifact = {"cache/#{data_hash}", arrow_ipc}
+
+    # Upload schema DDL as separate cache artifact (no "schema_" prefix —
+    # the server looks up schemaHash directly in the cache key space)
+    schema_bytes = if schema_ddl, do: schema_ddl, else: ""
+    schema_hash = :crypto.hash(:sha256, schema_bytes) |> Base.encode16(case: :lower)
+    schema_artifact = {"cache/#{schema_hash}", schema_bytes}
+
+    artifacts = [data_artifact, schema_artifact]
+
+    case upload_missing_cache_artifacts(state, artifacts) do
+      {:ok, state} ->
+        plan = {:chunked_cached_local_relation, [data_hash], schema_hash}
+        df = %SparkEx.DataFrame{session: self(), plan: plan}
+        {:reply, {:ok, df}, state}
+
+      {:error, _reason} = error ->
+        {:reply, error, state}
+    end
+  end
+
   def handle_call({:execute_show, plan}, _from, state) do
     {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
     state = %{state | plan_id_counter: counter}
@@ -968,6 +1085,167 @@ defmodule SparkEx.Session do
 
   defp call_timeout(opts) do
     Keyword.get(opts, :timeout, 60_000) + 5_000
+  end
+
+  # --- Local data preparation ---
+
+  defp prepare_local_data(data, opts) when is_struct(data, Explorer.DataFrame) do
+    schema_ddl = Keyword.get(opts, :schema, nil) || explorer_to_ddl(data)
+
+    case Explorer.DataFrame.dump_ipc_stream(data) do
+      {:ok, ipc_bytes} -> {:ok, ipc_bytes, schema_ddl}
+      {:error, reason} -> {:error, {:arrow_encode_error, reason}}
+    end
+  end
+
+  defp prepare_local_data(data, opts) when is_list(data) do
+    schema = Keyword.get(opts, :schema, nil)
+
+    cond do
+      is_binary(schema) ->
+        # User provided DDL schema string — convert list of maps to Explorer.DataFrame
+        prepare_list_data_with_schema(data, schema, opts)
+
+      true ->
+        # No schema — try to infer from data
+        prepare_list_data_inferred(data, opts)
+    end
+  end
+
+  defp prepare_local_data(data, opts) when is_map(data) and not is_struct(data) do
+    # Column-oriented data: %{"col1" => [1,2,3], "col2" => ["a","b","c"]}
+    schema_ddl = Keyword.get(opts, :schema, nil)
+
+    try do
+      explorer_df = Explorer.DataFrame.new(data)
+      effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
+      prepare_local_data(explorer_df, Keyword.put(opts, :schema, effective_schema))
+    rescue
+      e -> {:error, {:data_conversion_error, Exception.message(e)}}
+    end
+  end
+
+  defp prepare_local_data(_data, _opts) do
+    {:error, {:invalid_data, "expected Explorer.DataFrame, list of maps, or column map"}}
+  end
+
+  defp prepare_list_data_with_schema(data, schema_ddl, opts) when is_binary(schema_ddl) do
+    try do
+      explorer_df = list_of_maps_to_explorer(data)
+      prepare_local_data(explorer_df, Keyword.put(opts, :schema, schema_ddl))
+    rescue
+      e -> {:error, {:data_conversion_error, Exception.message(e)}}
+    end
+  end
+
+  defp prepare_list_data_inferred(data, opts) do
+    if Enum.empty?(data) do
+      {:error, {:invalid_data, "cannot infer schema from empty list"}}
+    else
+      try do
+        explorer_df = list_of_maps_to_explorer(data)
+        prepare_local_data(explorer_df, opts)
+      rescue
+        e -> {:error, {:data_conversion_error, Exception.message(e)}}
+      end
+    end
+  end
+
+  defp list_of_maps_to_explorer([]) do
+    Explorer.DataFrame.new(%{})
+  end
+
+  defp list_of_maps_to_explorer([first | _] = data) when is_map(first) do
+    ordered_keys =
+      Enum.reduce(data, [], fn row, acc ->
+        row
+        |> Map.keys()
+        |> Enum.map(&to_string/1)
+        |> Enum.reduce(acc, fn key, inner_acc ->
+          if key in inner_acc, do: inner_acc, else: inner_acc ++ [key]
+        end)
+      end)
+
+    columns =
+      ordered_keys
+      |> Enum.map(fn key ->
+        values = Enum.map(data, fn row -> value_for_key(row, key) end)
+        {key, values}
+      end)
+      |> Map.new()
+
+    Explorer.DataFrame.new(columns)
+  end
+
+  defp explorer_to_ddl(explorer_df) do
+    dtypes = Explorer.DataFrame.dtypes(explorer_df)
+
+    ordered_dtypes =
+      explorer_df
+      |> Explorer.DataFrame.names()
+      |> Enum.map(fn name -> {name, Map.fetch!(dtypes, name)} end)
+
+    TypeMapper.explorer_schema_to_ddl(ordered_dtypes)
+  end
+
+  defp read_local_file(local_path) do
+    case File.read(local_path) do
+      {:ok, data} -> {:ok, data}
+      {:error, reason} -> {:error, {:file_read_error, local_path, reason}}
+    end
+  end
+
+  defp validate_forward_dest_path(dest_path) when is_binary(dest_path) do
+    case URI.parse(dest_path) do
+      %URI{scheme: nil} ->
+        if Path.type(dest_path) == :absolute do
+          :ok
+        else
+          {:error, {:invalid_destination_path, "destination path must be absolute"}}
+        end
+
+      _uri ->
+        {:error, {:invalid_destination_path, "destination path must not include a URI scheme"}}
+    end
+  end
+
+  defp validate_forward_dest_path(_dest_path) do
+    {:error, {:invalid_destination_path, "destination path must be a string"}}
+  end
+
+  defp forward_to_fs_artifact_name(dest_path), do: "forward_to_fs" <> dest_path
+
+  defp value_for_key(row, key_name) do
+    case Enum.find(row, fn {key, _value} -> to_string(key) == key_name end) do
+      {_key, value} -> value
+      nil -> nil
+    end
+  end
+
+  defp upload_missing_cache_artifacts(state, artifacts) do
+    names = Enum.map(artifacts, fn {name, _data} -> name end)
+
+    case Client.artifact_status(state, names) do
+      {:ok, statuses, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        missing = Enum.reject(artifacts, fn {name, _data} -> Map.get(statuses, name, false) end)
+        maybe_upload_cache_artifacts(state, missing)
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp maybe_upload_cache_artifacts(state, []), do: {:ok, state}
+
+  defp maybe_upload_cache_artifacts(state, missing) do
+    case Client.add_artifacts(state, missing) do
+      {:ok, _summaries, server_side_session_id} ->
+        {:ok, maybe_update_server_session(state, server_side_session_id)}
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   defp resolve_connect_opts(url, nil) when is_binary(url), do: Channel.parse_uri(url)
