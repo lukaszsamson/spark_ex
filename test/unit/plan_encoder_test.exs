@@ -37,6 +37,15 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert length(sql.pos_arguments) == 3
       assert counter == 6
     end
+
+    test "encodes SQL arguments from Column expressions" do
+      args = [%SparkEx.Column{expr: {:expr, "array(42)"}}]
+      {plan, _counter} = PlanEncoder.encode({:sql, "SELECT element_at(?, 1)", args}, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:sql, sql}}}} = plan
+      [arg] = sql.pos_arguments
+      assert {:expression_string, %{expression: "array(42)"}} = arg.expr_type
+    end
   end
 
   describe "encode/2 with Range" do
@@ -137,6 +146,22 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       # count wraps: sql + aggregate: 2 plan IDs
       {_plan, counter} = PlanEncoder.encode_count({:range, 0, 10, 1, nil}, 0)
       assert counter == 2
+    end
+  end
+
+  describe "with_relations" do
+    test "encodes root and reference relations" do
+      plan =
+        {:with_relations, {:sql, "SELECT 1", nil},
+         [{:sql, "SELECT 2", nil}, {:range, 0, 3, 1, nil}]}
+
+      {encoded, counter} = PlanEncoder.encode(plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
+      assert %Relation{rel_type: {:sql, _}} = wr.root
+      assert length(wr.references) == 2
+      assert [%Relation{}, %Relation{}] = wr.references
+      assert counter == 4
     end
   end
 end

@@ -65,5 +65,72 @@ defmodule SparkEx.Connect.ChannelTest do
       assert {:ok, opts} = Channel.parse_uri("sc://localhost:15002/;use_ssl=abcs")
       assert opts.use_ssl == false
     end
+
+    test "decodes percent-encoded params" do
+      assert {:ok, opts} =
+               Channel.parse_uri(
+                 "sc://host/;x-my-header=hello%20world;user_agent=Agent123%20%2F3.4"
+               )
+
+      assert opts.extra_params["x-my-header"] == "hello world"
+      assert opts.extra_params["user_agent"] == "Agent123 /3.4"
+    end
+  end
+
+  describe "build_grpc_opts/1" do
+    test "includes custom metadata headers and authorization" do
+      opts = %{
+        host: "host",
+        port: 15002,
+        use_ssl: false,
+        token: "abc",
+        extra_params: %{"x-my-header" => "v1", "custom" => "v2"}
+      }
+
+      grpc_opts = Channel.build_grpc_opts(opts)
+      assert %{metadata: md} = Enum.into(grpc_opts, %{})
+      assert md["authorization"] == "Bearer abc"
+      assert md["x-my-header"] == "v1"
+      assert md["custom"] == "v2"
+    end
+
+    test "filters reserved metadata keys" do
+      opts = %{
+        host: "host",
+        port: 15002,
+        use_ssl: false,
+        token: "abc",
+        extra_params: %{
+          "session_id" => "123",
+          "user_agent" => "ua",
+          "user_id" => "u",
+          "use_ssl" => "true",
+          "token" => "zzz",
+          "x-keep" => "ok"
+        }
+      }
+
+      grpc_opts = Channel.build_grpc_opts(opts)
+      assert %{metadata: md} = Enum.into(grpc_opts, %{})
+      assert md["x-keep"] == "ok"
+      refute Map.has_key?(md, "session_id")
+      refute Map.has_key?(md, "user_agent")
+      refute Map.has_key?(md, "user_id")
+      refute Map.has_key?(md, "use_ssl")
+      assert md["authorization"] == "Bearer abc"
+    end
+
+    test "token implies secure credentials even when use_ssl is false" do
+      opts = %{
+        host: "host",
+        port: 15002,
+        use_ssl: false,
+        token: "abc",
+        extra_params: %{}
+      }
+
+      grpc_opts = Channel.build_grpc_opts(opts)
+      assert %GRPC.Credential{} = Keyword.fetch!(grpc_opts, :cred)
+    end
   end
 end

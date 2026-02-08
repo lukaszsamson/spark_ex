@@ -13,6 +13,8 @@ defmodule SparkEx.Connect.Channel do
           extra_params: %{String.t() => String.t()}
         }
 
+  @reserved_metadata_keys ~w(token use_ssl user_id user_agent session_id)
+
   @doc """
   Parses a Spark Connect URI string into connection options.
 
@@ -56,9 +58,18 @@ defmodule SparkEx.Connect.Channel do
   @spec connect(connect_opts()) :: {:ok, GRPC.Channel.t()} | {:error, term()}
   def connect(opts) do
     address = "#{opts.host}:#{opts.port}"
+    grpc_opts = build_grpc_opts(opts)
+    GRPC.Stub.connect(address, grpc_opts)
+  end
+
+  @doc false
+  @spec build_grpc_opts(connect_opts()) :: keyword()
+  def build_grpc_opts(opts) do
+    # Align with Spark Connect client behavior where bearer token implies secure transport.
+    secure? = opts.use_ssl or not is_nil(opts.token)
 
     cred =
-      if opts.use_ssl do
+      if secure? do
         GRPC.Credential.new(ssl: [])
       end
 
@@ -69,14 +80,28 @@ defmodule SparkEx.Connect.Channel do
         []
       end
 
+    extra_metadata =
+      opts.extra_params
+      |> Enum.reject(fn {k, _v} -> k in @reserved_metadata_keys end)
+      |> Enum.into(%{})
+
     grpc_opts =
-      if opts.token do
-        Keyword.put(grpc_opts, :metadata, %{"authorization" => "Bearer #{opts.token}"})
-      else
-        grpc_opts
+      case {opts.token, map_size(extra_metadata)} do
+        {nil, 0} ->
+          grpc_opts
+
+        {token, 0} when is_binary(token) ->
+          Keyword.put(grpc_opts, :metadata, %{"authorization" => "Bearer #{token}"})
+
+        {nil, _} ->
+          Keyword.put(grpc_opts, :metadata, extra_metadata)
+
+        {token, _} ->
+          md = Map.put(extra_metadata, "authorization", "Bearer #{token}")
+          Keyword.put(grpc_opts, :metadata, md)
       end
 
-    GRPC.Stub.connect(address, grpc_opts)
+    grpc_opts
   end
 
   @doc """
@@ -128,8 +153,13 @@ defmodule SparkEx.Connect.Channel do
       |> String.split(";", trim: true)
       |> Enum.reduce_while(%{}, fn pair, acc ->
         case String.split(pair, "=", parts: 2) do
-          [key, value] -> {:cont, Map.put(acc, key, value)}
-          _ -> {:halt, {:error, {:invalid_param, pair}}}
+          [key, value] ->
+            decoded_key = URI.decode_www_form(key)
+            decoded_value = URI.decode_www_form(value)
+            {:cont, Map.put(acc, decoded_key, decoded_value)}
+
+          _ ->
+            {:halt, {:error, {:invalid_param, pair}}}
         end
       end)
 

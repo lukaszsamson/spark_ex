@@ -134,6 +134,15 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Executes a ShowString plan and returns the formatted string.
+  """
+  @spec execute_show(GenServer.server(), term()) ::
+          {:ok, String.t()} | {:error, term()}
+  def execute_show(session, plan) do
+    GenServer.call(session, {:execute_show, plan}, :timer.seconds(60))
+  end
+
+  @doc """
   Stops the session and releases server resources.
   """
   @spec stop(GenServer.server()) :: :ok
@@ -268,6 +277,24 @@ defmodule SparkEx.Session do
     end
   end
 
+  def handle_call({:execute_show, plan}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.execute_plan(state, proto_plan) do
+      {:ok, result} ->
+        state = maybe_update_server_session(state, result.server_side_session_id)
+
+        case extract_show_string(result.rows) do
+          {:ok, str} -> {:reply, {:ok, str}, state}
+          {:error, _} = error -> {:reply, error, state}
+        end
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
   @impl true
   def handle_cast({:update_server_side_session_id, id}, state) do
     {:noreply, %{state | server_side_session_id: id}}
@@ -331,6 +358,17 @@ defmodule SparkEx.Session do
   end
 
   defp extract_count(rows), do: {:error, {:invalid_count_response, rows}}
+
+  defp extract_show_string([%{"show_string" => str}]) when is_binary(str), do: {:ok, str}
+
+  defp extract_show_string([row]) when is_map(row) and map_size(row) == 1 do
+    case Map.values(row) do
+      [str] when is_binary(str) -> {:ok, str}
+      _ -> {:error, {:invalid_show_response, row}}
+    end
+  end
+
+  defp extract_show_string(rows), do: {:error, {:invalid_show_response, rows}}
 
   defp call_timeout(opts) do
     Keyword.get(opts, :timeout, 60_000) + 5_000

@@ -53,6 +53,28 @@ defmodule SparkEx.Integration.QueryTest do
       assert [%{"id" => 9, "name" => "bob"}] = rows
     end
 
+    test "SQL with named expression args", %{session: session} do
+      df =
+        SparkEx.sql(
+          session,
+          "SELECT element_at(:m, 'a') AS v FROM range(1)",
+          args: %{m: SparkEx.Functions.expr("map('a', 1)")}
+        )
+
+      assert {:ok, [%{"v" => 1}]} = SparkEx.DataFrame.collect(df)
+    end
+
+    test "SQL with positional expression args", %{session: session} do
+      df =
+        SparkEx.sql(
+          session,
+          "SELECT element_at(?, 1) AS v FROM range(1)",
+          args: [SparkEx.Functions.expr("array(7)")]
+        )
+
+      assert {:ok, [%{"v" => 7}]} = SparkEx.DataFrame.collect(df)
+    end
+
     test "SQL with invalid args type raises", %{session: session} do
       assert_raise ArgumentError, ~r/expected :args to be a list, map, or nil/, fn ->
         SparkEx.sql(session, "SELECT 1", args: MapSet.new([1, 2, 3]))

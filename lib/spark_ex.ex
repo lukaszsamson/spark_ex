@@ -60,8 +60,11 @@ defmodule SparkEx do
   @doc """
   Creates a DataFrame from a range of integers.
 
-  ## Options
+  Supports both signatures:
+  - `range(session, end)`
+  - `range(session, start, end, step \\ 1, opts \\ [])`
 
+  Backward-compatible options for the 2-arity form:
   - `:start` — range start (default: 0)
   - `:step` — step increment (default: 1)
   - `:num_partitions` — number of partitions (default: nil, server decides)
@@ -69,14 +72,37 @@ defmodule SparkEx do
   ## Examples
 
       df = SparkEx.range(session, 10)
+      df = SparkEx.range(session, 10, 100, 2)
       df = SparkEx.range(session, 100, start: 10, step: 2)
   """
+  @spec range(GenServer.server(), integer()) :: SparkEx.DataFrame.t()
+  def range(session, end_) when is_integer(end_) do
+    build_range_df(session, 0, end_, 1, [])
+  end
+
   @spec range(GenServer.server(), integer(), keyword()) :: SparkEx.DataFrame.t()
-  def range(session, stop, opts \\ []) do
+  def range(session, end_, opts) when is_integer(end_) and is_list(opts) do
     start = Keyword.get(opts, :start, 0)
     step = Keyword.get(opts, :step, 1)
-    num_partitions = Keyword.get(opts, :num_partitions, nil)
-    %SparkEx.DataFrame{session: session, plan: {:range, start, stop, step, num_partitions}}
+    build_range_df(session, start, end_, step, opts)
+  end
+
+  @spec range(GenServer.server(), integer(), integer()) :: SparkEx.DataFrame.t()
+  def range(session, start, end_) when is_integer(start) and is_integer(end_) do
+    build_range_df(session, start, end_, 1, [])
+  end
+
+  @spec range(GenServer.server(), integer(), integer(), integer()) :: SparkEx.DataFrame.t()
+  def range(session, start, end_, step)
+      when is_integer(start) and is_integer(end_) and is_integer(step) do
+    build_range_df(session, start, end_, step, [])
+  end
+
+  @spec range(GenServer.server(), integer(), integer(), integer(), keyword()) ::
+          SparkEx.DataFrame.t()
+  def range(session, start, end_, step, opts)
+      when is_integer(start) and is_integer(end_) and is_integer(step) and is_list(opts) do
+    build_range_df(session, start, end_, step, opts)
   end
 
   @doc """
@@ -95,6 +121,11 @@ defmodule SparkEx do
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get(session, keys) do
     SparkEx.Session.config_get(session, keys)
+  end
+
+  defp build_range_df(session, start, stop, step, opts) do
+    num_partitions = Keyword.get(opts, :num_partitions, nil)
+    %SparkEx.DataFrame{session: session, plan: {:range, start, stop, step, num_partitions}}
   end
 
   defp validate_sql_args!(nil), do: :ok
