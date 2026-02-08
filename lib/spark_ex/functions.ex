@@ -203,7 +203,8 @@ defmodule SparkEx.Functions do
 
       aggregate(col("arr"), lit(0), fn acc, x -> Column.plus(acc, x) end)
   """
-  @spec aggregate(Column.t() | String.t(), Column.t() | term(), (Column.t(), Column.t() -> Column.t())) ::
+  @spec aggregate(Column.t() | String.t(), Column.t() | term(), (Column.t(), Column.t() ->
+                                                                   Column.t())) ::
           Column.t()
   def aggregate(col, zero, func) when is_function(func, 2) do
     col_expr = to_expr(col)
@@ -216,7 +217,8 @@ defmodule SparkEx.Functions do
   @doc """
   Alias for `aggregate/3`.
   """
-  @spec reduce(Column.t() | String.t(), Column.t() | term(), (Column.t(), Column.t() -> Column.t())) ::
+  @spec reduce(Column.t() | String.t(), Column.t() | term(), (Column.t(), Column.t() ->
+                                                                Column.t())) ::
           Column.t()
   def reduce(col, zero, func), do: aggregate(col, zero, func)
 

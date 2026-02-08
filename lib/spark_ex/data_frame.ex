@@ -918,7 +918,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec scalar(t()) :: Column.t()
   def scalar(%__MODULE__{} = df) do
-    %Column{expr: {:subquery, df.plan, :scalar}}
+    %Column{expr: {:subquery, :scalar, df.plan, []}}
   end
 
   @doc """
@@ -926,7 +926,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec exists(t()) :: Column.t()
   def exists(%__MODULE__{} = df) do
-    %Column{expr: {:subquery, df.plan, :exists}}
+    %Column{expr: {:subquery, :exists, df.plan, []}}
   end
 
   # ── Actions (execute against Spark) ──

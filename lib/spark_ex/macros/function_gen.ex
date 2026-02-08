@@ -80,8 +80,7 @@ defmodule SparkEx.Macros.FunctionGen do
       @spec unquote(name)(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
       def unquote(name)(col1, col2) do
         %Column{
-          expr:
-            {:fn, unquote(spark_name), [to_expr(col1), to_expr(col2)], unquote(is_distinct)}
+          expr: {:fn, unquote(spark_name), [to_expr(col1), to_expr(col2)], unquote(is_distinct)}
         }
       end
     end
@@ -98,8 +97,8 @@ defmodule SparkEx.Macros.FunctionGen do
       def unquote(name)(col1, col2, col3) do
         %Column{
           expr:
-            {:fn, unquote(spark_name),
-             [to_expr(col1), to_expr(col2), to_expr(col3)], unquote(is_distinct)}
+            {:fn, unquote(spark_name), [to_expr(col1), to_expr(col2), to_expr(col3)],
+             unquote(is_distinct)}
         }
       end
     end
@@ -111,8 +110,7 @@ defmodule SparkEx.Macros.FunctionGen do
       @spec unquote(name)([Column.t() | String.t()]) :: Column.t()
       def unquote(name)(cols) when is_list(cols) do
         %Column{
-          expr:
-            {:fn, unquote(spark_name), Enum.map(cols, &to_expr/1), unquote(is_distinct)}
+          expr: {:fn, unquote(spark_name), Enum.map(cols, &to_expr/1), unquote(is_distinct)}
         }
       end
     end
@@ -134,8 +132,7 @@ defmodule SparkEx.Macros.FunctionGen do
       @spec unquote(name)(term(), term()) :: Column.t()
       def unquote(name)(arg1, arg2) do
         %Column{
-          expr:
-            {:fn, unquote(spark_name), [lit_expr(arg1), lit_expr(arg2)], unquote(is_distinct)}
+          expr: {:fn, unquote(spark_name), [lit_expr(arg1), lit_expr(arg2)], unquote(is_distinct)}
         }
       end
     end
@@ -147,8 +144,7 @@ defmodule SparkEx.Macros.FunctionGen do
       @spec unquote(name)(Column.t() | String.t(), term()) :: Column.t()
       def unquote(name)(col, arg1) do
         %Column{
-          expr:
-            {:fn, unquote(spark_name), [to_expr(col), lit_expr(arg1)], unquote(is_distinct)}
+          expr: {:fn, unquote(spark_name), [to_expr(col), lit_expr(arg1)], unquote(is_distinct)}
         }
       end
     end
@@ -161,8 +157,8 @@ defmodule SparkEx.Macros.FunctionGen do
       def unquote(name)(col, arg1, arg2) do
         %Column{
           expr:
-            {:fn, unquote(spark_name),
-             [to_expr(col), lit_expr(arg1), lit_expr(arg2)], unquote(is_distinct)}
+            {:fn, unquote(spark_name), [to_expr(col), lit_expr(arg1), lit_expr(arg2)],
+             unquote(is_distinct)}
         }
       end
     end
@@ -176,8 +172,7 @@ defmodule SparkEx.Macros.FunctionGen do
         %Column{
           expr:
             {:fn, unquote(spark_name),
-             [to_expr(col), lit_expr(arg1), lit_expr(arg2), lit_expr(arg3)],
-             unquote(is_distinct)}
+             [to_expr(col), lit_expr(arg1), lit_expr(arg2), lit_expr(arg3)], unquote(is_distinct)}
         }
       end
     end

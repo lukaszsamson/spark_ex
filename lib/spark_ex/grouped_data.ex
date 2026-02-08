@@ -81,24 +81,95 @@ defmodule SparkEx.GroupedData do
   for {name, spark_fn, doc} <- @grouped_agg_shortcuts do
     @doc doc
     @spec unquote(name)(t(), [Column.t() | String.t()]) :: DataFrame.t()
-    def unquote(name)(%__MODULE__{} = gd, cols \\ []) do
-      agg_exprs =
-        case cols do
-          [] ->
-            [%Column{expr: {:fn, unquote(spark_fn), [{:star}], false}}]
+    def unquote(name)(gd, cols \\ [])
 
-          cols ->
-            Enum.map(cols, fn
-              %Column{} = c ->
-                %Column{expr: {:fn, unquote(spark_fn), [c.expr], false}}
+    if name == :count do
+      def unquote(name)(%__MODULE__{} = gd, cols) do
+        agg_exprs =
+          case cols do
+            [] ->
+              [%Column{expr: {:alias, {:fn, "count", [{:lit, 1}], false}, "count"}}]
 
-              name when is_binary(name) ->
-                %Column{expr: {:fn, unquote(spark_fn), [{:col, name}], false}}
-            end)
-        end
+            cols ->
+              Enum.map(cols, fn
+                %Column{} = c ->
+                  %Column{expr: {:fn, "count", [c.expr], false}}
 
-      agg(gd, agg_exprs)
+                name when is_binary(name) ->
+                  %Column{expr: {:fn, "count", [{:col, name}], false}}
+              end)
+          end
+
+        agg(gd, agg_exprs)
+      end
+    else
+      def unquote(name)(%__MODULE__{} = gd, cols) do
+        numeric_agg(gd, unquote(spark_fn), cols)
+      end
     end
+  end
+
+  defp numeric_agg(%__MODULE__{} = gd, spark_fn, cols) do
+    schema = fetch_schema!(gd.session, gd.plan)
+    numeric_names = numeric_column_names(schema)
+
+    agg_names =
+      case cols do
+        [] ->
+          numeric_names
+
+        cols when is_list(cols) ->
+          normalize_string_columns(cols)
+      end
+
+    invalid = Enum.reject(agg_names, &(&1 in numeric_names))
+
+    if invalid != [] do
+      raise ArgumentError, "expected numeric columns, got: #{inspect(invalid)}"
+    end
+
+    if agg_names == [] do
+      raise ArgumentError, "expected at least one numeric column"
+    end
+
+    agg_exprs =
+      Enum.map(agg_names, fn name ->
+        %Column{expr: {:fn, spark_fn, [{:col, name}], false}}
+      end)
+
+    agg(gd, agg_exprs)
+  end
+
+  defp normalize_string_columns(cols) do
+    Enum.map(cols, fn
+      %Column{expr: {:col, name}} ->
+        name
+
+      %Column{} ->
+        raise ArgumentError, "expected column names when aggregating numeric columns"
+
+      name when is_binary(name) ->
+        name
+    end)
+  end
+
+  defp fetch_schema!(session, plan) do
+    case SparkEx.Session.analyze_schema(session, plan) do
+      {:ok, schema} -> schema
+      {:error, reason} -> raise ArgumentError, "failed to fetch schema: #{inspect(reason)}"
+    end
+  end
+
+  defp numeric_column_names(%Spark.Connect.DataType{kind: {:struct, struct}}) do
+    struct.fields
+    |> Enum.filter(fn %Spark.Connect.DataType.StructField{data_type: dt} -> numeric_type?(dt) end)
+    |> Enum.map(& &1.name)
+  end
+
+  defp numeric_column_names(_), do: []
+
+  defp numeric_type?(%Spark.Connect.DataType{kind: {tag, _}}) do
+    tag in [:byte, :short, :integer, :long, :float, :double, :decimal]
   end
 
   # ── Pivot ──

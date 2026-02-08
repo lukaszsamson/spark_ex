@@ -29,6 +29,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   """
   @spec encode(term(), non_neg_integer()) :: {Plan.t(), non_neg_integer()}
   def encode(plan, counter) do
+    {plan, counter} = attach_with_relations(plan, counter)
     {relation, counter} = encode_relation(plan, counter)
     {%Plan{op_type: {:root, relation}}, counter}
   end
@@ -65,6 +66,12 @@ defmodule SparkEx.Connect.PlanEncoder do
       rel_type: {:sql, sql}
     }
 
+    {relation, counter}
+  end
+
+  def encode_relation({:plan_id, plan_id, plan}, counter) do
+    {relation, counter} = encode_relation(plan, counter)
+    relation = put_in(relation.common.plan_id, plan_id)
     {relation, counter}
   end
 
@@ -696,6 +703,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   """
   @spec encode_count(term(), non_neg_integer()) :: {Plan.t(), non_neg_integer()}
   def encode_count(plan, counter) do
+    {plan, counter} = attach_with_relations(plan, counter)
     {child, counter} = encode_relation(plan, counter)
     {plan_id, counter} = next_id(counter)
 
@@ -907,8 +915,7 @@ defmodule SparkEx.Connect.PlanEncoder do
 
         tao ->
           %Spark.Connect.SubqueryExpression.TableArgOptions{
-            partition_spec:
-              Enum.map(Keyword.get(tao, :partition_spec, []), &encode_expression/1),
+            partition_spec: Enum.map(Keyword.get(tao, :partition_spec, []), &encode_expression/1),
             order_spec: Enum.map(Keyword.get(tao, :order_spec, []), &encode_sort_order/1),
             with_single_partition: Keyword.get(tao, :with_single_partition)
           }
@@ -926,9 +933,573 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
+  def encode_expression({:subquery, subquery_type, referenced_plan, opts}) do
+    {plan_id, _plan} = extract_referenced_plan_id(referenced_plan)
+    encode_expression({:subquery, subquery_type, plan_id, opts})
+  end
+
   # --- Private ---
 
   defp next_id(counter), do: {counter, counter + 1}
+
+  defp attach_with_relations(plan, counter) do
+    {updated_plan, refs, counter} = collect_subquery_references(plan, counter)
+
+    case refs do
+      [] ->
+        {updated_plan, counter}
+
+      refs ->
+        wrapped = {:with_relations, updated_plan, Enum.map(refs, & &1.plan)}
+        {wrapped, counter}
+    end
+  end
+
+  defp collect_subquery_references(plan, counter) do
+    {updated_plan, _plan_ids, refs, counter} = rewrite_plan(plan, %{}, [], counter)
+    {updated_plan, Enum.reverse(refs), counter}
+  end
+
+  defp rewrite_plan({:with_relations, root_plan, reference_plans}, plan_ids, refs, counter) do
+    {root_plan, plan_ids, refs, counter} = rewrite_plan(root_plan, plan_ids, refs, counter)
+
+    {reference_plans, {plan_ids, refs, counter}} =
+      Enum.map_reduce(reference_plans, {plan_ids, refs, counter}, fn ref_plan, {ids, acc, ctr} ->
+        {updated_ref, ids, acc, ctr} = rewrite_plan(ref_plan, ids, acc, ctr)
+        {updated_ref, {ids, acc, ctr}}
+      end)
+
+    {{:with_relations, root_plan, reference_plans}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:sql, query, args}, plan_ids, refs, counter) do
+    {args, plan_ids, refs, counter} = rewrite_args(args, plan_ids, refs, counter)
+    {{:sql, query, args}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:range, _start, _end, _step, _num_partitions} = plan,
+         plan_ids,
+         refs,
+         counter
+       ),
+       do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan({:local_relation, _data, _schema} = plan, plan_ids, refs, counter),
+    do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan({:cached_local_relation, _hash} = plan, plan_ids, refs, counter),
+    do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan(
+         {:chunked_cached_local_relation, _data_hashes, _schema_hash} = plan,
+         plan_ids,
+         refs,
+         counter
+       ),
+       do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan({:limit, child_plan, n}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:limit, child_plan, n}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:read_named_table, _table_name, _options} = plan, plan_ids, refs, counter),
+    do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan(
+         {:read_data_source, _format, _paths, _schema, _options} = plan,
+         plan_ids,
+         refs,
+         counter
+       ),
+       do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan({:project, child_plan, expressions}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {expressions, plan_ids, refs, counter} =
+      rewrite_expr_list(expressions, plan_ids, refs, counter)
+
+    {{:project, child_plan, expressions}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:filter, child_plan, condition}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {condition, plan_ids, refs, counter} = rewrite_expr(condition, plan_ids, refs, counter)
+    {{:filter, child_plan, condition}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:sort, child_plan, sort_orders}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {sort_orders, plan_ids, refs, counter} =
+      rewrite_sort_orders(sort_orders, plan_ids, refs, counter)
+
+    {{:sort, child_plan, sort_orders}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:sort, child_plan, sort_orders, is_global}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {sort_orders, plan_ids, refs, counter} =
+      rewrite_sort_orders(sort_orders, plan_ids, refs, counter)
+
+    {{:sort, child_plan, sort_orders, is_global}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:with_columns, child_plan, aliases}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {aliases, plan_ids, refs, counter} = rewrite_aliases(aliases, plan_ids, refs, counter)
+    {{:with_columns, child_plan, aliases}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:drop, child_plan, column_names}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:drop, child_plan, column_names}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:show_string, child_plan, num_rows, truncate, vertical},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:show_string, child_plan, num_rows, truncate, vertical}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:aggregate, child_plan, group_type, grouping_exprs, agg_exprs},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {grouping_exprs, plan_ids, refs, counter} =
+      rewrite_expr_list(grouping_exprs, plan_ids, refs, counter)
+
+    {agg_exprs, plan_ids, refs, counter} = rewrite_expr_list(agg_exprs, plan_ids, refs, counter)
+    {{:aggregate, child_plan, group_type, grouping_exprs, agg_exprs}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:aggregate, child_plan, :pivot, grouping_exprs, agg_exprs, pivot_col, pivot_values},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {grouping_exprs, plan_ids, refs, counter} =
+      rewrite_expr_list(grouping_exprs, plan_ids, refs, counter)
+
+    {agg_exprs, plan_ids, refs, counter} = rewrite_expr_list(agg_exprs, plan_ids, refs, counter)
+    {pivot_col, plan_ids, refs, counter} = rewrite_expr(pivot_col, plan_ids, refs, counter)
+
+    {{:aggregate, child_plan, :pivot, grouping_exprs, agg_exprs, pivot_col, pivot_values},
+     plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:join, left_plan, right_plan, join_condition, join_type, using_columns},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {left_plan, plan_ids, refs, counter} = rewrite_plan(left_plan, plan_ids, refs, counter)
+    {right_plan, plan_ids, refs, counter} = rewrite_plan(right_plan, plan_ids, refs, counter)
+
+    {join_condition, plan_ids, refs, counter} =
+      case join_condition do
+        nil -> {nil, plan_ids, refs, counter}
+        expr -> rewrite_expr(expr, plan_ids, refs, counter)
+      end
+
+    {{:join, left_plan, right_plan, join_condition, join_type, using_columns}, plan_ids, refs,
+     counter}
+  end
+
+  defp rewrite_plan(
+         {:deduplicate, child_plan, column_names, all_columns} = _plan,
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:deduplicate, child_plan, column_names, all_columns}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:deduplicate, child_plan, column_names, all_columns, within_watermark},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {{:deduplicate, child_plan, column_names, all_columns, within_watermark}, plan_ids, refs,
+     counter}
+  end
+
+  defp rewrite_plan(
+         {:set_operation, left_plan, right_plan, op_type, is_all},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {left_plan, plan_ids, refs, counter} = rewrite_plan(left_plan, plan_ids, refs, counter)
+    {right_plan, plan_ids, refs, counter} = rewrite_plan(right_plan, plan_ids, refs, counter)
+    {{:set_operation, left_plan, right_plan, op_type, is_all}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:set_operation, left_plan, right_plan, op_type, is_all, opts},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {left_plan, plan_ids, refs, counter} = rewrite_plan(left_plan, plan_ids, refs, counter)
+    {right_plan, plan_ids, refs, counter} = rewrite_plan(right_plan, plan_ids, refs, counter)
+    {{:set_operation, left_plan, right_plan, op_type, is_all, opts}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:offset, child_plan, n}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:offset, child_plan, n}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:tail, child_plan, n}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:tail, child_plan, n}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:to_df, child_plan, column_names}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:to_df, child_plan, column_names}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:with_columns_renamed, child_plan, renames}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:with_columns_renamed, child_plan, renames}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:repartition, child_plan, num_partitions, shuffle}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:repartition, child_plan, num_partitions, shuffle}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:repartition_by_expression, child_plan, exprs, num_partitions},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {exprs, plan_ids, refs, counter} = rewrite_expr_list(exprs, plan_ids, refs, counter)
+    {{:repartition_by_expression, child_plan, exprs, num_partitions}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:sample, child_plan, lower, upper, with_replacement, seed, deterministic},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {{:sample, child_plan, lower, upper, with_replacement, seed, deterministic}, plan_ids, refs,
+     counter}
+  end
+
+  defp rewrite_plan({:hint, child_plan, name, parameters}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {parameters, plan_ids, refs, counter} = rewrite_expr_list(parameters, plan_ids, refs, counter)
+    {{:hint, child_plan, name, parameters}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:unpivot, child_plan, ids, values, variable_column_name, value_column_name},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {ids, plan_ids, refs, counter} = rewrite_expr_list(ids, plan_ids, refs, counter)
+
+    {values, plan_ids, refs, counter} =
+      case values do
+        nil -> {nil, plan_ids, refs, counter}
+        vals -> rewrite_expr_list(vals, plan_ids, refs, counter)
+      end
+
+    {{:unpivot, child_plan, ids, values, variable_column_name, value_column_name}, plan_ids, refs,
+     counter}
+  end
+
+  defp rewrite_plan({:transpose, child_plan, index_columns}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {index_columns, plan_ids, refs, counter} =
+      rewrite_expr_list(index_columns, plan_ids, refs, counter)
+
+    {{:transpose, child_plan, index_columns}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:html_string, child_plan, num_rows, truncate}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:html_string, child_plan, num_rows, truncate}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:with_watermark, child_plan, event_time, delay_threshold},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:with_watermark, child_plan, event_time, delay_threshold}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:subquery_alias, child_plan, alias_name}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:subquery_alias, child_plan, alias_name}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(other, _plan_ids, _refs, _counter) do
+    raise ArgumentError, "unsupported plan tuple: #{inspect(other)}"
+  end
+
+  defp rewrite_args(nil, plan_ids, refs, counter), do: {nil, plan_ids, refs, counter}
+
+  defp rewrite_args(args, plan_ids, refs, counter) when is_list(args) do
+    rewrite_expr_list(args, plan_ids, refs, counter)
+  end
+
+  defp rewrite_args(args, plan_ids, refs, counter) when is_map(args) do
+    {new_args, {plan_ids, refs, counter}} =
+      Enum.map_reduce(args, {plan_ids, refs, counter}, fn {key, value}, {ids, acc, ctr} ->
+        {updated, ids, acc, ctr} = rewrite_expr(value, ids, acc, ctr)
+        {{key, updated}, {ids, acc, ctr}}
+      end)
+
+    {Map.new(new_args), plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr_list(exprs, plan_ids, refs, counter) do
+    {updated, {plan_ids, refs, counter}} =
+      Enum.map_reduce(exprs, {plan_ids, refs, counter}, fn expr, {ids, acc, ctr} ->
+        {updated_expr, ids, acc, ctr} = rewrite_expr(expr, ids, acc, ctr)
+        {updated_expr, {ids, acc, ctr}}
+      end)
+
+    {updated, plan_ids, refs, counter}
+  end
+
+  defp rewrite_aliases(aliases, plan_ids, refs, counter) do
+    {updated, {plan_ids, refs, counter}} =
+      Enum.map_reduce(aliases, {plan_ids, refs, counter}, fn alias_item, {ids, acc, ctr} ->
+        {alias_item, ids, acc, ctr} = rewrite_alias(alias_item, ids, acc, ctr)
+        {alias_item, {ids, acc, ctr}}
+      end)
+
+    {updated, plan_ids, refs, counter}
+  end
+
+  defp rewrite_alias({:alias, expr, name}, plan_ids, refs, counter) do
+    {expr, plan_ids, refs, counter} = rewrite_expr(expr, plan_ids, refs, counter)
+    {{:alias, expr, name}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_alias({:alias, expr, name, metadata}, plan_ids, refs, counter) do
+    {expr, plan_ids, refs, counter} = rewrite_expr(expr, plan_ids, refs, counter)
+    {{:alias, expr, name, metadata}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_sort_orders(sort_orders, plan_ids, refs, counter) do
+    {updated, {plan_ids, refs, counter}} =
+      Enum.map_reduce(sort_orders, {plan_ids, refs, counter}, fn sort_order, {ids, acc, ctr} ->
+        {sort_order, ids, acc, ctr} = rewrite_sort_order(sort_order, ids, acc, ctr)
+        {sort_order, {ids, acc, ctr}}
+      end)
+
+    {updated, plan_ids, refs, counter}
+  end
+
+  defp rewrite_sort_order({:sort_order, expr, direction, null_ordering}, plan_ids, refs, counter) do
+    {expr, plan_ids, refs, counter} = rewrite_expr(expr, plan_ids, refs, counter)
+    {{:sort_order, expr, direction, null_ordering}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_sort_order(other, plan_ids, refs, counter) do
+    {other, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr(%Column{expr: expr}, plan_ids, refs, counter) do
+    {expr, plan_ids, refs, counter} = rewrite_expr(expr, plan_ids, refs, counter)
+    {%Column{expr: expr}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:col, _} = expr, plan_ids, refs, counter),
+    do: {expr, plan_ids, refs, counter}
+
+  defp rewrite_expr({:lit, _} = expr, plan_ids, refs, counter),
+    do: {expr, plan_ids, refs, counter}
+
+  defp rewrite_expr({:expr, _} = expr, plan_ids, refs, counter),
+    do: {expr, plan_ids, refs, counter}
+
+  defp rewrite_expr({:star} = expr, plan_ids, refs, counter), do: {expr, plan_ids, refs, counter}
+
+  defp rewrite_expr({:star, _} = expr, plan_ids, refs, counter),
+    do: {expr, plan_ids, refs, counter}
+
+  defp rewrite_expr({:fn, name, args, is_distinct}, plan_ids, refs, counter) do
+    {args, plan_ids, refs, counter} = rewrite_expr_list(args, plan_ids, refs, counter)
+    {{:fn, name, args, is_distinct}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:alias, expr, name}, plan_ids, refs, counter) do
+    {expr, plan_ids, refs, counter} = rewrite_expr(expr, plan_ids, refs, counter)
+    {{:alias, expr, name}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:cast, expr, type_str}, plan_ids, refs, counter) do
+    {expr, plan_ids, refs, counter} = rewrite_expr(expr, plan_ids, refs, counter)
+    {{:cast, expr, type_str}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:cast, expr, type_str, :try}, plan_ids, refs, counter) do
+    {expr, plan_ids, refs, counter} = rewrite_expr(expr, plan_ids, refs, counter)
+    {{:cast, expr, type_str, :try}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr(
+         {:window, fn_expr, partition_spec, order_spec, frame_spec},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {fn_expr, plan_ids, refs, counter} = rewrite_expr(fn_expr, plan_ids, refs, counter)
+
+    {partition_spec, plan_ids, refs, counter} =
+      rewrite_expr_list(partition_spec, plan_ids, refs, counter)
+
+    {order_spec, plan_ids, refs, counter} =
+      rewrite_sort_orders(order_spec, plan_ids, refs, counter)
+
+    {{:window, fn_expr, partition_spec, order_spec, frame_spec}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:unresolved_extract_value, child, extraction}, plan_ids, refs, counter) do
+    {child, plan_ids, refs, counter} = rewrite_expr(child, plan_ids, refs, counter)
+    {extraction, plan_ids, refs, counter} = rewrite_expr(extraction, plan_ids, refs, counter)
+    {{:unresolved_extract_value, child, extraction}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:lambda, body, variables}, plan_ids, refs, counter) do
+    {body, plan_ids, refs, counter} = rewrite_expr(body, plan_ids, refs, counter)
+    {{:lambda, body, variables}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:lambda_var, _name} = expr, plan_ids, refs, counter),
+    do: {expr, plan_ids, refs, counter}
+
+  defp rewrite_expr({:subquery, subquery_type, referenced_plan, opts}, plan_ids, refs, counter)
+       when is_list(opts) do
+    {plan_ids, refs, plan_id, counter} = ensure_plan_id(referenced_plan, plan_ids, refs, counter)
+
+    {opts, plan_ids, refs, counter} =
+      case Keyword.get(opts, :table_arg_options) do
+        nil ->
+          {opts, plan_ids, refs, counter}
+
+        table_opts ->
+          {table_opts, plan_ids, refs, counter} =
+            rewrite_table_arg_options(table_opts, plan_ids, refs, counter)
+
+          {Keyword.put(opts, :table_arg_options, table_opts), plan_ids, refs, counter}
+      end
+
+    {opts, plan_ids, refs, counter} =
+      case Keyword.get(opts, :in_values) do
+        nil ->
+          {opts, plan_ids, refs, counter}
+
+        values ->
+          {values, plan_ids, refs, counter} = rewrite_expr_list(values, plan_ids, refs, counter)
+          {Keyword.put(opts, :in_values, values), plan_ids, refs, counter}
+      end
+
+    {{:subquery, subquery_type, plan_id, opts}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr(value, plan_ids, refs, counter), do: {value, plan_ids, refs, counter}
+
+  defp ensure_plan_id(referenced_plan, plan_ids, refs, counter) do
+    {plan_id, referenced_plan, counter} = extract_referenced_plan_id(referenced_plan, counter)
+
+    case Map.fetch(plan_ids, plan_id) do
+      {:ok, existing} ->
+        {plan_ids, refs, existing, counter}
+
+      :error ->
+        plan_ids = Map.put(plan_ids, plan_id, plan_id)
+        refs = [%{id: plan_id, plan: referenced_plan} | refs]
+        {plan_ids, refs, plan_id, counter}
+    end
+  end
+
+  defp rewrite_table_arg_options(table_opts, plan_ids, refs, counter) do
+    {partition_spec, plan_ids, refs, counter} =
+      rewrite_expr_list(Keyword.get(table_opts, :partition_spec, []), plan_ids, refs, counter)
+
+    {order_spec, plan_ids, refs, counter} =
+      rewrite_sort_orders(Keyword.get(table_opts, :order_spec, []), plan_ids, refs, counter)
+
+    table_opts =
+      table_opts
+      |> Keyword.put(:partition_spec, partition_spec)
+      |> Keyword.put(:order_spec, order_spec)
+
+    {table_opts, plan_ids, refs, counter}
+  end
+
+  defp extract_referenced_plan_id(%{plan_id: plan_id, plan: plan}, counter)
+       when is_integer(plan_id) do
+    {plan_id, plan, counter}
+  end
+
+  defp extract_referenced_plan_id({plan_id, plan}, counter) when is_integer(plan_id) do
+    {plan_id, plan, counter}
+  end
+
+  defp extract_referenced_plan_id({:plan_id, plan_id, plan}, counter) when is_integer(plan_id) do
+    {plan_id, plan, counter}
+  end
+
+  defp extract_referenced_plan_id(plan, counter) do
+    {plan_id, counter} = next_id(counter)
+    {plan_id, {:plan_id, plan_id, plan}, counter}
+  end
+
+  defp extract_referenced_plan_id(%{plan_id: plan_id, plan: plan}) when is_integer(plan_id) do
+    {plan_id, plan}
+  end
+
+  defp extract_referenced_plan_id({plan_id, plan}) when is_integer(plan_id) do
+    {plan_id, plan}
+  end
+
+  defp extract_referenced_plan_id({:plan_id, plan_id, plan}) when is_integer(plan_id) do
+    {plan_id, plan}
+  end
+
+  defp extract_referenced_plan_id(plan) do
+    raise ArgumentError,
+          "expected subquery plan to carry plan_id via {plan_id, plan} or %{plan_id: plan_id, plan: plan}, got: #{inspect(plan)}"
+  end
 
   defp encode_literal_expression(value) do
     %Expression{expr_type: {:literal, encode_literal(value)}}
@@ -1054,5 +1625,4 @@ defmodule SparkEx.Connect.PlanEncoder do
       boundary: {:value, encode_literal_expression(n)}
     }
   end
-
 end

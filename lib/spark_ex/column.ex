@@ -122,10 +122,11 @@ defmodule SparkEx.Column do
   @doc "Returns true if the column value is in the given list of values."
   @spec isin(t(), [term()]) :: t()
   def isin(%__MODULE__{} = col, values) when is_list(values) do
-    value_exprs = Enum.map(values, fn
-      %__MODULE__{expr: e} -> e
-      v -> {:lit, v}
-    end)
+    value_exprs =
+      Enum.map(values, fn
+        %__MODULE__{expr: e} -> e
+        v -> {:lit, v}
+      end)
 
     %__MODULE__{expr: {:fn, "in", [col.expr | value_exprs], false}}
   end
