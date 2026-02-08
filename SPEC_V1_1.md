@@ -106,7 +106,7 @@ Major missing DataFrame APIs vs PySpark Connect:
 - Metadata/views: `createTempView`, `createOrReplaceTempView`, global temp view variants
 - Metadata/query shaping: `hint`, `withMetadata`, `withWatermark`, `dropDuplicatesWithinWatermark`, `to(schema)`
 - Dedup variants: `dropDuplicates(subset)` parity (current `distinct` is only full-row dedup)
-- Metadata columns/subquery helpers: `colRegex`, `metadataColumn`, `asTable`, `scalar`, `exists`
+- Metadata columns/subquery helpers: `colRegex`, `metadataColumn`; `asTable`/`scalar`/`exists` API surface exists, but executable subquery relation-reference encoding is still missing
 - Display/introspection parity: `printSchema` tree-string mode and `HtmlString` path
 - Transformation helpers: `transform` functional combinator
 - Local extraction/iteration helpers: `toArrow`, `toLocalIterator`, `foreach`, `foreachPartition`
@@ -135,6 +135,7 @@ Missing common `Column` capabilities:
 Expression-level gaps in encoder:
 
 - Window, lambda, update fields, regex extract, subquery expressions
+- Subquery execution wiring gap: `as_table`/`scalar`/`exists` map to API-level expressions, but encoder path still lacks full `Expression.subquery_expression` + `Relation.with_relations`/`plan_id` reference wiring (currently guarded by explicit unsupported error when attempting executable encoding)
 - CallFunction / NamedArgumentExpression support
 - Merge actions for MERGE INTO
 - Metadata/regex-related expression support for `metadataColumn`/`colRegex`
@@ -363,13 +364,14 @@ Deliverables:
 - convenience aliases and ergonomics: `where`, `union_all`, explicit `cross_join`
 - temp/global view creation APIs (via command encoder)
 - metadata/query shaping APIs: `hint`, `with_metadata`, `with_watermark`, `drop_duplicates_within_watermark`
-- subquery/dataframe expression helpers: `as_table`, `scalar`, `exists`
+- subquery/dataframe expression helpers: `as_table`, `scalar`, `exists` (API surface)
 - display parity helpers: `print_schema` tree-string mode and optional HTML-string parity path
 - semantic/hash/local/streaming/inputFiles introspection APIs
 
 Acceptance:
 
 - Behavior parity tests mirrored from PySpark connect dataframe/readwriter parity suites
+- Note: executable subquery relation-reference encoding moved to Milestone 11 as a blocker for full behavioral parity of `as_table`/`scalar`/`exists`
 
 ## Milestone 11 - Column + Functions Expansion
 
@@ -378,11 +380,17 @@ Deliverables:
 - Expand `SparkEx.Column` operators and predicates to common PySpark set
 - Generate large portion of `SparkEx.Functions` wrappers from a declarative function registry
 - Add window API (`Window`, `WindowSpec`) and `over/1` support
+- Implement executable subquery expression encoding:
+  - `Expression.subquery_expression` emission for scalar/exists/table-arg forms
+  - deterministic `plan_id` assignment for referenced subquery plans
+  - root wrapping via `Relation.with_relations` to carry referenced subquery relations
+  - removal of current explicit unsupported guard once end-to-end wiring is complete
 - Expand GroupedData API beyond `agg` (`count/min/max/sum/avg/pivot` baseline)
 
 Acceptance:
 
 - Function/column parity test suite against canonical examples
+- Integration tests for `as_table`/`scalar`/`exists` with executable subqueries (at minimum non-correlated scalar + exists flows, plus one table-arg flow)
 - No hand-maintained 500-function drift (registry/codegen-based approach)
 
 ## Milestone 12 - Catalog API
@@ -444,6 +452,7 @@ Execution model:
 - Run negative tests for invalid expressions/types/options and verify structured errors
 - Run concurrency tests for concurrent operations within a single session and across cloned sessions
 - Run large-result tests for Arrow chunking and reassembly behavior
+- Run explicit subquery execution tests that validate relation-reference wiring (`with_relations` + `subquery_expression.plan_id`) and verify prior guarded failure path is removed
 - Add encoder regression tests:
   - golden protobuf snapshots for representative relation/expression/command trees
   - proto encode/decode roundtrip checks to detect serialization drift
