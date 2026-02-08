@@ -14,6 +14,7 @@ defmodule SparkEx.Connect.Client do
     ConfigRequest,
     ConfigResponse,
     ExecutePlanRequest,
+    ResultChunkingOptions,
     KeyValue,
     Plan,
     UserContext
@@ -78,22 +79,22 @@ defmodule SparkEx.Connect.Client do
   @spec analyze_explain(SparkEx.Session.t(), Plan.t(), atom()) ::
           {:ok, String.t(), String.t() | nil} | {:error, term()}
   def analyze_explain(session, plan, mode) do
-    explain_mode = explain_mode_to_proto(mode)
+    with {:ok, explain_mode} <- explain_mode_to_proto(mode) do
+      request =
+        build_analyze_request(session,
+          analyze: {:explain, %AnalyzePlanRequest.Explain{plan: plan, explain_mode: explain_mode}}
+        )
 
-    request =
-      build_analyze_request(session,
-        analyze: {:explain, %AnalyzePlanRequest.Explain{plan: plan, explain_mode: explain_mode}}
-      )
+      case Stub.analyze_plan(session.channel, request) do
+        {:ok, %AnalyzePlanResponse{result: {:explain, %{explain_string: str}}} = resp} ->
+          {:ok, str, resp.server_side_session_id}
 
-    case Stub.analyze_plan(session.channel, request) do
-      {:ok, %AnalyzePlanResponse{result: {:explain, %{explain_string: str}}} = resp} ->
-        {:ok, str, resp.server_side_session_id}
+        {:error, %GRPC.RPCError{} = error} ->
+          {:error, Errors.from_grpc_error(error, session)}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -115,12 +116,19 @@ defmodule SparkEx.Connect.Client do
       client_type: session.client_type,
       user_context: %UserContext{user_id: session.user_id},
       client_observed_server_side_session_id: session.server_side_session_id,
-      plan: plan
+      plan: plan,
+      request_options: [
+        %ExecutePlanRequest.RequestOption{
+          request_option:
+            {:result_chunking_options,
+             %ResultChunkingOptions{allow_arrow_batch_chunking: true}}
+        }
+      ]
     }
 
     case Stub.execute_plan(session.channel, request, timeout: timeout) do
       {:ok, stream} ->
-        ResultDecoder.decode_stream(stream)
+        ResultDecoder.decode_stream(stream, session)
 
       {:error, %GRPC.RPCError{} = error} ->
         {:error, Errors.from_grpc_error(error, session)}
@@ -213,9 +221,10 @@ defmodule SparkEx.Connect.Client do
     )
   end
 
-  defp explain_mode_to_proto(:simple), do: :EXPLAIN_MODE_SIMPLE
-  defp explain_mode_to_proto(:extended), do: :EXPLAIN_MODE_EXTENDED
-  defp explain_mode_to_proto(:codegen), do: :EXPLAIN_MODE_CODEGEN
-  defp explain_mode_to_proto(:cost), do: :EXPLAIN_MODE_COST
-  defp explain_mode_to_proto(:formatted), do: :EXPLAIN_MODE_FORMATTED
+  defp explain_mode_to_proto(:simple), do: {:ok, :EXPLAIN_MODE_SIMPLE}
+  defp explain_mode_to_proto(:extended), do: {:ok, :EXPLAIN_MODE_EXTENDED}
+  defp explain_mode_to_proto(:codegen), do: {:ok, :EXPLAIN_MODE_CODEGEN}
+  defp explain_mode_to_proto(:cost), do: {:ok, :EXPLAIN_MODE_COST}
+  defp explain_mode_to_proto(:formatted), do: {:ok, :EXPLAIN_MODE_FORMATTED}
+  defp explain_mode_to_proto(other), do: {:error, {:invalid_explain_mode, other}}
 end

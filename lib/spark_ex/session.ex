@@ -207,8 +207,11 @@ defmodule SparkEx.Session do
     case Client.execute_plan(state, proto_plan) do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
-        count = extract_count(result.rows)
-        {:reply, {:ok, count}, state}
+
+        case extract_count(result.rows) do
+          {:ok, count} -> {:reply, {:ok, count}, state}
+          {:error, _} = error -> {:reply, error, state}
+        end
 
       {:error, _} = error ->
         {:reply, error, state}
@@ -318,9 +321,16 @@ defmodule SparkEx.Session do
     "elixir/#{System.version()}/otp#{otp_release}/spark_ex/#{@spark_ex_version}"
   end
 
-  defp extract_count([%{"count(1)" => n}]), do: n
-  defp extract_count([row]) when is_map(row), do: row |> Map.values() |> hd()
-  defp extract_count(_), do: 0
+  defp extract_count([%{"count(1)" => n}]) when is_integer(n) and n >= 0, do: {:ok, n}
+
+  defp extract_count([row]) when is_map(row) and map_size(row) == 1 do
+    case Map.values(row) do
+      [n] when is_integer(n) and n >= 0 -> {:ok, n}
+      _ -> {:error, {:invalid_count_response, row}}
+    end
+  end
+
+  defp extract_count(rows), do: {:error, {:invalid_count_response, rows}}
 
   defp call_timeout(opts) do
     Keyword.get(opts, :timeout, 60_000) + 5_000

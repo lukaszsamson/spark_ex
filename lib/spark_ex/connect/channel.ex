@@ -95,15 +95,19 @@ defmodule SparkEx.Connect.Channel do
       when is_binary(host) and host != "" ->
         port = port || @default_port
 
-        params_string =
-          case path do
-            nil -> ""
-            "/" -> ""
-            "/;" <> rest -> rest
-            _ -> ""
-          end
+        case path do
+          nil ->
+            {:ok, {host, port, ""}}
 
-        {:ok, {host, port, params_string}}
+          "/" ->
+            {:ok, {host, port, ""}}
+
+          "/;" <> rest ->
+            {:ok, {host, port, rest}}
+
+          other ->
+            {:error, {:invalid_uri, "path component '#{other}' must be empty"}}
+        end
 
       %URI{scheme: nil} ->
         {:error, {:invalid_uri, "missing sc:// scheme"}}

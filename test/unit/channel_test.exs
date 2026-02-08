@@ -52,5 +52,9 @@ defmodule SparkEx.Connect.ChannelTest do
     test "rejects missing scheme" do
       assert {:error, {:invalid_uri, _}} = Channel.parse_uri("localhost:15002")
     end
+
+    test "rejects non-empty path component" do
+      assert {:error, {:invalid_uri, _}} = Channel.parse_uri("sc://localhost:15002/not-allowed")
+    end
   end
 end
