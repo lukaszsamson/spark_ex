@@ -337,6 +337,38 @@ defmodule SparkEx.Connect.PlanEncoder do
     {relation, counter}
   end
 
+  def encode_relation(
+        {:aggregate, child_plan, :pivot, grouping_exprs, agg_exprs, pivot_col, pivot_values},
+        counter
+      ) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    pivot_values_protos =
+      case pivot_values do
+        nil -> []
+        vals -> Enum.map(vals, &encode_literal/1)
+      end
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:aggregate,
+         %Spark.Connect.Aggregate{
+           input: child,
+           group_type: :GROUP_TYPE_PIVOT,
+           grouping_expressions: Enum.map(grouping_exprs, &encode_expression/1),
+           aggregate_expressions: Enum.map(agg_exprs, &encode_expression/1),
+           pivot: %Spark.Connect.Aggregate.Pivot{
+             col: encode_expression(pivot_col),
+             values: pivot_values_protos
+           }
+         }}
+    }
+
+    {relation, counter}
+  end
+
   # --- Milestone 3: Join ---
 
   def encode_relation(
@@ -761,6 +793,70 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
+  def encode_expression({:cast, expr, type_str, :try}) do
+    %Expression{
+      expr_type:
+        {:cast,
+         %Expression.Cast{
+           expr: encode_expression(expr),
+           cast_to_type: {:type_str, type_str},
+           eval_mode: :EVAL_MODE_TRY
+         }}
+    }
+  end
+
+  # --- Window expression ---
+
+  def encode_expression({:window, fn_expr, partition_spec, order_spec, frame_spec}) do
+    %Expression{
+      expr_type:
+        {:window,
+         %Expression.Window{
+           window_function: encode_expression(fn_expr),
+           partition_spec: Enum.map(partition_spec, &encode_expression/1),
+           order_spec: Enum.map(order_spec, &encode_sort_order/1),
+           frame_spec: encode_window_frame(frame_spec)
+         }}
+    }
+  end
+
+  # --- Unresolved extract value (array[i], map[key], struct.field) ---
+
+  def encode_expression({:unresolved_extract_value, child, extraction}) do
+    %Expression{
+      expr_type:
+        {:unresolved_extract_value,
+         %Expression.UnresolvedExtractValue{
+           child: encode_expression(child),
+           extraction: encode_expression(extraction)
+         }}
+    }
+  end
+
+  # --- Lambda function ---
+
+  def encode_expression({:lambda, body, variables}) do
+    %Expression{
+      expr_type:
+        {:lambda_function,
+         %Expression.LambdaFunction{
+           function: encode_expression(body),
+           arguments:
+             Enum.map(variables, fn {:lambda_var, name} ->
+               %Expression.UnresolvedNamedLambdaVariable{name_parts: [name]}
+             end)
+         }}
+    }
+  end
+
+  def encode_expression({:lambda_var, name}) do
+    %Expression{
+      expr_type:
+        {:unresolved_named_lambda_variable,
+         %Expression.UnresolvedNamedLambdaVariable{name_parts: [name]}}
+    }
+  end
+
   def encode_expression({:sort_order, expr, direction, null_ordering}) do
     %Expression{
       expr_type:
@@ -785,9 +881,49 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
-  def encode_expression({:subquery, _plan, _kind}) do
-    raise ArgumentError,
-          "subquery expressions require relation-reference encoding which is not yet wired"
+  # --- Subquery expression ---
+  # The subquery expression references a plan via plan_id. The caller is responsible
+  # for encoding the referenced plan and wrapping the root in {:with_relations, ...}.
+
+  def encode_expression({:subquery, subquery_type, plan_id, opts}) when is_integer(plan_id) do
+    subquery_type_enum =
+      case subquery_type do
+        :scalar -> :SUBQUERY_TYPE_SCALAR
+        :exists -> :SUBQUERY_TYPE_EXISTS
+        :table_arg -> :SUBQUERY_TYPE_TABLE_ARG
+        :in -> :SUBQUERY_TYPE_IN
+      end
+
+    in_values =
+      case Keyword.get(opts, :in_values) do
+        nil -> []
+        vals -> Enum.map(vals, &encode_expression/1)
+      end
+
+    table_arg_options =
+      case Keyword.get(opts, :table_arg_options) do
+        nil ->
+          nil
+
+        tao ->
+          %Spark.Connect.SubqueryExpression.TableArgOptions{
+            partition_spec:
+              Enum.map(Keyword.get(tao, :partition_spec, []), &encode_expression/1),
+            order_spec: Enum.map(Keyword.get(tao, :order_spec, []), &encode_sort_order/1),
+            with_single_partition: Keyword.get(tao, :with_single_partition)
+          }
+      end
+
+    %Expression{
+      expr_type:
+        {:subquery_expression,
+         %Spark.Connect.SubqueryExpression{
+           plan_id: plan_id,
+           subquery_type: subquery_type_enum,
+           in_subquery_values: in_values,
+           table_arg_options: table_arg_options
+         }}
+    }
   end
 
   # --- Private ---
@@ -809,9 +945,14 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_sql_argument({:alias, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:sort_order, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:cast, _, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:cast, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:star} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:star, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:subquery, _, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:window, _, _, _, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:unresolved_extract_value, _, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:lambda, _, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:lambda_var, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:subquery, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument(value), do: encode_literal_expression(value)
 
   defp encode_literal(nil),
@@ -884,4 +1025,34 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_set_op_type(:union), do: :SET_OP_TYPE_UNION
   defp encode_set_op_type(:intersect), do: :SET_OP_TYPE_INTERSECT
   defp encode_set_op_type(:except), do: :SET_OP_TYPE_EXCEPT
+
+  # --- Window frame encoding ---
+
+  defp encode_window_frame(nil), do: nil
+
+  defp encode_window_frame({frame_type, lower, upper}) do
+    %Expression.Window.WindowFrame{
+      frame_type: encode_frame_type(frame_type),
+      lower: encode_frame_boundary(lower, :lower),
+      upper: encode_frame_boundary(upper, :upper)
+    }
+  end
+
+  defp encode_frame_type(:rows), do: :FRAME_TYPE_ROW
+  defp encode_frame_type(:range), do: :FRAME_TYPE_RANGE
+
+  defp encode_frame_boundary(:current_row, _position) do
+    %Expression.Window.WindowFrame.FrameBoundary{boundary: {:current_row, true}}
+  end
+
+  defp encode_frame_boundary(:unbounded, _position) do
+    %Expression.Window.WindowFrame.FrameBoundary{boundary: {:unbounded, true}}
+  end
+
+  defp encode_frame_boundary(n, _position) when is_integer(n) do
+    %Expression.Window.WindowFrame.FrameBoundary{
+      boundary: {:value, encode_literal_expression(n)}
+    }
+  end
+
 end

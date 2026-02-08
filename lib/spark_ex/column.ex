@@ -13,7 +13,7 @@ defmodule SparkEx.Column do
       import SparkEx.Functions, only: [col: 1, lit: 1]
 
       col("age") |> SparkEx.Column.gt(lit(18))
-      col("name") |> SparkEx.Column.alias("user_name")
+      col("name") |> SparkEx.Column.alias_("user_name")
       col("score") |> SparkEx.Column.desc()
   """
 
@@ -29,129 +29,75 @@ defmodule SparkEx.Column do
           | {:alias, expr(), String.t()}
           | {:sort_order, expr(), :asc | :desc, :nulls_first | :nulls_last | nil}
           | {:cast, expr(), String.t()}
+          | {:cast, expr(), String.t(), :try}
           | {:star}
           | {:star, String.t()}
-          | {:subquery, term(), :scalar | :exists}
+          | {:window, expr(), [expr()], [expr()], term()}
+          | {:unresolved_extract_value, expr(), expr()}
+          | {:lambda, expr(), [{:lambda_var, String.t()}]}
+          | {:lambda_var, String.t()}
+          | {:subquery, atom(), term(), keyword()}
 
-  # --- Comparisons ---
+  # ── Generated binary operators ──
 
-  @doc "Equality: `col == other`"
-  @spec eq(t(), t()) :: t()
-  def eq(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn("==", left, right)
+  @binary_operators [
+    {:eq, "==", "Equality: `col == other`."},
+    {:neq, "!=", "Not equal: `col != other`."},
+    {:gt, ">", "Greater than: `col > other`."},
+    {:gte, ">=", "Greater than or equal: `col >= other`."},
+    {:lt, "<", "Less than: `col < other`."},
+    {:lte, "<=", "Less than or equal: `col <= other`."},
+    {:eq_null_safe, "<=>", "Null-safe equality."},
+    {:and_, "and", "Logical AND."},
+    {:or_, "or", "Logical OR."},
+    {:plus, "+", "Addition: `col + other`."},
+    {:minus, "-", "Subtraction: `col - other`."},
+    {:multiply, "*", "Multiplication: `col * other`."},
+    {:divide, "/", "Division: `col / other`."},
+    {:mod, "%", "Modulo."},
+    {:bitwise_and, "&", "Bitwise AND."},
+    {:bitwise_or, "|", "Bitwise OR."},
+    {:bitwise_xor, "^", "Bitwise XOR."},
+    {:contains, "contains", "String contains."},
+    {:starts_with, "startswith", "String starts with."},
+    {:ends_with, "endswith", "String ends with."},
+    {:like, "like", "SQL LIKE pattern match."},
+    {:rlike, "rlike", "Regex pattern match."},
+    {:ilike, "ilike", "Case-insensitive LIKE."}
+  ]
+
+  for {name, spark_name, doc} <- @binary_operators do
+    @doc doc
+    @spec unquote(name)(t(), t() | term()) :: t()
+    def unquote(name)(%__MODULE__{} = left, %__MODULE__{} = right) do
+      binary_fn(unquote(spark_name), left, right)
+    end
+
+    def unquote(name)(%__MODULE__{} = left, right) do
+      binary_fn(unquote(spark_name), left, %__MODULE__{expr: {:lit, right}})
+    end
   end
 
-  @doc "Not equal: `col != other`"
-  @spec neq(t(), t()) :: t()
-  def neq(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn("!=", left, right)
+  # ── Generated unary operators ──
+
+  @unary_operators [
+    {:is_null, "isnull", "Returns true if the column is null."},
+    {:is_not_null, "isnotnull", "Returns true if the column is not null."},
+    {:is_nan, "isnan", "Returns true if the column is NaN."},
+    {:not_, "not", "Logical NOT."},
+    {:bitwise_not, "~", "Bitwise NOT."},
+    {:negate, "negative", "Unary negation."}
+  ]
+
+  for {name, spark_name, doc} <- @unary_operators do
+    @doc doc
+    @spec unquote(name)(t()) :: t()
+    def unquote(name)(%__MODULE__{} = col) do
+      %__MODULE__{expr: {:fn, unquote(spark_name), [col.expr], false}}
+    end
   end
 
-  @doc "Greater than: `col > other`"
-  @spec gt(t(), t()) :: t()
-  def gt(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn(">", left, right)
-  end
-
-  @doc "Greater than or equal: `col >= other`"
-  @spec gte(t(), t()) :: t()
-  def gte(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn(">=", left, right)
-  end
-
-  @doc "Less than: `col < other`"
-  @spec lt(t(), t()) :: t()
-  def lt(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn("<", left, right)
-  end
-
-  @doc "Less than or equal: `col <= other`"
-  @spec lte(t(), t()) :: t()
-  def lte(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn("<=", left, right)
-  end
-
-  # --- Boolean ---
-
-  @doc "Logical AND"
-  @spec and_(t(), t()) :: t()
-  def and_(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn("and", left, right)
-  end
-
-  @doc "Logical OR"
-  @spec or_(t(), t()) :: t()
-  def or_(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn("or", left, right)
-  end
-
-  @doc "Logical NOT"
-  @spec not_(t()) :: t()
-  def not_(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:fn, "not", [col.expr], false}}
-  end
-
-  # --- Null checks ---
-
-  @doc "Returns true if the column is null"
-  @spec is_null(t()) :: t()
-  def is_null(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:fn, "isnull", [col.expr], false}}
-  end
-
-  @doc "Returns true if the column is not null"
-  @spec is_not_null(t()) :: t()
-  def is_not_null(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:fn, "isnotnull", [col.expr], false}}
-  end
-
-  # --- String operations ---
-
-  @doc "Returns true if the column contains the given string"
-  @spec contains(t(), t()) :: t()
-  def contains(%__MODULE__{} = col, %__MODULE__{} = substr) do
-    binary_fn("contains", col, substr)
-  end
-
-  @doc "Returns true if the column starts with the given string"
-  @spec starts_with(t(), t()) :: t()
-  def starts_with(%__MODULE__{} = col, %__MODULE__{} = prefix) do
-    binary_fn("startswith", col, prefix)
-  end
-
-  @doc "Returns true if the column matches the given SQL LIKE pattern"
-  @spec like(t(), t()) :: t()
-  def like(%__MODULE__{} = col, %__MODULE__{} = pattern) do
-    binary_fn("like", col, pattern)
-  end
-
-  # --- Arithmetic ---
-
-  @doc "Addition: `col + other`"
-  @spec plus(t(), t()) :: t()
-  def plus(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn("+", left, right)
-  end
-
-  @doc "Subtraction: `col - other`"
-  @spec minus(t(), t()) :: t()
-  def minus(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn("-", left, right)
-  end
-
-  @doc "Multiplication: `col * other`"
-  @spec multiply(t(), t()) :: t()
-  def multiply(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn("*", left, right)
-  end
-
-  @doc "Division: `col / other`"
-  @spec divide(t(), t()) :: t()
-  def divide(%__MODULE__{} = left, %__MODULE__{} = right) do
-    binary_fn("/", left, right)
-  end
-
-  # --- Type casting ---
+  # ── Type casting ──
 
   @doc """
   Casts the column to the given type.
@@ -163,7 +109,87 @@ defmodule SparkEx.Column do
     %__MODULE__{expr: {:cast, col.expr, type_str}}
   end
 
-  # --- Sort ordering ---
+  @doc """
+  Try-casts the column to the given type. Returns null on cast failure instead of error.
+  """
+  @spec try_cast(t(), String.t()) :: t()
+  def try_cast(%__MODULE__{} = col, type_str) when is_binary(type_str) do
+    %__MODULE__{expr: {:cast, col.expr, type_str, :try}}
+  end
+
+  # ── Membership / range ──
+
+  @doc "Returns true if the column value is in the given list of values."
+  @spec isin(t(), [term()]) :: t()
+  def isin(%__MODULE__{} = col, values) when is_list(values) do
+    value_exprs = Enum.map(values, fn
+      %__MODULE__{expr: e} -> e
+      v -> {:lit, v}
+    end)
+
+    %__MODULE__{expr: {:fn, "in", [col.expr | value_exprs], false}}
+  end
+
+  @doc "Returns true if the column value is between lower and upper (inclusive)."
+  @spec between(t(), term(), term()) :: t()
+  def between(%__MODULE__{} = col, lower, upper) do
+    lower_expr = coerce_expr(lower)
+    upper_expr = coerce_expr(upper)
+
+    and_(
+      %__MODULE__{expr: {:fn, ">=", [col.expr, lower_expr], false}},
+      %__MODULE__{expr: {:fn, "<=", [col.expr, upper_expr], false}}
+    )
+  end
+
+  # ── Struct/array/map access ──
+
+  @doc "Extracts a value from an array by index or from a map by key."
+  @spec get_item(t(), t() | term()) :: t()
+  def get_item(%__MODULE__{} = col, %__MODULE__{} = key) do
+    %__MODULE__{expr: {:unresolved_extract_value, col.expr, key.expr}}
+  end
+
+  def get_item(%__MODULE__{} = col, key) do
+    %__MODULE__{expr: {:unresolved_extract_value, col.expr, {:lit, key}}}
+  end
+
+  @doc "Extracts a field from a struct column by name."
+  @spec get_field(t(), String.t()) :: t()
+  def get_field(%__MODULE__{} = col, field_name) when is_binary(field_name) do
+    %__MODULE__{expr: {:unresolved_extract_value, col.expr, {:lit, field_name}}}
+  end
+
+  # ── String operations ──
+
+  @doc "Returns a substring starting at `pos` for `len` characters."
+  @spec substr(t(), t() | integer(), t() | integer()) :: t()
+  def substr(%__MODULE__{} = col, pos, len) do
+    %__MODULE__{
+      expr: {:fn, "substr", [col.expr, coerce_expr(pos), coerce_expr(len)], false}
+    }
+  end
+
+  # ── Window binding ──
+
+  @doc """
+  Defines a window specification for this column expression.
+
+  ## Examples
+
+      import SparkEx.Functions, only: [col: 1]
+
+      w = SparkEx.Window.partition_by(["dept"]) |> SparkEx.WindowSpec.order_by(["salary"])
+      col("salary") |> SparkEx.Functions.row_number() |> SparkEx.Column.over(w)
+  """
+  @spec over(t(), SparkEx.WindowSpec.t()) :: t()
+  def over(%__MODULE__{} = col, %SparkEx.WindowSpec{} = spec) do
+    %__MODULE__{
+      expr: {:window, col.expr, spec.partition_spec, spec.order_spec, spec.frame_spec}
+    }
+  end
+
+  # ── Sort ordering ──
 
   @doc "Sort ascending (nulls first by default)"
   @spec asc(t()) :: t()
@@ -177,7 +203,7 @@ defmodule SparkEx.Column do
     %__MODULE__{expr: {:sort_order, col.expr, :desc, nil}}
   end
 
-  @doc "Sort ascending with explicit null ordering"
+  @doc "Sort ascending with nulls first"
   @spec asc_nulls_first(t()) :: t()
   def asc_nulls_first(%__MODULE__{} = col) do
     %__MODULE__{expr: {:sort_order, col.expr, :asc, :nulls_first}}
@@ -201,17 +227,20 @@ defmodule SparkEx.Column do
     %__MODULE__{expr: {:sort_order, col.expr, :desc, :nulls_last}}
   end
 
-  # --- Naming ---
+  # ── Naming ──
 
-  @doc "Assigns an alias (name) to this column expression"
+  @doc "Assigns an alias (name) to this column expression."
   @spec alias_(t(), String.t()) :: t()
   def alias_(%__MODULE__{} = col, name) when is_binary(name) do
     %__MODULE__{expr: {:alias, col.expr, name}}
   end
 
-  # --- Private helpers ---
+  # ── Private helpers ──
 
   defp binary_fn(name, %__MODULE__{} = left, %__MODULE__{} = right) do
     %__MODULE__{expr: {:fn, name, [left.expr, right.expr], false}}
   end
+
+  defp coerce_expr(%__MODULE__{expr: e}), do: e
+  defp coerce_expr(value), do: {:lit, value}
 end

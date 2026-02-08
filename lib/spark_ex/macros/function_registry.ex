@@ -15,6 +15,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
   #   {:col_lit, n}  — first arg is Column, rest are literal-coerced
   #   {:lit_then_cols, n} — first n args are literal-coerced, rest is a Column list
   #   {:col_opt, defaults} — Column + optional keyword args with defaults
+  #   {:lit_opt, defaults} — optional keyword args only, no column arg
   #
   # opts (keyword):
   #   :doc       — function documentation string
@@ -25,6 +26,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
   @spec registry() :: [tuple()]
   def registry do
     math_functions() ++
+      bitwise_functions() ++
       string_functions() ++
       date_functions() ++
       collection_functions() ++
@@ -32,6 +34,11 @@ defmodule SparkEx.Macros.FunctionRegistry do
       window_functions() ++
       conditional_functions() ++
       hash_functions() ++
+      json_functions() ++
+      csv_xml_functions() ++
+      type_functions() ++
+      encryption_functions() ++
+      session_functions() ++
       misc_functions()
   end
 
@@ -88,7 +95,36 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:tanh, "tanh", :one_col, group: :math, doc: "Computes hyperbolic tangent."},
       {:unhex, "unhex", :one_col, group: :math, doc: "Decodes hex string to binary."},
       {:width_bucket, "width_bucket", {:col_lit, 3}, group: :math,
-       doc: "Returns bucket number for value in equi-width histogram."}
+       doc: "Returns bucket number for value in equi-width histogram."},
+      {:try_add, "try_add", :two_col, group: :math, doc: "Try addition, returns null on overflow."},
+      {:try_divide, "try_divide", :two_col, group: :math,
+       doc: "Try division, returns null on division by zero."},
+      {:try_multiply, "try_multiply", :two_col, group: :math,
+       doc: "Try multiplication, returns null on overflow."},
+      {:try_subtract, "try_subtract", :two_col, group: :math,
+       doc: "Try subtraction, returns null on overflow."},
+      {:try_mod, "try_mod", :two_col, group: :math,
+       doc: "Try modulo, returns null on division by zero."},
+      {:try_sum, "try_sum", :one_col, group: :math,
+       doc: "Try sum, returns null on overflow."},
+      {:try_avg, "try_avg", :one_col, group: :math,
+       doc: "Try average, returns null on overflow."},
+      {:product, "product", :one_col, group: :math, doc: "Computes product of all values."},
+      {:uniform, "uniform", {:col_lit, 2}, group: :math,
+       doc: "Random value uniformly distributed in [min, max)."}
+    ]
+  end
+
+  defp bitwise_functions do
+    [
+      {:bit_count, "bit_count", :one_col, group: :bitwise, doc: "Counts number of set bits."},
+      {:bit_get, "bit_get", {:col_lit, 1}, group: :bitwise,
+       doc: "Returns the value of the bit at the given position.", aliases: [:getbit]},
+      {:bit_length, "bit_length", :one_col, group: :bitwise, doc: "Returns bit length of string."},
+      {:shiftleft, "shiftleft", {:col_lit, 1}, group: :bitwise, doc: "Bitwise left shift."},
+      {:shiftright, "shiftright", {:col_lit, 1}, group: :bitwise, doc: "Bitwise right shift."},
+      {:shiftrightunsigned, "shiftrightunsigned", {:col_lit, 1}, group: :bitwise,
+       doc: "Bitwise unsigned right shift."}
     ]
   end
 
@@ -108,6 +144,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:ltrim, "ltrim", :one_col, group: :string, doc: "Left-trims whitespace."},
       {:rtrim, "rtrim", :one_col, group: :string, doc: "Right-trims whitespace."},
       {:trim, "trim", :one_col, group: :string, doc: "Trims whitespace from both ends."},
+      {:btrim, "btrim", {:col_opt, [trim_string: nil]}, group: :string,
+       doc: "Trims characters from both sides."},
       {:lpad, "lpad", {:col_lit, 2}, group: :string,
        doc: "Left-pads string to length with pad string."},
       {:rpad, "rpad", {:col_lit, 2}, group: :string,
@@ -117,6 +155,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:soundex, "soundex", :one_col, group: :string, doc: "Soundex code."},
       {:substring, "substring", {:col_lit, 2}, group: :string,
        doc: "Returns substring from pos for len."},
+      {:substring_index, "substring_index", {:col_lit, 2}, group: :string,
+       doc: "Returns substring before count occurrences of delimiter."},
       {:translate, "translate", :three_col, group: :string,
        doc: "Translates characters."},
       {:instr, "instr", :two_col, group: :string,
@@ -125,13 +165,79 @@ defmodule SparkEx.Macros.FunctionRegistry do
        doc: "Extracts regex group."},
       {:regexp_replace, "regexp_replace", :three_col, group: :string,
        doc: "Replaces regex matches."},
+      {:regexp_count, "regexp_count", :two_col, group: :string,
+       doc: "Counts regex pattern occurrences."},
+      {:regexp_extract_all, "regexp_extract_all", {:col_lit, 2}, group: :string,
+       doc: "Extracts all matches for regex group."},
+      {:regexp_instr, "regexp_instr", {:col_lit, 1}, group: :string,
+       doc: "Returns position of first regex match."},
+      {:regexp_substr, "regexp_substr", :two_col, group: :string,
+       doc: "Returns first substring matching regex."},
+      {:regexp_like, "regexp_like", :two_col, group: :string,
+       doc: "Returns true if column matches regex.", aliases: [:regexp]},
       {:format_string, "format_string", {:lit_then_cols, 1}, group: :string,
-       doc: "printf-style formatting."},
+       doc: "printf-style formatting.", aliases: [:printf]},
       {:format_number, "format_number", {:col_lit, 1}, group: :string,
        doc: "Formats number with d decimal places."},
       {:base64, "base64", :one_col, group: :string, doc: "Base64 encodes binary."},
       {:unbase64, "unbase64", :one_col, group: :string, doc: "Decodes base64 string."},
-      {:length, "length", :one_col, group: :string, doc: "Returns length of string or binary."}
+      {:length, "length", :one_col, group: :string,
+       doc: "Returns length of string or binary."},
+      {:octet_length, "octet_length", :one_col, group: :string,
+       doc: "Returns byte length of string."},
+      {:overlay, "overlay", {:col_lit, 3}, group: :string,
+       doc: "Overlays string at position for length."},
+      {:sentences, "sentences", :one_col, group: :string,
+       doc: "Splits text into array of sentences."},
+      {:levenshtein, "levenshtein", :two_col, group: :string,
+       doc: "Levenshtein edit distance between strings."},
+      {:locate, "locate", {:col_lit, 1}, group: :string,
+       doc: "Locates position of substring."},
+      {:split, "split", {:col_lit, 1}, group: :string,
+       doc: "Splits string by regex pattern."},
+      {:split_part, "split_part", {:col_lit, 2}, group: :string,
+       doc: "Splits string and returns the field at index."},
+      {:char_, "char", {:lit, 1}, group: :string,
+       doc: "Returns character from ASCII code.", aliases: [:chr]},
+      {:elt, "elt", :n_col, group: :string,
+       doc: "Returns the n-th input string."},
+      {:find_in_set, "find_in_set", :two_col, group: :string,
+       doc: "Returns position of string in comma-delimited list."},
+      {:left_, "left", {:col_lit, 1}, group: :string,
+       doc: "Returns leftmost n characters."},
+      {:right_, "right", {:col_lit, 1}, group: :string,
+       doc: "Returns rightmost n characters."},
+      {:endswith, "endswith", :two_col, group: :string,
+       doc: "Returns true if string ends with suffix."},
+      {:startswith, "startswith", :two_col, group: :string,
+       doc: "Returns true if string starts with prefix."},
+      {:position, "position", {:col_lit, 1}, group: :string,
+       doc: "Returns position of substring."},
+      {:replace, "replace", :three_col, group: :string,
+       doc: "Replaces occurrences of search with replace."},
+      {:url_encode, "url_encode", :one_col, group: :string,
+       doc: "URL-encodes string."},
+      {:url_decode, "url_decode", :one_col, group: :string,
+       doc: "URL-decodes string."},
+      {:try_url_decode, "try_url_decode", :one_col, group: :string,
+       doc: "Try URL-decode, returns null on failure."},
+      {:mask, "mask", {:col_opt, [upper_char: nil, lower_char: nil, digit_char: nil, other_char: nil]},
+       group: :string, doc: "Masks string characters."},
+      {:encode, "encode", {:col_lit, 1}, group: :string, doc: "Encodes string with charset."},
+      {:decode, "decode", {:col_lit, 1}, group: :string, doc: "Decodes binary with charset."},
+      {:collate, "collate", {:col_lit, 1}, group: :string, doc: "Applies collation to string."},
+      {:collation, "collation", :one_col, group: :string,
+       doc: "Returns collation of string column."},
+      {:is_valid_utf8, "is_valid_utf8", :one_col, group: :string,
+       doc: "Returns true if string is valid UTF-8."},
+      {:make_valid_utf8, "make_valid_utf8", :one_col, group: :string,
+       doc: "Replaces invalid UTF-8 with replacement char."},
+      {:validate_utf8, "validate_utf8", :one_col, group: :string,
+       doc: "Validates UTF-8 and raises on invalid."},
+      {:try_validate_utf8, "try_validate_utf8", :one_col, group: :string,
+       doc: "Validates UTF-8 and returns null on invalid."},
+      {:randstr, "randstr", {:col_lit, 1}, group: :string,
+       doc: "Generates random string of given length."}
     ]
   end
 
@@ -141,6 +247,12 @@ defmodule SparkEx.Macros.FunctionRegistry do
        doc: "Returns current date.", aliases: [:curdate]},
       {:current_timestamp, "current_timestamp", :zero, group: :datetime,
        doc: "Returns current timestamp.", aliases: [:now]},
+      {:current_time, "current_time", :zero, group: :datetime,
+       doc: "Returns current time."},
+      {:current_timezone, "current_timezone", :zero, group: :datetime,
+       doc: "Returns current timezone string."},
+      {:localtimestamp_, "localtimestamp", :zero, group: :datetime,
+       doc: "Returns current local timestamp."},
       {:year, "year", :one_col, group: :datetime, doc: "Extracts year."},
       {:month, "month", :one_col, group: :datetime, doc: "Extracts month."},
       {:day, "day", :one_col, group: :datetime, doc: "Extracts day.",
@@ -152,6 +264,12 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:dayofweek, "dayofweek", :one_col, group: :datetime, doc: "Day of week (1=Sun)."},
       {:dayofyear, "dayofyear", :one_col, group: :datetime, doc: "Day of year."},
       {:weekofyear, "weekofyear", :one_col, group: :datetime, doc: "Week of year."},
+      {:weekday, "weekday", :one_col, group: :datetime,
+       doc: "Day of week (0=Mon, 6=Sun)."},
+      {:monthname, "monthname", :one_col, group: :datetime, doc: "Returns month name."},
+      {:dayname, "dayname", :one_col, group: :datetime, doc: "Returns day name."},
+      {:extract, "extract", {:lit_then_cols, 1}, group: :datetime,
+       doc: "Extracts date/time field.", aliases: [:date_part, :datepart]},
       {:date_add, "date_add", {:col_lit, 1}, group: :datetime,
        doc: "Adds days to date.", aliases: [:dateadd]},
       {:date_sub, "date_sub", {:col_lit, 1}, group: :datetime,
@@ -160,20 +278,72 @@ defmodule SparkEx.Macros.FunctionRegistry do
        doc: "Difference in days between dates.", aliases: [:date_diff]},
       {:date_format, "date_format", {:col_lit, 1}, group: :datetime,
        doc: "Formats date/timestamp with pattern."},
+      {:date_trunc, "date_trunc", {:lit_then_cols, 1}, group: :datetime,
+       doc: "Truncates date to specified unit."},
+      {:trunc, "trunc", {:col_lit, 1}, group: :datetime,
+       doc: "Truncates date to specified format."},
       {:add_months, "add_months", {:col_lit, 1}, group: :datetime,
        doc: "Adds months to date."},
       {:months_between, "months_between", :two_col, group: :datetime,
        doc: "Months between two dates."},
+      {:next_day, "next_day", {:col_lit, 1}, group: :datetime,
+       doc: "Next day of week after date."},
       {:last_day, "last_day", :one_col, group: :datetime,
        doc: "Last day of month for date."},
       {:to_date, "to_date", {:col_opt, [format: nil]}, group: :datetime,
        doc: "Converts to date, optionally with format."},
+      {:try_to_date, "try_to_date", {:col_opt, [format: nil]}, group: :datetime,
+       doc: "Try to convert to date, returns null on failure."},
       {:to_timestamp, "to_timestamp", {:col_opt, [format: nil]}, group: :datetime,
        doc: "Converts to timestamp, optionally with format."},
+      {:try_to_timestamp, "try_to_timestamp", {:col_opt, [format: nil]}, group: :datetime,
+       doc: "Try to convert to timestamp, returns null on failure."},
+      {:to_timestamp_ltz, "to_timestamp_ltz", {:col_opt, [format: nil]}, group: :datetime,
+       doc: "Converts to timestamp with local timezone."},
+      {:to_timestamp_ntz, "to_timestamp_ntz", {:col_opt, [format: nil]}, group: :datetime,
+       doc: "Converts to timestamp without timezone."},
       {:from_unixtime, "from_unixtime", {:col_opt, [format: nil]}, group: :datetime,
        doc: "Converts unix timestamp to string."},
       {:unix_timestamp, "unix_timestamp", {:col_opt, [format: nil]}, group: :datetime,
-       doc: "Converts timestamp to unix seconds."}
+       doc: "Converts timestamp to unix seconds."},
+      {:to_unix_timestamp, "to_unix_timestamp", {:col_opt, [format: nil]}, group: :datetime,
+       doc: "Converts timestamp to unix seconds."},
+      {:from_utc_timestamp, "from_utc_timestamp", {:col_lit, 1}, group: :datetime,
+       doc: "Converts UTC timestamp to timezone."},
+      {:to_utc_timestamp, "to_utc_timestamp", {:col_lit, 1}, group: :datetime,
+       doc: "Converts timestamp from timezone to UTC."},
+      {:date_from_unix_date, "date_from_unix_date", :one_col, group: :datetime,
+       doc: "Creates date from days since epoch."},
+      {:unix_date, "unix_date", :one_col, group: :datetime,
+       doc: "Returns days since epoch for date."},
+      {:unix_micros, "unix_micros", :one_col, group: :datetime,
+       doc: "Returns microseconds since epoch."},
+      {:unix_millis, "unix_millis", :one_col, group: :datetime,
+       doc: "Returns milliseconds since epoch."},
+      {:unix_seconds, "unix_seconds", :one_col, group: :datetime,
+       doc: "Returns seconds since epoch."},
+      {:timestamp_seconds, "timestamp_seconds", :one_col, group: :datetime,
+       doc: "Creates timestamp from seconds."},
+      {:timestamp_millis, "timestamp_millis", :one_col, group: :datetime,
+       doc: "Creates timestamp from milliseconds."},
+      {:timestamp_micros, "timestamp_micros", :one_col, group: :datetime,
+       doc: "Creates timestamp from microseconds."},
+      {:timestamp_diff, "timestamp_diff", {:lit_then_cols, 1}, group: :datetime,
+       doc: "Returns difference between timestamps in given unit."},
+      {:timestamp_add, "timestamp_add", {:lit_then_cols, 1}, group: :datetime,
+       doc: "Adds interval to timestamp."},
+      {:time_diff, "time_diff", {:lit_then_cols, 1}, group: :datetime,
+       doc: "Returns difference between times in given unit."},
+      {:time_trunc, "time_trunc", {:lit_then_cols, 1}, group: :datetime,
+       doc: "Truncates time to specified unit."},
+      {:make_date, "make_date", :three_col, group: :datetime,
+       doc: "Creates date from year, month, day."},
+      {:convert_timezone, "convert_timezone", :three_col, group: :datetime,
+       doc: "Converts timestamp between timezones."},
+      {:to_time, "to_time", {:col_opt, [format: nil]}, group: :datetime,
+       doc: "Converts to time type."},
+      {:try_to_time, "try_to_time", {:col_opt, [format: nil]}, group: :datetime,
+       doc: "Try to convert to time, returns null on failure."}
     ]
   end
 
@@ -184,6 +354,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
        doc: "Creates map from key-value column pairs."},
       {:struct, "struct", :n_col, group: :collection,
        doc: "Creates struct from columns."},
+      {:named_struct, "named_struct", :n_col, group: :collection,
+       doc: "Creates struct with named fields."},
       {:array_contains, "array_contains", :two_col, group: :collection,
        doc: "Checks if array contains value."},
       {:array_distinct, "array_distinct", :one_col, group: :collection,
@@ -197,17 +369,49 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:array_min, "array_min", :one_col, group: :collection,
        doc: "Returns min element of array."},
       {:array_size, "array_size", :one_col, group: :collection,
-       doc: "Returns array size.", aliases: [:size]},
+       doc: "Returns array size.", aliases: [:size, :cardinality]},
       {:array_sort, "array_sort", :one_col, group: :collection,
        doc: "Sorts array in ascending order."},
       {:array_union, "array_union", :two_col, group: :collection,
        doc: "Returns union of two arrays."},
+      {:array_append, "array_append", :two_col, group: :collection,
+       doc: "Appends element to array."},
+      {:array_prepend, "array_prepend", :two_col, group: :collection,
+       doc: "Prepends element to array."},
+      {:array_compact, "array_compact", :one_col, group: :collection,
+       doc: "Removes null values from array."},
+      {:array_insert, "array_insert", :three_col, group: :collection,
+       doc: "Inserts element at position in array."},
+      {:array_remove, "array_remove", :two_col, group: :collection,
+       doc: "Removes all occurrences of element from array."},
+      {:array_repeat, "array_repeat", {:col_lit, 1}, group: :collection,
+       doc: "Creates array with element repeated n times."},
+      {:array_position, "array_position", :two_col, group: :collection,
+       doc: "Locates element in array (1-based)."},
+      {:arrays_overlap, "arrays_overlap", :two_col, group: :collection,
+       doc: "Returns true if arrays have common elements."},
+      {:arrays_zip, "arrays_zip", :n_col, group: :collection,
+       doc: "Zips arrays into array of structs."},
+      {:array_join, "array_join", {:col_lit, 1}, group: :collection,
+       doc: "Joins array elements with delimiter."},
       {:element_at, "element_at", :two_col, group: :collection,
        doc: "Returns element at index/key."},
+      {:try_element_at, "try_element_at", :two_col, group: :collection,
+       doc: "Returns element at index/key, null on out of bounds."},
+      {:get, "get", {:col_lit, 1}, group: :collection,
+       doc: "Returns element at index from array."},
       {:explode, "explode", :one_col, group: :collection,
        doc: "Creates a row for each array/map element."},
       {:explode_outer, "explode_outer", :one_col, group: :collection,
        doc: "Like explode but preserves nulls."},
+      {:posexplode, "posexplode", :one_col, group: :collection,
+       doc: "Like explode but includes position."},
+      {:posexplode_outer, "posexplode_outer", :one_col, group: :collection,
+       doc: "Like posexplode but preserves nulls."},
+      {:inline, "inline", :one_col, group: :collection,
+       doc: "Explodes array of structs into columns."},
+      {:inline_outer, "inline_outer", :one_col, group: :collection,
+       doc: "Like inline but preserves nulls."},
       {:flatten, "flatten", :one_col, group: :collection,
        doc: "Flattens nested array."},
       {:map_keys, "map_keys", :one_col, group: :collection, doc: "Returns map keys."},
@@ -221,10 +425,20 @@ defmodule SparkEx.Macros.FunctionRegistry do
        doc: "Creates map from key and value arrays."},
       {:map_from_entries, "map_from_entries", :one_col, group: :collection,
        doc: "Creates map from array of entries."},
+      {:map_contains_key, "map_contains_key", :two_col, group: :collection,
+       doc: "Returns true if map contains the given key."},
+      {:str_to_map, "str_to_map", {:col_opt, [pair_delim: nil, key_value_delim: nil]},
+       group: :collection, doc: "Creates map from delimited string."},
       {:slice, "slice", {:col_lit, 2}, group: :collection,
        doc: "Returns slice of array from start for length."},
       {:sort_array, "sort_array", {:col_opt, [asc: true]}, group: :collection,
-       doc: "Sorts array."}
+       doc: "Sorts array."},
+      {:sequence, "sequence", :three_col, group: :collection,
+       doc: "Creates array of values from start to stop with step."},
+      {:shuffle, "shuffle", :one_col, group: :collection,
+       doc: "Returns randomly shuffled array."},
+      {:stack, "stack", :n_col, group: :collection,
+       doc: "Separates column into n rows."}
     ]
   end
 
@@ -250,13 +464,17 @@ defmodule SparkEx.Macros.FunctionRegistry do
        doc: "Computes sum of distinct values.", is_distinct: true},
       {:approx_count_distinct, "approx_count_distinct", :one_col, group: :aggregate,
        doc: "Approximate count of distinct values."},
+      {:approx_percentile, "approx_percentile", {:col_lit, 2}, group: :aggregate,
+       doc: "Approximate percentile with accuracy parameter."},
+      {:percentile, "percentile", {:col_lit, 1}, group: :aggregate,
+       doc: "Exact percentile."},
       {:corr, "corr", :two_col, group: :aggregate, doc: "Pearson correlation."},
       {:covar_pop, "covar_pop", :two_col, group: :aggregate,
        doc: "Population covariance."},
       {:covar_samp, "covar_samp", :two_col, group: :aggregate,
        doc: "Sample covariance."},
       {:stddev, "stddev", :one_col, group: :aggregate,
-       doc: "Sample standard deviation.", aliases: [:stddev_samp]},
+       doc: "Sample standard deviation.", aliases: [:stddev_samp, :std]},
       {:stddev_pop, "stddev_pop", :one_col, group: :aggregate,
        doc: "Population standard deviation."},
       {:variance, "variance", :one_col, group: :aggregate,
@@ -282,7 +500,31 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:bit_and, "bit_and", :one_col, group: :aggregate, doc: "Bitwise AND aggregate."},
       {:bit_or, "bit_or", :one_col, group: :aggregate, doc: "Bitwise OR aggregate."},
       {:bit_xor, "bit_xor", :one_col, group: :aggregate, doc: "Bitwise XOR aggregate."},
-      {:median, "median", :one_col, group: :aggregate, doc: "Median value."}
+      {:median, "median", :one_col, group: :aggregate, doc: "Median value."},
+      {:listagg, "listagg", {:col_opt, [delimiter: nil]}, group: :aggregate,
+       doc: "Concatenates values as string.", aliases: [:string_agg]},
+      {:listagg_distinct, "listagg_distinct", {:col_opt, [delimiter: nil]}, group: :aggregate,
+       doc: "Concatenates distinct values as string.", aliases: [:string_agg_distinct]},
+      {:regr_avgx, "regr_avgx", :two_col, group: :aggregate,
+       doc: "Average of independent variable."},
+      {:regr_avgy, "regr_avgy", :two_col, group: :aggregate,
+       doc: "Average of dependent variable."},
+      {:regr_count, "regr_count", :two_col, group: :aggregate,
+       doc: "Count of non-null pairs."},
+      {:regr_intercept, "regr_intercept", :two_col, group: :aggregate,
+       doc: "Y-intercept of regression line."},
+      {:regr_r2, "regr_r2", :two_col, group: :aggregate,
+       doc: "Coefficient of determination."},
+      {:regr_slope, "regr_slope", :two_col, group: :aggregate,
+       doc: "Slope of regression line."},
+      {:regr_sxx, "regr_sxx", :two_col, group: :aggregate,
+       doc: "Sum of squares of independent variable."},
+      {:regr_sxy, "regr_sxy", :two_col, group: :aggregate,
+       doc: "Sum of products of deviations."},
+      {:regr_syy, "regr_syy", :two_col, group: :aggregate,
+       doc: "Sum of squares of dependent variable."},
+      {:histogram_numeric, "histogram_numeric", {:col_lit, 1}, group: :aggregate,
+       doc: "Computes histogram of column."}
     ]
   end
 
@@ -320,6 +562,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
        doc: "Returns second value if first is null."},
       {:nullif, "nullif", :two_col, group: :conditional,
        doc: "Returns null if both values are equal."},
+      {:nullifzero, "nullifzero", :one_col, group: :conditional,
+       doc: "Returns null if value is zero."},
       {:nvl, "nvl", :two_col, group: :conditional,
        doc: "Returns second value if first is null."},
       {:nvl2, "nvl2", :three_col, group: :conditional,
@@ -328,18 +572,124 @@ defmodule SparkEx.Macros.FunctionRegistry do
        doc: "Returns second value if first is NaN."},
       {:isnan, "isnan", :one_col, group: :conditional, doc: "True if NaN."},
       {:isnull, "isnull", :one_col, group: :conditional, doc: "True if null."},
-      {:isnotnull, "isnotnull", :one_col, group: :conditional, doc: "True if not null."}
+      {:isnotnull, "isnotnull", :one_col, group: :conditional, doc: "True if not null."},
+      {:equal_null, "equal_null", :two_col, group: :conditional,
+       doc: "Null-safe equality."},
+      {:zeroifnull, "zeroifnull", :one_col, group: :conditional,
+       doc: "Returns zero if value is null."},
+      {:assert_true, "assert_true", :one_col, group: :conditional,
+       doc: "Raises error if condition is false."},
+      {:raise_error, "raise_error", :one_col, group: :conditional,
+       doc: "Raises a user-specified error message."}
     ]
   end
 
   defp hash_functions do
     [
       {:md5, "md5", :one_col, group: :hash, doc: "MD5 hash."},
-      {:sha1, "sha1", :one_col, group: :hash, doc: "SHA-1 hash."},
+      {:sha1, "sha1", :one_col, group: :hash, doc: "SHA-1 hash.", aliases: [:sha]},
       {:sha2, "sha2", {:col_lit, 1}, group: :hash, doc: "SHA-2 hash with bit length."},
       {:crc32, "crc32", :one_col, group: :hash, doc: "CRC32 hash."},
       {:hash, "hash", :n_col, group: :hash, doc: "Murmur3 hash of columns."},
       {:xxhash64, "xxhash64", :n_col, group: :hash, doc: "xxHash64 of columns."}
+    ]
+  end
+
+  defp json_functions do
+    [
+      {:get_json_object, "get_json_object", {:col_lit, 1}, group: :json,
+       doc: "Extracts JSON object from path expression."},
+      {:json_tuple, "json_tuple", {:lit_then_cols, 1}, group: :json,
+       doc: "Creates columns from JSON fields."},
+      {:json_array_length, "json_array_length", :one_col, group: :json,
+       doc: "Returns length of outermost JSON array."},
+      {:json_object_keys, "json_object_keys", :one_col, group: :json,
+       doc: "Returns keys of outermost JSON object."},
+      {:schema_of_json, "schema_of_json", :one_col, group: :json,
+       doc: "Returns DDL schema string of JSON string."},
+      {:parse_json, "parse_json", :one_col, group: :json,
+       doc: "Parses JSON string to variant type."},
+      {:try_parse_json, "try_parse_json", :one_col, group: :json,
+       doc: "Try parse JSON, returns null on failure."},
+      {:is_variant_null, "is_variant_null", :one_col, group: :json,
+       doc: "Returns true if variant value is null."},
+      {:variant_get, "variant_get", {:col_lit, 2}, group: :json,
+       doc: "Gets variant value at path with type."},
+      {:try_variant_get, "try_variant_get", {:col_lit, 2}, group: :json,
+       doc: "Try get variant value, returns null on failure."},
+      {:to_variant_object, "to_variant_object", :one_col, group: :json,
+       doc: "Converts map to variant object."},
+      {:schema_of_variant, "schema_of_variant", :one_col, group: :json,
+       doc: "Returns schema string of variant."},
+      {:schema_of_variant_agg, "schema_of_variant_agg", :one_col, group: :json,
+       doc: "Returns merged schema string of variant column."}
+    ]
+  end
+
+  defp csv_xml_functions do
+    [
+      {:schema_of_csv, "schema_of_csv", :one_col, group: :csv_xml,
+       doc: "Returns DDL schema string of CSV string."},
+      {:schema_of_xml, "schema_of_xml", :one_col, group: :csv_xml,
+       doc: "Returns DDL schema string of XML string."},
+      {:xpath, "xpath", {:col_lit, 1}, group: :csv_xml,
+       doc: "Evaluates XPath expression returning array of strings."},
+      {:xpath_boolean, "xpath_boolean", {:col_lit, 1}, group: :csv_xml,
+       doc: "Evaluates XPath expression returning boolean."},
+      {:xpath_double, "xpath_double", {:col_lit, 1}, group: :csv_xml,
+       doc: "Evaluates XPath expression returning double.", aliases: [:xpath_number]},
+      {:xpath_float, "xpath_float", {:col_lit, 1}, group: :csv_xml,
+       doc: "Evaluates XPath expression returning float."},
+      {:xpath_int, "xpath_int", {:col_lit, 1}, group: :csv_xml,
+       doc: "Evaluates XPath expression returning integer."},
+      {:xpath_long, "xpath_long", {:col_lit, 1}, group: :csv_xml,
+       doc: "Evaluates XPath expression returning long."},
+      {:xpath_short, "xpath_short", {:col_lit, 1}, group: :csv_xml,
+       doc: "Evaluates XPath expression returning short."},
+      {:xpath_string, "xpath_string", {:col_lit, 1}, group: :csv_xml,
+       doc: "Evaluates XPath expression returning string."}
+    ]
+  end
+
+  defp type_functions do
+    [
+      {:typeof, "typeof", :one_col, group: :type, doc: "Runtime data type string."},
+      {:to_binary, "to_binary", {:col_opt, [format: nil]}, group: :type,
+       doc: "Converts to binary."},
+      {:try_to_binary, "try_to_binary", {:col_opt, [format: nil]}, group: :type,
+       doc: "Try to convert to binary, returns null on failure."},
+      {:to_char_, "to_char", {:col_lit, 1}, group: :type,
+       doc: "Converts to character string with format.", aliases: [:to_varchar]},
+      {:to_number, "to_number", {:col_lit, 1}, group: :type,
+       doc: "Converts string to number with format."},
+      {:try_to_number, "try_to_number", {:col_lit, 1}, group: :type,
+       doc: "Try to convert to number, returns null on failure."}
+    ]
+  end
+
+  defp encryption_functions do
+    [
+      {:aes_encrypt, "aes_encrypt", :n_col, group: :encryption,
+       doc: "AES encrypts binary data."},
+      {:aes_decrypt, "aes_decrypt", :n_col, group: :encryption,
+       doc: "AES decrypts binary data."},
+      {:try_aes_decrypt, "try_aes_decrypt", :n_col, group: :encryption,
+       doc: "Try AES decrypt, returns null on failure."}
+    ]
+  end
+
+  defp session_functions do
+    [
+      {:current_catalog, "current_catalog", :zero, group: :session,
+       doc: "Returns current catalog name."},
+      {:current_database, "current_database", :zero, group: :session,
+       doc: "Returns current database name.", aliases: [:current_schema]},
+      {:current_user_, "current_user", :zero, group: :session,
+       doc: "Returns current user name.", aliases: [:user_]},
+      {:session_user_, "session_user", :zero, group: :session,
+       doc: "Returns session user name."},
+      {:uuid, "uuid", :zero, group: :session, doc: "Generates a random UUID string."},
+      {:version_, "version", :zero, group: :session, doc: "Returns Spark version string."}
     ]
   end
 
@@ -351,7 +701,10 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :misc, doc: "Partition ID of each row."},
       {:input_file_name, "input_file_name", :zero,
        group: :misc, doc: "Name of file being read."},
-      {:typeof, "typeof", :one_col, group: :misc, doc: "Runtime data type string."},
+      {:input_file_block_length, "input_file_block_length", :zero,
+       group: :misc, doc: "Length of current file block."},
+      {:input_file_block_start, "input_file_block_start", :zero,
+       group: :misc, doc: "Start offset of current file block."},
       {:rand, "rand", {:lit_opt, [seed: nil]}, group: :misc,
        doc: "Random value in [0, 1)."},
       {:randn, "randn", {:lit_opt, [seed: nil]}, group: :misc,
