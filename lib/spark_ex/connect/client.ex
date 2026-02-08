@@ -22,6 +22,14 @@ defmodule SparkEx.Connect.Client do
 
   alias SparkEx.Connect.{Errors, ResultDecoder}
 
+  # gRPC status codes considered transient (eligible for retry)
+  @status_unavailable 14
+  @status_deadline_exceeded 4
+
+  @default_max_retries 3
+  @default_initial_backoff_ms 100
+  @default_max_backoff_ms 5_000
+
   # --- AnalyzePlan RPCs ---
 
   @doc """
@@ -125,16 +133,21 @@ defmodule SparkEx.Connect.Client do
       ]
     }
 
-    case Stub.execute_plan(session.channel, request, timeout: timeout) do
-      {:ok, stream} ->
-        ResultDecoder.decode_stream(stream, session)
+    retry_with_backoff(
+      fn ->
+        case Stub.execute_plan(session.channel, request, timeout: timeout) do
+          {:ok, stream} ->
+            ResultDecoder.decode_stream(stream, session)
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
+          {:error, %GRPC.RPCError{} = error} ->
+            {:error, Errors.from_grpc_error(error, session)}
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end,
+      opts
+    )
   end
 
   # --- Config RPCs ---
@@ -226,4 +239,52 @@ defmodule SparkEx.Connect.Client do
   defp explain_mode_to_proto(:cost), do: {:ok, :EXPLAIN_MODE_COST}
   defp explain_mode_to_proto(:formatted), do: {:ok, :EXPLAIN_MODE_FORMATTED}
   defp explain_mode_to_proto(other), do: {:error, {:invalid_explain_mode, other}}
+
+  # --- Retry logic ---
+
+  @doc false
+  @spec retry_with_backoff((-> term()), keyword()) :: term()
+  def retry_with_backoff(fun, opts \\ []) when is_function(fun, 0) do
+    max_retries = Keyword.get(opts, :max_retries, @default_max_retries)
+    initial_backoff = Keyword.get(opts, :initial_backoff_ms, @default_initial_backoff_ms)
+    max_backoff = Keyword.get(opts, :max_backoff_ms, @default_max_backoff_ms)
+    sleep_fun = Keyword.get(opts, :sleep_fun, &Process.sleep/1)
+    jitter_fun = Keyword.get(opts, :jitter_fun, &default_jitter/1)
+
+    do_retry(fun, 0, max_retries, initial_backoff, max_backoff, sleep_fun, jitter_fun)
+  end
+
+  defp do_retry(fun, attempt, max_retries, initial_backoff, max_backoff, sleep_fun, jitter_fun) do
+    case fun.() do
+      {:error, %SparkEx.Error.Remote{grpc_status: status}}
+      when status in [@status_unavailable, @status_deadline_exceeded] and
+             attempt < max_retries ->
+        sleep_ms = backoff_ms(attempt, initial_backoff, max_backoff, jitter_fun)
+        sleep_fun.(sleep_ms)
+
+        do_retry(
+          fun,
+          attempt + 1,
+          max_retries,
+          initial_backoff,
+          max_backoff,
+          sleep_fun,
+          jitter_fun
+        )
+
+      result ->
+        result
+    end
+  end
+
+  defp backoff_ms(attempt, initial_backoff, max_backoff, jitter_fun) do
+    base = initial_backoff * Integer.pow(2, attempt)
+    capped = Kernel.min(base, max_backoff)
+    jitter_fun.(capped)
+  end
+
+  defp default_jitter(capped) do
+    # Add jitter: random value between 0 and capped
+    :rand.uniform(capped + 1) - 1
+  end
 end

@@ -264,6 +264,297 @@ defmodule SparkEx.Integration.DataFrameTest do
     end
   end
 
+  # --- Milestone 3: join, group_by + agg, distinct, union ---
+
+  describe "group_by/2 + agg/2" do
+    test "counts by group", %{session: session} do
+      df =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES ('eng', 100), ('eng', 200), ('hr', 150) AS t(dept, salary)"
+        )
+        |> DataFrame.group_by(["dept"])
+        |> SparkEx.GroupedData.agg([
+          Column.alias_(Functions.count(Functions.col("salary")), "cnt")
+        ])
+        |> DataFrame.order_by(["dept"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      assert length(rows) == 2
+      assert Enum.find(rows, &(&1["dept"] == "eng"))["cnt"] == 2
+      assert Enum.find(rows, &(&1["dept"] == "hr"))["cnt"] == 1
+    end
+
+    test "sum and avg aggregates", %{session: session} do
+      df =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES ('eng', 100), ('eng', 200), ('hr', 150) AS t(dept, salary)"
+        )
+        |> DataFrame.group_by(["dept"])
+        |> SparkEx.GroupedData.agg([
+          Column.alias_(Functions.sum(Functions.col("salary")), "total"),
+          Column.alias_(Functions.avg(Functions.col("salary")), "average")
+        ])
+        |> DataFrame.filter(Column.eq(Functions.col("dept"), Functions.lit("eng")))
+
+      assert {:ok, [row]} = DataFrame.collect(df)
+      assert row["total"] == 300
+      assert row["average"] == 150.0
+    end
+  end
+
+  describe "join/4" do
+    test "inner join using columns", %{session: session} do
+      left =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol') AS t(id, name)"
+        )
+
+      right =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES (1, 'eng'), (2, 'hr'), (4, 'sales') AS t(id, dept)"
+        )
+
+      df =
+        DataFrame.join(left, right, ["id"], :inner)
+        |> DataFrame.order_by(["id"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      assert length(rows) == 2
+      ids = Enum.map(rows, & &1["id"])
+      assert ids == [1, 2]
+    end
+
+    test "inner join on condition (list of Column predicates)", %{session: session} do
+      left =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES (1, 10), (1, 20), (2, 30) AS t(id_l, value_l)"
+        )
+
+      right =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES (1, 10, 'x'), (1, 99, 'y'), (2, 30, 'z') AS t(id_r, value_r, tag)"
+        )
+
+      df =
+        DataFrame.join(
+          left,
+          right,
+          [
+            Column.eq(Functions.col("id_l"), Functions.col("id_r")),
+            Column.eq(Functions.col("value_l"), Functions.col("value_r"))
+          ],
+          :inner
+        )
+        |> DataFrame.select(["id_l", "value_l", "tag"])
+        |> DataFrame.order_by(["id_l", "value_l"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+
+      assert Enum.map(rows, &{&1["id_l"], &1["value_l"], &1["tag"]}) == [
+               {1, 10, "x"},
+               {2, 30, "z"}
+             ]
+    end
+
+    test "left outer join", %{session: session} do
+      left =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol') AS t(id, name)"
+        )
+
+      right =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES (1, 'eng'), (2, 'hr') AS t(id, dept)"
+        )
+
+      df =
+        DataFrame.join(left, right, ["id"], :left)
+        |> DataFrame.order_by(["id"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      assert length(rows) == 3
+      # Carol (id=3) should have null dept
+      carol = Enum.find(rows, &(&1["id"] == 3))
+      assert carol["dept"] == nil
+    end
+
+    test "cross join", %{session: session} do
+      left = SparkEx.sql(session, "SELECT * FROM VALUES (1), (2) AS t(a)")
+      right = SparkEx.sql(session, "SELECT * FROM VALUES ('x'), ('y') AS t(b)")
+
+      df =
+        DataFrame.join(left, right, [], :cross)
+        |> DataFrame.order_by(["a", "b"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      assert length(rows) == 4
+    end
+  end
+
+  describe "session guards" do
+    test "join and set operations reject different sessions", %{session: session} do
+      {:ok, other_session} = SparkEx.connect(url: @spark_remote)
+      Process.unlink(other_session)
+
+      on_exit(fn ->
+        if Process.alive?(other_session), do: SparkEx.Session.stop(other_session)
+      end)
+
+      left = SparkEx.range(session, 3)
+      right = SparkEx.range(other_session, 3)
+
+      assert_raise ArgumentError, ~r/different sessions/, fn ->
+        DataFrame.join(left, right, ["id"], :inner)
+      end
+
+      assert_raise ArgumentError, ~r/different sessions/, fn ->
+        DataFrame.union(left, right)
+      end
+
+      assert_raise ArgumentError, ~r/different sessions/, fn ->
+        DataFrame.union_distinct(left, right)
+      end
+
+      assert_raise ArgumentError, ~r/different sessions/, fn ->
+        DataFrame.intersect(left, right)
+      end
+
+      assert_raise ArgumentError, ~r/different sessions/, fn ->
+        DataFrame.except(left, right)
+      end
+    end
+  end
+
+  describe "distinct/1" do
+    test "removes duplicate rows", %{session: session} do
+      df =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES (1, 'a'), (2, 'b'), (1, 'a'), (3, 'c'), (2, 'b') AS t(id, name)"
+        )
+        |> DataFrame.distinct()
+        |> DataFrame.order_by(["id"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      assert length(rows) == 3
+      ids = Enum.map(rows, & &1["id"])
+      assert ids == [1, 2, 3]
+    end
+  end
+
+  describe "union/2" do
+    test "unions two DataFrames (preserves duplicates)", %{session: session} do
+      df1 = SparkEx.sql(session, "SELECT * FROM VALUES (1), (2), (3) AS t(id)")
+      df2 = SparkEx.sql(session, "SELECT * FROM VALUES (2), (3), (4) AS t(id)")
+
+      df =
+        DataFrame.union(df1, df2)
+        |> DataFrame.order_by(["id"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      ids = Enum.map(rows, & &1["id"])
+      assert ids == [1, 2, 2, 3, 3, 4]
+    end
+  end
+
+  describe "union_distinct/2" do
+    test "unions two DataFrames removing duplicates", %{session: session} do
+      df1 = SparkEx.sql(session, "SELECT * FROM VALUES (1), (2), (3) AS t(id)")
+      df2 = SparkEx.sql(session, "SELECT * FROM VALUES (2), (3), (4) AS t(id)")
+
+      df =
+        DataFrame.union_distinct(df1, df2)
+        |> DataFrame.order_by(["id"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      ids = Enum.map(rows, & &1["id"])
+      assert ids == [1, 2, 3, 4]
+    end
+  end
+
+  describe "intersect/2" do
+    test "returns common rows", %{session: session} do
+      df1 = SparkEx.sql(session, "SELECT * FROM VALUES (1), (2), (3) AS t(id)")
+      df2 = SparkEx.sql(session, "SELECT * FROM VALUES (2), (3), (4) AS t(id)")
+
+      df =
+        DataFrame.intersect(df1, df2)
+        |> DataFrame.order_by(["id"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      ids = Enum.map(rows, & &1["id"])
+      assert ids == [2, 3]
+    end
+  end
+
+  describe "except/2" do
+    test "returns rows only in first DataFrame", %{session: session} do
+      df1 = SparkEx.sql(session, "SELECT * FROM VALUES (1), (2), (3) AS t(id)")
+      df2 = SparkEx.sql(session, "SELECT * FROM VALUES (2), (3), (4) AS t(id)")
+
+      df =
+        DataFrame.except(df1, df2)
+        |> DataFrame.order_by(["id"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      ids = Enum.map(rows, & &1["id"])
+      assert ids == [1]
+    end
+  end
+
+  describe "join + aggregate pipeline" do
+    test "join then group_by + agg", %{session: session} do
+      employees =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES (1, 'Alice', 1), (2, 'Bob', 1), (3, 'Carol', 2) AS t(id, name, dept_id)"
+        )
+
+      departments =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES (1, 'Engineering'), (2, 'HR') AS t(dept_id, dept_name)"
+        )
+
+      df =
+        DataFrame.join(employees, departments, ["dept_id"], :inner)
+        |> DataFrame.group_by(["dept_name"])
+        |> SparkEx.GroupedData.agg([
+          Column.alias_(Functions.count(Functions.col("id")), "headcount")
+        ])
+        |> DataFrame.order_by(["dept_name"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      assert length(rows) == 2
+      assert Enum.find(rows, &(&1["dept_name"] == "Engineering"))["headcount"] == 2
+      assert Enum.find(rows, &(&1["dept_name"] == "HR"))["headcount"] == 1
+    end
+  end
+
+  describe "like/2" do
+    test "filters with LIKE pattern", %{session: session} do
+      df =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES ('Alice'), ('Bob'), ('Andy'), ('Carol') AS t(name)"
+        )
+        |> DataFrame.filter(Column.like(Functions.col("name"), Functions.lit("A%")))
+        |> DataFrame.order_by(["name"])
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      names = Enum.map(rows, & &1["name"])
+      assert names == ["Alice", "Andy"]
+    end
+  end
+
   describe "data source reading" do
     test "read from SQL-created temp view works like named table", %{session: session} do
       # Create a temp view first via SQL

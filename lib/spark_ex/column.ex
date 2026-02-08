@@ -118,6 +118,12 @@ defmodule SparkEx.Column do
     binary_fn("startswith", col, prefix)
   end
 
+  @doc "Returns true if the column matches the given SQL LIKE pattern"
+  @spec like(t(), t()) :: t()
+  def like(%__MODULE__{} = col, %__MODULE__{} = pattern) do
+    binary_fn("like", col, pattern)
+  end
+
   # --- Arithmetic ---
 
   @doc "Addition: `col + other`"

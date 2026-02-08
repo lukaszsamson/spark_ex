@@ -261,6 +261,103 @@ defmodule SparkEx.Connect.PlanEncoder do
     {relation, counter}
   end
 
+  # --- Milestone 3: Aggregate ---
+
+  def encode_relation({:aggregate, child_plan, group_type, grouping_exprs, agg_exprs}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:aggregate,
+         %Spark.Connect.Aggregate{
+           input: child,
+           group_type: encode_group_type(group_type),
+           grouping_expressions: Enum.map(grouping_exprs, &encode_expression/1),
+           aggregate_expressions: Enum.map(agg_exprs, &encode_expression/1)
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  # --- Milestone 3: Join ---
+
+  def encode_relation(
+        {:join, left_plan, right_plan, join_condition, join_type, using_columns},
+        counter
+      ) do
+    {plan_id, counter} = next_id(counter)
+    {left, counter} = encode_relation(left_plan, counter)
+    {right, counter} = encode_relation(right_plan, counter)
+
+    join_cond =
+      case join_condition do
+        nil -> nil
+        expr -> encode_expression(expr)
+      end
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:join,
+         %Spark.Connect.Join{
+           left: left,
+           right: right,
+           join_condition: join_cond,
+           join_type: encode_join_type(join_type),
+           using_columns: using_columns || []
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  # --- Milestone 3: Deduplicate ---
+
+  def encode_relation({:deduplicate, child_plan, column_names, all_columns}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:deduplicate,
+         %Spark.Connect.Deduplicate{
+           input: child,
+           column_names: column_names || [],
+           all_columns_as_keys: all_columns
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  # --- Milestone 3: SetOperation ---
+
+  def encode_relation({:set_operation, left_plan, right_plan, op_type, is_all}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {left, counter} = encode_relation(left_plan, counter)
+    {right, counter} = encode_relation(right_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:set_op,
+         %Spark.Connect.SetOperation{
+           left_input: left,
+           right_input: right,
+           set_op_type: encode_set_op_type(op_type),
+           is_all: is_all,
+           by_name: false,
+           allow_missing_columns: false
+         }}
+    }
+
+    {relation, counter}
+  end
+
   @doc """
   Wraps a plan in an aggregate count(*) relation.
 
@@ -464,4 +561,22 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_null_ordering(nil), do: :SORT_NULLS_UNSPECIFIED
   defp encode_null_ordering(:nulls_first), do: :SORT_NULLS_FIRST
   defp encode_null_ordering(:nulls_last), do: :SORT_NULLS_LAST
+
+  defp encode_join_type(:inner), do: :JOIN_TYPE_INNER
+  defp encode_join_type(:full), do: :JOIN_TYPE_FULL_OUTER
+  defp encode_join_type(:left), do: :JOIN_TYPE_LEFT_OUTER
+  defp encode_join_type(:right), do: :JOIN_TYPE_RIGHT_OUTER
+  defp encode_join_type(:left_anti), do: :JOIN_TYPE_LEFT_ANTI
+  defp encode_join_type(:left_semi), do: :JOIN_TYPE_LEFT_SEMI
+  defp encode_join_type(:cross), do: :JOIN_TYPE_CROSS
+  defp encode_join_type(other), do: raise(ArgumentError, "invalid join type: #{inspect(other)}")
+
+  defp encode_group_type(:groupby), do: :GROUP_TYPE_GROUPBY
+  defp encode_group_type(:rollup), do: :GROUP_TYPE_ROLLUP
+  defp encode_group_type(:cube), do: :GROUP_TYPE_CUBE
+  defp encode_group_type(:pivot), do: :GROUP_TYPE_PIVOT
+
+  defp encode_set_op_type(:union), do: :SET_OP_TYPE_UNION
+  defp encode_set_op_type(:intersect), do: :SET_OP_TYPE_INTERSECT
+  defp encode_set_op_type(:except), do: :SET_OP_TYPE_EXCEPT
 end

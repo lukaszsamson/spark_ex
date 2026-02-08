@@ -138,5 +138,10 @@ defmodule SparkEx.ColumnTest do
       result = Column.starts_with(Functions.col("name"), Functions.lit("pre"))
       assert %Column{expr: {:fn, "startswith", [{:col, "name"}, {:lit, "pre"}], false}} = result
     end
+
+    test "like/2" do
+      result = Column.like(Functions.col("name"), Functions.lit("%test%"))
+      assert %Column{expr: {:fn, "like", [{:col, "name"}, {:lit, "%test%"}], false}} = result
+    end
   end
 end

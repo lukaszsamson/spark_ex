@@ -14,6 +14,10 @@ defmodule SparkEx.DataFrame do
   - `drop/2` — drop columns
   - `order_by/2` — sort rows
   - `limit/2` — limit number of rows
+  - `group_by/2` — group by columns (returns `SparkEx.GroupedData`)
+  - `join/4` — join two DataFrames
+  - `distinct/1` — deduplicate all rows
+  - `union/2` — union two DataFrames
 
   ## Actions (execute)
 
@@ -137,6 +141,160 @@ defmodule SparkEx.DataFrame do
     %__MODULE__{df | plan: {:limit, df.plan, n}}
   end
 
+  @doc """
+  Groups the DataFrame by the given columns, returning a `SparkEx.GroupedData`.
+
+  Use `SparkEx.GroupedData.agg/2` to apply aggregate functions.
+
+  Accepts a list of column names (strings or atoms) or `Column` structs.
+
+  ## Examples
+
+      import SparkEx.Functions
+
+      df
+      |> DataFrame.group_by(["department"])
+      |> SparkEx.GroupedData.agg([sum(col("salary"))])
+  """
+  @spec group_by(t(), [Column.t() | String.t() | atom()]) :: SparkEx.GroupedData.t()
+  def group_by(%__MODULE__{} = df, columns) when is_list(columns) do
+    grouping_exprs = Enum.map(columns, &normalize_column_expr/1)
+
+    %SparkEx.GroupedData{
+      session: df.session,
+      plan: df.plan,
+      grouping_exprs: grouping_exprs
+    }
+  end
+
+  @doc """
+  Joins this DataFrame with another on the given condition.
+
+  ## Join types
+
+  - `:inner` (default)
+  - `:left` — left outer join
+  - `:right` — right outer join
+  - `:full` — full outer join
+  - `:cross` — cross join (no condition needed)
+  - `:left_semi` — left semi join
+  - `:left_anti` — left anti join
+
+  ## Join conditions
+
+  The `on` parameter can be:
+  - A `Column` struct representing the join condition expression
+  - A list of column name strings for a `USING` join
+
+  ## Examples
+
+      import SparkEx.Functions, only: [col: 1]
+
+      DataFrame.join(df1, df2, Column.eq(col("df1.id"), col("df2.id")), :inner)
+      DataFrame.join(df1, df2, ["id"], :inner)
+  """
+  @spec join(
+          t(),
+          t(),
+          Column.t() | String.t() | atom() | [Column.t() | String.t() | atom()],
+          atom() | String.t()
+        ) ::
+          t()
+  def join(%__MODULE__{} = left, %__MODULE__{} = right, on, join_type \\ :inner) do
+    ensure_same_session!(left, right, :join)
+    {condition, using_columns} = normalize_join_on(on)
+    canonical_join_type = normalize_join_type(join_type)
+
+    %__MODULE__{
+      left
+      | plan: {:join, left.plan, right.plan, condition, canonical_join_type, using_columns}
+    }
+  end
+
+  @doc """
+  Returns a new DataFrame with duplicate rows removed.
+
+  ## Examples
+
+      df |> SparkEx.DataFrame.distinct()
+  """
+  @spec distinct(t()) :: t()
+  def distinct(%__MODULE__{} = df) do
+    %__MODULE__{df | plan: {:deduplicate, df.plan, [], true}}
+  end
+
+  @doc """
+  Returns a new DataFrame with the union of rows from both DataFrames.
+
+  Both DataFrames must have the same schema. Duplicates are preserved
+  (equivalent to SQL `UNION ALL`).
+
+  ## Examples
+
+      DataFrame.union(df1, df2)
+  """
+  @spec union(t(), t()) :: t()
+  def union(%__MODULE__{} = left, %__MODULE__{} = right) do
+    ensure_same_session!(left, right, :union)
+
+    %__MODULE__{
+      left
+      | plan: {:set_operation, left.plan, right.plan, :union, true}
+    }
+  end
+
+  @doc """
+  Returns a new DataFrame with the union of rows, removing duplicates
+  (equivalent to SQL `UNION`).
+
+  ## Examples
+
+      DataFrame.union_distinct(df1, df2)
+  """
+  @spec union_distinct(t(), t()) :: t()
+  def union_distinct(%__MODULE__{} = left, %__MODULE__{} = right) do
+    ensure_same_session!(left, right, :union_distinct)
+
+    %__MODULE__{
+      left
+      | plan: {:set_operation, left.plan, right.plan, :union, false}
+    }
+  end
+
+  @doc """
+  Returns rows in this DataFrame that are also in the other DataFrame.
+
+  ## Examples
+
+      DataFrame.intersect(df1, df2)
+  """
+  @spec intersect(t(), t()) :: t()
+  def intersect(%__MODULE__{} = left, %__MODULE__{} = right) do
+    ensure_same_session!(left, right, :intersect)
+
+    %__MODULE__{
+      left
+      | plan: {:set_operation, left.plan, right.plan, :intersect, false}
+    }
+  end
+
+  @doc """
+  Returns rows in this DataFrame that are not in the other DataFrame.
+
+  ## Examples
+
+      DataFrame.except(df1, df2)
+  """
+  @spec except(t(), t()) :: t()
+  def except(%__MODULE__{} = left, %__MODULE__{} = right) do
+    ensure_same_session!(left, right, :except)
+
+    %__MODULE__{
+      left
+      | plan: {:set_operation, left.plan, right.plan, :except, false}
+    }
+  end
+
   # ── Actions (execute against Spark) ──
 
   @doc """
@@ -223,5 +381,79 @@ defmodule SparkEx.DataFrame do
 
   defp normalize_sort_expr(name) when is_atom(name) do
     {:sort_order, {:col, Atom.to_string(name)}, :asc, nil}
+  end
+
+  defp ensure_same_session!(%__MODULE__{session: left}, %__MODULE__{session: right}, _op)
+       when left == right,
+       do: :ok
+
+  defp ensure_same_session!(%__MODULE__{}, %__MODULE__{}, op) do
+    raise ArgumentError, "cannot #{op} DataFrames from different sessions"
+  end
+
+  defp normalize_join_on(%Column{} = col), do: {col.expr, []}
+
+  defp normalize_join_on(name) when is_binary(name) or is_atom(name) do
+    {nil, [to_string(name)]}
+  end
+
+  defp normalize_join_on(columns) when is_list(columns) do
+    cond do
+      columns == [] ->
+        {nil, []}
+
+      Enum.all?(columns, &(is_binary(&1) or is_atom(&1))) ->
+        {nil, Enum.map(columns, &to_string/1)}
+
+      Enum.all?(columns, &match?(%Column{}, &1)) ->
+        {combine_join_conditions(columns), []}
+
+      true ->
+        raise ArgumentError,
+              "expected join keys as a column name, list of names, Column, or list of Column conditions"
+    end
+  end
+
+  defp normalize_join_on(_other) do
+    raise ArgumentError,
+          "expected join keys as a column name, list of names, Column, or list of Column conditions"
+  end
+
+  defp combine_join_conditions([%Column{expr: first_expr} | rest]) do
+    Enum.reduce(rest, first_expr, fn %Column{expr: expr}, acc ->
+      {:fn, "and", [acc, expr], false}
+    end)
+  end
+
+  defp normalize_join_type(join_type) do
+    normalized =
+      case join_type do
+        type when is_atom(type) ->
+          type |> Atom.to_string() |> String.downcase() |> String.replace("_", "")
+
+        type when is_binary(type) ->
+          type |> String.downcase() |> String.replace("_", "")
+
+        _ ->
+          raise ArgumentError,
+                "invalid join type: #{inspect(join_type)}. Expected one of: :inner, :outer, :full, :full_outer, :left, :left_outer, :right, :right_outer, :semi, :left_semi, :anti, :left_anti, :cross"
+      end
+
+    case normalized do
+      "inner" -> :inner
+      "outer" -> :full
+      "full" -> :full
+      "fullouter" -> :full
+      "left" -> :left
+      "leftouter" -> :left
+      "right" -> :right
+      "rightouter" -> :right
+      "semi" -> :left_semi
+      "leftsemi" -> :left_semi
+      "anti" -> :left_anti
+      "leftanti" -> :left_anti
+      "cross" -> :cross
+      _ -> raise ArgumentError, "invalid join type: #{inspect(join_type)}"
+    end
   end
 end
