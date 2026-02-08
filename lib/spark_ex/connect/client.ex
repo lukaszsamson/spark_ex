@@ -20,7 +20,11 @@ defmodule SparkEx.Connect.Client do
     UserContext
   }
 
+  @compile {:no_warn_undefined, Explorer.DataFrame}
+
   alias SparkEx.Connect.{Errors, ResultDecoder}
+
+  require Logger
 
   # gRPC status codes considered transient (eligible for retry)
   @status_unavailable 14
@@ -133,21 +137,70 @@ defmodule SparkEx.Connect.Client do
       ]
     }
 
-    retry_with_backoff(
-      fn ->
-        case Stub.execute_plan(session.channel, request, timeout: timeout) do
-          {:ok, stream} ->
-            ResultDecoder.decode_stream(stream, session)
+    metadata = %{rpc: :execute_plan, session_id: session.session_id}
 
-          {:error, %GRPC.RPCError{} = error} ->
-            {:error, Errors.from_grpc_error(error, session)}
+    rpc_telemetry_span(metadata, fn ->
+      retry_with_backoff(
+        fn ->
+          case Stub.execute_plan(session.channel, request, timeout: timeout) do
+            {:ok, stream} ->
+              ResultDecoder.decode_stream(stream, session)
 
-          {:error, reason} ->
-            {:error, reason}
-        end
-      end,
-      opts
-    )
+            {:error, %GRPC.RPCError{} = error} ->
+              {:error, Errors.from_grpc_error(error, session)}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+        end,
+        opts
+      )
+    end)
+  end
+
+  @doc """
+  Calls `ExecutePlan` and decodes the response as an `Explorer.DataFrame`.
+
+  Enforces row and byte limits. See `ResultDecoder.decode_stream_explorer/3`.
+  """
+  @spec execute_plan_explorer(SparkEx.Session.t(), Plan.t(), keyword()) ::
+          {:ok, ResultDecoder.explorer_result()} | {:error, term()}
+  def execute_plan_explorer(session, plan, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, 60_000)
+
+    request = %ExecutePlanRequest{
+      session_id: session.session_id,
+      client_type: session.client_type,
+      user_context: %UserContext{user_id: session.user_id},
+      client_observed_server_side_session_id: session.server_side_session_id,
+      plan: plan,
+      request_options: [
+        %ExecutePlanRequest.RequestOption{
+          request_option:
+            {:result_chunking_options, %ResultChunkingOptions{allow_arrow_batch_chunking: true}}
+        }
+      ]
+    }
+
+    metadata = %{rpc: :execute_plan_explorer, session_id: session.session_id}
+
+    rpc_telemetry_span(metadata, fn ->
+      retry_with_backoff(
+        fn ->
+          case Stub.execute_plan(session.channel, request, timeout: timeout) do
+            {:ok, stream} ->
+              ResultDecoder.decode_stream_explorer(stream, session, opts)
+
+            {:error, %GRPC.RPCError{} = error} ->
+              {:error, Errors.from_grpc_error(error, session)}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+        end,
+        opts
+      )
+    end)
   end
 
   # --- Config RPCs ---
@@ -256,10 +309,17 @@ defmodule SparkEx.Connect.Client do
 
   defp do_retry(fun, attempt, max_retries, initial_backoff, max_backoff, sleep_fun, jitter_fun) do
     case fun.() do
-      {:error, %SparkEx.Error.Remote{grpc_status: status}}
+      {:error, %SparkEx.Error.Remote{grpc_status: status} = error}
       when status in [@status_unavailable, @status_deadline_exceeded] and
              attempt < max_retries ->
         sleep_ms = backoff_ms(attempt, initial_backoff, max_backoff, jitter_fun)
+
+        :telemetry.execute(
+          [:spark_ex, :retry, :attempt],
+          %{attempt: attempt + 1, backoff_ms: sleep_ms},
+          %{grpc_status: status, error: error, max_retries: max_retries}
+        )
+
         sleep_fun.(sleep_ms)
 
         do_retry(
@@ -287,4 +347,57 @@ defmodule SparkEx.Connect.Client do
     # Add jitter: random value between 0 and capped
     :rand.uniform(capped + 1) - 1
   end
+
+  # --- Telemetry ---
+
+  @doc false
+  @spec rpc_telemetry_span(map(), (-> term())) :: term()
+  def rpc_telemetry_span(metadata, fun) when is_map(metadata) and is_function(fun, 0) do
+    start_time = System.monotonic_time()
+    :telemetry.execute([:spark_ex, :rpc, :start], %{system_time: System.system_time()}, metadata)
+
+    try do
+      result = fun.()
+
+      duration = System.monotonic_time() - start_time
+
+      result_metadata = Map.merge(metadata, row_count_metadata(result))
+
+      :telemetry.execute(
+        [:spark_ex, :rpc, :stop],
+        %{duration: duration},
+        Map.put(result_metadata, :result, result_status(result))
+      )
+
+      result
+    rescue
+      e ->
+        duration = System.monotonic_time() - start_time
+
+        :telemetry.execute(
+          [:spark_ex, :rpc, :exception],
+          %{duration: duration},
+          Map.merge(metadata, %{kind: :error, reason: e, stacktrace: __STACKTRACE__})
+        )
+
+        reraise e, __STACKTRACE__
+    end
+  end
+
+  defp result_status({:ok, _}), do: :ok
+  defp result_status({:error, _}), do: :error
+
+  defp row_count_metadata({:ok, %{rows: rows}}) when is_list(rows) do
+    %{row_count: length(rows)}
+  end
+
+  defp row_count_metadata({:ok, %{dataframe: dataframe}}) do
+    if Code.ensure_loaded?(Explorer.DataFrame) and match?(%Explorer.DataFrame{}, dataframe) do
+      %{row_count: Explorer.DataFrame.n_rows(dataframe)}
+    else
+      %{}
+    end
+  end
+
+  defp row_count_metadata(_result), do: %{}
 end

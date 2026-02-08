@@ -33,6 +33,8 @@ defmodule SparkEx.DataFrame do
 
   defstruct [:session, :plan]
 
+  @compile {:no_warn_undefined, Explorer.DataFrame}
+
   @type plan :: term()
 
   @type t :: %__MODULE__{
@@ -296,6 +298,32 @@ defmodule SparkEx.DataFrame do
   end
 
   # ── Actions (execute against Spark) ──
+
+  @doc """
+  Materializes the DataFrame as an `Explorer.DataFrame`.
+
+  By default, injects a `LIMIT` of `max_rows` into the Spark plan to prevent
+  unbounded collection. Pass `unsafe: true` to skip the limit injection.
+  Local decoder limits still apply unless you explicitly set `max_rows: :infinity`
+  and/or `max_bytes: :infinity`.
+
+  ## Options
+
+  - `:max_rows` — maximum number of rows (default: 10_000)
+  - `:max_bytes` — maximum Arrow data bytes (default: 64 MB)
+  - `:unsafe` — skip LIMIT injection only (default: false)
+  - `:timeout` — gRPC timeout in ms (default: 60_000)
+
+  ## Examples
+
+      {:ok, explorer_df} = DataFrame.to_explorer(df)
+      {:ok, explorer_df} = DataFrame.to_explorer(df, max_rows: 1_000)
+      {:ok, explorer_df} = DataFrame.to_explorer(df, unsafe: true)
+  """
+  @spec to_explorer(t(), keyword()) :: {:ok, Explorer.DataFrame.t()} | {:error, term()}
+  def to_explorer(%__MODULE__{} = df, opts \\ []) do
+    SparkEx.Session.execute_explorer(df.session, df.plan, opts)
+  end
 
   @doc """
   Collects all rows from the DataFrame as a list of maps.

@@ -6,11 +6,16 @@ Targets Spark 4.1.1. See `SPEC_V1.md` for the full design.
 
 ## Status
 
-Milestone 0 (Foundations) and Milestone 1 (Minimal Query Path) are complete:
+Milestones 0 through 4 are complete (289 tests passing against Spark 4.1.1).
+
+### Milestone 0 &mdash; Foundations
 
 - Generated protobuf + gRPC stubs from vendored Spark Connect protos (v4.1.1)
 - `sc://` URI parsing (`SparkEx.Connect.Channel`)
 - Session GenServer with plan ID counter and server-side session ID tracking (`SparkEx.Session`)
+
+### Milestone 1 &mdash; Minimal Query Path
+
 - `SparkEx.sql/3` &mdash; create DataFrames from SQL queries (with positional/named args)
 - `SparkEx.range/3` &mdash; create DataFrames from integer ranges
 - `DataFrame.collect/2`, `count/1`, `take/3` &mdash; execute plans and return rows
@@ -18,6 +23,34 @@ Milestone 0 (Foundations) and Milestone 1 (Minimal Query Path) are complete:
 - `SparkEx.config_set/2`, `config_get/2` &mdash; Spark configuration management
 - Arrow IPC stream decoding via Explorer
 - Structured error handling with `FetchErrorDetails` RPC (`SparkEx.Error.Remote`)
+
+### Milestone 2 &mdash; Core Transforms + Expressions
+
+- `DataFrame.select/2`, `filter/2`, `with_column/3`, `drop/2`, `order_by/2`, `limit/2` &mdash; lazy transforms
+- `DataFrame.show/2` &mdash; formatted string output (like PySpark's `show()`)
+- `SparkEx.Column` &mdash; expression wrapper with comparisons, boolean ops, null checks, string ops (`contains`, `starts_with`, `like`), arithmetic, `cast`, sort ordering, `alias_`
+- `SparkEx.Functions` &mdash; `col/1`, `lit/1`, `expr/1`, `star/0`, `asc/1`, `desc/1`, `count/1`, `sum/1`, `avg/1`, `min/1`, `max/1`, `count_distinct/1`
+- `SparkEx.Reader` &mdash; `table/2`, `parquet/2`, `csv/2`, `json/2`
+
+### Milestone 3 &mdash; Joins, Aggregates, Set Operations
+
+- `DataFrame.group_by/2` + `SparkEx.GroupedData.agg/2` &mdash; group-by aggregation
+- `DataFrame.join/4` &mdash; inner, left, right, full, cross, left_semi, left_anti joins (with condition or USING columns)
+- `DataFrame.distinct/1` &mdash; deduplicate rows
+- `DataFrame.union/2`, `union_distinct/2`, `intersect/2`, `except/2` &mdash; set operations
+- Retry with exponential backoff + jitter for transient gRPC errors (UNAVAILABLE, DEADLINE_EXCEEDED)
+- Same-session guards for join and set operations
+- Join type normalization (`:outer` &rarr; `:full`, `:semi` &rarr; `:left_semi`, string types, etc.)
+
+### Milestone 4 &mdash; Explorer + Kino + Observability
+
+- `DataFrame.to_explorer/2` &mdash; materialize as `Explorer.DataFrame` with bounded row/byte limits (default: 10,000 rows / 64 MB); injects LIMIT unless `unsafe: true` (which skips LIMIT injection only)
+- `SparkEx.Connect.TypeMapper` &mdash; maps all 28 Spark `DataType` proto variants to Explorer dtypes
+- `SparkEx.Error.LimitExceeded` &mdash; structured error for exceeded materialization bounds with remediation guidance
+- `SparkEx.Livebook` &mdash; helpers returning Kino terms: `preview/2`, `explain/2`, `sample/2`, `schema/1`
+- `Kino.Render` protocol for `SparkEx.DataFrame` &mdash; tabs: Schema, Preview (`Kino.DataTable`), Explain, Raw
+- Telemetry events: `[:spark_ex, :rpc, :start/stop/exception]`, `[:spark_ex, :result, :batch]`, `[:spark_ex, :result, :progress]`, `[:spark_ex, :retry, :attempt]`
+- Arrow batch chunking reassembly with Explorer-native decode path (`Explorer.DataFrame.concat_rows/1`)
 
 ## Quick start
 
@@ -52,12 +85,83 @@ df = SparkEx.sql(session, "SELECT * FROM t WHERE id = :id", args: %{id: 42})
 df = SparkEx.sql(session, "SELECT * FROM t WHERE id = ?", args: [42])
 ```
 
+### Transforms and expressions
+
+```elixir
+import SparkEx.Functions
+alias SparkEx.{DataFrame, Column}
+
+df =
+  SparkEx.sql(session, "SELECT * FROM VALUES (1,'Alice',100), (2,'Bob',200) AS t(id,name,salary)")
+  |> DataFrame.select([col("name"), col("salary")])
+  |> DataFrame.filter(col("salary") |> Column.gt(lit(150)))
+  |> DataFrame.with_column("bonus", col("salary") |> Column.multiply(lit(0.1)))
+  |> DataFrame.order_by([col("name") |> Column.asc()])
+  |> DataFrame.limit(10)
+
+{:ok, rows} = DataFrame.collect(df)
+```
+
+### Joins and aggregates
+
+```elixir
+employees = SparkEx.sql(session, "SELECT * FROM VALUES (1,'eng'), (2,'hr') AS t(id,dept)")
+departments = SparkEx.sql(session, "SELECT * FROM VALUES ('eng','Engineering') AS t(dept,name)")
+
+df =
+  DataFrame.join(employees, departments, ["dept"], :inner)
+  |> DataFrame.group_by(["name"])
+  |> SparkEx.GroupedData.agg([
+    Column.alias_(count(col("id")), "headcount")
+  ])
+
+{:ok, rows} = DataFrame.collect(df)
+```
+
+### Data sources
+
+```elixir
+alias SparkEx.Reader
+
+df = Reader.parquet(session, "/path/to/data.parquet")
+df = Reader.csv(session, "/path/to/data.csv", schema: "name STRING, age INT")
+df = Reader.json(session, "/path/to/data.json")
+df = Reader.table(session, "my_table")
+```
+
+### Explorer integration
+
+```elixir
+# Materialize as Explorer.DataFrame (bounded by default)
+{:ok, explorer_df} = DataFrame.to_explorer(df, max_rows: 1_000)
+
+# Skip limit injection (decoder bounds still apply)
+{:ok, explorer_df} = DataFrame.to_explorer(df, unsafe: true)
+
+# Fully unbounded collection (use carefully)
+{:ok, explorer_df} = DataFrame.to_explorer(df, unsafe: true, max_rows: :infinity, max_bytes: :infinity)
+```
+
+### Livebook
+
+In a Livebook cell, `SparkEx.DataFrame` structs render automatically with tabs for Schema, Preview, Explain, and Raw via the `Kino.Render` protocol.
+
+```elixir
+# Helpers return Kino terms for explicit rendering
+SparkEx.Livebook.preview(df, num_rows: 50)
+SparkEx.Livebook.explain(df, mode: :extended)
+SparkEx.Livebook.schema(df)
+```
+
+See [`notebooks/spark_ex_demo.livemd`](notebooks/spark_ex_demo.livemd) for a full interactive demo.
+
 ## Prerequisites
 
 - Elixir >= 1.19
 - `protoc` with `protoc-gen-elixir` (for proto regeneration only)
 - Java 17 or 21 (for running the Spark Connect server; Spark 4.1.1 does **not** support Java 25+)
-- [Explorer](https://hex.pm/packages/explorer) (optional, for Arrow IPC decoding &mdash; included as optional dep)
+- [Explorer](https://hex.pm/packages/explorer) (optional, for Arrow IPC decoding and `to_explorer/2`)
+- [Kino](https://hex.pm/packages/kino) (optional, for Livebook rendering and helpers)
 
 ## Setup
 
@@ -174,22 +278,32 @@ lib/
   spark_ex/
     application.ex                 # OTP application (starts GRPC.Client.Supervisor)
     session.ex                     # Session GenServer
-    data_frame.ex                  # Lazy DataFrame struct (collect, count, take, schema, explain)
+    data_frame.ex                  # Lazy DataFrame struct + actions
+    column.ex                      # Expression wrapper (comparisons, arithmetic, etc.)
+    functions.ex                   # Column constructors and aggregate functions
+    grouped_data.ex                # GroupedData struct (group_by + agg)
+    reader.ex                      # Data source readers (parquet, csv, json, table)
+    livebook.ex                    # Livebook helpers (preview, explain, sample, schema)
+    kino_render.ex                 # Kino.Render protocol for DataFrame
     connect/
       channel.ex                   # sc:// URI parser + gRPC channel management
-      client.ex                    # Low-level gRPC RPC calls
+      client.ex                    # Low-level gRPC RPC calls (with telemetry + retry)
       plan_encoder.ex              # Internal plan -> Spark Connect protobuf encoding
-      result_decoder.ex            # Arrow IPC stream decoding (via Explorer)
-      errors.ex                    # Structured error handling (FetchErrorDetails RPC)
+      result_decoder.ex            # Arrow IPC stream decoding (rows + Explorer modes)
+      errors.ex                    # Structured errors (Remote, LimitExceeded)
+      type_mapper.ex               # Spark DataType -> Explorer dtype mapping
     proto/spark/connect/*.pb.ex    # Generated protobuf modules (do not edit)
 
 priv/
   proto/spark/connect/*.proto      # Vendored Spark Connect protos (v4.1.1)
   scripts/gen_proto.sh             # Proto generation script
 
+notebooks/
+  spark_ex_demo.livemd             # Interactive Livebook demo (Kino.Render, preview, etc.)
+
 test/
-  unit/                            # Unit tests (no server needed)
-  integration/                     # Integration tests (tagged :integration)
+  unit/                            # Unit tests (no server needed, 225 tests)
+  integration/                     # Integration tests (tagged :integration, 64 tests)
   spark-4.1.1-bin-hadoop3-connect/ # Spark distribution (download separately, gitignored)
   run_integration.sh               # One-command integration test runner
 ```

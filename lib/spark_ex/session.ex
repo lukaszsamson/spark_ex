@@ -8,6 +8,8 @@ defmodule SparkEx.Session do
 
   use GenServer
 
+  @compile {:no_warn_undefined, Explorer.DataFrame}
+
   alias SparkEx.Connect.Channel
   alias SparkEx.Connect.Client
   alias SparkEx.Connect.PlanEncoder
@@ -87,6 +89,26 @@ defmodule SparkEx.Session do
           {:ok, [map()]} | {:error, term()}
   def execute_collect(session, plan, opts \\ []) do
     GenServer.call(session, {:execute_collect, plan, opts}, call_timeout(opts))
+  end
+
+  @doc """
+  Executes a plan and returns an `Explorer.DataFrame`.
+
+  Pushes a LIMIT into the plan unless `unsafe: true`. Enforces row/byte bounds.
+  `unsafe: true` skips only LIMIT injection; decoder bounds still apply unless
+  explicitly overridden.
+
+  ## Options
+
+  - `:max_rows` — maximum rows (default: 10_000)
+  - `:max_bytes` — maximum bytes (default: 64 MB)
+  - `:unsafe` — skip LIMIT injection only (default: false)
+  - `:timeout` — gRPC timeout in ms (default: 60_000)
+  """
+  @spec execute_explorer(GenServer.server(), term(), keyword()) ::
+          {:ok, Explorer.DataFrame.t()} | {:error, term()}
+  def execute_explorer(session, plan, opts \\ []) do
+    GenServer.call(session, {:execute_explorer, plan, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -203,6 +225,31 @@ defmodule SparkEx.Session do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
         {:reply, {:ok, result.rows}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:execute_explorer, plan, opts}, _from, state) do
+    max_rows = Keyword.get(opts, :max_rows, 10_000)
+    unsafe = Keyword.get(opts, :unsafe, false)
+
+    {effective_plan, decoder_opts} =
+      if unsafe do
+        # Skip remote LIMIT injection only; local decoder limits stay active unless overridden.
+        {plan, opts}
+      else
+        {{:limit, plan, max_rows}, opts}
+      end
+
+    {proto_plan, counter} = PlanEncoder.encode(effective_plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.execute_plan_explorer(state, proto_plan, decoder_opts) do
+      {:ok, result} ->
+        state = maybe_update_server_session(state, result.server_side_session_id)
+        {:reply, {:ok, result.dataframe}, state}
 
       {:error, _} = error ->
         {:reply, error, state}

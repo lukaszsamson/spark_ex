@@ -555,6 +555,120 @@ defmodule SparkEx.Integration.DataFrameTest do
     end
   end
 
+  describe "to_explorer/2" do
+    test "returns Explorer.DataFrame from range", %{session: session} do
+      df = SparkEx.range(session, 5)
+      assert {:ok, explorer_df} = DataFrame.to_explorer(df, max_rows: 100)
+      assert %Explorer.DataFrame{} = explorer_df
+      assert Explorer.DataFrame.n_rows(explorer_df) == 5
+      assert "id" in Explorer.DataFrame.names(explorer_df)
+    end
+
+    test "returns Explorer.DataFrame from SQL", %{session: session} do
+      df = SparkEx.sql(session, "SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob') AS t(id, name)")
+      assert {:ok, explorer_df} = DataFrame.to_explorer(df)
+      assert Explorer.DataFrame.n_rows(explorer_df) == 2
+      assert "id" in Explorer.DataFrame.names(explorer_df)
+      assert "name" in Explorer.DataFrame.names(explorer_df)
+    end
+
+    test "respects max_rows limit by injecting LIMIT", %{session: session} do
+      df = SparkEx.range(session, 100)
+      assert {:ok, explorer_df} = DataFrame.to_explorer(df, max_rows: 5)
+      assert Explorer.DataFrame.n_rows(explorer_df) <= 5
+    end
+
+    test "unsafe: true skips LIMIT injection", %{session: session} do
+      df = SparkEx.range(session, 10)
+
+      assert {:error, %SparkEx.Error.LimitExceeded{limit_type: :rows}} =
+               DataFrame.to_explorer(df, max_rows: 5, unsafe: true)
+    end
+
+    test "unsafe: true can be fully unbounded with explicit decoder opts", %{session: session} do
+      df = SparkEx.range(session, 10)
+
+      assert {:ok, explorer_df} =
+               DataFrame.to_explorer(df, unsafe: true, max_rows: :infinity, max_bytes: :infinity)
+
+      assert Explorer.DataFrame.n_rows(explorer_df) == 10
+    end
+
+    test "preserves schema for empty result sets", %{session: session} do
+      df =
+        SparkEx.sql(
+          session,
+          "SELECT CAST(1 AS INT) AS id, CAST('x' AS STRING) AS name WHERE 1 = 0"
+        )
+
+      assert {:ok, explorer_df} = DataFrame.to_explorer(df)
+      assert Explorer.DataFrame.n_rows(explorer_df) == 0
+      assert Explorer.DataFrame.names(explorer_df) == ["id", "name"]
+    end
+
+    test "materializes null-heavy public json dataset", %{session: session} do
+      json_path = Path.join(@spark_test_support_sql, "people.json")
+
+      df =
+        Reader.json(session, json_path)
+        |> DataFrame.select(["name", "age"])
+        |> DataFrame.order_by(["name"])
+
+      assert {:ok, explorer_df} = DataFrame.to_explorer(df, max_rows: 100)
+      assert Explorer.DataFrame.names(explorer_df) == ["name", "age"]
+      assert Explorer.DataFrame.n_rows(explorer_df) == 3
+
+      rows = Explorer.DataFrame.to_rows(explorer_df)
+      assert Enum.any?(rows, &(&1["age"] == nil))
+    end
+
+    test "materializes public parquet dataset", %{session: session} do
+      parquet_path = Path.join(@spark_examples_resources, "users.parquet")
+
+      df =
+        Reader.parquet(session, parquet_path)
+        |> DataFrame.select(["name", "favorite_color"])
+        |> DataFrame.order_by(["name"])
+        |> DataFrame.limit(3)
+
+      assert {:ok, explorer_df} = DataFrame.to_explorer(df, max_rows: 10)
+      assert Explorer.DataFrame.names(explorer_df) == ["name", "favorite_color"]
+      assert Explorer.DataFrame.n_rows(explorer_df) >= 1
+    end
+
+    test "materializes public csv dataset", %{session: session} do
+      csv_path = Path.join(@spark_test_support_sql, "ages_newlines.csv")
+
+      df =
+        Reader.csv(
+          session,
+          csv_path,
+          schema: "name STRING, age INT, note STRING",
+          options: %{"multiLine" => "true"}
+        )
+        |> DataFrame.select(["name", "age"])
+        |> DataFrame.order_by(["age"])
+
+      assert {:ok, explorer_df} = DataFrame.to_explorer(df, max_rows: 10)
+      assert Explorer.DataFrame.names(explorer_df) == ["name", "age"]
+      assert Explorer.DataFrame.n_rows(explorer_df) == 3
+    end
+
+    test "falls back complex types to strings", %{session: session} do
+      df =
+        SparkEx.sql(
+          session,
+          "SELECT array(1, 2) AS arr, named_struct('k', 1, 'v', 'x') AS st, map('a', 1) AS mp"
+        )
+
+      assert {:ok, explorer_df} = DataFrame.to_explorer(df, max_rows: 10)
+      [row] = Explorer.DataFrame.to_rows(explorer_df)
+      assert is_binary(row["arr"])
+      assert is_binary(row["st"])
+      assert is_binary(row["mp"])
+    end
+  end
+
   describe "data source reading" do
     test "read from SQL-created temp view works like named table", %{session: session} do
       # Create a temp view first via SQL

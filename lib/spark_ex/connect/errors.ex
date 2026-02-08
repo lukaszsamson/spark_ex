@@ -3,6 +3,51 @@ defmodule SparkEx.Error do
   Structured error types for SparkEx.
   """
 
+  defmodule LimitExceeded do
+    @moduledoc """
+    Raised when a materialization operation exceeds configured bounds.
+
+    Provides `remediation` guidance to help users adjust their query or limits.
+    """
+    defexception [:limit_type, :limit_value, :actual_value, :remediation]
+
+    @type t :: %__MODULE__{
+            limit_type: :rows | :bytes,
+            limit_value: non_neg_integer(),
+            actual_value: non_neg_integer() | nil,
+            remediation: String.t()
+          }
+
+    @impl true
+    def message(%__MODULE__{} = e) do
+      base =
+        case e.limit_type do
+          :rows ->
+            "Collection limit exceeded: maximum #{e.limit_value} rows"
+
+          :bytes ->
+            "Collection limit exceeded: maximum #{format_bytes(e.limit_value)}"
+        end
+
+      base =
+        if e.actual_value do
+          base <> " (got #{e.actual_value})"
+        else
+          base
+        end
+
+      if e.remediation do
+        base <> ". " <> e.remediation
+      else
+        base
+      end
+    end
+
+    defp format_bytes(bytes) when bytes >= 1_048_576, do: "#{div(bytes, 1_048_576)} MB"
+    defp format_bytes(bytes) when bytes >= 1_024, do: "#{div(bytes, 1_024)} KB"
+    defp format_bytes(bytes), do: "#{bytes} bytes"
+  end
+
   defmodule Remote do
     @moduledoc """
     A structured error from the Spark Connect server.
