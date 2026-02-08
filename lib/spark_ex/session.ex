@@ -10,6 +10,7 @@ defmodule SparkEx.Session do
 
   alias SparkEx.Connect.Channel
   alias SparkEx.Connect.Client
+  alias SparkEx.Connect.PlanEncoder
 
   defstruct [
     :channel,
@@ -80,6 +81,59 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Executes a plan and collects rows.
+  """
+  @spec execute_collect(GenServer.server(), term(), keyword()) ::
+          {:ok, [map()]} | {:error, term()}
+  def execute_collect(session, plan, opts \\ []) do
+    GenServer.call(session, {:execute_collect, plan, opts}, call_timeout(opts))
+  end
+
+  @doc """
+  Executes a plan wrapped in a count(*) aggregate and returns the count.
+  """
+  @spec execute_count(GenServer.server(), term()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def execute_count(session, plan) do
+    GenServer.call(session, {:execute_count, plan}, :timer.seconds(60))
+  end
+
+  @doc """
+  Returns the schema for a plan via AnalyzePlan.
+  """
+  @spec analyze_schema(GenServer.server(), term()) :: {:ok, term()} | {:error, term()}
+  def analyze_schema(session, plan) do
+    GenServer.call(session, {:analyze_schema, plan})
+  end
+
+  @doc """
+  Returns the explain string for a plan via AnalyzePlan.
+  """
+  @spec analyze_explain(GenServer.server(), term(), atom()) ::
+          {:ok, String.t()} | {:error, term()}
+  def analyze_explain(session, plan, mode \\ :simple) do
+    GenServer.call(session, {:analyze_explain, plan, mode})
+  end
+
+  @doc """
+  Sets Spark configuration key-value pairs.
+  """
+  @spec config_set(GenServer.server(), [{String.t(), String.t()}]) ::
+          :ok | {:error, term()}
+  def config_set(session, pairs) do
+    GenServer.call(session, {:config_set, pairs})
+  end
+
+  @doc """
+  Gets Spark configuration values for the given keys.
+  """
+  @spec config_get(GenServer.server(), [String.t()]) ::
+          {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
+  def config_get(session, keys) do
+    GenServer.call(session, {:config_get, keys})
+  end
+
+  @doc """
   Stops the session and releases server resources.
   """
   @spec stop(GenServer.server()) :: :ok
@@ -132,6 +186,85 @@ defmodule SparkEx.Session do
     end
   end
 
+  def handle_call({:execute_collect, plan, opts}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.execute_plan(state, proto_plan, opts) do
+      {:ok, result} ->
+        state = maybe_update_server_session(state, result.server_side_session_id)
+        {:reply, {:ok, result.rows}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:execute_count, plan}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode_count(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.execute_plan(state, proto_plan) do
+      {:ok, result} ->
+        state = maybe_update_server_session(state, result.server_side_session_id)
+        count = extract_count(result.rows)
+        {:reply, {:ok, count}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_schema, plan}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.analyze_schema(state, proto_plan) do
+      {:ok, schema, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, schema}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:analyze_explain, plan, mode}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.analyze_explain(state, proto_plan, mode) do
+      {:ok, explain_str, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, explain_str}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:config_set, pairs}, _from, state) do
+    case Client.config_set(state, pairs) do
+      {:ok, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, :ok, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:config_get, keys}, _from, state) do
+    case Client.config_get(state, keys) do
+      {:ok, result, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, result}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
   @impl true
   def handle_cast({:update_server_side_session_id, id}, state) do
     {:noreply, %{state | server_side_session_id: id}}
@@ -178,8 +311,18 @@ defmodule SparkEx.Session do
     |> IO.iodata_to_binary()
   end
 
+  @spark_ex_version Mix.Project.config()[:version]
+
   defp default_client_type do
     otp_release = :erlang.system_info(:otp_release) |> List.to_string()
-    "elixir/#{System.version()}/otp#{otp_release}/spark_ex/#{Mix.Project.config()[:version]}"
+    "elixir/#{System.version()}/otp#{otp_release}/spark_ex/#{@spark_ex_version}"
+  end
+
+  defp extract_count([%{"count(1)" => n}]), do: n
+  defp extract_count([row]) when is_map(row), do: row |> Map.values() |> hd()
+  defp extract_count(_), do: 0
+
+  defp call_timeout(opts) do
+    Keyword.get(opts, :timeout, 60_000) + 5_000
   end
 end

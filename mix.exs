@@ -38,7 +38,10 @@ defmodule SparkEx.MixProject do
 
       # Optional - feature gated
       {:explorer, "~> 0.10", optional: true},
-      {:kino, "~> 0.14", optional: true}
+      {:kino, "~> 0.14", optional: true},
+
+      # Dev/test
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 

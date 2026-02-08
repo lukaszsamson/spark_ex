@@ -22,3 +22,9 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 spark_ex-*.tar
 
+# Spark distribution for integration tests (downloaded separately).
+/test/spark-4.1.1-bin-hadoop3-connect/
+
+# uv / Python virtualenv for spark_server
+/test/spark_server/.venv/
+
