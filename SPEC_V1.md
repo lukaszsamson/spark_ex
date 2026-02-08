@@ -250,8 +250,15 @@ Result decoder invariants:
 
 ### 9.1 Chosen Approach
 
-- Target architecture: in-memory decode path (Arrow/Polars-compatible) for performance.
-- MVP fallback: write reassembled IPC bytes to temp file and load with Explorer IPC APIs if needed.
+- Primary path: in-memory Arrow IPC stream decode using Explorer binary loaders.
+- Concretely, decode each reassembled Spark Arrow payload with:
+  - `Explorer.DataFrame.load_ipc_stream!/2` for IPC stream bytes
+  - (fallback) `Explorer.DataFrame.load_ipc!/2` for IPC file bytes when applicable
+- Batch assembly:
+  - reassemble gRPC chunks into a full `arrow_batch.data` binary
+  - decode each Arrow batch to `Explorer.DataFrame`
+  - combine with `Explorer.DataFrame.concat_rows/1`
+- Last-resort fallback (debug only): temp-file path with `Explorer.DataFrame.from_ipc_stream!/2`.
 
 ### 9.2 Guardrails
 
@@ -264,10 +271,30 @@ All local materialization paths are bounded by defaults:
 
 If exceeded, return `SparkEx.Error.LimitExceeded` with remediation guidance.
 
+Materialization policy:
+
+- `to_explorer/2` always pushes `LIMIT` into the remote Spark plan unless `unsafe: true`.
+- renderer paths (`Kino.Render`, `SparkEx.Livebook.preview/2`) always operate in safe mode.
+- if limits are exceeded mid-stream, abort decode and return partial-free error (no silently truncated dataframe).
+
 ### 9.3 Type Mapping
 
 Define explicit Spark type -> Explorer dtype mapping for primitives.
 For unsupported nested/complex types in V1, use deterministic fallback (JSON string).
+
+Minimum mapping contract:
+
+- Spark integral types -> Explorer signed integer dtypes
+- Spark float/double -> Explorer float dtypes
+- Spark decimal -> Explorer decimal or string fallback (explicitly documented)
+- Spark date/timestamp/timestamp_ntz -> Explorer date/datetime dtypes where supported
+- Spark binary/map/struct/array (unsupported in V1 display path) -> JSON string
+
+### 9.4 Explorer Backend and Lazy Policy
+
+- Default to eager `Explorer.DataFrame` for notebook previews.
+- Do not rely on lazy IPC-stream reads for performance assumptions in V1.
+- Optional `backend:` override is supported but not required for core SparkEx behavior.
 
 ## 10. Transport, Auth, Reliability, Error Handling
 
@@ -323,19 +350,42 @@ Primary path is whichever stack passes these constraints in the spike.
 
 Render tabs:
 
-- Schema (AnalyzePlan schema)
-- Preview (`to_explorer(limit: N)`)
+- Schema (`AnalyzePlan.Schema`)
+- Preview (`Kino.DataTable.new(explorer_df, num_rows: N)`)
 - Explain (`explain(:extended)` default)
+- Raw (`Kino.Inspect.new(df)`) for debugging internals
+
+Implementation note:
+
+- `Explorer.DataFrame` already implements `Table.Reader`, so it is directly compatible with `Kino.DataTable`.
+- `SparkEx.DataFrame` does not implement `Table.Reader`; it needs a dedicated `defimpl Kino.Render`.
 
 ### 11.2 Helpers
 
 - `SparkEx.Livebook.preview/2`
 - `SparkEx.Livebook.explain/2`
 - `SparkEx.Livebook.sample/2`
+- `SparkEx.Livebook.schema/1`
+
+Helper behavior contract:
+
+- helpers return Kino terms, not raw strings/lists
+- helpers do not call `Kino.render/1` internally (caller controls rendering)
+- preview helper uses `Kino.DataTable` options passthrough:
+  - `:name`
+  - `:num_rows`
+  - `:sorting_enabled`
+  - optional `:formatter`
 
 ### 11.3 Safety
 
 Livebook rendering always executes bounded preview queries; never unbounded collect by default.
+
+### 11.4 Progress and Long-running Queries
+
+- `execution_progress` events from Spark are surfaced via telemetry.
+- optional notebook helper (`SparkEx.Livebook.run_with_progress/2`) may render a `Kino.Frame` and update progress text/metrics while fetching batches.
+- progress UI is best-effort and must not block result decoding.
 
 ## 12. Observability
 
@@ -433,6 +483,18 @@ Run equivalent PySpark Connect and SparkEx queries against the same cluster and 
 - Local CI/dev fallback: Dockerized Spark Connect server (`apache/spark:4.1.1`) exposing port `15002`.
 - Integration tests are tagged and skipped automatically when no Spark Connect endpoint is available.
 
+### 15.6 Livebook/Kino/Explorer Tests
+
+- `Kino.Render` implementation tests:
+  - returns `:tabs` output shape with expected labels
+  - preview tab uses `Kino.DataTable`
+- Explorer decode tests:
+  - `load_ipc_stream!/2` on assembled Arrow payloads
+  - `concat_rows/1` preserves row order across multiple Spark batches
+- limit safety tests:
+  - preview refuses unbounded paths
+  - oversized payload triggers `SparkEx.Error.LimitExceeded`
+
 ## 16. Incremental Implementation Plan
 
 ### Milestone 0 - Foundations
@@ -494,14 +556,17 @@ Acceptance:
 
 Deliverables:
 
-- robust Arrow decode path for Explorer
-- chunking reassembly
-- `Kino.Render` and Livebook helpers
+- robust Explorer decode path using `load_ipc_stream!/2`
+- chunking reassembly + dataframe row concatenation
+- `Kino.Render` tabs (`Schema`, `Preview`, `Explain`, `Raw`)
+- Livebook helpers with `Kino.DataTable` option passthrough
+- optional progress frame integration
 
 Acceptance:
 
 - Livebook preview works on real cluster data without OOM
 - chunked Arrow responses decode correctly
+- preview table supports sorting/pagination in notebook UI
 
 ### Milestone 5 - Session Controls and Interrupts
 
