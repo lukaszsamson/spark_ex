@@ -12,6 +12,129 @@ defmodule SparkEx.Reader do
 
   alias SparkEx.DataFrame
 
+  defstruct [
+    :session,
+    :format,
+    :schema,
+    options: %{}
+  ]
+
+  @type t :: %__MODULE__{
+          session: GenServer.server(),
+          format: String.t() | nil,
+          schema: String.t() | nil,
+          options: %{String.t() => String.t()}
+        }
+
+  @doc """
+  Creates a stateful reader builder.
+
+  Mirrors PySpark's `spark.read` builder style.
+  """
+  @spec new(GenServer.server()) :: t()
+  def new(session), do: %__MODULE__{session: session}
+
+  @doc """
+  Sets the source format for a reader builder.
+  """
+  @spec format(t(), String.t()) :: t()
+  def format(%__MODULE__{} = reader, source) when is_binary(source) do
+    %{reader | format: source}
+  end
+
+  @doc """
+  Sets the schema for a reader builder.
+  """
+  @spec schema(t(), String.t()) :: t()
+  def schema(%__MODULE__{} = reader, schema_ddl) when is_binary(schema_ddl) do
+    %{reader | schema: schema_ddl}
+  end
+
+  @doc """
+  Sets a single option on a reader builder.
+  """
+  @spec option(t(), String.t(), term()) :: t()
+  def option(%__MODULE__{} = reader, key, value) when is_binary(key) do
+    %{reader | options: Map.put(reader.options, key, normalize_option_value(value))}
+  end
+
+  @doc """
+  Merges options into a reader builder.
+  """
+  @spec options(t(), map() | keyword()) :: t()
+  def options(%__MODULE__{} = reader, opts) when is_map(opts) or is_list(opts) do
+    merged =
+      opts
+      |> normalize_options()
+      |> then(&Map.merge(reader.options, &1))
+
+    %{reader | options: merged}
+  end
+
+  @doc """
+  Loads data from the configured source using reader builder state.
+  """
+  @spec load(t()) :: DataFrame.t()
+  @spec load(t(), String.t() | [String.t()] | nil | keyword()) :: DataFrame.t()
+  @spec load(t(), String.t() | [String.t()] | nil | keyword(), keyword()) :: DataFrame.t()
+  def load(%__MODULE__{} = reader), do: load(reader, [], [])
+  def load(%__MODULE__{} = reader, paths_or_opts), do: load(reader, paths_or_opts, [])
+
+  @spec load(GenServer.server(), String.t()) :: DataFrame.t()
+  @spec load(GenServer.server(), String.t(), String.t() | [String.t()] | keyword()) ::
+          DataFrame.t()
+  @spec load(GenServer.server(), String.t(), String.t() | [String.t()], keyword()) ::
+          DataFrame.t()
+  def load(session, format) when not is_struct(session, __MODULE__) and is_binary(format),
+    do: load(session, format, [], [])
+
+  def load(%__MODULE__{} = reader, paths_or_opts, opts) when is_binary(paths_or_opts) do
+    load_from_builder(reader, [paths_or_opts], opts)
+  end
+
+  def load(%__MODULE__{} = reader, nil, opts) do
+    load_from_builder(reader, [], opts)
+  end
+
+  def load(%__MODULE__{} = reader, paths_or_opts, opts) when is_list(paths_or_opts) do
+    if Keyword.keyword?(paths_or_opts) and paths_or_opts != [] do
+      load_from_builder(reader, [], paths_or_opts)
+    else
+      load_from_builder(reader, paths_or_opts, opts)
+    end
+  end
+
+  def load(session, format, paths_or_opts)
+      when not is_struct(session, __MODULE__) and is_binary(format) do
+    load(session, format, paths_or_opts, [])
+  end
+
+  def load(session, format, paths_or_opts, opts)
+      when not is_struct(session, __MODULE__) and is_binary(format) and is_binary(paths_or_opts) do
+    data_source(session, format, [paths_or_opts], opts)
+  end
+
+  def load(session, format, paths_or_opts, opts)
+      when not is_struct(session, __MODULE__) and is_binary(format) and is_list(paths_or_opts) do
+    if Keyword.keyword?(paths_or_opts) and paths_or_opts != [] do
+      # Called as load(session, format, opts) — keyword list is opts, not paths
+      data_source(session, format, [], paths_or_opts)
+    else
+      data_source(session, format, paths_or_opts, opts)
+    end
+  end
+
+  @doc """
+  Reads a table from the catalog using reader builder options.
+  """
+  @spec table(t(), String.t()) :: DataFrame.t()
+  def table(%__MODULE__{} = reader, table_name) when is_binary(table_name) do
+    %DataFrame{
+      session: reader.session,
+      plan: {:read_named_table, table_name, reader.options}
+    }
+  end
+
   @doc """
   Creates a DataFrame from a named table (catalog table).
 
@@ -25,7 +148,7 @@ defmodule SparkEx.Reader do
   """
   @spec table(GenServer.server(), String.t(), keyword()) :: DataFrame.t()
   def table(session, table_name, opts \\ []) when is_binary(table_name) do
-    options = opts |> Keyword.get(:options, %{}) |> stringify_options()
+    options = opts |> Keyword.get(:options, %{}) |> normalize_options()
     %DataFrame{session: session, plan: {:read_named_table, table_name, options}}
   end
 
@@ -95,16 +218,78 @@ defmodule SparkEx.Reader do
     data_source(session, "json", paths, opts)
   end
 
+  @doc """
+  Creates a DataFrame by reading text file(s).
+
+  Each line becomes a row with a single `value` column.
+
+  ## Options
+
+  - `:options` — map of text reader options
+
+  ## Examples
+
+      df = SparkEx.Reader.text(session, "/data/lines.txt")
+  """
+  @spec text(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def text(session, paths, opts \\ []) do
+    data_source(session, "text", paths, opts)
+  end
+
+  @doc """
+  Creates a DataFrame by reading ORC file(s).
+
+  ## Options
+
+  - `:schema` — optional schema string
+  - `:options` — map of ORC reader options
+
+  ## Examples
+
+      df = SparkEx.Reader.orc(session, "/data/events.orc")
+  """
+  @spec orc(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def orc(session, paths, opts \\ []) do
+    data_source(session, "orc", paths, opts)
+  end
+
   # --- Private ---
+
+  defp load_from_builder(reader, paths, opts) do
+    format = Keyword.get(opts, :format, reader.format)
+    schema = Keyword.get(opts, :schema, reader.schema)
+
+    opts_options = Keyword.get(opts, :options, %{})
+    merged_options = Map.merge(reader.options, normalize_options(opts_options))
+
+    %DataFrame{
+      session: reader.session,
+      plan: {:read_data_source, format, List.wrap(paths), schema, merged_options}
+    }
+  end
 
   defp data_source(session, format, paths, opts) do
     paths = List.wrap(paths)
     schema = Keyword.get(opts, :schema, nil)
-    options = opts |> Keyword.get(:options, %{}) |> stringify_options()
+    options = opts |> Keyword.get(:options, %{}) |> normalize_options()
     %DataFrame{session: session, plan: {:read_data_source, format, paths, schema, options}}
   end
 
-  defp stringify_options(opts) when is_map(opts) do
-    Map.new(opts, fn {k, v} -> {to_string(k), to_string(v)} end)
+  defp normalize_options(opts) when is_list(opts) do
+    opts |> Enum.into(%{}) |> normalize_options()
+  end
+
+  defp normalize_options(opts) when is_map(opts) do
+    Map.new(opts, fn {k, v} -> {to_string(k), normalize_option_value(v)} end)
+  end
+
+  defp normalize_option_value(value) when is_binary(value), do: value
+  defp normalize_option_value(value) when is_integer(value), do: Integer.to_string(value)
+  defp normalize_option_value(value) when is_float(value), do: Float.to_string(value)
+  defp normalize_option_value(value) when is_boolean(value), do: to_string(value)
+
+  defp normalize_option_value(value) do
+    raise ArgumentError,
+          "reader option value must be a primitive (string, integer, float, boolean), got: #{inspect(value)}"
   end
 end

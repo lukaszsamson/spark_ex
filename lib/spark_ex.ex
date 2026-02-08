@@ -70,6 +70,19 @@ defmodule SparkEx do
   end
 
   @doc """
+  Returns a stateful reader builder (PySpark-style `spark.read`).
+
+  ## Examples
+
+      reader = SparkEx.read(session)
+      df = reader |> SparkEx.Reader.format("json") |> SparkEx.Reader.load("/data/events.json")
+  """
+  @spec read(GenServer.server()) :: SparkEx.Reader.t()
+  def read(session) do
+    SparkEx.Reader.new(session)
+  end
+
+  @doc """
   Creates a DataFrame from a range of integers.
 
   Supports both signatures:

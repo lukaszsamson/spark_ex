@@ -6,7 +6,7 @@ Targets Spark 4.1.1. See `SPEC_V1.md` for the full design.
 
 ## Status
 
-Milestones 0 through 8 are complete (347 unit tests + integration tests passing against Spark 4.1.1).
+Milestones 0 through 9 are complete (389 unit tests + integration tests passing against Spark 4.1.1).
 
 ### Milestone 0 &mdash; Foundations
 
@@ -92,6 +92,19 @@ Milestones 0 through 8 are complete (347 unit tests + integration tests passing 
 - `SparkEx.copy_from_local_to_fs/3` &mdash; copy local files to the Spark driver filesystem
 - SHA-256 cache keying for local relation deduplication
 - Full filter/join/select support on locally-created DataFrames
+
+### Milestone 9 &mdash; Reader/Writer + Command Encoder
+
+- `SparkEx.Connect.CommandEncoder` &mdash; encodes command tuples into `Plan` protos with `{:command, ...}` op_type
+- `SparkEx.Writer` &mdash; builder API for writing DataFrames (format, mode, options, save, save_as_table, insert_into, partition_by, sort_by, bucket_by, cluster_by)
+- `SparkEx.Writer.parquet/3`, `csv/3`, `json/3`, `orc/3`, `text/3` &mdash; format-specific write convenience functions
+- `SparkEx.WriterV2` &mdash; V2 DataSource write API (create, replace, create_or_replace, append, overwrite, overwrite_partitions)
+- `DataFrame.write/1`, `write_v2/2` &mdash; entry points to Writer and WriterV2 builders
+- `DataFrame.create_temp_view/2`, `create_or_replace_temp_view/2` &mdash; session-scoped temporary views
+- `DataFrame.create_global_temp_view/2`, `create_or_replace_global_temp_view/2` &mdash; cross-session global temporary views
+- `SparkEx.Reader.text/3`, `orc/3`, `load/4` &mdash; generic data source reader and additional formats
+- Roundtrip tests: read &rarr; transform &rarr; write &rarr; read-back verified for Parquet, CSV, JSON
+- Save modes verified: append, overwrite, error_if_exists, ignore
 
 ## Quick start
 

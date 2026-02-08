@@ -27,4 +27,4 @@ spark_ex-*.tar
 
 # uv / Python virtualenv for spark_server
 /test/spark_server/.venv/
-
+spark-warehouse

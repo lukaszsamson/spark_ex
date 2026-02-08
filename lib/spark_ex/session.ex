@@ -413,6 +413,16 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Executes a command (write, create view, etc.) and returns :ok or error.
+
+  Commands are side-effecting operations that don't return data rows.
+  """
+  @spec execute_command(GenServer.server(), term(), keyword()) :: :ok | {:error, term()}
+  def execute_command(session, command, opts \\ []) do
+    GenServer.call(session, {:execute_command, command, opts}, call_timeout(opts))
+  end
+
+  @doc """
   Executes a ShowString plan and returns the formatted string.
   """
   @spec execute_show(GenServer.server(), term()) ::
@@ -966,6 +976,22 @@ defmodule SparkEx.Session do
         {:reply, {:ok, df}, state}
 
       {:error, _reason} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:execute_command, command, opts}, _from, state) do
+    alias SparkEx.Connect.CommandEncoder
+
+    {proto_plan, counter} = CommandEncoder.encode(command, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.execute_plan(state, proto_plan, opts) do
+      {:ok, result} ->
+        state = maybe_update_server_session(state, result.server_side_session_id)
+        {:reply, :ok, state}
+
+      {:error, _} = error ->
         {:reply, error, state}
     end
   end

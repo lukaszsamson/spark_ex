@@ -298,6 +298,95 @@ defmodule SparkEx.DataFrame do
     }
   end
 
+  # ── Writer entry points ──
+
+  @doc """
+  Returns a `SparkEx.Writer` builder for this DataFrame.
+
+  ## Examples
+
+      df
+      |> DataFrame.write()
+      |> SparkEx.Writer.format("parquet")
+      |> SparkEx.Writer.mode(:overwrite)
+      |> SparkEx.Writer.save("/data/output.parquet")
+  """
+  @spec write(t()) :: SparkEx.Writer.t()
+  def write(%__MODULE__{} = df) do
+    %SparkEx.Writer{df: df}
+  end
+
+  @doc """
+  Returns a `SparkEx.WriterV2` builder for this DataFrame targeting the given table.
+
+  ## Examples
+
+      df
+      |> DataFrame.write_v2("catalog.db.my_table")
+      |> SparkEx.WriterV2.using("parquet")
+      |> SparkEx.WriterV2.create()
+  """
+  @spec write_v2(t(), String.t()) :: SparkEx.WriterV2.t()
+  def write_v2(%__MODULE__{} = df, table_name) when is_binary(table_name) do
+    %SparkEx.WriterV2{df: df, table_name: table_name}
+  end
+
+  # ── Temp View creation ──
+
+  @doc """
+  Creates a temporary view with the given name.
+
+  Raises an error if a view with this name already exists.
+  """
+  @spec create_temp_view(t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def create_temp_view(%__MODULE__{} = df, name, opts \\ []) when is_binary(name) do
+    SparkEx.Session.execute_command(
+      df.session,
+      {:create_dataframe_view, df.plan, name, false, false},
+      opts
+    )
+  end
+
+  @doc """
+  Creates or replaces a temporary view with the given name.
+  """
+  @spec create_or_replace_temp_view(t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def create_or_replace_temp_view(%__MODULE__{} = df, name, opts \\ []) when is_binary(name) do
+    SparkEx.Session.execute_command(
+      df.session,
+      {:create_dataframe_view, df.plan, name, false, true},
+      opts
+    )
+  end
+
+  @doc """
+  Creates a global temporary view with the given name.
+
+  Global temp views are accessible across sessions within the same Spark application
+  and are available in the `global_temp` database.
+  """
+  @spec create_global_temp_view(t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def create_global_temp_view(%__MODULE__{} = df, name, opts \\ []) when is_binary(name) do
+    SparkEx.Session.execute_command(
+      df.session,
+      {:create_dataframe_view, df.plan, name, true, false},
+      opts
+    )
+  end
+
+  @doc """
+  Creates or replaces a global temporary view with the given name.
+  """
+  @spec create_or_replace_global_temp_view(t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def create_or_replace_global_temp_view(%__MODULE__{} = df, name, opts \\ [])
+      when is_binary(name) do
+    SparkEx.Session.execute_command(
+      df.session,
+      {:create_dataframe_view, df.plan, name, true, true},
+      opts
+    )
+  end
+
   # ── Metadata ──
 
   @doc """
