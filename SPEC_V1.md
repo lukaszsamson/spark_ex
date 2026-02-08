@@ -6,361 +6,368 @@ Build an Elixir library (`spark_ex`) that talks to Spark via Spark Connect gRPC,
 
 This spec targets Option A from `HLD.md`: native Spark Connect client (no JVM sidecar).
 
-## 2. Scope
+## 2. Design Principles
 
-### 2.1 V1 Goals
+- Keep the protocol boundary strict: Elixir IR -> Spark Connect protobuf -> gRPC.
+- Keep execution lazy: transforms build plans, actions execute.
+- Prefer explicit, functional Elixir API first; DSL macros are optional sugar.
+- Make Livebook safe by default: bounded previews and materialization limits.
+- Validate behavior against real Spark Connect endpoints from day one.
+
+## 3. Scope
+
+### 3.1 V1 Goals
 
 - Native Spark Connect protocol client in Elixir using generated protobuf + gRPC stubs.
 - Core lazy DataFrame API (read, transform, action).
 - Interoperability with:
-  - `:grpc` (transport)
-  - `:protobuf` (proto structs)
-  - `:explorer` (local tabular representation)
-  - `:kino` (Livebook rendering/UX)
+  - gRPC client stack
+  - protobuf generated modules
+  - `Explorer.DataFrame` for local tabular results
+  - `Kino` for Livebook rendering
 - Real-cluster testable milestones with incremental delivery.
-- API shape guided by PySpark Connect, with Elixir ergonomics.
+- API shape guided by PySpark Connect, but idiomatic for Elixir.
 
-### 2.2 Non-goals for V1
+### 3.2 Non-goals for V1
 
 - Full PySpark parity.
 - RDD APIs / SparkContext-like low-level APIs.
-- General UDF shipping from Elixir runtime.
-- Structured Streaming full support (deferred).
+- Arbitrary Elixir code-shipping UDFs.
+- Structured Streaming parity.
+- Catalog API parity (deferred to 1.1).
 
-## 3. External Protocol and Behavioral Constraints
+## 4. External Protocol Constraints
 
 Based on Spark Connect docs and source in `/Users/lukaszsamson/claude_fun/spark`:
 
 - Connection URI format: `sc://host:port/;key=value`.
+- Path component must be empty.
 - Default port: `15002`.
-- Core RPCs: `ExecutePlan` (streaming), `AnalyzePlan`, `Config`, `Interrupt`, `ReleaseSession`, plus `ReattachExecute`/`ReleaseExecute`.
-- Requests are scoped by `user_context.user_id` + `session_id`.
-- Results are streamed as Arrow batches (`ExecutePlanResponse.arrow_batch`).
-- SQL/DataFrame operations are sent as unresolved logical plans (`Relation`, `Expression`).
-- Catalog proto is explicitly marked unstable; keep catalog API in V1 as experimental.
+- Core RPCs for V1: `ExecutePlan`, `AnalyzePlan`, `Config`, `Interrupt`, `ReleaseSession`, `CloneSession`, `FetchErrorDetails`.
+- Session scoping: `session_id` + `user_context.user_id`.
+- Request idempotency/session continuity: track `server_side_session_id` from responses and send back via `client_observed_server_side_session_id`.
+- Results: streamed Arrow batches via `ExecutePlanResponse.arrow_batch`.
+- SQL/DataFrame operations: unresolved logical plans (`Relation`, `Expression`).
 
-## 4. High-level Architecture
+## 5. High-level Architecture
 
-### 4.1 Public Modules
+### 5.1 Public Modules
 
 - `SparkEx`
-  - User entrypoints (`connect/1`, convenience helpers).
+  - Entrypoints (`connect/1`, convenience wrappers).
 - `SparkEx.Session`
-  - Session identity, connection options, lifecycle (`stop/1`, `clone/1`).
+  - Session lifecycle, config, interrupt, clone.
 - `SparkEx.DataFrame`
   - Immutable lazy logical plan handle.
 - `SparkEx.Column`
   - Expression wrapper.
 - `SparkEx.Functions`
-  - Function constructors (`col/1`, `lit/1`, `sum/1`, `count/1`, `expr/1`, etc.).
+  - Expression constructors (`col/1`, `lit/1`, `expr/1`, aggregates).
 - `SparkEx.Reader`
-  - `table/2`, `parquet/2`, `csv/2`, `json/2`, `load/2`.
+  - Read/data source builder APIs.
+- `SparkEx.Livebook`
+  - Notebook-focused helpers.
 
-### 4.2 Internal Modules
+### 5.2 Internal Modules
 
 - `SparkEx.Connect.Channel`
-  - URI parsing, TLS/token setup, headers/metadata.
+  - URI parsing, TLS/token config, metadata, channel creation.
 - `SparkEx.Connect.Client`
-  - gRPC stubs, retries, timeout handling, operation IDs.
+  - RPC orchestration, retries, deadlines, per-request metadata.
 - `SparkEx.Connect.PlanEncoder`
-  - Elixir plan/expression structs -> Spark Connect protobuf.
+  - Elixir IR -> Spark Connect protobuf (`Plan`, `Relation`, `Expression`).
 - `SparkEx.Connect.ResultDecoder`
-  - ExecutePlan stream handling, Arrow batch assembly, schema extraction.
+  - Execute stream decode, Arrow chunk reassembly, data materialization.
 - `SparkEx.Connect.Errors`
-  - gRPC + Spark structured error mapping.
+  - gRPC + Spark structured error mapping, `FetchErrorDetails` integration.
 - `SparkEx.Livebook.Renderer`
-  - Kino integration and notebook UX wrappers.
+  - `Kino.Render` integration for DataFrame preview/explain/schema.
 
-### 4.3 Plan Representation
+### 5.3 Session Process Model
 
-Use internal Elixir structs (IR), then encode to proto at action time.
+`SparkEx.Session` will be implemented as a `GenServer` to safely manage mutable protocol state:
 
-Examples:
+- gRPC channel handle
+- `session_id`
+- `server_side_session_id`
+- connection defaults (timeouts, size limits)
+- monotonic `plan_id` counter
 
-- Relations: `Read`, `Project`, `Filter`, `Join`, `Aggregate`, `Sort`, `Limit`, `SQL`.
-- Expressions: `Literal`, `ColumnRef`, `UnresolvedFunction`, `Alias`, `SortOrder`, `ExprString`.
+## 6. API Design (Idiomatic Elixir)
 
-This mirrors PySpark Connect architecture (`plan.py`, `expressions.py`) while keeping BEAM-native internals.
-
-## 5. API Design
-
-## 5.1 Session and Connection
-
-```elixir
-{:ok, spark} = SparkEx.connect(
-  url: "sc://spark-host:15002/;use_ssl=true;token=...",
-  user_id: "lukasz",
-  user_agent: "spark_ex/0.1",
-  grpc_max_message_size: 128 * 1024 * 1024
-)
-```
-
-- Respect Spark Connect URI semantics.
-- If token is provided, set authorization metadata (`Bearer <token>`).
-- Auto-generate `session_id` UUID if not provided.
-
-## 5.2 DataFrame Operations (V1 subset)
-
-Read APIs:
-
-- `SparkEx.read.table(session, table_name, opts \\ [])`
-- `SparkEx.read.parquet(session, paths, opts \\ [])`
-- `SparkEx.read.csv(session, paths, opts \\ [])`
-- `SparkEx.read.json(session, paths, opts \\ [])`
-- `SparkEx.sql(session, sql, args \\ [])`
-
-Transforms:
-
-- `select/2`, `select_expr/2`
-- `filter/2`
-- `with_column/3`
-- `drop/2`
-- `join/4`
-- `group_by/2` + `agg/2`
-- `order_by/2`
-- `limit/2`
-
-Actions:
-
-- `collect/2`
-- `take/2`
-- `count/1`
-- `schema/1`
-- `explain/2`
-- `to_explorer/2`
-- `show/2`
-
-## 5.3 Column and Functions
-
-- `SparkEx.Functions.col/1`, `lit/1`, `expr/1`
-- Aggregations: `count/1`, `sum/1`, `avg/1`, `min/1`, `max/1`
-- Predicates/string basics: `is_null/1`, `is_not_null/1`, `contains/2`, `starts_with/2`
-
-## 5.4 Idiomatic Elixir DSL (optional but recommended)
-
-Provide macro DSL in `SparkEx.Query`:
+### 6.1 Connection and Session
 
 ```elixir
-import SparkEx.Query
-
-spark
-|> SparkEx.read.table("events")
-|> where(col("country") == ^"PL" and col("amount") > ^100)
-|> select([:country, :amount])
-|> limit(100)
-|> SparkEx.to_explorer()
+{:ok, session} =
+  SparkEx.connect(
+    url: "sc://spark-host:15002/;use_ssl=true;token=...",
+    user_id: "lukasz",
+    client_type: "spark_ex/0.1"
+  )
 ```
 
-Guidelines:
+Session APIs (V1):
 
-- Macros only as syntax sugar over stable function API.
-- Pinned values (`^value`) become literals.
-- Unknown AST forms fail fast with descriptive compile errors.
+- `SparkEx.Session.stop/1`
+- `SparkEx.Session.clone/2`
+- `SparkEx.Session.interrupt_all/1`
+- `SparkEx.Session.interrupt_operation/2`
+- `SparkEx.Session.config_get/2`
+- `SparkEx.Session.config_set/3`
 
-## 6. Livebook Interoperability
+### 6.2 Read APIs
 
-### 6.1 Kino Rendering
+Use valid Elixir module-function style:
 
-Implement `Kino.Render` for `SparkEx.DataFrame` with:
+- `SparkEx.Reader.table(session, table_name, opts \\ [])`
+- `SparkEx.Reader.parquet(session, paths, opts \\ [])`
+- `SparkEx.Reader.csv(session, paths, opts \\ [])`
+- `SparkEx.Reader.json(session, paths, opts \\ [])`
+- `SparkEx.sql(session, statement, args \\ [])`
+- `SparkEx.range(session, start_or_end, end \\ nil, step \\ 1, opts \\ [])`
 
-- lazy schema panel (`schema/1` via `AnalyzePlan`)
-- preview table (`to_explorer(limit: N)`)
-- optional explain section
+Optional convenience wrappers may be exposed from `SparkEx`.
 
-### 6.2 Explorer Integration
+### 6.3 DataFrame Transforms (V1)
 
-- Primary local representation: `Explorer.DataFrame`.
-- `to_explorer/2` defaults:
-  - bounded row count (`limit`) to avoid notebook OOM
-  - configurable max bytes/rows
-- For large data, keep remote and render sampled preview only.
+- `SparkEx.DataFrame.select/2`
+- `SparkEx.DataFrame.select_expr/2`
+- `SparkEx.DataFrame.filter/2`
+- `SparkEx.DataFrame.with_column/3`
+- `SparkEx.DataFrame.drop/2`
+- `SparkEx.DataFrame.join/4`
+- `SparkEx.DataFrame.group_by/2`
+- `SparkEx.DataFrame.agg/2`
+- `SparkEx.DataFrame.order_by/2`
+- `SparkEx.DataFrame.limit/2`
+- `SparkEx.DataFrame.distinct/1`
+- `SparkEx.DataFrame.union/2`
 
-### 6.3 Notebook UX
+### 6.4 DataFrame Actions
 
-Add helpers:
+- `SparkEx.DataFrame.collect/2`
+- `SparkEx.DataFrame.take/2`
+- `SparkEx.DataFrame.count/1`
+- `SparkEx.DataFrame.schema/1`
+- `SparkEx.DataFrame.explain/2`
+- `SparkEx.DataFrame.show/2`
+- `SparkEx.DataFrame.to_explorer/2`
 
-- `SparkEx.Livebook.preview(df, opts \\ [])`
-- `SparkEx.Livebook.explain(df, mode \\ :extended)`
-- `SparkEx.Livebook.sample(df, n \\ 1000)`
+`explain/2` supports Spark Connect explain modes:
 
-## 7. Transport, Reliability, and Error Handling
+- `:simple`
+- `:extended`
+- `:codegen`
+- `:cost`
+- `:formatted`
 
-### 7.1 gRPC
+### 6.5 SQL Args Encoding
 
-- Unary-stream handling for `ExecutePlan`.
-- Propagate metadata (token, custom headers, user-agent).
-- Configurable per-call timeout.
+`SparkEx.sql/3` supports both:
 
-### 7.2 Retry Policy
+- positional args -> `Relation.SQL.pos_arguments`
+- named args (map) -> `Relation.SQL.named_arguments`
 
-Adopt PySpark-inspired retry categories:
+Do not use deprecated literal-only SQL arg fields.
 
-- Retry transient network issues (`UNAVAILABLE`, etc.) with capped exponential backoff.
-- Do not retry semantic Spark errors.
-- Optional support for server-provided retry delay metadata.
+### 6.6 Expression API
 
-### 7.3 Reattachable Execute (Phase 3+)
+`SparkEx.Functions` and `SparkEx.Column` provide the canonical V1 expression API:
 
-- Support operation IDs.
-- On stream breaks, call `ReattachExecute` with last response ID.
-- Use `ReleaseExecute` to free server buffers.
+- constructors: `col/1`, `lit/1`, `expr/1`
+- comparisons/boolean: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `and`, `or`, `not`
+- null/string basics: `is_null/1`, `is_not_null/1`, `contains/2`, `starts_with/2`
+- aggregates: `count/1`, `sum/1`, `avg/1`, `min/1`, `max/1`, `count_distinct/1`
+- cast/sort helpers: `cast/2`, `asc/1`, `desc/1`
 
-### 7.4 Error Model
+### 6.7 DSL Scope
 
-Normalize into:
+V1 source of truth is the functional API above.
 
-- `SparkEx.Error.Transport`
-- `SparkEx.Error.Remote` (error class/sql state/message params when available)
-- `SparkEx.Error.InvalidPlan`
-- `SparkEx.Error.Unsupported`
+Optional macro DSL (`SparkEx.Query`) is limited in V1:
 
-## 8. Versioning and Compatibility
+- minimal `where`/`select` sugar only
+- no attempt to mirror full Ecto macro semantics yet
+- explicitly optional and may move to 1.1 if it slows delivery
 
-- Pin protocol generation to one Spark baseline (initially Spark 4.x from checked-in proto set).
-- Publish compatibility matrix:
-  - `spark_ex` version
-  - proto baseline
-  - validated Spark server versions
-- Treat unstable proto surfaces (`Catalog`) as experimental namespace:
-  - `SparkEx.Experimental.Catalog`
+## 7. IR and Proto Mapping
 
-## 9. Dependencies (initial)
+### 7.1 Relation IR (V1)
 
-- `:grpc`
-- `:protobuf`
-- `:explorer`
-- `:kino`
-- `:telemetry`
+IR nodes map to Spark Connect relations:
+
+- `Read.NamedTable`, `Read.DataSource`
+- `SQL`
+- `Range`
+- `Project`
+- `Filter`
+- `WithColumns`
+- `Drop`
+- `Join`
+- `Aggregate`
+- `Sort`
+- `Limit`
+- `Deduplicate`
+- `SetOperation` (union)
+- `ShowString`
+
+### 7.2 Expression IR (V1)
+
+- `Literal` (null, bool, int, long, double, decimal, string, date, timestamp)
+- `UnresolvedAttribute`
+- `UnresolvedFunction`
+- `Alias`
+- `SortOrder`
+- `ExpressionString`
+- `Cast`
+- `UnresolvedStar`
+
+### 7.3 Plan IDs and References
+
+- Every relation emitted by `PlanEncoder` gets `RelationCommon.plan_id`.
+- `WithRelations` support is included for query shapes that require relation references (subquery/reference cases).
+- For simple tree-only plans, encoder may emit plain rooted relation.
+
+## 8. ExecutePlan Response Handling
+
+`SparkEx.Connect.ResultDecoder` handles full stream semantics:
+
+- Arrow batches (`arrow_batch.data`)
+- chunked Arrow batches (`chunk_index`, `num_chunks_in_batch`) with strict reassembly
+- optional `schema` field usage
+- `execution_progress` events (telemetry + optional Livebook display)
+- `result_complete` handling for reattachable flows
+
+`ExecutePlan` requests set result chunking options with `allow_arrow_batch_chunking=true` by default, so oversized Arrow batches can be safely split and reassembled.
+
+Result decoder invariants:
+
+- validate chunk ordering
+- validate row count consistency
+- fail with structured decode errors on malformed stream state
+
+## 9. Arrow to Explorer Strategy
+
+### 9.1 Chosen Approach
+
+- Target architecture: in-memory decode path (Arrow/Polars-compatible) for performance.
+- MVP fallback: write reassembled IPC bytes to temp file and load with Explorer IPC APIs if needed.
+
+### 9.2 Guardrails
+
+All local materialization paths are bounded by defaults:
+
+- `preview_rows_default`: 100
+- `collect_rows_max`: 10_000
+- `collect_bytes_max`: 64 MB
+- `max_batches`: configurable cap
+
+If exceeded, return `SparkEx.Error.LimitExceeded` with remediation guidance.
+
+### 9.3 Type Mapping
+
+Define explicit Spark type -> Explorer dtype mapping for primitives.
+For unsupported nested/complex types in V1, use deterministic fallback (JSON string).
+
+## 10. Transport, Auth, Reliability, Error Handling
+
+### 10.1 gRPC Client Stack
+
+Milestone 0 includes a client-library validation spike:
+
+- verify server-streaming robustness (`ExecutePlan`)
+- verify metadata + token support
+- verify TLS + deadlines + cancellation
+
+Primary path is whichever stack passes these constraints in the spike.
+
+### 10.2 Auth and Metadata
+
+- Connection-string `token` is used as bearer auth in gRPC credentials/metadata per chosen client stack.
+- `client_type` is sent on all requests (e.g. `elixir/<otp> spark_ex/<version>`).
+- support additional custom metadata headers via options.
+
+### 10.3 Retry Policy
+
+- Retry transient transport errors only (e.g. `UNAVAILABLE`, `DEADLINE_EXCEEDED`).
+- No retry for semantic/query errors.
+- Exponential backoff with jitter.
+- optional server-retry-delay awareness if available.
+
+### 10.4 Reattach and Release (V1.1)
+
+- Reattachable execute is deferred to 1.1 unless needed to stabilize V1 against network instability.
+- When enabled: use `operation_id`, `ReattachExecute`, `ReleaseExecute`.
+
+### 10.5 Error Enrichment
+
+`SparkEx.Connect.Errors` flow:
+
+1. Parse gRPC error status/metadata.
+2. If `error_id` is present, call `FetchErrorDetails`.
+3. Map into `SparkEx.Error.Remote` fields:
+   - `error_class`
+   - `sql_state`
+   - `message_parameters`
+   - `query_contexts`
+
+### 10.6 Plan Compression
+
+- V1 default: plan compression disabled.
+- V1.1 target: optional zstd compressed plans via `Plan.compressed_operation`.
+- Compression must be feature-gated and enabled only after compatibility tests against Spark `v4.1.1`.
+
+## 11. Livebook / Kino Integration
+
+### 11.1 `Kino.Render` for `SparkEx.DataFrame`
+
+Render tabs:
+
+- Schema (AnalyzePlan schema)
+- Preview (`to_explorer(limit: N)`)
+- Explain (`explain(:extended)` default)
+
+### 11.2 Helpers
+
+- `SparkEx.Livebook.preview/2`
+- `SparkEx.Livebook.explain/2`
+- `SparkEx.Livebook.sample/2`
+
+### 11.3 Safety
+
+Livebook rendering always executes bounded preview queries; never unbounded collect by default.
+
+## 12. Observability
+
+Define telemetry events:
+
+- `[:spark_ex, :rpc, :start]`
+- `[:spark_ex, :rpc, :stop]`
+- `[:spark_ex, :rpc, :exception]`
+- `[:spark_ex, :result, :batch]`
+- `[:spark_ex, :retry, :attempt]`
+
+Metadata includes RPC name, duration, row_count, bytes, attempt index, and status.
+
+## 13. Dependencies and Proto Generation
+
+### 13.1 Dependencies (initial)
+
+- protobuf generation/runtime libraries
+- chosen gRPC client stack from Milestone 0 spike
 - `:nimble_options`
+- `:telemetry`
+- `:jason`
+- optional (feature-gated): `:explorer`, `:kino`
 
-Optional later:
+### 13.2 Proto Generation
 
-- `:jason` for metadata/JSON utilities
-- dedicated Arrow IPC helper if needed by decoder path
+- Pin proto source to Spark `v4.1.1`.
+- Vendor all required Spark Connect protos and required Google protobuf dependencies.
+- Generate modules into `lib/spark_ex/proto/**`.
+- Provide `mix spark_ex.gen_proto` task for repeatable regeneration.
 
-## 10. Testing Strategy (guided by PySpark)
-
-PySpark guidance applied:
-
-- API surface parity checks for selected subset.
-- Signature and behavior compatibility checks where meaningful.
-- Protocol-level encode/decode tests.
-- End-to-end tests against a real Spark Connect server.
-
-### 10.1 Test Layers
-
-1. Unit tests
-- Expression -> proto mapping.
-- Relation plan assembly for each DataFrame op.
-- URI parser, option normalization, metadata injection.
-
-2. Contract tests
-- Golden protobuf snapshots for critical operations.
-- Error mapping from known gRPC status payloads.
-
-3. Integration tests (real Spark)
-- ExecutePlan/AnalyzePlan roundtrips.
-- Arrow streaming + chunk assembly.
-- Retry + reconnect behavior.
-
-4. Livebook integration tests
-- `Kino.Render` smoke tests.
-- `to_explorer/2` schema + value conversion checks.
-
-### 10.2 Coverage Matrix (V1 minimum)
-
-- Session lifecycle: connect, config get/set subset, release session.
-- Reader: table/parquet/csv/json.
-- DataFrame ops: select/filter/with_column/join/group_by+agg/order_by/limit.
-- Actions: count/take/collect/schema/explain/to_explorer.
-- Error paths: invalid SQL, bad column, interrupted operation, auth failure.
-
-## 11. Incremental Implementation Plan
-
-## Milestone 0 - Foundations
-
-Deliverables:
-
-- Proto/vendor setup and code generation scripts.
-- Basic project structure and types.
-
-Acceptance (real cluster):
-
-- Connect to Spark Connect endpoint and fetch Spark version (`AnalyzePlan.spark_version`).
-
-## Milestone 1 - Minimal Query Path
-
-Deliverables:
-
-- `SparkEx.connect/1`
-- `SparkEx.sql/2`
-- `SparkEx.count/1`, `SparkEx.collect/1` (small results)
-
-Acceptance:
-
-- `SELECT 1` and `spark.range(...).count()` equivalent query works end-to-end.
-
-## Milestone 2 - DataFrame Core
-
-Deliverables:
-
-- Reader + core transforms (`select`, `filter`, `limit`, `order_by`).
-- `schema/1`, `explain/2`.
-
-Acceptance:
-
-- Read parquet dataset from cluster storage and run filtered projection.
-- Explain plan returns non-empty output for all explain modes supported.
-
-## Milestone 3 - Aggregations and Joins
-
-Deliverables:
-
-- `group_by`/`agg`, `join` variants, `with_column`, `drop`.
-- Basic retry/backoff and operation tagging.
-
-Acceptance:
-
-- Join + aggregate query on non-trivial data set matches expected results.
-- Simulated transient network failure is retried successfully.
-
-## Milestone 4 - Arrow + Explorer + Kino
-
-Deliverables:
-
-- Stable Arrow streaming decode path.
-- `to_explorer/2`.
-- `Kino.Render` for DataFrame previews.
-
-Acceptance:
-
-- Livebook notebook can preview schema + sample rows from remote Spark.
-- Large result guardrails prevent unbounded materialization.
-
-## Milestone 5 - Session Controls and Interrupts
-
-Deliverables:
-
-- `interrupt_all`, `interrupt_operation`, `stop/release_session`.
-- Better structured error reporting.
-
-Acceptance:
-
-- Long query can be interrupted from client and returns deterministic error.
-- Session release invalidates further requests as expected.
-
-## Milestone 6 - Reattachable Execution (optional for V1.1)
-
-Deliverables:
-
-- `ReattachExecute` + `ReleaseExecute` path.
-- Stream resume on dropped connection.
-
-Acceptance:
-
-- Mid-stream disconnection resumes without data corruption/duplication.
-
-## 12. Repository Layout Proposal
+## 14. Repository Layout
 
 ```text
 lib/
@@ -369,14 +376,15 @@ lib/
   spark_ex/data_frame.ex
   spark_ex/column.ex
   spark_ex/functions.ex
-  spark_ex/query.ex
   spark_ex/reader.ex
+  spark_ex/livebook.ex
   spark_ex/livebook/renderer.ex
   spark_ex/connect/channel.ex
   spark_ex/connect/client.ex
   spark_ex/connect/plan_encoder.ex
   spark_ex/connect/result_decoder.ex
   spark_ex/connect/errors.ex
+  spark_ex/proto/** (generated)
 
 priv/proto/spark/connect/*.proto
 
@@ -385,18 +393,148 @@ test/
   contract/
   integration/
   livebook/
+  fixtures/proto/
 ```
 
-## 13. Open Decisions (must be settled before Milestone 2)
+## 15. Testing Strategy
 
-- Spark baseline version for generated proto (4.0 vs 4.1). Use 4.1. The spark sources are checked out at tag v4.1.1
-- Preferred Arrow decode path in Elixir runtime for best Explorer interoperability. Aim for in-memory decoding via arrow-rs/polars. For MVP we may write to temp file and load with Explorer.DataFrame.from_ipc_stream!/2
-- DSL scope for V1 (`where`/`select` macros only vs broader macro API). Start with small subset, mimic Ecto API
-- Whether catalog APIs are included in V1 or moved fully to experimental. Defer to 1.1
+### 15.1 Unit Tests
 
-## 14. Success Criteria for V1
+- URI parsing and connection options
+- plan/expression encoding
+- literal/type conversion
+- error mapping behavior
+
+### 15.2 Contract Tests
+
+- golden proto snapshots for key operations
+- proto serialize/parse roundtrip checks
+
+### 15.3 Integration Tests (real Spark)
+
+- `AnalyzePlan.spark_version`
+- SQL query/collect/count flows
+- read/filter/project/aggregate/join workflows
+- interrupt behavior
+- auth failure behavior
+- Arrow chunking reassembly path
+
+### 15.4 PySpark Parity Checks (selected subset)
+
+Run equivalent PySpark Connect and SparkEx queries against the same cluster and compare:
+
+- row counts
+- key values
+- schema shape
+
+### 15.5 Integration Test Environment
+
+- Primary mode: run tests against externally provided `SPARK_REMOTE`.
+- Local CI/dev fallback: Dockerized Spark Connect server (`apache/spark:4.1.1`) exposing port `15002`.
+- Integration tests are tagged and skipped automatically when no Spark Connect endpoint is available.
+
+## 16. Incremental Implementation Plan
+
+### Milestone 0 - Foundations
+
+Deliverables:
+
+- proto vendor + generation pipeline
+- gRPC client stack spike and decision
+- session process skeleton
+
+Acceptance:
+
+- connect and fetch Spark version via `AnalyzePlan.spark_version`
+
+### Milestone 1 - Minimal Query Path
+
+Deliverables:
+
+- `SparkEx.connect/1`
+- `SparkEx.sql/3` with named/positional args
+- `collect/2`, `count/1`
+- `Config` get/set subset
+- server-side session ID tracking
+- structured error enrichment (`FetchErrorDetails`)
+
+Acceptance:
+
+- `SELECT 1` and range query equivalent succeed end-to-end
+- invalid SQL returns enriched structured error
+
+### Milestone 2 - DataFrame Core
+
+Deliverables:
+
+- reader APIs (table/parquet/csv/json)
+- core transforms (`select/filter/order_by/limit/with_column/drop`)
+- `schema/1`, `explain/2`, `show/2`
+- plan ID assignment + reference support
+
+Acceptance:
+
+- read parquet and run projection/filter/order/limit
+- all explain modes return non-empty output
+
+### Milestone 3 - Joins, Aggregates, Retry
+
+Deliverables:
+
+- `join`, `group_by`, `agg`, `distinct`, `union`
+- aggregate and predicate functions
+- transient retry/backoff
+
+Acceptance:
+
+- join + aggregate query matches expected result set
+- retry succeeds on simulated transient error
+
+### Milestone 4 - Explorer + Kino + Chunking
+
+Deliverables:
+
+- robust Arrow decode path for Explorer
+- chunking reassembly
+- `Kino.Render` and Livebook helpers
+
+Acceptance:
+
+- Livebook preview works on real cluster data without OOM
+- chunked Arrow responses decode correctly
+
+### Milestone 5 - Session Controls and Interrupts
+
+Deliverables:
+
+- `stop/release_session`, interrupt APIs
+- telemetry coverage for RPC and streaming
+
+Acceptance:
+
+- long-running query can be interrupted deterministically
+- released session rejects further requests
+
+### Milestone 6 - Reattachable Execute (optional V1.1)
+
+Deliverables:
+
+- `ReattachExecute` + `ReleaseExecute` implementation
+
+Acceptance:
+
+- mid-stream disconnect can resume without duplicate rows
+
+## 17. Open Decisions (settled)
+
+- Spark baseline version for generated proto (4.0 vs 4.1): use 4.1, pinned to Spark `v4.1.1`.
+- Preferred Arrow decode path: target in-memory decode; MVP fallback is temp-file IPC with Explorer loader.
+- DSL scope for V1: keep small subset only; functional API remains canonical.
+- Catalog API placement: defer to 1.1 / experimental namespace.
+
+## 18. Success Criteria for V1
 
 - Users can run realistic read-transform-aggregate workflows from Elixir/Livebook against real Spark clusters.
-- API feels Elixir-native while remaining familiar to PySpark users.
-- Core reliability expectations (timeouts, retries, interruption, session lifecycle) are covered.
-- Clear extension path exists for streaming, UDF story, and broader parity.
+- API is Elixir-idiomatic while remaining familiar to Spark users.
+- Reliability basics are covered: timeouts, retries, interruption, session lifecycle, enriched errors.
+- The architecture leaves clear upgrade paths for reattach, broader parity, and advanced extensions.
