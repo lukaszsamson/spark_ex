@@ -9,8 +9,15 @@ defmodule SparkEx.Connect.CommandEncoder do
 
   alias Spark.Connect.{
     Command,
+    CommonInlineUserDefinedFunction,
+    CommonInlineUserDefinedTableFunction,
     CreateDataFrameViewCommand,
+    Expression,
+    JavaUDF,
+    MergeAction,
+    MergeIntoTableCommand,
     Plan,
+    PythonUDTF,
     WriteOperation,
     WriteOperationV2
   }
@@ -123,7 +130,112 @@ defmodule SparkEx.Connect.CommandEncoder do
     {command, counter}
   end
 
+  # --- MergeIntoTableCommand ---
+
+  def encode_command(
+        {:merge_into_table, source_plan, target_table, condition_expr, match_actions,
+         not_matched_actions, not_matched_by_source_actions, schema_evolution},
+        counter
+      ) do
+    {source_relation, counter} = PlanEncoder.encode_relation(source_plan, counter)
+    merge_condition = PlanEncoder.encode_expression(condition_expr)
+
+    command = %Command{
+      command_type:
+        {:merge_into_table_command,
+         %MergeIntoTableCommand{
+           target_table_name: target_table,
+           source_table_plan: source_relation,
+           merge_condition: merge_condition,
+           match_actions: Enum.map(match_actions, &encode_merge_action/1),
+           not_matched_actions: Enum.map(not_matched_actions, &encode_merge_action/1),
+           not_matched_by_source_actions:
+             Enum.map(not_matched_by_source_actions, &encode_merge_action/1),
+           with_schema_evolution: schema_evolution
+         }}
+    }
+
+    {command, counter}
+  end
+
+  # --- RegisterJavaUDF ---
+
+  def encode_command({:register_java_udf, name, class_name, return_type, aggregate}, counter) do
+    java_udf = %JavaUDF{
+      class_name: class_name,
+      output_type: return_type,
+      aggregate: aggregate
+    }
+
+    fun = %CommonInlineUserDefinedFunction{
+      function_name: name,
+      deterministic: true,
+      function: {:java_udf, java_udf}
+    }
+
+    command = %Command{command_type: {:register_function, fun}}
+    {command, counter}
+  end
+
+  # --- RegisterUDTF (register_table_function) ---
+
+  def encode_command(
+        {:register_udtf, name, python_command, return_type, eval_type, python_ver, deterministic},
+        counter
+      ) do
+    python_udtf = %PythonUDTF{
+      return_type: return_type,
+      eval_type: eval_type,
+      command: python_command,
+      python_ver: python_ver
+    }
+
+    udtf = %CommonInlineUserDefinedTableFunction{
+      function_name: name,
+      deterministic: deterministic,
+      function: {:python_udtf, python_udtf}
+    }
+
+    command = %Command{command_type: {:register_table_function, udtf}}
+    {command, counter}
+  end
+
   # --- Private helpers ---
+
+  defp encode_merge_action({action_type, condition_expr, assignments}) do
+    action_type_enum =
+      case action_type do
+        :delete -> :ACTION_TYPE_DELETE
+        :insert -> :ACTION_TYPE_INSERT
+        :insert_star -> :ACTION_TYPE_INSERT_STAR
+        :update -> :ACTION_TYPE_UPDATE
+        :update_star -> :ACTION_TYPE_UPDATE_STAR
+      end
+
+    condition =
+      case condition_expr do
+        nil -> nil
+        expr -> PlanEncoder.encode_expression(expr)
+      end
+
+    encoded_assignments =
+      Enum.map(assignments, fn {key_expr, value_expr} ->
+        %MergeAction.Assignment{
+          key: PlanEncoder.encode_expression(key_expr),
+          value: PlanEncoder.encode_expression(value_expr)
+        }
+      end)
+
+    %Expression{
+      expr_type:
+        {:merge_action,
+         %MergeAction{
+           action_type: action_type_enum,
+           condition: condition,
+           assignments: encoded_assignments
+         }}
+    }
+  end
 
   defp encode_save_type(opts) do
     path = Keyword.get(opts, :path, nil)

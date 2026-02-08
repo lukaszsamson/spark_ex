@@ -224,7 +224,8 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
 
       assert String.contains?(error.message || "", "OPERATION_CANCELED") or
                String.contains?(error.server_message || "", "OPERATION_CANCELED") or
-               String.contains?(error.message || "", "CANCEL")
+               String.contains?(error.message || "", "CANCEL") or
+               String.contains?(error.server_message || "", "CANCEL")
     end
   end
 

@@ -46,7 +46,7 @@ defmodule SparkEx.Integration.ReattachTest do
         |> DataFrame.limit(5)
 
       assert {:ok, rows} = DataFrame.collect(df)
-      assert length(rows) == 5
+      assert Kernel.length(rows) == 5
     end
 
     test "tagged query works with reattachable enabled", %{session: session} do

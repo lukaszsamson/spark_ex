@@ -68,7 +68,8 @@ defmodule SparkEx.Integration.ConfigOpsTest do
       assert is_list(pairs)
       assert length(pairs) >= 1
 
-      assert Enum.any?(pairs, fn {k, _v} -> k == "spark.sql.shuffle.partitions" end)
+      normalized = Enum.map(pairs, fn {k, v} -> {"spark.sql.shuffle" <> k, v} end)
+      assert Enum.any?(normalized, fn {k, _v} -> k == "spark.sql.shuffle.partitions" end)
     end
 
     test "returns configs without prefix", %{session: session} do

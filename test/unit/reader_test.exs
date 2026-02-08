@@ -17,6 +17,43 @@ defmodule SparkEx.ReaderTest do
     end
   end
 
+  describe "builder API" do
+    test "SparkEx.read/1 returns a reader builder" do
+      reader = SparkEx.read(self())
+      assert %Reader{} = reader
+      assert reader.session == self()
+    end
+
+    test "builds a stateful read plan with format/schema/options/load" do
+      df =
+        self()
+        |> SparkEx.read()
+        |> Reader.format("csv")
+        |> Reader.schema("id INT, name STRING")
+        |> Reader.option("header", true)
+        |> Reader.options(%{"inferSchema" => false, "maxColumns" => 200})
+        |> Reader.load("/tmp/data.csv")
+
+      assert %DataFrame{
+               plan:
+                 {:read_data_source, "csv", ["/tmp/data.csv"], "id INT, name STRING",
+                  %{"header" => "true", "inferSchema" => "false", "maxColumns" => "200"}}
+             } = df
+    end
+
+    test "builder table/2 carries options" do
+      df =
+        self()
+        |> SparkEx.read()
+        |> Reader.option("streaming", false)
+        |> Reader.table("my_db.my_table")
+
+      assert %DataFrame{
+               plan: {:read_named_table, "my_db.my_table", %{"streaming" => "false"}}
+             } = df
+    end
+  end
+
   describe "parquet/2" do
     test "creates read_data_source with parquet format" do
       df = Reader.parquet(self(), "/data/file.parquet")

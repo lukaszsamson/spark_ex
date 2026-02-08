@@ -696,6 +696,245 @@ defmodule SparkEx.Connect.PlanEncoder do
     {relation, counter}
   end
 
+  # --- NA Relations ---
+
+  def encode_relation({:na_fill, child_plan, cols, values}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:fill_na,
+         %Spark.Connect.NAFill{
+           input: child,
+           cols: cols,
+           values: Enum.map(values, &encode_na_literal/1)
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:na_drop, child_plan, cols, min_non_nulls}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:drop_na,
+         %Spark.Connect.NADrop{
+           input: child,
+           cols: cols,
+           min_non_nulls: min_non_nulls
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:na_replace, child_plan, cols, replacements}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    encoded_replacements =
+      Enum.map(replacements, fn {old_val, new_val} ->
+        %Spark.Connect.NAReplace.Replacement{
+          old_value: encode_literal(old_val),
+          new_value: encode_literal(new_val)
+        }
+      end)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:replace,
+         %Spark.Connect.NAReplace{
+           input: child,
+           cols: cols,
+           replacements: encoded_replacements
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  # --- Stat Relations ---
+
+  def encode_relation({:stat_describe, child_plan, cols}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:describe, %Spark.Connect.StatDescribe{input: child, cols: cols}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:stat_summary, child_plan, statistics}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:summary, %Spark.Connect.StatSummary{input: child, statistics: statistics}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:stat_corr, child_plan, col1, col2, method}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:corr, %Spark.Connect.StatCorr{input: child, col1: col1, col2: col2, method: method}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:stat_cov, child_plan, col1, col2}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:cov, %Spark.Connect.StatCov{input: child, col1: col1, col2: col2}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:stat_crosstab, child_plan, col1, col2}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:crosstab, %Spark.Connect.StatCrosstab{input: child, col1: col1, col2: col2}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:stat_freq_items, child_plan, cols, support}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:freq_items, %Spark.Connect.StatFreqItems{input: child, cols: cols, support: support}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:stat_approx_quantile, child_plan, cols, probs, rel_error}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:approx_quantile,
+         %Spark.Connect.StatApproxQuantile{
+           input: child,
+           cols: cols,
+           probabilities: probs,
+           relative_error: rel_error
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:stat_sample_by, child_plan, col_expr, fractions, seed}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    encoded_fractions =
+      Enum.map(fractions, fn {stratum, fraction} ->
+        %Spark.Connect.StatSampleBy.Fraction{
+          stratum: encode_literal(stratum),
+          fraction: fraction
+        }
+      end)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:sample_by,
+         %Spark.Connect.StatSampleBy{
+           input: child,
+           col: encode_expression(col_expr),
+           fractions: encoded_fractions,
+           seed: seed
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  # --- Table-Valued Functions ---
+
+  def encode_relation({:table_valued_function, function_name, arg_exprs}, counter) do
+    {plan_id, counter} = next_id(counter)
+
+    encoded_args = Enum.map(arg_exprs, &encode_expression/1)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:unresolved_table_valued_function,
+         %Spark.Connect.UnresolvedTableValuedFunction{
+           function_name: function_name,
+           arguments: encoded_args
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  # --- Inline UDTF as Relation ---
+
+  def encode_relation(
+        {:inline_udtf, function_name, arg_exprs, python_command, return_type, eval_type,
+         python_ver, deterministic},
+        counter
+      ) do
+    {plan_id, counter} = next_id(counter)
+
+    python_udtf = %Spark.Connect.PythonUDTF{
+      return_type: return_type,
+      eval_type: eval_type,
+      command: python_command,
+      python_ver: python_ver
+    }
+
+    encoded_args = Enum.map(arg_exprs, &encode_expression/1)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:common_inline_user_defined_table_function,
+         %Spark.Connect.CommonInlineUserDefinedTableFunction{
+           function_name: function_name,
+           deterministic: deterministic,
+           arguments: encoded_args,
+           function: {:python_udtf, python_udtf}
+         }}
+    }
+
+    {relation, counter}
+  end
+
   @doc """
   Wraps a plan in an aggregate count(*) relation.
 
@@ -1267,6 +1506,89 @@ defmodule SparkEx.Connect.PlanEncoder do
     {{:subquery_alias, child_plan, alias_name}, plan_ids, refs, counter}
   end
 
+  # ── NA operations ──
+
+  defp rewrite_plan({:na_fill, child_plan, cols, values}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:na_fill, child_plan, cols, values}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:na_drop, child_plan, cols, min_non_nulls}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:na_drop, child_plan, cols, min_non_nulls}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:na_replace, child_plan, cols, replacements}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:na_replace, child_plan, cols, replacements}, plan_ids, refs, counter}
+  end
+
+  # ── Stat operations ──
+
+  defp rewrite_plan({:stat_describe, child_plan, cols}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:stat_describe, child_plan, cols}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:stat_summary, child_plan, statistics}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:stat_summary, child_plan, statistics}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:stat_corr, child_plan, col1, col2, method}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:stat_corr, child_plan, col1, col2, method}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:stat_cov, child_plan, col1, col2}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:stat_cov, child_plan, col1, col2}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:stat_crosstab, child_plan, col1, col2}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:stat_crosstab, child_plan, col1, col2}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:stat_freq_items, child_plan, cols, support}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:stat_freq_items, child_plan, cols, support}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:stat_approx_quantile, child_plan, cols, probs, rel_error},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:stat_approx_quantile, child_plan, cols, probs, rel_error}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:stat_sample_by, child_plan, col_expr, fractions, seed},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:stat_sample_by, child_plan, col_expr, fractions, seed}, plan_ids, refs, counter}
+  end
+
+  # ── TVF / UDTF (leaf nodes — no child plan) ──
+
+  defp rewrite_plan({:table_valued_function, _name, _args} = plan, plan_ids, refs, counter),
+    do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan(
+         {:inline_udtf, _name, _args, _command, _return_type, _eval_type, _python_ver,
+          _deterministic} = plan,
+         plan_ids,
+         refs,
+         counter
+       ),
+       do: {plan, plan_ids, refs, counter}
+
   defp rewrite_plan(other, _plan_ids, _refs, _counter) do
     raise ArgumentError, "unsupported plan tuple: #{inspect(other)}"
   end
@@ -1525,6 +1847,14 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_sql_argument({:lambda_var, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:subquery, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument(value), do: encode_literal_expression(value)
+
+  # PySpark's NAFill._convert_value always uses long for ints (not integer)
+  # because the Spark server only accepts Long/Double/String/Boolean in NAFill values.
+  defp encode_na_literal(true), do: %Expression.Literal{literal_type: {:boolean, true}}
+  defp encode_na_literal(false), do: %Expression.Literal{literal_type: {:boolean, false}}
+  defp encode_na_literal(v) when is_integer(v), do: %Expression.Literal{literal_type: {:long, v}}
+  defp encode_na_literal(v) when is_float(v), do: %Expression.Literal{literal_type: {:double, v}}
+  defp encode_na_literal(v) when is_binary(v), do: %Expression.Literal{literal_type: {:string, v}}
 
   defp encode_literal(nil),
     do: %Expression.Literal{literal_type: {:null, %Spark.Connect.DataType.NULL{}}}

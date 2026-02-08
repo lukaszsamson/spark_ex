@@ -423,6 +423,24 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Registers a Java UDF. Convenience delegate to `SparkEx.UDFRegistration.register_java/4`.
+  """
+  @spec register_java_udf(GenServer.server(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, term()}
+  def register_java_udf(session, name, class_name, opts \\ []) do
+    SparkEx.UDFRegistration.register_java(session, name, class_name, opts)
+  end
+
+  @doc """
+  Registers a UDTF. Convenience delegate to `SparkEx.UDFRegistration.register_udtf/4`.
+  """
+  @spec register_udtf(GenServer.server(), String.t(), binary(), keyword()) ::
+          :ok | {:error, term()}
+  def register_udtf(session, name, python_command, opts \\ []) do
+    SparkEx.UDFRegistration.register_udtf(session, name, python_command, opts)
+  end
+
+  @doc """
   Executes a ShowString plan and returns the formatted string.
   """
   @spec execute_show(GenServer.server(), term()) ::

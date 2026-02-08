@@ -1108,6 +1108,115 @@ defmodule SparkEx.DataFrame do
     SparkEx.Session.analyze_get_storage_level(df.session, df.plan)
   end
 
+  # ── NA / Stat / Merge sub-APIs ──
+
+  @doc """
+  Returns the DataFrame for use with `SparkEx.DataFrame.NA` functions.
+  """
+  @spec na(t()) :: t()
+  def na(%__MODULE__{} = df), do: df
+
+  @doc """
+  Returns the DataFrame for use with `SparkEx.DataFrame.Stat` functions.
+  """
+  @spec stat(t()) :: t()
+  def stat(%__MODULE__{} = df), do: df
+
+  @doc "Fills null values. Delegates to `SparkEx.DataFrame.NA.fill/3`."
+  @spec fillna(t(), term(), keyword()) :: t()
+  def fillna(%__MODULE__{} = df, value, opts \\ []),
+    do: SparkEx.DataFrame.NA.fill(df, value, opts)
+
+  @doc "Drops rows with null values. Delegates to `SparkEx.DataFrame.NA.drop/2`."
+  @spec dropna(t(), keyword()) :: t()
+  def dropna(%__MODULE__{} = df, opts \\ []),
+    do: SparkEx.DataFrame.NA.drop(df, opts)
+
+  @doc "Replaces values. Delegates to `SparkEx.DataFrame.NA.replace/4`."
+  @spec replace(t(), term(), term(), keyword()) :: t()
+  def replace(%__MODULE__{} = df, to_replace, value \\ nil, opts \\ []),
+    do: SparkEx.DataFrame.NA.replace(df, to_replace, value, opts)
+
+  @doc "Describes basic statistics. Delegates to `SparkEx.DataFrame.Stat.describe/2`."
+  @spec describe(t(), [String.t()]) :: t()
+  def describe(%__MODULE__{} = df, cols \\ []),
+    do: SparkEx.DataFrame.Stat.describe(df, cols)
+
+  @doc "Computes summary statistics. Delegates to `SparkEx.DataFrame.Stat.summary/2`."
+  @spec summary(t(), [String.t()]) :: t()
+  def summary(%__MODULE__{} = df, statistics \\ []),
+    do: SparkEx.DataFrame.Stat.summary(df, statistics)
+
+  @doc "Computes Pearson correlation. Delegates to `SparkEx.DataFrame.Stat.corr/4`."
+  @spec corr(t(), String.t(), String.t(), String.t()) :: {:ok, float()} | {:error, term()}
+  def corr(%__MODULE__{} = df, col1, col2, method \\ "pearson"),
+    do: SparkEx.DataFrame.Stat.corr(df, col1, col2, method)
+
+  @doc "Computes covariance. Delegates to `SparkEx.DataFrame.Stat.cov/3`."
+  @spec cov(t(), String.t(), String.t()) :: {:ok, float()} | {:error, term()}
+  def cov(%__MODULE__{} = df, col1, col2),
+    do: SparkEx.DataFrame.Stat.cov(df, col1, col2)
+
+  @doc "Computes crosstab. Delegates to `SparkEx.DataFrame.Stat.crosstab/3`."
+  @spec crosstab(t(), String.t(), String.t()) :: t()
+  def crosstab(%__MODULE__{} = df, col1, col2),
+    do: SparkEx.DataFrame.Stat.crosstab(df, col1, col2)
+
+  @doc "Finds frequent items. Delegates to `SparkEx.DataFrame.Stat.freq_items/3`."
+  @spec freq_items(t(), [String.t()], float()) :: t()
+  def freq_items(%__MODULE__{} = df, cols, support \\ 0.01),
+    do: SparkEx.DataFrame.Stat.freq_items(df, cols, support)
+
+  @doc "Computes approximate quantiles. Delegates to `SparkEx.DataFrame.Stat.approx_quantile/4`."
+  @spec approx_quantile(t(), String.t() | [String.t()], [float()], float()) ::
+          {:ok, [float()] | [[float()]]} | {:error, term()}
+  def approx_quantile(%__MODULE__{} = df, col, probabilities, relative_error \\ 0.0),
+    do: SparkEx.DataFrame.Stat.approx_quantile(df, col, probabilities, relative_error)
+
+  @doc "Returns stratified sample. Delegates to `SparkEx.DataFrame.Stat.sample_by/4`."
+  @spec sample_by(t(), Column.t() | String.t(), map(), integer() | nil) :: t()
+  def sample_by(%__MODULE__{} = df, col, fractions, seed \\ nil),
+    do: SparkEx.DataFrame.Stat.sample_by(df, col, fractions, seed)
+
+  @doc """
+  Creates a `SparkEx.MergeIntoWriter` for MERGE INTO operations.
+
+  ## Examples
+
+      df
+      |> DataFrame.merge_into("target_table")
+      |> MergeIntoWriter.on(col("source.id") |> Column.eq(col("target.id")))
+      |> MergeIntoWriter.when_matched_update_all()
+      |> MergeIntoWriter.when_not_matched_insert_all()
+      |> MergeIntoWriter.merge()
+  """
+  @spec merge_into(t(), String.t()) :: SparkEx.MergeIntoWriter.t()
+  def merge_into(%__MODULE__{} = df, table_name) when is_binary(table_name) do
+    SparkEx.MergeIntoWriter.new(df, table_name)
+  end
+
+  @doc """
+  Creates a DataFrame from a table-valued function (TVF) call.
+
+  TVFs are built-in Spark functions that return tables (e.g. `range`, `explode`).
+  Arguments can be `Column` structs or literal values.
+
+  ## Examples
+
+      DataFrame.table_function(session, "range", [lit(0), lit(10)])
+  """
+  @spec table_function(GenServer.server(), String.t(), [SparkEx.Column.t() | term()]) :: t()
+  def table_function(session, function_name, args \\ [])
+      when is_binary(function_name) and is_list(args) do
+    arg_exprs =
+      Enum.map(args, fn
+        %SparkEx.Column{expr: e} -> e
+        value -> {:lit, value}
+      end)
+
+    %__MODULE__{session: session, plan: {:table_valued_function, function_name, arg_exprs}}
+  end
+
   # ── Private helpers ──
 
   defp merge_tags(%__MODULE__{tags: []}, opts), do: opts
