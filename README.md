@@ -6,7 +6,7 @@ Targets Spark 4.1.1. See `SPEC_V1.md` for the full design.
 
 ## Status
 
-Milestones 0 through 4 are complete (289 tests passing against Spark 4.1.1).
+Milestones 0 through 5 are complete (328 tests passing against Spark 4.1.1).
 
 ### Milestone 0 &mdash; Foundations
 
@@ -51,6 +51,16 @@ Milestones 0 through 4 are complete (289 tests passing against Spark 4.1.1).
 - `Kino.Render` protocol for `SparkEx.DataFrame` &mdash; tabs: Schema, Preview (`Kino.DataTable`), Explain, Raw
 - Telemetry events: `[:spark_ex, :rpc, :start/stop/exception]`, `[:spark_ex, :result, :batch]`, `[:spark_ex, :result, :progress]`, `[:spark_ex, :retry, :attempt]`
 - Arrow batch chunking reassembly with Explorer-native decode path (`Explorer.DataFrame.concat_rows/1`)
+
+### Milestone 5 &mdash; Session Lifecycle + Interrupts
+
+- `SparkEx.Session.release/1` &mdash; calls `ReleaseSession` RPC, marks session as released, rejects further RPCs with `{:error, :session_released}`
+- `SparkEx.Session.stop/1` &mdash; calls `ReleaseSession` before disconnecting the gRPC channel
+- `SparkEx.interrupt_all/1` &mdash; interrupt all running operations via `Interrupt` RPC
+- `SparkEx.interrupt_tag/2` &mdash; interrupt operations matching a tag
+- `SparkEx.interrupt_operation/2` &mdash; interrupt a specific operation by ID
+- `DataFrame.tag/2` &mdash; attach operation tags to DataFrames (propagated to `ExecutePlanRequest.tags`)
+- Telemetry spans for `release_session` and `interrupt` RPCs
 
 ## Quick start
 
@@ -154,6 +164,26 @@ SparkEx.Livebook.schema(df)
 ```
 
 See [`notebooks/spark_ex_demo.livemd`](notebooks/spark_ex_demo.livemd) for a full interactive demo.
+
+### Session lifecycle and interrupts
+
+```elixir
+# Tag operations for interrupt targeting
+df = SparkEx.sql(session, "SELECT * FROM big_table")
+|> DataFrame.tag("etl-pipeline")
+
+# From another process: interrupt by tag
+SparkEx.interrupt_tag(session, "etl-pipeline")
+
+# Interrupt all running operations
+SparkEx.interrupt_all(session)
+
+# Release server-side session (rejects further RPCs)
+SparkEx.Session.release(session)
+
+# Stop the session process (calls ReleaseSession + disconnects)
+SparkEx.Session.stop(session)
+```
 
 ## Prerequisites
 

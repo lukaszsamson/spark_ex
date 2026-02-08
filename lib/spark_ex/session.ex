@@ -16,20 +16,24 @@ defmodule SparkEx.Session do
 
   defstruct [
     :channel,
+    :connect_opts,
     :session_id,
     :server_side_session_id,
     :user_id,
     :client_type,
-    plan_id_counter: 0
+    plan_id_counter: 0,
+    released: false
   ]
 
   @type t :: %__MODULE__{
           channel: GRPC.Channel.t() | nil,
+          connect_opts: SparkEx.Connect.Channel.connect_opts() | nil,
           session_id: String.t(),
           server_side_session_id: String.t() | nil,
           user_id: String.t(),
           client_type: String.t(),
-          plan_id_counter: non_neg_integer()
+          plan_id_counter: non_neg_integer(),
+          released: boolean()
         }
 
   # --- Public API ---
@@ -72,6 +76,17 @@ defmodule SparkEx.Session do
   @spec update_server_side_session_id(GenServer.server(), String.t()) :: :ok
   def update_server_side_session_id(session, server_side_session_id) do
     GenServer.cast(session, {:update_server_side_session_id, server_side_session_id})
+  end
+
+  @doc """
+  Clones the current server-side session and returns a new Session process.
+
+  The cloned session inherits server-side state (configs/temp views/etc.) and
+  uses a new session ID unless one is explicitly provided.
+  """
+  @spec clone(GenServer.server(), String.t() | nil) :: {:ok, pid()} | {:error, term()}
+  def clone(session, new_session_id \\ nil) do
+    GenServer.call(session, {:clone_session, new_session_id})
   end
 
   @doc """
@@ -165,7 +180,51 @@ defmodule SparkEx.Session do
   end
 
   @doc """
-  Stops the session and releases server resources.
+  Releases the server-side session via the `ReleaseSession` RPC.
+
+  After release, all further RPC calls through this session will return
+  `{:error, :session_released}`. The GenServer process remains alive but
+  the gRPC channel is disconnected.
+  """
+  @spec release(GenServer.server()) :: :ok | {:error, term()}
+  def release(session) do
+    GenServer.call(session, :release_session)
+  end
+
+  @doc """
+  Interrupts all running operations on this session.
+
+  Returns the list of interrupted operation IDs.
+  """
+  @spec interrupt_all(GenServer.server()) :: {:ok, [String.t()]} | {:error, term()}
+  def interrupt_all(session) do
+    GenServer.call(session, {:interrupt, :all})
+  end
+
+  @doc """
+  Interrupts operations matching the given tag.
+
+  Returns the list of interrupted operation IDs.
+  """
+  @spec interrupt_tag(GenServer.server(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def interrupt_tag(session, tag) when is_binary(tag) do
+    GenServer.call(session, {:interrupt, {:tag, tag}})
+  end
+
+  @doc """
+  Interrupts a specific operation by its ID.
+
+  Returns the list of interrupted operation IDs.
+  """
+  @spec interrupt_operation(GenServer.server(), String.t()) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def interrupt_operation(session, operation_id) when is_binary(operation_id) do
+    GenServer.call(session, {:interrupt, {:operation_id, operation_id}})
+  end
+
+  @doc """
+  Stops the session process. Calls `ReleaseSession` if not already released,
+  then disconnects the gRPC channel.
   """
   @spec stop(GenServer.server()) :: :ok
   def stop(session) do
@@ -176,16 +235,20 @@ defmodule SparkEx.Session do
 
   @impl true
   def init(opts) do
-    url = Keyword.fetch!(opts, :url)
+    connect_opts_opt = Keyword.get(opts, :connect_opts)
+    url_opt = Keyword.get(opts, :url)
     user_id = Keyword.get(opts, :user_id, "spark_ex")
     client_type = Keyword.get(opts, :client_type, default_client_type())
     session_id = Keyword.get(opts, :session_id, generate_uuid())
+    observed_server_session_id = Keyword.get(opts, :server_side_session_id, nil)
 
-    with {:ok, connect_opts} <- Channel.parse_uri(url),
+    with {:ok, connect_opts} <- resolve_connect_opts(url_opt, connect_opts_opt),
          {:ok, channel} <- Channel.connect(connect_opts) do
       state = %__MODULE__{
         channel: channel,
+        connect_opts: connect_opts,
         session_id: session_id,
+        server_side_session_id: observed_server_session_id,
         user_id: user_id,
         client_type: client_type
       }
@@ -201,9 +264,76 @@ defmodule SparkEx.Session do
     {:reply, state, state}
   end
 
+  def handle_call({:clone_session, _new_session_id}, _from, %{released: true} = state) do
+    {:reply, {:error, :session_released}, state}
+  end
+
+  def handle_call({:clone_session, new_session_id}, _from, state) do
+    case Client.clone_session(state, new_session_id) do
+      {:ok, clone_info} ->
+        state =
+          maybe_update_server_session(state, clone_info.source_server_side_session_id)
+
+        clone_opts = [
+          connect_opts: state.connect_opts,
+          user_id: state.user_id,
+          client_type: state.client_type,
+          session_id: clone_info.new_session_id,
+          server_side_session_id: clone_info.new_server_side_session_id
+        ]
+
+        case __MODULE__.start_link(clone_opts) do
+          {:ok, clone_session} ->
+            {:reply, {:ok, clone_session}, state}
+
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
   def handle_call(:next_plan_id, _from, state) do
     id = state.plan_id_counter
     {:reply, id, %{state | plan_id_counter: id + 1}}
+  end
+
+  def handle_call(:release_session, _from, %{released: true} = state) do
+    {:reply, :ok, state}
+  end
+
+  # --- Released guard: reject RPCs after session release ---
+
+  def handle_call(_msg, _from, %{released: true} = state) do
+    {:reply, {:error, :session_released}, state}
+  end
+
+  # --- Session lifecycle handlers ---
+
+  def handle_call(:release_session, _from, state) do
+    case Client.release_session(state) do
+      {:ok, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        Channel.disconnect(state.channel)
+        state = %{state | released: true, channel: nil}
+        {:reply, :ok, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:interrupt, type}, _from, state) do
+    case Client.interrupt(state, type) do
+      {:ok, interrupted_ids, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, interrupted_ids}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
   end
 
   def handle_call(:spark_version, _from, state) do
@@ -347,10 +477,30 @@ defmodule SparkEx.Session do
     {:noreply, %{state | server_side_session_id: id}}
   end
 
+  # Silently discard gun messages that arrive after session release
   @impl true
+  def handle_info({:gun_data, _, _, _, _}, state), do: {:noreply, state}
+  def handle_info({:gun_trailers, _, _, _}, state), do: {:noreply, state}
+  def handle_info({:gun_error, _, _, _}, state), do: {:noreply, state}
+  def handle_info({:gun_down, _, _, _, _}, state), do: {:noreply, state}
+
+  def handle_info(msg, state) do
+    require Logger
+
+    Logger.error(
+      "#{inspect(__MODULE__)} #{inspect(self())} received unexpected message in handle_info/2: #{inspect(msg)}"
+    )
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def terminate(_reason, %{released: true}), do: :ok
   def terminate(_reason, %{channel: nil}), do: :ok
 
-  def terminate(_reason, %{channel: channel}) do
+  def terminate(_reason, %{channel: channel} = state) do
+    # Best-effort release before disconnect
+    _ = Client.release_session(state)
     Channel.disconnect(channel)
     :ok
   end
@@ -419,5 +569,13 @@ defmodule SparkEx.Session do
 
   defp call_timeout(opts) do
     Keyword.get(opts, :timeout, 60_000) + 5_000
+  end
+
+  defp resolve_connect_opts(url, nil) when is_binary(url), do: Channel.parse_uri(url)
+  defp resolve_connect_opts(nil, connect_opts) when is_map(connect_opts), do: {:ok, connect_opts}
+  defp resolve_connect_opts(url, _connect_opts) when is_binary(url), do: Channel.parse_uri(url)
+
+  defp resolve_connect_opts(_url, _connect_opts) do
+    {:error, {:invalid_connect_opts, "expected :url or :connect_opts"}}
   end
 end

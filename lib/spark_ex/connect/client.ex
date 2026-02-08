@@ -14,6 +14,12 @@ defmodule SparkEx.Connect.Client do
     ConfigRequest,
     ConfigResponse,
     ExecutePlanRequest,
+    CloneSessionRequest,
+    CloneSessionResponse,
+    InterruptRequest,
+    InterruptResponse,
+    ReleaseSessionRequest,
+    ReleaseSessionResponse,
     ResultChunkingOptions,
     KeyValue,
     Plan,
@@ -122,6 +128,7 @@ defmodule SparkEx.Connect.Client do
           {:ok, ResultDecoder.decode_result()} | {:error, term()}
   def execute_plan(session, plan, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 60_000)
+    tags = Keyword.get(opts, :tags, [])
 
     request = %ExecutePlanRequest{
       session_id: session.session_id,
@@ -129,6 +136,7 @@ defmodule SparkEx.Connect.Client do
       user_context: %UserContext{user_id: session.user_id},
       client_observed_server_side_session_id: session.server_side_session_id,
       plan: plan,
+      tags: tags,
       request_options: [
         %ExecutePlanRequest.RequestOption{
           request_option:
@@ -167,6 +175,7 @@ defmodule SparkEx.Connect.Client do
           {:ok, ResultDecoder.explorer_result()} | {:error, term()}
   def execute_plan_explorer(session, plan, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 60_000)
+    tags = Keyword.get(opts, :tags, [])
 
     request = %ExecutePlanRequest{
       session_id: session.session_id,
@@ -174,6 +183,7 @@ defmodule SparkEx.Connect.Client do
       user_context: %UserContext{user_id: session.user_id},
       client_observed_server_side_session_id: session.server_side_session_id,
       plan: plan,
+      tags: tags,
       request_options: [
         %ExecutePlanRequest.RequestOption{
           request_option:
@@ -258,6 +268,140 @@ defmodule SparkEx.Connect.Client do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # --- Session Lifecycle RPCs ---
+
+  @doc """
+  Calls `CloneSession` and returns cloned session identifiers.
+  """
+  @spec clone_session(SparkEx.Session.t(), String.t() | nil) ::
+          {:ok,
+           %{
+             new_session_id: String.t(),
+             new_server_side_session_id: String.t() | nil,
+             source_server_side_session_id: String.t() | nil
+           }}
+          | {:error, term()}
+  def clone_session(session, new_session_id \\ nil) do
+    request = %CloneSessionRequest{
+      session_id: session.session_id,
+      client_observed_server_side_session_id: session.server_side_session_id,
+      user_context: %UserContext{user_id: session.user_id},
+      client_type: session.client_type,
+      new_session_id: new_session_id
+    }
+
+    metadata = %{rpc: :clone_session, session_id: session.session_id}
+
+    rpc_telemetry_span(metadata, fn ->
+      case Stub.clone_session(session.channel, request) do
+        {:ok, %CloneSessionResponse{} = resp} ->
+          {:ok,
+           %{
+             new_session_id: resp.new_session_id,
+             new_server_side_session_id: blank_to_nil(resp.new_server_side_session_id),
+             source_server_side_session_id: blank_to_nil(resp.server_side_session_id)
+           }}
+
+        {:error, %GRPC.RPCError{} = error} ->
+          {:error, Errors.from_grpc_error(error, session)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
+  Calls `ReleaseSession` to release the server-side session.
+  """
+  @spec release_session(SparkEx.Session.t()) ::
+          {:ok, String.t() | nil} | {:error, term()}
+  def release_session(session) do
+    request = %ReleaseSessionRequest{
+      session_id: session.session_id,
+      user_context: %UserContext{user_id: session.user_id},
+      client_type: session.client_type
+    }
+
+    metadata = %{rpc: :release_session, session_id: session.session_id}
+
+    rpc_telemetry_span(metadata, fn ->
+      case Stub.release_session(session.channel, request) do
+        {:ok, %ReleaseSessionResponse{} = resp} ->
+          {:ok, resp.server_side_session_id}
+
+        {:error, %GRPC.RPCError{} = error} ->
+          {:error, Errors.from_grpc_error(error, session)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
+  end
+
+  # --- Interrupt RPC ---
+
+  @doc """
+  Calls `Interrupt` to cancel running operations.
+
+  ## Interrupt types
+
+  - `:all` — interrupt all running operations
+  - `{:tag, tag}` — interrupt operations matching the given tag
+  - `{:operation_id, id}` — interrupt a specific operation by ID
+  """
+  @spec interrupt(SparkEx.Session.t(), :all | {:tag, String.t()} | {:operation_id, String.t()}) ::
+          {:ok, [String.t()], String.t() | nil} | {:error, term()}
+  def interrupt(session, type) do
+    request = build_interrupt_request(session, type)
+    metadata = %{rpc: :interrupt, session_id: session.session_id, interrupt_type: type}
+
+    rpc_telemetry_span(metadata, fn ->
+      case Stub.interrupt(session.channel, request) do
+        {:ok, %InterruptResponse{} = resp} ->
+          {:ok, resp.interrupted_ids, resp.server_side_session_id}
+
+        {:error, %GRPC.RPCError{} = error} ->
+          {:error, Errors.from_grpc_error(error, session)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
+  end
+
+  defp build_interrupt_request(session, :all) do
+    %InterruptRequest{
+      session_id: session.session_id,
+      client_observed_server_side_session_id: session.server_side_session_id,
+      user_context: %UserContext{user_id: session.user_id},
+      client_type: session.client_type,
+      interrupt_type: :INTERRUPT_TYPE_ALL
+    }
+  end
+
+  defp build_interrupt_request(session, {:tag, tag}) when is_binary(tag) do
+    %InterruptRequest{
+      session_id: session.session_id,
+      client_observed_server_side_session_id: session.server_side_session_id,
+      user_context: %UserContext{user_id: session.user_id},
+      client_type: session.client_type,
+      interrupt_type: :INTERRUPT_TYPE_TAG,
+      interrupt: {:operation_tag, tag}
+    }
+  end
+
+  defp build_interrupt_request(session, {:operation_id, id}) when is_binary(id) do
+    %InterruptRequest{
+      session_id: session.session_id,
+      client_observed_server_side_session_id: session.server_side_session_id,
+      user_context: %UserContext{user_id: session.user_id},
+      client_type: session.client_type,
+      interrupt_type: :INTERRUPT_TYPE_OPERATION_ID,
+      interrupt: {:operation_id, id}
+    }
   end
 
   # --- Helpers ---
@@ -385,6 +529,7 @@ defmodule SparkEx.Connect.Client do
   end
 
   defp result_status({:ok, _}), do: :ok
+  defp result_status({:ok, _, _}), do: :ok
   defp result_status({:error, _}), do: :error
 
   defp row_count_metadata({:ok, %{rows: rows}}) when is_list(rows) do
@@ -400,4 +545,8 @@ defmodule SparkEx.Connect.Client do
   end
 
   defp row_count_metadata(_result), do: %{}
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 end

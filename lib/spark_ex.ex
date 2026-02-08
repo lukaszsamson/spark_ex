@@ -34,6 +34,16 @@ defmodule SparkEx do
   end
 
   @doc """
+  Clones a session on the server side and returns a new Session process.
+
+  If `new_session_id` is nil, Spark generates a new one.
+  """
+  @spec clone_session(GenServer.server(), String.t() | nil) :: {:ok, pid()} | {:error, term()}
+  def clone_session(session, new_session_id \\ nil) do
+    SparkEx.Session.clone(session, new_session_id)
+  end
+
+  @doc """
   Returns the Spark version from the connected server.
   """
   @spec spark_version(GenServer.server()) :: {:ok, String.t()} | {:error, term()}
@@ -121,6 +131,36 @@ defmodule SparkEx do
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get(session, keys) do
     SparkEx.Session.config_get(session, keys)
+  end
+
+  @doc """
+  Interrupts all running operations on the session.
+
+  Returns the list of interrupted operation IDs.
+  """
+  @spec interrupt_all(GenServer.server()) :: {:ok, [String.t()]} | {:error, term()}
+  def interrupt_all(session) do
+    SparkEx.Session.interrupt_all(session)
+  end
+
+  @doc """
+  Interrupts operations matching the given tag.
+
+  Tags are set on DataFrames via `SparkEx.DataFrame.tag/2` and propagated
+  to the server when the DataFrame is executed.
+  """
+  @spec interrupt_tag(GenServer.server(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def interrupt_tag(session, tag) when is_binary(tag) do
+    SparkEx.Session.interrupt_tag(session, tag)
+  end
+
+  @doc """
+  Interrupts a specific operation by its server-assigned operation ID.
+  """
+  @spec interrupt_operation(GenServer.server(), String.t()) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def interrupt_operation(session, operation_id) when is_binary(operation_id) do
+    SparkEx.Session.interrupt_operation(session, operation_id)
   end
 
   defp build_range_df(session, start, stop, step, opts) do

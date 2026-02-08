@@ -31,7 +31,7 @@ defmodule SparkEx.DataFrame do
 
   alias SparkEx.Column
 
-  defstruct [:session, :plan]
+  defstruct [:session, :plan, tags: []]
 
   @compile {:no_warn_undefined, Explorer.DataFrame}
 
@@ -39,7 +39,8 @@ defmodule SparkEx.DataFrame do
 
   @type t :: %__MODULE__{
           session: GenServer.server(),
-          plan: plan()
+          plan: plan(),
+          tags: [String.t()]
         }
 
   # ── Transforms (lazy — return new DataFrame) ──
@@ -297,6 +298,28 @@ defmodule SparkEx.DataFrame do
     }
   end
 
+  # ── Metadata ──
+
+  @doc """
+  Tags the DataFrame with an operation tag for interrupt targeting.
+
+  Tags are propagated to the `ExecutePlanRequest` when the DataFrame is
+  executed. Multiple tags can be added by calling `tag/2` multiple times.
+
+  ## Examples
+
+      df = SparkEx.sql(session, "SELECT * FROM big_table")
+      |> DataFrame.tag("etl-job-42")
+
+      # Later, from another process:
+      SparkEx.interrupt_tag(session, "etl-job-42")
+  """
+  @spec tag(t(), String.t()) :: t()
+  def tag(%__MODULE__{} = df, tag) when is_binary(tag) do
+    validate_tag!(tag)
+    %{df | tags: df.tags ++ [tag]}
+  end
+
   # ── Actions (execute against Spark) ──
 
   @doc """
@@ -322,7 +345,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec to_explorer(t(), keyword()) :: {:ok, Explorer.DataFrame.t()} | {:error, term()}
   def to_explorer(%__MODULE__{} = df, opts \\ []) do
-    SparkEx.Session.execute_explorer(df.session, df.plan, opts)
+    SparkEx.Session.execute_explorer(df.session, df.plan, merge_tags(df, opts))
   end
 
   @doc """
@@ -334,7 +357,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec collect(t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def collect(%__MODULE__{} = df, opts \\ []) do
-    SparkEx.Session.execute_collect(df.session, df.plan, opts)
+    SparkEx.Session.execute_collect(df.session, df.plan, merge_tags(df, opts))
   end
 
   @doc """
@@ -351,7 +374,7 @@ defmodule SparkEx.DataFrame do
   @spec take(t(), pos_integer(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def take(%__MODULE__{} = df, n, opts \\ []) when is_integer(n) and n > 0 do
     limit_plan = {:limit, df.plan, n}
-    SparkEx.Session.execute_collect(df.session, limit_plan, opts)
+    SparkEx.Session.execute_collect(df.session, limit_plan, merge_tags(df, opts))
   end
 
   @doc """
@@ -392,6 +415,21 @@ defmodule SparkEx.DataFrame do
   end
 
   # ── Private helpers ──
+
+  defp merge_tags(%__MODULE__{tags: []}, opts), do: opts
+  defp merge_tags(%__MODULE__{tags: tags}, opts), do: Keyword.put(opts, :tags, tags)
+
+  defp validate_tag!("") do
+    raise ArgumentError, "Spark Connect tag must be a non-empty string"
+  end
+
+  defp validate_tag!(tag) do
+    if String.contains?(tag, ",") do
+      raise ArgumentError, "Spark Connect tag cannot contain ','"
+    end
+
+    :ok
+  end
 
   defp normalize_column_expr(%Column{} = col), do: col.expr
   defp normalize_column_expr(name) when is_binary(name), do: {:col, name}
