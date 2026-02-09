@@ -83,6 +83,19 @@ defmodule SparkEx do
   end
 
   @doc """
+  Returns a `SparkEx.StreamReader` builder for creating streaming DataFrames.
+
+  ## Examples
+
+      reader = SparkEx.read_stream(session)
+      df = reader |> SparkEx.StreamReader.format("rate") |> SparkEx.StreamReader.load()
+  """
+  @spec read_stream(GenServer.server()) :: SparkEx.StreamReader.t()
+  def read_stream(session) do
+    SparkEx.StreamReader.new(session)
+  end
+
+  @doc """
   Creates a DataFrame from a range of integers.
 
   Supports both signatures:

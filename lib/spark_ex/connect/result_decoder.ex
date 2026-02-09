@@ -53,7 +53,8 @@ defmodule SparkEx.Connect.ResultDecoder do
       current_chunked_batch: nil,
       schema: nil,
       server_side_session_id: nil,
-      num_records: 0
+      num_records: 0,
+      command_result: nil
     }
 
     result =
@@ -78,6 +79,15 @@ defmodule SparkEx.Connect.ResultDecoder do
 
             {:sql_command_result, _} ->
               {:cont, {:ok, state}}
+
+            {:write_stream_operation_start_result, result} ->
+              {:cont, {:ok, %{state | command_result: {:write_stream_start, result}}}}
+
+            {:streaming_query_command_result, result} ->
+              {:cont, {:ok, %{state | command_result: {:streaming_query, result}}}}
+
+            {:streaming_query_manager_command_result, result} ->
+              {:cont, {:ok, %{state | command_result: {:streaming_query_manager, result}}}}
 
             {:execution_progress, progress} ->
               :telemetry.execute(
@@ -131,7 +141,8 @@ defmodule SparkEx.Connect.ResultDecoder do
              %{
                rows: state.rows,
                schema: state.schema,
-               server_side_session_id: state.server_side_session_id
+               server_side_session_id: state.server_side_session_id,
+               command_result: state.command_result
              }}
 
           current ->

@@ -423,6 +423,19 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Executes a command and returns the command result data from the response.
+
+  Unlike `execute_command/3` which returns `:ok`, this returns the raw
+  command result from the `ExecutePlanResponse` stream (e.g. streaming
+  query IDs, status results, etc.).
+  """
+  @spec execute_command_with_result(GenServer.server(), term(), keyword()) ::
+          {:ok, term()} | {:error, term()}
+  def execute_command_with_result(session, command, opts \\ []) do
+    GenServer.call(session, {:execute_command_with_result, command, opts}, call_timeout(opts))
+  end
+
+  @doc """
   Registers a Java UDF. Convenience delegate to `SparkEx.UDFRegistration.register_java/4`.
   """
   @spec register_java_udf(GenServer.server(), String.t(), String.t(), keyword()) ::
@@ -1008,6 +1021,22 @@ defmodule SparkEx.Session do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
         {:reply, :ok, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:execute_command_with_result, command, opts}, _from, state) do
+    alias SparkEx.Connect.CommandEncoder
+
+    {proto_plan, counter} = CommandEncoder.encode(command, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.execute_plan(state, proto_plan, opts) do
+      {:ok, result} ->
+        state = maybe_update_server_session(state, result.server_side_session_id)
+        {:reply, {:ok, result.command_result}, state}
 
       {:error, _} = error ->
         {:reply, error, state}

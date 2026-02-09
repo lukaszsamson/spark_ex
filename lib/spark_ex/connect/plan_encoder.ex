@@ -210,6 +210,52 @@ defmodule SparkEx.Connect.PlanEncoder do
     {relation, counter}
   end
 
+  # --- Milestone 14: Streaming Reads ---
+
+  def encode_relation({:read_named_table_streaming, table_name, options}, counter) do
+    {plan_id, counter} = next_id(counter)
+
+    read = %Spark.Connect.Read{
+      is_streaming: true,
+      read_type:
+        {:named_table,
+         %Spark.Connect.Read.NamedTable{
+           unparsed_identifier: table_name,
+           options: options
+         }}
+    }
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:read, read}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:read_data_source_streaming, format, paths, schema, options}, counter) do
+    {plan_id, counter} = next_id(counter)
+
+    read = %Spark.Connect.Read{
+      is_streaming: true,
+      read_type:
+        {:data_source,
+         %Spark.Connect.Read.DataSource{
+           format: format,
+           schema: schema,
+           paths: paths,
+           options: options
+         }}
+    }
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:read, read}
+    }
+
+    {relation, counter}
+  end
+
   # --- Milestone 2: Project ---
 
   def encode_relation({:project, child_plan, expressions}, counter) do
@@ -1262,6 +1308,22 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp rewrite_plan(
          {:read_data_source, _format, _paths, _schema, _options} = plan,
+         plan_ids,
+         refs,
+         counter
+       ),
+       do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan(
+         {:read_named_table_streaming, _table_name, _options} = plan,
+         plan_ids,
+         refs,
+         counter
+       ),
+       do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan(
+         {:read_data_source_streaming, _format, _paths, _schema, _options} = plan,
          plan_ids,
          refs,
          counter

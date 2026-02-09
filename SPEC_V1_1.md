@@ -417,11 +417,11 @@ Acceptance:
 
 - End-to-end tests for NA/stat/merge/UDF basic flows on real cluster
 
-## Milestone 14 - Streaming Parity Baseline
+## Milestone 14 - Streaming Parity
 
 Deliverables:
 
-- DataStreamReader/DataStreamWriter minimal API
+- DataStreamReader/DataStreamWriter API
 - StreamingQuery and StreamingQueryManager controls
 - Listener bus wiring for progress/termination events
 

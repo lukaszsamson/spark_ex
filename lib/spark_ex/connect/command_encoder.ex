@@ -18,8 +18,12 @@ defmodule SparkEx.Connect.CommandEncoder do
     MergeIntoTableCommand,
     Plan,
     PythonUDTF,
+    StreamingQueryCommand,
+    StreamingQueryInstanceId,
+    StreamingQueryManagerCommand,
     WriteOperation,
-    WriteOperationV2
+    WriteOperationV2,
+    WriteStreamOperationStart
   }
 
   alias SparkEx.Connect.PlanEncoder
@@ -200,6 +204,57 @@ defmodule SparkEx.Connect.CommandEncoder do
     {command, counter}
   end
 
+  # --- WriteStreamOperationStart ---
+
+  def encode_command({:write_stream_operation_start, df_plan, write_opts}, counter) do
+    {relation, counter} = PlanEncoder.encode_relation(df_plan, counter)
+
+    format = Keyword.get(write_opts, :format, nil)
+    options = write_opts |> Keyword.get(:options, %{}) |> stringify_options()
+    output_mode = Keyword.get(write_opts, :output_mode, nil)
+    query_name = Keyword.get(write_opts, :query_name, nil)
+    partitioning_columns = Keyword.get(write_opts, :partition_by, [])
+    clustering_columns = Keyword.get(write_opts, :cluster_by, [])
+
+    write_proto = %WriteStreamOperationStart{
+      input: relation,
+      format: format || "",
+      options: options,
+      output_mode: output_mode || "",
+      query_name: query_name || "",
+      partitioning_column_names: partitioning_columns,
+      clustering_column_names: clustering_columns
+    }
+
+    write_proto = apply_trigger(write_proto, Keyword.get(write_opts, :trigger, nil))
+    write_proto = apply_sink_destination(write_proto, write_opts)
+
+    command = %Command{command_type: {:write_stream_operation_start, write_proto}}
+    {command, counter}
+  end
+
+  # --- StreamingQueryCommand ---
+
+  def encode_command({:streaming_query_command, query_id, run_id, cmd_type}, counter) do
+    query_id_proto = %StreamingQueryInstanceId{id: query_id, run_id: run_id}
+
+    cmd = %StreamingQueryCommand{
+      query_id: query_id_proto,
+      command: encode_sq_command(cmd_type)
+    }
+
+    command = %Command{command_type: {:streaming_query_command, cmd}}
+    {command, counter}
+  end
+
+  # --- StreamingQueryManagerCommand ---
+
+  def encode_command({:streaming_query_manager_command, cmd_type}, counter) do
+    cmd = %StreamingQueryManagerCommand{command: encode_sqm_command(cmd_type)}
+    command = %Command{command_type: {:streaming_query_manager_command, cmd}}
+    {command, counter}
+  end
+
   # --- Private helpers ---
 
   defp encode_merge_action({action_type, condition_expr, assignments}) do
@@ -301,5 +356,49 @@ defmodule SparkEx.Connect.CommandEncoder do
 
   defp stringify_options(opts) when is_map(opts) do
     Map.new(opts, fn {k, v} -> {to_string(k), to_string(v)} end)
+  end
+
+  # --- Streaming helpers ---
+
+  defp apply_trigger(proto, nil), do: proto
+  defp apply_trigger(proto, {:processing_time, interval}), do: %{proto | trigger: {:processing_time_interval, interval}}
+  defp apply_trigger(proto, :available_now), do: %{proto | trigger: {:available_now, true}}
+  defp apply_trigger(proto, :once), do: %{proto | trigger: {:once, true}}
+  defp apply_trigger(proto, {:continuous, interval}), do: %{proto | trigger: {:continuous_checkpoint_interval, interval}}
+
+  defp apply_sink_destination(proto, opts) do
+    path = Keyword.get(opts, :path, nil)
+    table_name = Keyword.get(opts, :table_name, nil)
+
+    cond do
+      path != nil -> %{proto | sink_destination: {:path, path}}
+      table_name != nil -> %{proto | sink_destination: {:table_name, table_name}}
+      true -> proto
+    end
+  end
+
+  defp encode_sq_command({:status}), do: {:status, true}
+  defp encode_sq_command({:stop}), do: {:stop, true}
+  defp encode_sq_command({:process_all_available}), do: {:process_all_available, true}
+  defp encode_sq_command({:recent_progress}), do: {:recent_progress, true}
+  defp encode_sq_command({:last_progress}), do: {:last_progress, true}
+  defp encode_sq_command({:exception}), do: {:exception, true}
+
+  defp encode_sq_command({:explain, extended}) do
+    {:explain, %StreamingQueryCommand.ExplainCommand{extended: extended}}
+  end
+
+  defp encode_sq_command({:await_termination, timeout_ms}) do
+    {:await_termination,
+     %StreamingQueryCommand.AwaitTerminationCommand{timeout_ms: timeout_ms}}
+  end
+
+  defp encode_sqm_command({:active}), do: {:active, true}
+  defp encode_sqm_command({:get_query, id}), do: {:get_query, id}
+  defp encode_sqm_command({:reset_terminated}), do: {:reset_terminated, true}
+
+  defp encode_sqm_command({:await_any_termination, timeout_ms}) do
+    {:await_any_termination,
+     %StreamingQueryManagerCommand.AwaitAnyTerminationCommand{timeout_ms: timeout_ms}}
   end
 end

@@ -811,6 +811,22 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
+  Returns a `SparkEx.StreamWriter` builder for this streaming DataFrame.
+
+  ## Examples
+
+      df
+      |> DataFrame.write_stream()
+      |> SparkEx.StreamWriter.format("console")
+      |> SparkEx.StreamWriter.output_mode("append")
+      |> SparkEx.StreamWriter.start()
+  """
+  @spec write_stream(t()) :: SparkEx.StreamWriter.t()
+  def write_stream(%__MODULE__{} = df) do
+    %SparkEx.StreamWriter{df: df}
+  end
+
+  @doc """
   Returns a `SparkEx.WriterV2` builder for this DataFrame targeting the given table.
 
   ## Examples
