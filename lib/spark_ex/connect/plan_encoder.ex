@@ -9,6 +9,7 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   alias Spark.Connect.{
     CachedLocalRelation,
+    Catalog,
     ChunkedCachedLocalRelation,
     Expression,
     LocalRelation,
@@ -935,6 +936,19 @@ defmodule SparkEx.Connect.PlanEncoder do
     {relation, counter}
   end
 
+  # --- Catalog operations ---
+
+  def encode_relation({:catalog, cat_plan}, counter) do
+    {plan_id, counter} = next_id(counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:catalog, %Catalog{cat_type: encode_catalog_type(cat_plan)}}
+    }
+
+    {relation, counter}
+  end
+
   @doc """
   Wraps a plan in an aggregate count(*) relation.
 
@@ -1575,7 +1589,10 @@ defmodule SparkEx.Connect.PlanEncoder do
     {{:stat_sample_by, child_plan, col_expr, fractions, seed}, plan_ids, refs, counter}
   end
 
-  # ── TVF / UDTF (leaf nodes — no child plan) ──
+  # ── Catalog / TVF / UDTF (leaf nodes — no child plan) ──
+
+  defp rewrite_plan({:catalog, _} = plan, plan_ids, refs, counter),
+    do: {plan, plan_ids, refs, counter}
 
   defp rewrite_plan({:table_valued_function, _name, _args} = plan, plan_ids, refs, counter),
     do: {plan, plan_ids, refs, counter}
@@ -1847,6 +1864,111 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_sql_argument({:lambda_var, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:subquery, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument(value), do: encode_literal_expression(value)
+
+  # ── Catalog type encoding ──
+
+  defp encode_catalog_type({:current_database}),
+    do: {:current_database, %Spark.Connect.CurrentDatabase{}}
+
+  defp encode_catalog_type({:set_current_database, db_name}),
+    do: {:set_current_database, %Spark.Connect.SetCurrentDatabase{db_name: db_name}}
+
+  defp encode_catalog_type({:list_databases, pattern}),
+    do: {:list_databases, %Spark.Connect.ListDatabases{pattern: pattern}}
+
+  defp encode_catalog_type({:current_catalog}),
+    do: {:current_catalog, %Spark.Connect.CurrentCatalog{}}
+
+  defp encode_catalog_type({:set_current_catalog, catalog_name}),
+    do: {:set_current_catalog, %Spark.Connect.SetCurrentCatalog{catalog_name: catalog_name}}
+
+  defp encode_catalog_type({:list_catalogs, pattern}),
+    do: {:list_catalogs, %Spark.Connect.ListCatalogs{pattern: pattern}}
+
+  defp encode_catalog_type({:list_tables, db_name, pattern}),
+    do: {:list_tables, %Spark.Connect.ListTables{db_name: db_name, pattern: pattern}}
+
+  defp encode_catalog_type({:get_table, table_name, db_name}),
+    do: {:get_table, %Spark.Connect.GetTable{table_name: table_name, db_name: db_name}}
+
+  defp encode_catalog_type({:table_exists, table_name, db_name}),
+    do: {:table_exists, %Spark.Connect.TableExists{table_name: table_name, db_name: db_name}}
+
+  defp encode_catalog_type({:list_functions, db_name, pattern}),
+    do: {:list_functions, %Spark.Connect.ListFunctions{db_name: db_name, pattern: pattern}}
+
+  defp encode_catalog_type({:get_function, function_name, db_name}),
+    do:
+      {:get_function,
+       %Spark.Connect.GetFunction{function_name: function_name, db_name: db_name}}
+
+  defp encode_catalog_type({:function_exists, function_name, db_name}),
+    do:
+      {:function_exists,
+       %Spark.Connect.FunctionExists{function_name: function_name, db_name: db_name}}
+
+  defp encode_catalog_type({:list_columns, table_name, db_name}),
+    do: {:list_columns, %Spark.Connect.ListColumns{table_name: table_name, db_name: db_name}}
+
+  defp encode_catalog_type({:get_database, db_name}),
+    do: {:get_database, %Spark.Connect.GetDatabase{db_name: db_name}}
+
+  defp encode_catalog_type({:database_exists, db_name}),
+    do: {:database_exists, %Spark.Connect.DatabaseExists{db_name: db_name}}
+
+  defp encode_catalog_type(
+         {:create_table, table_name, path, source, description, schema, options}
+       ),
+       do:
+         {:create_table,
+          %Spark.Connect.CreateTable{
+            table_name: table_name,
+            path: path,
+            source: source,
+            description: description,
+            schema: schema,
+            options: options || %{}
+          }}
+
+  defp encode_catalog_type({:create_external_table, table_name, path, source, schema, options}),
+    do:
+      {:create_external_table,
+       %Spark.Connect.CreateExternalTable{
+         table_name: table_name,
+         path: path,
+         source: source,
+         schema: schema,
+         options: options || %{}
+       }}
+
+  defp encode_catalog_type({:drop_temp_view, view_name}),
+    do: {:drop_temp_view, %Spark.Connect.DropTempView{view_name: view_name}}
+
+  defp encode_catalog_type({:drop_global_temp_view, view_name}),
+    do: {:drop_global_temp_view, %Spark.Connect.DropGlobalTempView{view_name: view_name}}
+
+  defp encode_catalog_type({:recover_partitions, table_name}),
+    do: {:recover_partitions, %Spark.Connect.RecoverPartitions{table_name: table_name}}
+
+  defp encode_catalog_type({:is_cached, table_name}),
+    do: {:is_cached, %Spark.Connect.IsCached{table_name: table_name}}
+
+  defp encode_catalog_type({:cache_table, table_name, storage_level}),
+    do:
+      {:cache_table,
+       %Spark.Connect.CacheTable{table_name: table_name, storage_level: storage_level}}
+
+  defp encode_catalog_type({:uncache_table, table_name}),
+    do: {:uncache_table, %Spark.Connect.UncacheTable{table_name: table_name}}
+
+  defp encode_catalog_type({:clear_cache}),
+    do: {:clear_cache, %Spark.Connect.ClearCache{}}
+
+  defp encode_catalog_type({:refresh_table, table_name}),
+    do: {:refresh_table, %Spark.Connect.RefreshTable{table_name: table_name}}
+
+  defp encode_catalog_type({:refresh_by_path, path}),
+    do: {:refresh_by_path, %Spark.Connect.RefreshByPath{path: path}}
 
   # PySpark's NAFill._convert_value always uses long for ints (not integer)
   # because the Spark server only accepts Long/Double/String/Boolean in NAFill values.
