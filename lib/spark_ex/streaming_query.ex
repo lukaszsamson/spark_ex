@@ -41,7 +41,7 @@ defmodule SparkEx.StreamingQuery do
       {:ok, {:streaming_query, result}} ->
         case result.result_type do
           {:status, status} -> {:ok, status.is_active}
-          _ -> {:ok, false}
+          other -> {:error, {:unexpected_result, other}}
         end
 
       {:error, _} = error ->
@@ -90,7 +90,7 @@ defmodule SparkEx.StreamingQuery do
       {:ok, {:streaming_query, result}} ->
         case result.result_type do
           {:await_termination, at} -> {:ok, at.terminated}
-          _ -> {:ok, nil}
+          other -> {:error, {:unexpected_result, other}}
         end
 
       {:error, _} = error ->
@@ -118,7 +118,7 @@ defmodule SparkEx.StreamingQuery do
       {:ok, {:streaming_query, result}} ->
         case result.result_type do
           {:recent_progress, rp} -> {:ok, rp.recent_progress_json}
-          _ -> {:ok, []}
+          other -> {:error, {:unexpected_result, other}}
         end
 
       {:error, _} = error ->
@@ -137,8 +137,8 @@ defmodule SparkEx.StreamingQuery do
           {:recent_progress, rp} ->
             {:ok, List.last(rp.recent_progress_json)}
 
-          _ ->
-            {:ok, nil}
+          other ->
+            {:error, {:unexpected_result, other}}
         end
 
       {:error, _} = error ->
@@ -161,7 +161,7 @@ defmodule SparkEx.StreamingQuery do
       {:ok, {:streaming_query, result}} ->
         case result.result_type do
           {:explain, explain} -> {:ok, explain.result}
-          _ -> {:ok, ""}
+          other -> {:error, {:unexpected_result, other}}
         end
 
       {:error, _} = error ->
@@ -189,8 +189,12 @@ defmodule SparkEx.StreamingQuery do
               {:ok, nil}
             end
 
-          _ ->
+          # No exception set in response means no exception occurred
+          nil ->
             {:ok, nil}
+
+          other ->
+            {:error, {:unexpected_result, other}}
         end
 
       {:error, _} = error ->

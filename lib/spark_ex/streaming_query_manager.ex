@@ -33,8 +33,8 @@ defmodule SparkEx.StreamingQueryManager do
 
             {:ok, queries}
 
-          _ ->
-            {:ok, []}
+          other ->
+            {:error, {:unexpected_result, other}}
         end
 
       {:error, _} = error ->
@@ -60,8 +60,8 @@ defmodule SparkEx.StreamingQueryManager do
 
             {:ok, query}
 
-          _ ->
-            {:ok, nil}
+          other ->
+            {:error, {:unexpected_result, other}}
         end
 
       {:error, _} = error ->
@@ -85,7 +85,7 @@ defmodule SparkEx.StreamingQueryManager do
       {:ok, {:streaming_query_manager, result}} ->
         case result.result_type do
           {:await_any_termination, at} -> {:ok, at.terminated}
-          _ -> {:ok, nil}
+          other -> {:error, {:unexpected_result, other}}
         end
 
       {:error, _} = error ->
@@ -101,6 +101,73 @@ defmodule SparkEx.StreamingQueryManager do
     case execute_command(session, {:reset_terminated}) do
       {:ok, _result} -> :ok
       {:error, _} = error -> error
+    end
+  end
+
+  # ── Listener Management ──
+
+  @doc """
+  Registers a streaming query listener on the server.
+
+  ## Parameters
+
+    * `listener_id` — unique identifier for the listener
+    * `listener_payload` — serialized listener payload (bytes)
+  """
+  @spec add_listener(GenServer.server(), String.t(), binary()) ::
+          {:ok, boolean()} | {:error, term()}
+  def add_listener(session, listener_id, listener_payload)
+      when is_binary(listener_id) and is_binary(listener_payload) do
+    case execute_command(session, {:add_listener, listener_id, listener_payload}) do
+      {:ok, {:streaming_query_manager, result}} ->
+        case result.result_type do
+          {:add_listener, added} -> {:ok, added}
+          other -> {:error, {:unexpected_result, other}}
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc """
+  Removes a streaming query listener from the server.
+
+  ## Parameters
+
+    * `listener_id` — unique identifier of the listener to remove
+    * `listener_payload` — serialized listener payload (bytes)
+  """
+  @spec remove_listener(GenServer.server(), String.t(), binary()) ::
+          {:ok, boolean()} | {:error, term()}
+  def remove_listener(session, listener_id, listener_payload)
+      when is_binary(listener_id) and is_binary(listener_payload) do
+    case execute_command(session, {:remove_listener, listener_id, listener_payload}) do
+      {:ok, {:streaming_query_manager, result}} ->
+        case result.result_type do
+          {:remove_listener, removed} -> {:ok, removed}
+          other -> {:error, {:unexpected_result, other}}
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc """
+  Lists all registered streaming query listener IDs.
+  """
+  @spec list_listeners(GenServer.server()) :: {:ok, [String.t()]} | {:error, term()}
+  def list_listeners(session) do
+    case execute_command(session, {:list_listeners}) do
+      {:ok, {:streaming_query_manager, result}} ->
+        case result.result_type do
+          {:list_listeners, list_result} -> {:ok, list_result.listener_ids}
+          other -> {:error, {:unexpected_result, other}}
+        end
+
+      {:error, _} = error ->
+        error
     end
   end
 

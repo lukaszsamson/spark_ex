@@ -21,6 +21,8 @@ defmodule SparkEx.StreamWriter do
     :trigger,
     :path,
     :table_name,
+    :foreach_writer,
+    :foreach_batch,
     options: %{},
     partition_by: [],
     cluster_by: []
@@ -34,6 +36,8 @@ defmodule SparkEx.StreamWriter do
           trigger: term() | nil,
           path: String.t() | nil,
           table_name: String.t() | nil,
+          foreach_writer: Spark.Connect.StreamingForeachFunction.t() | nil,
+          foreach_batch: Spark.Connect.StreamingForeachFunction.t() | nil,
           options: %{String.t() => String.t()},
           partition_by: [String.t()],
           cluster_by: [String.t()]
@@ -51,7 +55,11 @@ defmodule SparkEx.StreamWriter do
 
   @spec option(t(), String.t(), term()) :: t()
   def option(%__MODULE__{} = writer, key, value) when is_binary(key) do
-    %{writer | options: Map.put(writer.options, key, normalize_option_value(value))}
+    if is_nil(value) do
+      writer
+    else
+      %{writer | options: Map.put(writer.options, key, normalize_option_value(value))}
+    end
   end
 
   @spec options(t(), map() | keyword()) :: t()
@@ -114,6 +122,46 @@ defmodule SparkEx.StreamWriter do
   end
 
   @doc """
+  Sets a foreach writer function for row-level processing.
+
+  Accepts a `Spark.Connect.StreamingForeachFunction` proto struct.
+  Use this with Java/Scala UDF payloads.
+
+  ## Example with Scala UDF
+
+      foreach_fn = %Spark.Connect.StreamingForeachFunction{
+        function: {:scala_function, %Spark.Connect.ScalarScalaUDF{
+          payload: serialized_scala_bytes
+        }}
+      }
+      writer |> StreamWriter.foreach_writer(foreach_fn)
+  """
+  @spec foreach_writer(t(), Spark.Connect.StreamingForeachFunction.t()) :: t()
+  def foreach_writer(%__MODULE__{} = writer, %Spark.Connect.StreamingForeachFunction{} = func) do
+    %{writer | foreach_writer: func}
+  end
+
+  @doc """
+  Sets a foreach batch function for micro-batch processing.
+
+  Accepts a `Spark.Connect.StreamingForeachFunction` proto struct.
+  Use this with Java/Scala UDF payloads.
+
+  ## Example with Scala UDF
+
+      foreach_fn = %Spark.Connect.StreamingForeachFunction{
+        function: {:scala_function, %Spark.Connect.ScalarScalaUDF{
+          payload: serialized_scala_bytes
+        }}
+      }
+      writer |> StreamWriter.foreach_batch(foreach_fn)
+  """
+  @spec foreach_batch(t(), Spark.Connect.StreamingForeachFunction.t()) :: t()
+  def foreach_batch(%__MODULE__{} = writer, %Spark.Connect.StreamingForeachFunction{} = func) do
+    %{writer | foreach_batch: func}
+  end
+
+  @doc """
   Starts the streaming query, writing to the path set via `option("path", ...)`.
 
   Returns `{:ok, StreamingQuery.t()}` on success.
@@ -129,7 +177,8 @@ defmodule SparkEx.StreamWriter do
 
   Returns `{:ok, StreamingQuery.t()}` on success.
   """
-  @spec to_table(t(), String.t(), keyword()) :: {:ok, SparkEx.StreamingQuery.t()} | {:error, term()}
+  @spec to_table(t(), String.t(), keyword()) ::
+          {:ok, SparkEx.StreamingQuery.t()} | {:error, term()}
   def to_table(%__MODULE__{} = writer, table_name, opts \\ []) when is_binary(table_name) do
     writer = %{writer | table_name: table_name}
     write_opts = build_write_opts(writer)
@@ -148,7 +197,9 @@ defmodule SparkEx.StreamWriter do
       path: writer.path,
       table_name: writer.table_name,
       partition_by: writer.partition_by,
-      cluster_by: writer.cluster_by
+      cluster_by: writer.cluster_by,
+      foreach_writer: writer.foreach_writer,
+      foreach_batch: writer.foreach_batch
     ]
   end
 
@@ -177,7 +228,9 @@ defmodule SparkEx.StreamWriter do
   end
 
   defp stringify_options(opts) when is_map(opts) do
-    Map.new(opts, fn {k, v} -> {to_string(k), normalize_option_value(v)} end)
+    opts
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new(fn {k, v} -> {to_string(k), normalize_option_value(v)} end)
   end
 
   defp normalize_option_value(value) when is_binary(value), do: value

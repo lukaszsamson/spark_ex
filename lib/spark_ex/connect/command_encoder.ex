@@ -20,6 +20,7 @@ defmodule SparkEx.Connect.CommandEncoder do
     PythonUDTF,
     StreamingQueryCommand,
     StreamingQueryInstanceId,
+    StreamingQueryListenerBusCommand,
     StreamingQueryManagerCommand,
     WriteOperation,
     WriteOperationV2,
@@ -228,6 +229,7 @@ defmodule SparkEx.Connect.CommandEncoder do
 
     write_proto = apply_trigger(write_proto, Keyword.get(write_opts, :trigger, nil))
     write_proto = apply_sink_destination(write_proto, write_opts)
+    write_proto = apply_foreach(write_proto, write_opts)
 
     command = %Command{command_type: {:write_stream_operation_start, write_proto}}
     {command, counter}
@@ -244,6 +246,14 @@ defmodule SparkEx.Connect.CommandEncoder do
     }
 
     command = %Command{command_type: {:streaming_query_command, cmd}}
+    {command, counter}
+  end
+
+  # --- StreamingQueryListenerBusCommand ---
+
+  def encode_command({:streaming_query_listener_bus_command, cmd_type}, counter) do
+    cmd = %StreamingQueryListenerBusCommand{command: encode_listener_bus_command(cmd_type)}
+    command = %Command{command_type: {:streaming_query_listener_bus_command, cmd}}
     {command, counter}
   end
 
@@ -361,10 +371,15 @@ defmodule SparkEx.Connect.CommandEncoder do
   # --- Streaming helpers ---
 
   defp apply_trigger(proto, nil), do: proto
-  defp apply_trigger(proto, {:processing_time, interval}), do: %{proto | trigger: {:processing_time_interval, interval}}
+
+  defp apply_trigger(proto, {:processing_time, interval}),
+    do: %{proto | trigger: {:processing_time_interval, interval}}
+
   defp apply_trigger(proto, :available_now), do: %{proto | trigger: {:available_now, true}}
   defp apply_trigger(proto, :once), do: %{proto | trigger: {:once, true}}
-  defp apply_trigger(proto, {:continuous, interval}), do: %{proto | trigger: {:continuous_checkpoint_interval, interval}}
+
+  defp apply_trigger(proto, {:continuous, interval}),
+    do: %{proto | trigger: {:continuous_checkpoint_interval, interval}}
 
   defp apply_sink_destination(proto, opts) do
     path = Keyword.get(opts, :path, nil)
@@ -374,6 +389,24 @@ defmodule SparkEx.Connect.CommandEncoder do
       path != nil -> %{proto | sink_destination: {:path, path}}
       table_name != nil -> %{proto | sink_destination: {:table_name, table_name}}
       true -> proto
+    end
+  end
+
+  defp apply_foreach(proto, opts) do
+    foreach_writer = Keyword.get(opts, :foreach_writer, nil)
+    foreach_batch = Keyword.get(opts, :foreach_batch, nil)
+
+    proto =
+      if foreach_writer do
+        %{proto | foreach_writer: foreach_writer}
+      else
+        proto
+      end
+
+    if foreach_batch do
+      %{proto | foreach_batch: foreach_batch}
+    else
+      proto
     end
   end
 
@@ -389,16 +422,35 @@ defmodule SparkEx.Connect.CommandEncoder do
   end
 
   defp encode_sq_command({:await_termination, timeout_ms}) do
-    {:await_termination,
-     %StreamingQueryCommand.AwaitTerminationCommand{timeout_ms: timeout_ms}}
+    {:await_termination, %StreamingQueryCommand.AwaitTerminationCommand{timeout_ms: timeout_ms}}
   end
 
   defp encode_sqm_command({:active}), do: {:active, true}
   defp encode_sqm_command({:get_query, id}), do: {:get_query, id}
   defp encode_sqm_command({:reset_terminated}), do: {:reset_terminated, true}
+  defp encode_sqm_command({:list_listeners}), do: {:list_listeners, true}
 
   defp encode_sqm_command({:await_any_termination, timeout_ms}) do
     {:await_any_termination,
      %StreamingQueryManagerCommand.AwaitAnyTerminationCommand{timeout_ms: timeout_ms}}
   end
+
+  defp encode_sqm_command({:add_listener, listener_id, listener_payload}) do
+    {:add_listener,
+     %StreamingQueryManagerCommand.StreamingQueryListenerCommand{
+       id: listener_id,
+       listener_payload: listener_payload
+     }}
+  end
+
+  defp encode_sqm_command({:remove_listener, listener_id, listener_payload}) do
+    {:remove_listener,
+     %StreamingQueryManagerCommand.StreamingQueryListenerCommand{
+       id: listener_id,
+       listener_payload: listener_payload
+     }}
+  end
+
+  defp encode_listener_bus_command(:add), do: {:add_listener_bus_listener, true}
+  defp encode_listener_bus_command(:remove), do: {:remove_listener_bus_listener, true}
 end

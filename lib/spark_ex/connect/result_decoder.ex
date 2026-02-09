@@ -89,6 +89,9 @@ defmodule SparkEx.Connect.ResultDecoder do
             {:streaming_query_manager_command_result, result} ->
               {:cont, {:ok, %{state | command_result: {:streaming_query_manager, result}}}}
 
+            {:streaming_query_listener_events_result, result} ->
+              {:cont, {:ok, %{state | command_result: {:listener_events, result}}}}
+
             {:execution_progress, progress} ->
               :telemetry.execute(
                 [:spark_ex, :result, :progress],

@@ -44,10 +44,24 @@ defmodule SparkEx.Reader do
 
   @doc """
   Sets the schema for a reader builder.
+
+  Accepts either a DDL string or a struct type from `SparkEx.Types`.
+
+  ## Examples
+
+      reader |> Reader.schema("id LONG, name STRING")
+      reader |> Reader.schema(SparkEx.Types.struct_type([
+        SparkEx.Types.struct_field("id", :long),
+        SparkEx.Types.struct_field("name", :string)
+      ]))
   """
-  @spec schema(t(), String.t()) :: t()
+  @spec schema(t(), String.t() | SparkEx.Types.struct_type()) :: t()
   def schema(%__MODULE__{} = reader, schema_ddl) when is_binary(schema_ddl) do
     %{reader | schema: schema_ddl}
+  end
+
+  def schema(%__MODULE__{} = reader, {:struct, _} = struct_type) do
+    %{reader | schema: SparkEx.Types.schema_to_string(struct_type)}
   end
 
   @doc """

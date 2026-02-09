@@ -37,14 +37,35 @@ defmodule SparkEx.StreamReader do
     %{reader | format: source}
   end
 
-  @spec schema(t(), String.t()) :: t()
+  @doc """
+  Sets the schema for the streaming reader.
+
+  Accepts either a DDL string or a struct type from `SparkEx.Types`.
+
+  ## Examples
+
+      reader |> StreamReader.schema("id LONG, name STRING")
+      reader |> StreamReader.schema(SparkEx.Types.struct_type([
+        SparkEx.Types.struct_field("id", :long),
+        SparkEx.Types.struct_field("name", :string)
+      ]))
+  """
+  @spec schema(t(), String.t() | SparkEx.Types.struct_type()) :: t()
   def schema(%__MODULE__{} = reader, schema_ddl) when is_binary(schema_ddl) do
     %{reader | schema: schema_ddl}
   end
 
+  def schema(%__MODULE__{} = reader, {:struct, _} = struct_type) do
+    %{reader | schema: SparkEx.Types.schema_to_string(struct_type)}
+  end
+
   @spec option(t(), String.t(), term()) :: t()
   def option(%__MODULE__{} = reader, key, value) when is_binary(key) do
-    %{reader | options: Map.put(reader.options, key, normalize_option_value(value))}
+    if is_nil(value) do
+      reader
+    else
+      %{reader | options: Map.put(reader.options, key, normalize_option_value(value))}
+    end
   end
 
   @spec options(t(), map() | keyword()) :: t()
@@ -67,6 +88,8 @@ defmodule SparkEx.StreamReader do
 
   @spec load(t(), String.t() | [String.t()]) :: DataFrame.t()
   def load(%__MODULE__{} = reader, path) when is_binary(path) do
+    validate_path!(path)
+
     %DataFrame{
       session: reader.session,
       plan: {:read_data_source_streaming, reader.format, [path], reader.schema, reader.options}
@@ -74,6 +97,8 @@ defmodule SparkEx.StreamReader do
   end
 
   def load(%__MODULE__{} = reader, paths) when is_list(paths) do
+    Enum.each(paths, &validate_path!/1)
+
     %DataFrame{
       session: reader.session,
       plan: {:read_data_source_streaming, reader.format, paths, reader.schema, reader.options}
@@ -143,7 +168,11 @@ defmodule SparkEx.StreamReader do
     paths = List.wrap(path)
     schema = Keyword.get(opts, :schema, nil)
     options = opts |> Keyword.get(:options, %{}) |> normalize_options()
-    %DataFrame{session: session, plan: {:read_data_source_streaming, format, paths, schema, options}}
+
+    %DataFrame{
+      session: session,
+      plan: {:read_data_source_streaming, format, paths, schema, options}
+    }
   end
 
   defp normalize_options(opts) when is_list(opts) do
@@ -151,7 +180,9 @@ defmodule SparkEx.StreamReader do
   end
 
   defp normalize_options(opts) when is_map(opts) do
-    Map.new(opts, fn {k, v} -> {to_string(k), normalize_option_value(v)} end)
+    opts
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new(fn {k, v} -> {to_string(k), normalize_option_value(v)} end)
   end
 
   defp normalize_option_value(value) when is_binary(value), do: value
@@ -162,5 +193,11 @@ defmodule SparkEx.StreamReader do
   defp normalize_option_value(value) do
     raise ArgumentError,
           "stream reader option value must be a primitive (string, integer, float, boolean), got: #{inspect(value)}"
+  end
+
+  defp validate_path!(path) when is_binary(path) do
+    if String.trim(path) == "" do
+      raise ArgumentError, "path must not be empty or blank"
+    end
   end
 end

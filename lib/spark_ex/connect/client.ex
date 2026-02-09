@@ -518,6 +518,28 @@ defmodule SparkEx.Connect.Client do
     end)
   end
 
+  @doc """
+  Executes a command plan and returns the raw gRPC response stream.
+
+  Used for long-lived streaming operations like the listener bus where
+  the caller needs to iterate over responses as they arrive.
+
+  Returns `{:ok, stream}` where stream is an enumerable of
+  `{:ok, ExecutePlanResponse.t()} | {:error, term()}` tuples.
+  """
+  @spec execute_plan_raw_stream(SparkEx.Session.t(), Plan.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def execute_plan_raw_stream(session, plan, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, :infinity)
+    request = build_execute_request(session, plan, [], nil, false, opts)
+
+    case Stub.execute_plan(session.channel, request, timeout: timeout) do
+      {:ok, stream} -> {:ok, stream}
+      {:error, %GRPC.RPCError{} = error} -> {:error, Errors.from_grpc_error(error, session)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   # --- Config RPCs ---
 
   @doc """

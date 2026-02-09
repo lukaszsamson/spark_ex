@@ -225,7 +225,8 @@ defmodule SparkEx.Integration.M12.CatalogTest do
 
   describe "global temp views" do
     test "drop_global_temp_view returns false for non-existent", %{session: session} do
-      assert {:ok, false} = Catalog.drop_global_temp_view(session, "nonexistent_global_view_12345")
+      assert {:ok, false} =
+               Catalog.drop_global_temp_view(session, "nonexistent_global_view_12345")
     end
   end
 

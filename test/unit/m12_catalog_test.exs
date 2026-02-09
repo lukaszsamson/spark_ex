@@ -267,7 +267,8 @@ defmodule SparkEx.M12.CatalogPlanEncoderTest do
     test "encodes create_table" do
       plan =
         {:catalog,
-         {:create_table, "new_table", "/data/path", "parquet", "A test table", nil, %{"key" => "val"}}}
+         {:create_table, "new_table", "/data/path", "parquet", "A test table", nil,
+          %{"key" => "val"}}}
 
       {relation, _} = PlanEncoder.encode_relation(plan, 0)
 
@@ -291,7 +292,8 @@ defmodule SparkEx.M12.CatalogPlanEncoderTest do
 
     test "encodes create_external_table" do
       plan =
-        {:catalog, {:create_external_table, "ext_table", "/data/ext", "csv", nil, %{"sep" => ","}}}
+        {:catalog,
+         {:create_external_table, "ext_table", "/data/ext", "csv", nil, %{"sep" => ","}}}
 
       {relation, _} = PlanEncoder.encode_relation(plan, 0)
 

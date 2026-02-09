@@ -245,6 +245,64 @@ defmodule SparkEx.M14.StreamingTest do
       assert proto.clustering_column_names == ["col3"]
       assert proto.options == %{"key" => "val"}
     end
+
+    test "encodes with foreach_writer" do
+      df_plan = {:sql, "SELECT 1", nil}
+
+      foreach_fn = %Spark.Connect.StreamingForeachFunction{
+        function: {:scala_function, %Spark.Connect.ScalarScalaUDF{payload: "test_payload"}}
+      }
+
+      write_opts = [
+        format: "console",
+        output_mode: "append",
+        options: %{},
+        query_name: nil,
+        trigger: nil,
+        path: nil,
+        table_name: nil,
+        partition_by: [],
+        cluster_by: [],
+        foreach_writer: foreach_fn,
+        foreach_batch: nil
+      ]
+
+      {command, _counter} =
+        CommandEncoder.encode_command({:write_stream_operation_start, df_plan, write_opts}, 0)
+
+      assert {:write_stream_operation_start, proto} = command.command_type
+      assert proto.foreach_writer == foreach_fn
+      assert proto.foreach_batch == nil
+    end
+
+    test "encodes with foreach_batch" do
+      df_plan = {:sql, "SELECT 1", nil}
+
+      foreach_fn = %Spark.Connect.StreamingForeachFunction{
+        function: {:scala_function, %Spark.Connect.ScalarScalaUDF{payload: "batch_payload"}}
+      }
+
+      write_opts = [
+        format: "console",
+        output_mode: "append",
+        options: %{},
+        query_name: nil,
+        trigger: nil,
+        path: nil,
+        table_name: nil,
+        partition_by: [],
+        cluster_by: [],
+        foreach_writer: nil,
+        foreach_batch: foreach_fn
+      ]
+
+      {command, _counter} =
+        CommandEncoder.encode_command({:write_stream_operation_start, df_plan, write_opts}, 0)
+
+      assert {:write_stream_operation_start, proto} = command.command_type
+      assert proto.foreach_batch == foreach_fn
+      assert proto.foreach_writer == nil
+    end
   end
 
   # ── CommandEncoder: StreamingQueryCommand ──
@@ -401,6 +459,73 @@ defmodule SparkEx.M14.StreamingTest do
     end
   end
 
+  # ── CommandEncoder: StreamingQueryManagerCommand — Listener Controls ──
+
+  describe "encode_command for streaming_query_manager_command listener controls" do
+    test "encodes add_listener command" do
+      {command, _counter} =
+        CommandEncoder.encode_command(
+          {:streaming_query_manager_command, {:add_listener, "listener-1", "payload-bytes"}},
+          0
+        )
+
+      assert {:streaming_query_manager_command, cmd} = command.command_type
+      assert {:add_listener, listener_cmd} = cmd.command
+      assert listener_cmd.id == "listener-1"
+      assert listener_cmd.listener_payload == "payload-bytes"
+    end
+
+    test "encodes remove_listener command" do
+      {command, _counter} =
+        CommandEncoder.encode_command(
+          {:streaming_query_manager_command, {:remove_listener, "listener-2", "payload"}},
+          0
+        )
+
+      assert {:streaming_query_manager_command, cmd} = command.command_type
+      assert {:remove_listener, listener_cmd} = cmd.command
+      assert listener_cmd.id == "listener-2"
+      assert listener_cmd.listener_payload == "payload"
+    end
+
+    test "encodes list_listeners command" do
+      {command, _counter} =
+        CommandEncoder.encode_command(
+          {:streaming_query_manager_command, {:list_listeners}},
+          0
+        )
+
+      assert {:streaming_query_manager_command, cmd} = command.command_type
+      assert cmd.command == {:list_listeners, true}
+    end
+  end
+
+  # ── CommandEncoder: StreamingQueryListenerBusCommand ──
+
+  describe "encode_command for streaming_query_listener_bus_command" do
+    test "encodes add listener bus listener" do
+      {command, _counter} =
+        CommandEncoder.encode_command(
+          {:streaming_query_listener_bus_command, :add},
+          0
+        )
+
+      assert {:streaming_query_listener_bus_command, cmd} = command.command_type
+      assert cmd.command == {:add_listener_bus_listener, true}
+    end
+
+    test "encodes remove listener bus listener" do
+      {command, _counter} =
+        CommandEncoder.encode_command(
+          {:streaming_query_listener_bus_command, :remove},
+          0
+        )
+
+      assert {:streaming_query_listener_bus_command, cmd} = command.command_type
+      assert cmd.command == {:remove_listener_bus_listener, true}
+    end
+  end
+
   # ── StreamReader struct tests ──
 
   describe "StreamReader" do
@@ -437,7 +562,11 @@ defmodule SparkEx.M14.StreamingTest do
     end
 
     test "load creates streaming DataFrame" do
-      df = SparkEx.StreamReader.new(:s) |> SparkEx.StreamReader.format("rate") |> SparkEx.StreamReader.load()
+      df =
+        SparkEx.StreamReader.new(:s)
+        |> SparkEx.StreamReader.format("rate")
+        |> SparkEx.StreamReader.load()
+
       assert %SparkEx.DataFrame{} = df
       assert {:read_data_source_streaming, "rate", [], nil, _opts} = df.plan
     end
@@ -460,6 +589,47 @@ defmodule SparkEx.M14.StreamingTest do
       df = SparkEx.StreamReader.rate(:s, rows_per_second: 10)
       assert {:read_data_source_streaming, "rate", [], nil, opts} = df.plan
       assert opts["rowsPerSecond"] == "10"
+    end
+
+    test "option with nil value is skipped" do
+      reader =
+        SparkEx.StreamReader.new(:s)
+        |> SparkEx.StreamReader.option("a", "1")
+        |> SparkEx.StreamReader.option("b", nil)
+
+      assert reader.options == %{"a" => "1"}
+    end
+
+    test "options with nil values are skipped" do
+      reader =
+        SparkEx.StreamReader.new(:s)
+        |> SparkEx.StreamReader.options(%{"a" => "1", "b" => nil})
+
+      assert reader.options == %{"a" => "1"}
+    end
+
+    test "load raises on empty path" do
+      reader = SparkEx.StreamReader.new(:s) |> SparkEx.StreamReader.format("json")
+
+      assert_raise ArgumentError, ~r/must not be empty/, fn ->
+        SparkEx.StreamReader.load(reader, "")
+      end
+    end
+
+    test "load raises on blank path" do
+      reader = SparkEx.StreamReader.new(:s) |> SparkEx.StreamReader.format("json")
+
+      assert_raise ArgumentError, ~r/must not be empty/, fn ->
+        SparkEx.StreamReader.load(reader, "   ")
+      end
+    end
+
+    test "load with list raises on blank path in list" do
+      reader = SparkEx.StreamReader.new(:s) |> SparkEx.StreamReader.format("json")
+
+      assert_raise ArgumentError, ~r/must not be empty/, fn ->
+        SparkEx.StreamReader.load(reader, ["/valid", "  "])
+      end
     end
   end
 
@@ -540,6 +710,41 @@ defmodule SparkEx.M14.StreamingTest do
 
       assert writer.cluster_by == ["c"]
     end
+
+    test "option with nil value is skipped" do
+      writer =
+        %SparkEx.StreamWriter{df: nil}
+        |> SparkEx.StreamWriter.option("a", "1")
+        |> SparkEx.StreamWriter.option("b", nil)
+
+      assert writer.options == %{"a" => "1"}
+    end
+
+    test "options with nil values are skipped" do
+      writer =
+        %SparkEx.StreamWriter{df: nil}
+        |> SparkEx.StreamWriter.options(%{"a" => "1", "b" => nil})
+
+      assert writer.options == %{"a" => "1"}
+    end
+
+    test "foreach_writer sets foreach function" do
+      func = %Spark.Connect.StreamingForeachFunction{
+        function: {:scala_function, %Spark.Connect.ScalarScalaUDF{payload: "test"}}
+      }
+
+      writer = %SparkEx.StreamWriter{df: nil} |> SparkEx.StreamWriter.foreach_writer(func)
+      assert writer.foreach_writer == func
+    end
+
+    test "foreach_batch sets foreach batch function" do
+      func = %Spark.Connect.StreamingForeachFunction{
+        function: {:scala_function, %Spark.Connect.ScalarScalaUDF{payload: "test"}}
+      }
+
+      writer = %SparkEx.StreamWriter{df: nil} |> SparkEx.StreamWriter.foreach_batch(func)
+      assert writer.foreach_batch == func
+    end
   end
 
   # ── StreamingQuery struct tests ──
@@ -588,6 +793,100 @@ defmodule SparkEx.M14.StreamingTest do
       reader = SparkEx.read_stream(:fake_session)
       assert %SparkEx.StreamReader{} = reader
       assert reader.session == :fake_session
+    end
+  end
+
+  # ── StreamingQueryListener behaviour ──
+
+  describe "StreamingQueryListener behaviour" do
+    test "defines the expected callbacks" do
+      callbacks = SparkEx.StreamingQueryListener.behaviour_info(:callbacks)
+      assert {:on_query_progress, 1} in callbacks
+      assert {:on_query_terminated, 1} in callbacks
+      assert {:on_query_idle, 1} in callbacks
+    end
+  end
+
+  # ── SparkEx.Types ──
+
+  describe "SparkEx.Types" do
+    import SparkEx.Types
+
+    test "struct_type creates a struct type" do
+      schema = struct_type([struct_field("id", :long)])
+      assert {:struct, [%{name: "id", type: :long, nullable: true}]} = schema
+    end
+
+    test "struct_field defaults nullable to true" do
+      field = struct_field("name", :string)
+      assert field.nullable == true
+    end
+
+    test "struct_field with nullable: false" do
+      field = struct_field("name", :string, nullable: false)
+      assert field.nullable == false
+    end
+
+    test "to_ddl converts struct type to DDL" do
+      schema =
+        struct_type([
+          struct_field("id", :long),
+          struct_field("name", :string)
+        ])
+
+      assert to_ddl(schema) == "id LONG, name STRING"
+    end
+
+    test "to_ddl handles complex types" do
+      schema =
+        struct_type([
+          struct_field("tags", array_type(:string)),
+          struct_field("meta", map_type(:string, :long)),
+          struct_field("amount", {:decimal, 10, 2})
+        ])
+
+      ddl = to_ddl(schema)
+      assert ddl =~ "tags ARRAY<STRING>"
+      assert ddl =~ "meta MAP<STRING, LONG>"
+      assert ddl =~ "amount DECIMAL(10, 2)"
+    end
+
+    test "to_json converts struct type to JSON" do
+      schema =
+        struct_type([
+          struct_field("id", :long),
+          struct_field("name", :string)
+        ])
+
+      json = to_json(schema)
+      decoded = Jason.decode!(json)
+      assert decoded["type"] == "struct"
+      assert length(decoded["fields"]) == 2
+      assert Enum.at(decoded["fields"], 0)["name"] == "id"
+      assert Enum.at(decoded["fields"], 0)["type"] == "long"
+      assert Enum.at(decoded["fields"], 1)["name"] == "name"
+      assert Enum.at(decoded["fields"], 1)["type"] == "string"
+    end
+
+    test "schema_to_string passes through DDL strings" do
+      assert schema_to_string("id LONG") == "id LONG"
+    end
+
+    test "schema_to_string converts struct type to DDL" do
+      schema = struct_type([struct_field("id", :long)])
+      assert schema_to_string(schema) == "id LONG"
+    end
+
+    test "Reader.schema accepts struct type" do
+      schema = struct_type([struct_field("id", :long), struct_field("name", :string)])
+      reader = SparkEx.Reader.new(:s) |> SparkEx.Reader.schema(schema)
+      assert reader.schema == "id LONG, name STRING"
+    end
+
+    test "StreamReader.schema accepts struct type" do
+      schema = struct_type([struct_field("id", :long), struct_field("name", :string)])
+      reader = SparkEx.StreamReader.new(:s) |> SparkEx.StreamReader.schema(schema)
+      assert reader.schema == "id LONG, name STRING"
     end
   end
 end

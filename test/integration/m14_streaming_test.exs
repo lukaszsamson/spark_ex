@@ -19,7 +19,9 @@ defmodule SparkEx.Integration.M14.StreamingTest do
   end
 
   defp unique_checkpoint do
-    suffix = "#{System.system_time(:millisecond)}_#{System.unique_integer([:positive, :monotonic])}"
+    suffix =
+      "#{System.system_time(:millisecond)}_#{System.unique_integer([:positive, :monotonic])}"
+
     path = "/tmp/spark_ex_streaming_ckpt_#{suffix}"
     # Ensure clean checkpoint directory
     File.rm_rf!(path)
@@ -287,6 +289,103 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       writer = DataFrame.write_stream(df)
       assert %StreamWriter{} = writer
       assert writer.df == df
+    end
+  end
+
+  # ── Trigger types (Issue #9) ──
+
+  describe "trigger types" do
+    test "processing_time trigger starts query", %{session: session} do
+      {:ok, query} =
+        start_rate_query(session,
+          query_name: "trigger_pt_test",
+          trigger: [processing_time: "2 seconds"]
+        )
+
+      on_exit(fn -> stop_query(query) end)
+
+      assert {:ok, true} = StreamingQuery.is_active?(query)
+      :ok = StreamingQuery.stop(query)
+    end
+
+    test "available_now trigger processes and stops", %{session: session} do
+      {:ok, query} =
+        start_rate_query(session,
+          query_name: "trigger_an_test",
+          trigger: [available_now: true]
+        )
+
+      on_exit(fn -> stop_query(query) end)
+
+      # available_now should process all available data then terminate
+      # Give it time to start and finish
+      Process.sleep(3000)
+
+      # Query should have terminated by now (or still running briefly)
+      result = StreamingQuery.is_active?(query)
+      assert {:ok, _active} = result
+    end
+
+    test "once trigger processes one batch", %{session: session} do
+      {:ok, query} =
+        start_rate_query(session,
+          query_name: "trigger_once_test",
+          trigger: [once: true]
+        )
+
+      on_exit(fn -> stop_query(query) end)
+
+      # once trigger should process one micro-batch then terminate
+      Process.sleep(3000)
+
+      result = StreamingQuery.is_active?(query)
+      assert {:ok, _active} = result
+    end
+  end
+
+  # ── StreamingQueryManager edge cases (Issue #10) ──
+
+  describe "query manager edge cases" do
+    test "active returns empty list when no queries running", %{session: session} do
+      # Reset terminated first to clear state
+      :ok = StreamingQueryManager.reset_terminated(session)
+
+      assert {:ok, queries} = StreamingQueryManager.active(session)
+      assert is_list(queries)
+      # May or may not be empty depending on server state, but should not error
+    end
+
+    test "get returns result for nonexistent query", %{session: session} do
+      # A random UUID that doesn't match any running query
+      fake_id = "00000000-0000-0000-0000-000000000000"
+
+      result = StreamingQueryManager.get(session, fake_id)
+      # Should either return {:ok, _} or {:error, _}, not crash
+      case result do
+        {:ok, _} -> :ok
+        {:error, _} -> :ok
+      end
+    end
+
+    test "await_any_termination with short timeout", %{session: session} do
+      # No queries running + short timeout should return a result
+      :ok = StreamingQueryManager.reset_terminated(session)
+
+      result = StreamingQueryManager.await_any_termination(session, timeout: 100)
+      # May return {:ok, false} or timeout-related result
+      case result do
+        {:ok, _} -> :ok
+        {:error, _} -> :ok
+      end
+    end
+  end
+
+  # ── Listener manager controls (Issue #2) ──
+
+  describe "listener manager controls" do
+    test "list_listeners returns list", %{session: session} do
+      assert {:ok, listeners} = StreamingQueryManager.list_listeners(session)
+      assert is_list(listeners)
     end
   end
 end

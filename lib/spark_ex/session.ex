@@ -436,6 +436,18 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Executes a command and returns a raw gRPC response stream.
+
+  Used for long-lived streaming operations like the listener bus.
+  The caller is responsible for consuming the stream.
+  """
+  @spec execute_command_stream(GenServer.server(), term(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def execute_command_stream(session, command, opts \\ []) do
+    GenServer.call(session, {:execute_command_stream, command, opts}, call_timeout(opts))
+  end
+
+  @doc """
   Registers a Java UDF. Convenience delegate to `SparkEx.UDFRegistration.register_java/4`.
   """
   @spec register_java_udf(GenServer.server(), String.t(), String.t(), keyword()) ::
@@ -1037,6 +1049,21 @@ defmodule SparkEx.Session do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
         {:reply, {:ok, result.command_result}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:execute_command_stream, command, opts}, _from, state) do
+    alias SparkEx.Connect.CommandEncoder
+
+    {proto_plan, counter} = CommandEncoder.encode(command, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.execute_plan_raw_stream(state, proto_plan, opts) do
+      {:ok, stream} ->
+        {:reply, {:ok, stream}, state}
 
       {:error, _} = error ->
         {:reply, error, state}

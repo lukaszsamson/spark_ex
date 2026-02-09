@@ -1961,8 +1961,7 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp encode_catalog_type({:get_function, function_name, db_name}),
     do:
-      {:get_function,
-       %Spark.Connect.GetFunction{function_name: function_name, db_name: db_name}}
+      {:get_function, %Spark.Connect.GetFunction{function_name: function_name, db_name: db_name}}
 
   defp encode_catalog_type({:function_exists, function_name, db_name}),
     do:
