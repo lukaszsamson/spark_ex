@@ -264,6 +264,32 @@ defmodule SparkEx.Catalog do
     end
   end
 
+  @doc """
+  Creates an external table from the given path and returns a DataFrame.
+
+  ## Options
+
+    * `:source` — data source format (e.g., `"parquet"`, `"csv"`)
+    * `:schema` — DDL schema string
+    * `:options` — additional data source options (default: `%{}`)
+  """
+  @spec create_external_table(GenServer.server(), String.t(), String.t(), keyword()) ::
+          {:ok, DataFrame.t()} | {:error, term()}
+  def create_external_table(session, table_name, path, opts \\ [])
+      when is_binary(table_name) and is_binary(path) do
+    source = Keyword.get(opts, :source, nil)
+    schema = Keyword.get(opts, :schema, nil)
+    options = Keyword.get(opts, :options, %{})
+
+    plan = {:catalog, {:create_external_table, table_name, path, source, schema, options}}
+    df = %DataFrame{session: session, plan: plan}
+
+    case DataFrame.collect(df) do
+      {:ok, _} -> {:ok, df}
+      {:error, _} = err -> err
+    end
+  end
+
   # ── Private Helpers ──
 
   defp execute_catalog(session, cat_plan) do
@@ -273,8 +299,13 @@ defmodule SparkEx.Catalog do
 
   defp execute_scalar(session, cat_plan) do
     case execute_catalog(session, cat_plan) do
+      {:ok, [row]} when is_map(row) and map_size(row) == 1 ->
+        [{_key, value}] = Map.to_list(row)
+        {:ok, value}
+
       {:ok, [row]} when is_map(row) ->
-        {:ok, row |> Map.values() |> hd()}
+        # Multi-column result — cannot safely pick a scalar
+        {:error, {:unexpected_columns, Map.keys(row)}}
 
       {:ok, []} ->
         {:error, :no_result}

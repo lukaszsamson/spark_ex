@@ -6,7 +6,7 @@ Targets Spark 4.1.1. See `SPEC_V1.md` for the full design.
 
 ## Status
 
-Milestones 0 through 9 are complete (389 unit tests + integration tests passing against Spark 4.1.1).
+Milestones 0 through 14 are complete (890 unit tests + 260 integration tests passing against Spark 4.1.1).
 
 ### Milestone 0 &mdash; Foundations
 
@@ -105,6 +105,58 @@ Milestones 0 through 9 are complete (389 unit tests + integration tests passing 
 - `SparkEx.Reader.text/3`, `orc/3`, `load/4` &mdash; generic data source reader and additional formats
 - Roundtrip tests: read &rarr; transform &rarr; write &rarr; read-back verified for Parquet, CSV, JSON
 - Save modes verified: append, overwrite, error_if_exists, ignore
+
+### Milestone 10 &mdash; Extended DataFrame Operations
+
+- `DataFrame.with_column_renamed/3`, `with_columns_renamed/2` &mdash; column renaming (single or bulk via map)
+- `DataFrame.repartition/2,3`, `coalesce/2`, `sort_within_partitions/2` &mdash; partitioning control
+- `DataFrame.sample/2`, `random_split/2` &mdash; random sampling and splitting by weights
+- `DataFrame.offset/2`, `tail/2`, `head/2`, `first/1` &mdash; row selection
+- `DataFrame.unpivot/5`, `transpose/1` &mdash; reshape operations
+- `DataFrame.union_by_name/2`, `except_all/2`, `intersect_all/2` &mdash; extended set operations
+- `DataFrame.alias_/2` &mdash; alias DataFrames for subqueries
+- `GroupedData.pivot/2` &mdash; pivot aggregation with optional values list
+- `SparkEx.TableArg` &mdash; table argument support for window function expressions
+- Convenience aliases: `where/2`, `union_all/2`, `cross_join/2`
+
+### Milestone 11 &mdash; Window Functions &amp; Expression System
+
+- `SparkEx.WindowSpec` &mdash; window specification with partitioning, ordering, and frame boundaries (rows/range)
+- `SparkEx.Window` &mdash; convenience constructors (`partition_by/1`, `order_by/1`, `rows_between/2`, `range_between/2`)
+- `Column.over/2` &mdash; apply window function with a `WindowSpec`
+- `SparkEx.Functions` &mdash; comprehensive function registry with 900+ Spark SQL functions auto-generated via `SparkEx.Macros.FunctionRegistry`
+- Function categories: math, string, date/time, array, map, struct, conditional, bitwise, type casting, window, aggregate, and higher-order functions
+- Subquery reference tracking and plan ID attachment in the expression encoder
+
+### Milestone 12 &mdash; Catalog API
+
+- `SparkEx.Catalog` &mdash; full metadata introspection and management API
+- Catalog management: `current_catalog/1`, `set_current_catalog/2`, `list_catalogs/1`
+- Database management: `current_database/1`, `set_current_database/2`, `list_databases/1`, `get_database/2`, `database_exists?/2`
+- Table operations: `list_tables/1`, `get_table/2`, `table_exists?/2`, `drop_temp_view/2`, `drop_global_temp_view/2`, `create_table/2`
+- Column introspection: `list_columns/2`
+- Function introspection: `list_functions/1`, `get_function/2`, `function_exists?/2`
+- Caching: `is_cached?/2`, `cache_table/2`, `uncache_table/2`, `clear_cache/1`
+- Maintenance: `refresh_table/2`, `refresh_by_path/2`, `recover_partitions/2`
+- Typed result structs: `CatalogMetadata`, `Database`, `Table`, `Function`, `ColumnInfo`
+
+### Milestone 13 &mdash; NA/Stat Operations, UDFs &amp; MERGE INTO
+
+- `DataFrame.NA` &mdash; null-value handling: `fill/2`, `drop/1`, `replace/3` (with column subsets and per-column values)
+- `DataFrame.Stat` &mdash; statistical operations: `describe/1`, `summary/1`, `crosstab/3`, `freq_items/2`, `corr/3`, `cov/3`, `approx_quantile/3`, `sample_by/3`
+- `DataFrame.fillna/2`, `dropna/1`, `describe/1`, `summary/1`, `crosstab/3`, `corr/3`, `cov/3` &mdash; top-level DataFrame delegation to NA/Stat sub-APIs
+- `SparkEx.MergeIntoWriter` &mdash; builder for MERGE INTO operations with `when_matched_delete`, `when_matched_update_all`, `when_matched_update`, `when_not_matched_insert_all`, `when_not_matched_insert`, `when_not_matched_by_source_delete`, `when_not_matched_by_source_update_all`, `with_schema_evolution`, and `merge/1`
+- `SparkEx.UDFRegistration` &mdash; register Java UDFs (`register_java/3`) and Python UDTFs (`register_udtf/3`) with the Spark session
+
+### Milestone 14 &mdash; Structured Streaming
+
+- `SparkEx.StreamReader` &mdash; builder for streaming DataFrames: `format/2`, `schema/2`, `option/3`, `load/1`, `table/2`, plus format-specific convenience functions (`rate/2`, `csv/3`, `json/3`, `parquet/3`, `orc/3`, `text/3`)
+- `SparkEx.StreamWriter` &mdash; builder for streaming sinks: `output_mode/2`, `format/2`, `trigger/2`, `query_name/2`, `start/1`, `to_table/2`
+- Trigger types: `processing_time: "5 seconds"`, `available_now: true`, `once: true`, `continuous: "1 second"`
+- `SparkEx.StreamingQuery` &mdash; control running queries: `stop/1`, `is_active?/1`, `status/1`, `await_termination/1`, `process_all_available/1`, `recent_progress/1`, `last_progress/1`, `explain/1`, `exception/1`
+- `SparkEx.StreamingQueryManager` &mdash; manage all active queries: `active/1`, `get/2`, `await_any_termination/1`, `reset_terminated/1`
+- `DataFrame.write_stream/1`, `SparkEx.read_stream/1` &mdash; entry points to streaming builders
+- `Session.execute_command_with_result/3` &mdash; command execution path that returns result data (query IDs, status, etc.)
 
 ## Quick start
 
@@ -229,6 +281,110 @@ SparkEx.Session.release(session)
 SparkEx.Session.stop(session)
 ```
 
+### Window functions
+
+```elixir
+import SparkEx.Functions
+alias SparkEx.{DataFrame, Column, Window}
+
+df = SparkEx.sql(session, """
+  SELECT * FROM VALUES
+    ('eng', 'Alice', 100), ('eng', 'Bob', 120), ('hr', 'Carol', 90)
+  AS t(dept, name, salary)
+""")
+
+# Rank employees within each department
+w = Window.partition_by(["dept"]) |> SparkEx.WindowSpec.order_by([col("salary") |> Column.desc()])
+
+df
+|> DataFrame.with_column("rank", row_number() |> Column.over(w))
+|> DataFrame.collect()
+```
+
+### Catalog API
+
+```elixir
+alias SparkEx.Catalog
+
+# Browse metadata
+{:ok, dbs} = Catalog.list_databases(session)
+{:ok, tables} = Catalog.list_tables(session)
+{:ok, cols} = Catalog.list_columns(session, "my_table")
+
+# Cache management
+:ok = Catalog.cache_table(session, "frequently_used")
+{:ok, true} = Catalog.is_cached?(session, "frequently_used")
+:ok = Catalog.uncache_table(session, "frequently_used")
+```
+
+### NA/Stat operations
+
+```elixir
+alias SparkEx.DataFrame
+
+df = SparkEx.sql(session, """
+  SELECT * FROM VALUES (1, 'Alice', null), (2, null, 80.0), (null, 'Carol', 90.0)
+  AS t(id, name, score)
+""")
+
+# Fill nulls
+filled = DataFrame.fillna(df, %{"name" => "unknown", "score" => 0.0})
+
+# Drop rows with any nulls
+clean = DataFrame.dropna(df)
+
+# Statistical summaries
+{:ok, desc} = DataFrame.describe(df) |> DataFrame.collect()
+```
+
+### MERGE INTO
+
+```elixir
+alias SparkEx.{DataFrame, MergeIntoWriter}
+import SparkEx.Functions
+
+source = SparkEx.sql(session, "SELECT * FROM VALUES (2, 'Bobby') AS t(id, name)")
+
+DataFrame.merge_into(source, "target_table")
+|> MergeIntoWriter.on(col("source.id") |> SparkEx.Column.eq(col("target.id")))
+|> MergeIntoWriter.when_matched_update_all()
+|> MergeIntoWriter.when_not_matched_insert_all()
+|> MergeIntoWriter.merge()
+```
+
+### Structured streaming
+
+```elixir
+alias SparkEx.{DataFrame, StreamReader, StreamWriter, StreamingQuery, StreamingQueryManager}
+
+# Read from a streaming source
+df = StreamReader.rate(session, rows_per_second: 10)
+
+# Start a streaming query
+{:ok, query} =
+  df
+  |> DataFrame.write_stream()
+  |> StreamWriter.format("memory")
+  |> StreamWriter.output_mode("append")
+  |> StreamWriter.query_name("my_stream")
+  |> StreamWriter.option("checkpointLocation", "/tmp/checkpoint")
+  |> StreamWriter.start()
+
+# Monitor the query
+{:ok, true} = StreamingQuery.is_active?(query)
+{:ok, status} = StreamingQuery.status(query)
+
+# Query results from memory sink
+result = SparkEx.sql(session, "SELECT * FROM my_stream")
+{:ok, rows} = DataFrame.collect(result)
+
+# Manage queries
+{:ok, queries} = StreamingQueryManager.active(session)
+
+# Stop the query
+:ok = StreamingQuery.stop(query)
+```
+
 ## Prerequisites
 
 - Elixir >= 1.19
@@ -348,36 +504,55 @@ SPARK_REMOTE="sc://my-spark-host:15002" mix test --include integration
 
 ```
 lib/
-  spark_ex.ex                      # Public API (connect, sql, range, config)
+  spark_ex.ex                        # Public API (connect, sql, range, config, read_stream)
   spark_ex/
-    application.ex                 # OTP application (starts GRPC.Client.Supervisor)
-    session.ex                     # Session GenServer
-    data_frame.ex                  # Lazy DataFrame struct + actions
-    column.ex                      # Expression wrapper (comparisons, arithmetic, etc.)
-    functions.ex                   # Column constructors and aggregate functions
-    grouped_data.ex                # GroupedData struct (group_by + agg)
-    reader.ex                      # Data source readers (parquet, csv, json, table)
-    livebook.ex                    # Livebook helpers (preview, explain, sample, schema)
-    kino_render.ex                 # Kino.Render protocol for DataFrame
+    application.ex                   # OTP application (starts GRPC.Client.Supervisor)
+    session.ex                       # Session GenServer
+    data_frame.ex                    # Lazy DataFrame struct + actions
+    data_frame/
+      na.ex                          # Null-value handling (fill, drop, replace)
+      stat.ex                        # Statistical operations (describe, corr, cov, etc.)
+    column.ex                        # Expression wrapper (comparisons, arithmetic, etc.)
+    functions.ex                     # 900+ Spark SQL functions (auto-generated)
+    grouped_data.ex                  # GroupedData struct (group_by + agg + pivot)
+    window.ex                        # Window convenience constructors
+    window_spec.ex                   # WindowSpec (partition, order, frame boundaries)
+    table_arg.ex                     # Table arguments for window function expressions
+    reader.ex                        # Batch data source readers (parquet, csv, json, table)
+    writer.ex                        # Batch data source writer (V1)
+    writer_v2.ex                     # V2 DataSource write API
+    stream_reader.ex                 # Streaming source reader (rate, csv, json, etc.)
+    stream_writer.ex                 # Streaming sink writer (console, memory, etc.)
+    streaming_query.ex               # StreamingQuery control (stop, status, await, etc.)
+    streaming_query_manager.ex       # Manage all active streaming queries
+    catalog.ex                       # Catalog API (databases, tables, functions, caching)
+    merge_into_writer.ex             # MERGE INTO table builder
+    udf_registration.ex              # UDF/UDTF registration
+    livebook.ex                      # Livebook helpers (preview, explain, sample, schema)
+    kino_render.ex                   # Kino.Render protocol for DataFrame
+    macros/
+      function_registry.ex           # Spark SQL function registry + code generation
+      function_gen.ex                # Function generation macros
     connect/
-      channel.ex                   # sc:// URI parser + gRPC channel management
-      client.ex                    # Low-level gRPC RPC calls (with telemetry + retry)
-      plan_encoder.ex              # Internal plan -> Spark Connect protobuf encoding
-      result_decoder.ex            # Arrow IPC stream decoding (rows + Explorer modes)
-      errors.ex                    # Structured errors (Remote, LimitExceeded)
-      type_mapper.ex               # Spark DataType -> Explorer dtype mapping
-    proto/spark/connect/*.pb.ex    # Generated protobuf modules (do not edit)
+      channel.ex                     # sc:// URI parser + gRPC channel management
+      client.ex                      # Low-level gRPC RPC calls (with telemetry + retry)
+      plan_encoder.ex                # Internal plan -> Spark Connect protobuf encoding
+      command_encoder.ex             # Command tuples -> Spark Connect command encoding
+      result_decoder.ex              # Arrow IPC stream decoding (rows + Explorer modes)
+      errors.ex                      # Structured errors (Remote, LimitExceeded)
+      type_mapper.ex                 # Spark DataType <-> Explorer dtype mapping
+    proto/spark/connect/*.pb.ex      # Generated protobuf modules (do not edit)
 
 priv/
-  proto/spark/connect/*.proto      # Vendored Spark Connect protos (v4.1.1)
-  scripts/gen_proto.sh             # Proto generation script
+  proto/spark/connect/*.proto        # Vendored Spark Connect protos (v4.1.1)
+  scripts/gen_proto.sh               # Proto generation script
 
 notebooks/
-  spark_ex_demo.livemd             # Interactive Livebook demo (Kino.Render, preview, etc.)
+  spark_ex_demo.livemd               # Interactive Livebook demo
 
 test/
-  unit/                            # Unit tests (no server needed, 313 tests)
-  integration/                     # Integration tests (tagged :integration, 122 tests)
-  spark-4.1.1-bin-hadoop3-connect/ # Spark distribution (download separately, gitignored)
-  run_integration.sh               # One-command integration test runner
+  unit/                              # Unit tests (no server needed, 890 tests)
+  integration/                       # Integration tests (tagged :integration, 260 tests)
+  spark-4.1.1-bin-hadoop3-connect/   # Spark distribution (download separately, gitignored)
+  run_integration.sh                 # One-command integration test runner
 ```
