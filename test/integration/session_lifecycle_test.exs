@@ -90,6 +90,21 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
     end
   end
 
+  describe "is_stopped/1" do
+    test "reflects released state" do
+      {:ok, session} = SparkEx.connect(url: @spark_remote)
+      Process.unlink(session)
+
+      on_exit(fn ->
+        if Process.alive?(session), do: SparkEx.Session.stop(session)
+      end)
+
+      assert SparkEx.is_stopped(session) == false
+      assert :ok = SparkEx.Session.release(session)
+      assert SparkEx.is_stopped(session) == true
+    end
+  end
+
   describe "interrupt_all/1" do
     test "returns empty list when no operations are running" do
       {:ok, session} = SparkEx.connect(url: @spark_remote)

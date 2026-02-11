@@ -33,6 +33,24 @@ defmodule SparkEx.StreamingQuery do
   end
 
   @doc """
+  Returns the streaming query ID.
+  """
+  @spec id(t()) :: String.t()
+  def id(%__MODULE__{} = query), do: query.query_id
+
+  @doc """
+  Returns the streaming query run ID.
+  """
+  @spec run_id(t()) :: String.t()
+  def run_id(%__MODULE__{} = query), do: query.run_id
+
+  @doc """
+  Returns the streaming query name.
+  """
+  @spec name(t()) :: String.t() | nil
+  def name(%__MODULE__{} = query), do: query.name
+
+  @doc """
   Returns whether the streaming query is currently active.
   """
   @spec is_active?(t()) :: {:ok, boolean()} | {:error, term()}

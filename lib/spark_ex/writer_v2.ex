@@ -155,6 +155,14 @@ defmodule SparkEx.WriterV2 do
   end
 
   @doc """
+  Alias for `create_or_replace/2` (PySpark `createOrReplace`).
+  """
+  @spec createOrReplace(t(), keyword()) :: :ok | {:error, term()}
+  def createOrReplace(%__MODULE__{} = writer, opts \\ []) do
+    create_or_replace(writer, opts)
+  end
+
+  @doc """
   Appends the DataFrame's data to the table.
   """
   @spec append(t(), keyword()) :: :ok | {:error, term()}

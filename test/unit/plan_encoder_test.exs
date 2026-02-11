@@ -197,6 +197,45 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
   end
 
+  describe "encode/2 with ToSchema" do
+    test "encodes ToSchema with DDL string" do
+      {plan, _counter} = PlanEncoder.encode({:to_schema, {:sql, "SELECT 1", nil}, "id LONG"}, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:to_schema, to_schema}}}} = plan
+      assert %Spark.Connect.ToSchema{} = to_schema
+      assert %Spark.Connect.DataType{kind: {:unparsed, _}} = to_schema.schema
+    end
+
+    test "encodes ToSchema with Struct type" do
+      schema = SparkEx.Types.struct_type([SparkEx.Types.struct_field("id", :long)])
+      {plan, _counter} = PlanEncoder.encode({:to_schema, {:sql, "SELECT 1", nil}, schema}, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:to_schema, to_schema}}}} = plan
+      assert %Spark.Connect.ToSchema{} = to_schema
+      assert %Spark.Connect.DataType{kind: {:unparsed, _}} = to_schema.schema
+    end
+
+    test "encodes ToSchema with DataType" do
+      schema = %Spark.Connect.DataType{kind: {:long, %Spark.Connect.DataType.Long{}}}
+      {plan, _counter} = PlanEncoder.encode({:to_schema, {:sql, "SELECT 1", nil}, schema}, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:to_schema, to_schema}}}} = plan
+      assert %Spark.Connect.ToSchema{} = to_schema
+      assert %Spark.Connect.DataType{kind: {:long, _}} = to_schema.schema
+    end
+  end
+
+  describe "encode/2 with cached_remote_relation" do
+    test "encodes cached remote relation" do
+      {plan, _counter} = PlanEncoder.encode({:cached_remote_relation, "rel-1"}, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:cached_remote_relation, cached}}}} =
+               plan
+
+      assert %Spark.Connect.CachedRemoteRelation{relation_id: "rel-1"} = cached
+    end
+  end
+
   describe "encode_count/2" do
     test "wraps plan in aggregate count" do
       {plan, counter} = PlanEncoder.encode_count({:sql, "SELECT * FROM t", nil}, 0)

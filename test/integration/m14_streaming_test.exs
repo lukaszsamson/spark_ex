@@ -111,6 +111,30 @@ defmodule SparkEx.Integration.M14.StreamingTest do
     end
   end
 
+  describe "streamWriter.xml/2" do
+    test "writes xml stream to path", %{session: session} do
+      checkpoint = unique_checkpoint()
+      output = "/tmp/spark_ex_stream_xml_#{System.unique_integer([:positive, :monotonic])}"
+
+      df = StreamReader.rate(session, rows_per_second: 1)
+
+      {:ok, query} =
+        df
+        |> DataFrame.write_stream()
+        |> StreamWriter.option("checkpointLocation", checkpoint)
+        |> StreamWriter.xml(output)
+        |> StreamWriter.start()
+
+      on_exit(fn ->
+        stop_query(query)
+        File.rm_rf(output)
+      end)
+
+      Process.sleep(1000)
+      assert {:ok, true} = StreamingQuery.is_active?(query)
+    end
+  end
+
   describe "await_termination" do
     test "returns terminated status after stop", %{session: session} do
       {:ok, query} = start_rate_query(session, query_name: "await_test")

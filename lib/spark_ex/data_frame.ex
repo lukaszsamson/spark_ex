@@ -1012,6 +1012,30 @@ defmodule SparkEx.DataFrame do
     create_or_replace_temp_view(df, name, opts)
   end
 
+  @doc "Returns the parent Spark session."
+  @spec spark_session(t()) :: GenServer.server()
+  def spark_session(%__MODULE__{} = df), do: df.session
+
+  @doc "Alias for `spark_session/1` (PySpark `sparkSession`)."
+  @spec sparkSession(t()) :: GenServer.server()
+  def sparkSession(%__MODULE__{} = df), do: spark_session(df)
+
+  @doc "Returns true if the DataFrame is cached (storage level is not NONE)."
+  @spec is_cached(t()) :: {:ok, boolean()} | {:error, term()}
+  def is_cached(%__MODULE__{} = df) do
+    case storage_level(df) do
+      {:ok, %Spark.Connect.StorageLevel{} = level} ->
+        {:ok, storage_level_active?(level)}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc "Alias for `is_cached/1` (PySpark `is_cached`)."
+  @spec is_cached?(t()) :: {:ok, boolean()} | {:error, term()}
+  def is_cached?(%__MODULE__{} = df), do: is_cached(df)
+
   @doc "Cross join — shorthand for `join(df, other, [], :cross)`."
   @spec cross_join(t(), t()) :: t()
   def cross_join(%__MODULE__{} = left, %__MODULE__{} = right) do
@@ -1183,6 +1207,16 @@ defmodule SparkEx.DataFrame do
     %{df | tags: df.tags ++ [tag]}
   end
 
+  @doc "Returns execution metrics from the last action on the session."
+  @spec execution_info(t()) :: {:ok, map()} | {:error, term()}
+  def execution_info(%__MODULE__{} = df) do
+    SparkEx.Session.last_execution_metrics(df.session)
+  end
+
+  @doc "Alias for `execution_info/1` (PySpark `executionInfo`)."
+  @spec executionInfo(t()) :: {:ok, map()} | {:error, term()}
+  def executionInfo(%__MODULE__{} = df), do: execution_info(df)
+
   # ── M10: Subquery/DataFrame Expression Helpers ──
 
   @doc """
@@ -1191,6 +1225,80 @@ defmodule SparkEx.DataFrame do
   @spec as_table(t()) :: SparkEx.TableArg.t()
   def as_table(%__MODULE__{} = df) do
     %SparkEx.TableArg{plan: df.plan}
+  end
+
+  @doc """
+  Materializes this DataFrame as a cached relation.
+
+  ## Options
+
+  - `:eager` — whether to checkpoint eagerly (default: false)
+  """
+  @spec checkpoint(t(), keyword()) :: t() | {:error, term()}
+  def checkpoint(%__MODULE__{} = df, opts \\ []) do
+    eager = Keyword.get(opts, :eager, false)
+
+    case SparkEx.Session.execute_command_with_result(
+           df.session,
+           {:checkpoint, df.plan, false, eager, nil},
+           merge_tags(df, opts)
+         ) do
+      {:ok, {:checkpoint, %Spark.Connect.CheckpointCommandResult{relation: relation}}} ->
+        %__MODULE__{df | plan: {:cached_remote_relation, relation.relation_id}}
+
+      {:ok, other} ->
+        {:error, {:unexpected_result, other}}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc "Alias for `checkpoint/2` (PySpark `checkpoint`)."
+  @spec checkpoint(t()) :: t() | {:error, term()}
+  def checkpoint(%__MODULE__{} = df), do: checkpoint(df, [])
+
+  @doc """
+  Materializes this DataFrame as a local (non-reliable) checkpoint.
+
+  ## Options
+
+  - `:eager` — whether to checkpoint eagerly (default: false)
+  - `:storage_level` — optional `Spark.Connect.StorageLevel` struct
+  """
+  @spec local_checkpoint(t(), keyword()) :: t() | {:error, term()}
+  def local_checkpoint(%__MODULE__{} = df, opts \\ []) do
+    eager = Keyword.get(opts, :eager, false)
+    storage_level = Keyword.get(opts, :storage_level, nil)
+
+    case SparkEx.Session.execute_command_with_result(
+           df.session,
+           {:checkpoint, df.plan, true, eager, storage_level},
+           merge_tags(df, opts)
+         ) do
+      {:ok, {:checkpoint, %Spark.Connect.CheckpointCommandResult{relation: relation}}} ->
+        %__MODULE__{df | plan: {:cached_remote_relation, relation.relation_id}}
+
+      {:ok, other} ->
+        {:error, {:unexpected_result, other}}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc "Alias for `local_checkpoint/2` (PySpark `localCheckpoint`)."
+  @spec localCheckpoint(t()) :: t() | {:error, term()}
+  def localCheckpoint(%__MODULE__{} = df), do: local_checkpoint(df, [])
+
+  @doc """
+  Casts this DataFrame to the given schema.
+
+  Accepts a Spark Connect `DataType`, a DDL string, or a `SparkEx.Types` struct type.
+  """
+  @spec to(t(), Spark.Connect.DataType.t() | String.t() | SparkEx.Types.struct_type()) :: t()
+  def to(%__MODULE__{} = df, schema) do
+    %__MODULE__{df | plan: {:to_schema, df.plan, schema}}
   end
 
   @doc """
@@ -1476,6 +1584,10 @@ defmodule SparkEx.DataFrame do
   @spec storage_level(t()) :: {:ok, Spark.Connect.StorageLevel.t()} | {:error, term()}
   def storage_level(%__MODULE__{} = df) do
     SparkEx.Session.analyze_get_storage_level(df.session, df.plan)
+  end
+
+  defp storage_level_active?(%Spark.Connect.StorageLevel{} = level) do
+    level.use_disk or level.use_memory or level.use_off_heap or level.replication > 0
   end
 
   # ── NA / Stat / Merge sub-APIs ──

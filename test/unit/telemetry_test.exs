@@ -10,6 +10,12 @@ defmodule SparkEx.TelemetryTest do
       ref = make_ref()
       pid = self()
 
+      on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
+
+      SparkEx.RetryPolicyRegistry.set_policies(
+        retry: %{sleep_fun: fn _ -> :ok end, jitter_fun: fn ms -> ms end}
+      )
+
       :telemetry.attach(
         "test-batch-#{inspect(ref)}",
         [:spark_ex, :result, :batch],
@@ -220,6 +226,12 @@ defmodule SparkEx.TelemetryTest do
       ref = make_ref()
       pid = self()
 
+      on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
+
+      SparkEx.RetryPolicyRegistry.set_policies(
+        retry: %{sleep_fun: fn _ -> :ok end, jitter_fun: fn ms -> ms end}
+      )
+
       :telemetry.attach(
         "test-retry-#{inspect(ref)}",
         [:spark_ex, :retry, :attempt],
@@ -233,21 +245,16 @@ defmodule SparkEx.TelemetryTest do
       call_count = :counters.new(1, [:atomics])
 
       result =
-        SparkEx.Connect.Client.retry_with_backoff(
-          fn ->
-            count = :counters.get(call_count, 1)
-            :counters.add(call_count, 1, 1)
+        SparkEx.Connect.Client.retry_with_backoff(fn ->
+          count = :counters.get(call_count, 1)
+          :counters.add(call_count, 1, 1)
 
-            if count == 0 do
-              {:error, %SparkEx.Error.Remote{grpc_status: 14, message: "unavailable"}}
-            else
-              {:ok, :success}
-            end
-          end,
-          max_retries: 3,
-          sleep_fun: fn _ -> :ok end,
-          jitter_fun: fn ms -> ms end
-        )
+          if count == 0 do
+            {:error, %SparkEx.Error.Remote{grpc_status: 14, message: "unavailable"}}
+          else
+            {:ok, :success}
+          end
+        end)
 
       assert {:ok, :success} = result
       assert_receive {:telemetry, ^ref, [:spark_ex, :retry, :attempt], measurements, metadata}

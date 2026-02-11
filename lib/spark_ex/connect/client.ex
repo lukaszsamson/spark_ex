@@ -32,13 +32,13 @@ defmodule SparkEx.Connect.Client do
     ResultChunkingOptions,
     StorageLevel,
     KeyValue,
-    Plan,
-    UserContext
+    Plan
   }
 
   @compile {:no_warn_undefined, Explorer.DataFrame}
 
   alias SparkEx.Connect.{Errors, ResultDecoder}
+  alias SparkEx.{RetryPolicyRegistry, UserContextExtensions}
 
   require Logger
 
@@ -46,9 +46,6 @@ defmodule SparkEx.Connect.Client do
   @status_unavailable 14
   @status_deadline_exceeded 4
 
-  @default_max_retries 3
-  @default_initial_backoff_ms 100
-  @default_max_backoff_ms 5_000
   @artifact_chunk_size 32 * 1024
 
   # --- AnalyzePlan RPCs ---
@@ -806,7 +803,7 @@ defmodule SparkEx.Connect.Client do
     request = %CloneSessionRequest{
       session_id: session.session_id,
       client_observed_server_side_session_id: session.server_side_session_id,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_type: session.client_type,
       new_session_id: new_session_id
     }
@@ -840,7 +837,7 @@ defmodule SparkEx.Connect.Client do
   def release_session(session) do
     request = %ReleaseSessionRequest{
       session_id: session.session_id,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_type: session.client_type
     }
 
@@ -895,7 +892,7 @@ defmodule SparkEx.Connect.Client do
     %InterruptRequest{
       session_id: session.session_id,
       client_observed_server_side_session_id: session.server_side_session_id,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_type: session.client_type,
       interrupt_type: :INTERRUPT_TYPE_ALL
     }
@@ -905,7 +902,7 @@ defmodule SparkEx.Connect.Client do
     %InterruptRequest{
       session_id: session.session_id,
       client_observed_server_side_session_id: session.server_side_session_id,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_type: session.client_type,
       interrupt_type: :INTERRUPT_TYPE_TAG,
       interrupt: {:operation_tag, tag}
@@ -916,7 +913,7 @@ defmodule SparkEx.Connect.Client do
     %InterruptRequest{
       session_id: session.session_id,
       client_observed_server_side_session_id: session.server_side_session_id,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_type: session.client_type,
       interrupt_type: :INTERRUPT_TYPE_OPERATION_ID,
       interrupt: {:operation_id, id}
@@ -936,7 +933,7 @@ defmodule SparkEx.Connect.Client do
     request = %ArtifactStatusesRequest{
       session_id: session.session_id,
       client_observed_server_side_session_id: session.server_side_session_id,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_type: session.client_type,
       names: names
     }
@@ -1060,7 +1057,7 @@ defmodule SparkEx.Connect.Client do
     request = %ReattachExecuteRequest{
       session_id: session.session_id,
       client_observed_server_side_session_id: session.server_side_session_id,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_type: session.client_type,
       operation_id: operation_id,
       last_response_id: last_response_id
@@ -1099,7 +1096,7 @@ defmodule SparkEx.Connect.Client do
     request = %ReleaseExecuteRequest{
       session_id: session.session_id,
       client_observed_server_side_session_id: session.server_side_session_id,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_type: session.client_type,
       operation_id: operation_id,
       release: release
@@ -1128,7 +1125,8 @@ defmodule SparkEx.Connect.Client do
   # --- Reattachable execution helpers ---
 
   defp execute_reattachable(session, request, operation_id, timeout, opts, decode_fn) do
-    max_retries = Keyword.get(opts, :reattach_retries, @default_max_retries)
+    default_policy = RetryPolicyRegistry.policy(:reattach)
+    max_retries = Keyword.get(opts, :reattach_retries, default_policy.max_retries)
 
     execute_stream_fun =
       Keyword.get(opts, :execute_stream_fun, fn req, req_timeout ->
@@ -1319,7 +1317,7 @@ defmodule SparkEx.Connect.Client do
     %ExecutePlanRequest{
       session_id: session.session_id,
       client_type: session.client_type,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_observed_server_side_session_id: session.server_side_session_id,
       plan: plan,
       tags: tags,
@@ -1374,7 +1372,7 @@ defmodule SparkEx.Connect.Client do
     %AddArtifactsRequest{
       session_id: session.session_id,
       client_observed_server_side_session_id: session.server_side_session_id,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_type: session.client_type,
       payload: {:batch, %AddArtifactsRequest.Batch{artifacts: single_chunks}}
     }
@@ -1388,7 +1386,7 @@ defmodule SparkEx.Connect.Client do
     begin_request = %AddArtifactsRequest{
       session_id: session.session_id,
       client_observed_server_side_session_id: session.server_side_session_id,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_type: session.client_type,
       payload:
         {:begin_chunk,
@@ -1408,7 +1406,7 @@ defmodule SparkEx.Connect.Client do
         %AddArtifactsRequest{
           session_id: session.session_id,
           client_observed_server_side_session_id: session.server_side_session_id,
-          user_context: %UserContext{user_id: session.user_id},
+          user_context: UserContextExtensions.build_user_context(session.user_id),
           client_type: session.client_type,
           payload:
             {:chunk, %AddArtifactsRequest.ArtifactChunk{data: chunk, crc: :erlang.crc32(chunk)}}
@@ -1510,8 +1508,15 @@ defmodule SparkEx.Connect.Client do
       telemetry_metadata
     )
 
+    default_policy = RetryPolicyRegistry.policy(:reattach)
+
     sleep_ms =
-      backoff_ms(attempt, @default_initial_backoff_ms, @default_max_backoff_ms, &default_jitter/1)
+      backoff_ms(
+        attempt,
+        default_policy.initial_backoff_ms,
+        default_policy.max_backoff_ms,
+        default_policy.jitter_fun
+      )
 
     Process.sleep(sleep_ms)
 
@@ -1607,7 +1612,7 @@ defmodule SparkEx.Connect.Client do
       [
         session_id: session.session_id,
         client_type: session.client_type,
-        user_context: %UserContext{user_id: session.user_id},
+        user_context: UserContextExtensions.build_user_context(session.user_id),
         client_observed_server_side_session_id: session.server_side_session_id
       ] ++ fields
     )
@@ -1619,7 +1624,7 @@ defmodule SparkEx.Connect.Client do
       [
         session_id: session.session_id,
         client_type: session.client_type,
-        user_context: %UserContext{user_id: session.user_id},
+        user_context: UserContextExtensions.build_user_context(session.user_id),
         client_observed_server_side_session_id: session.server_side_session_id
       ] ++ fields
     )
@@ -1637,11 +1642,13 @@ defmodule SparkEx.Connect.Client do
   @doc false
   @spec retry_with_backoff((-> term()), keyword()) :: term()
   def retry_with_backoff(fun, opts \\ []) when is_function(fun, 0) do
-    max_retries = Keyword.get(opts, :max_retries, @default_max_retries)
-    initial_backoff = Keyword.get(opts, :initial_backoff_ms, @default_initial_backoff_ms)
-    max_backoff = Keyword.get(opts, :max_backoff_ms, @default_max_backoff_ms)
-    sleep_fun = Keyword.get(opts, :sleep_fun, &Process.sleep/1)
-    jitter_fun = Keyword.get(opts, :jitter_fun, &default_jitter/1)
+    default_policy = RetryPolicyRegistry.policy(:retry)
+
+    max_retries = Keyword.get(opts, :max_retries, default_policy.max_retries)
+    initial_backoff = Keyword.get(opts, :initial_backoff_ms, default_policy.initial_backoff_ms)
+    max_backoff = Keyword.get(opts, :max_backoff_ms, default_policy.max_backoff_ms)
+    sleep_fun = Keyword.get(opts, :sleep_fun, default_policy.sleep_fun)
+    jitter_fun = Keyword.get(opts, :jitter_fun, default_policy.jitter_fun)
 
     do_retry(fun, 0, max_retries, initial_backoff, max_backoff, sleep_fun, jitter_fun)
   end
@@ -1680,11 +1687,6 @@ defmodule SparkEx.Connect.Client do
     base = initial_backoff * Integer.pow(2, attempt)
     capped = Kernel.min(base, max_backoff)
     jitter_fun.(capped)
-  end
-
-  defp default_jitter(capped) do
-    # Add jitter: random value between 0 and capped
-    :rand.uniform(capped + 1) - 1
   end
 
   # --- Telemetry ---

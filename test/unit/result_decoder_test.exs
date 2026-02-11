@@ -57,6 +57,20 @@ defmodule SparkEx.Connect.ResultDecoderTest do
       assert result.rows == []
     end
 
+    test "captures checkpoint command result" do
+      result =
+        %Spark.Connect.CheckpointCommandResult{
+          relation: %Spark.Connect.CachedRemoteRelation{relation_id: "rel-1"}
+        }
+
+      stream = [
+        {:ok, %ExecutePlanResponse{response_type: {:checkpoint_command_result, result}}}
+      ]
+
+      assert {:ok, decoded} = ResultDecoder.decode_stream(stream)
+      assert decoded.command_result == {:checkpoint, result}
+    end
+
     test "captures observed metrics" do
       metrics =
         %ExecutePlanResponse.ObservedMetrics{

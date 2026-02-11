@@ -162,6 +162,11 @@ defmodule SparkEx.StreamReader do
     streaming_data_source(session, "orc", path, opts)
   end
 
+  @spec xml(GenServer.server(), String.t(), keyword()) :: DataFrame.t()
+  def xml(session, path, opts \\ []) do
+    streaming_data_source(session, "xml", path, opts)
+  end
+
   # --- Private ---
 
   defp streaming_data_source(session, format, path, opts) do

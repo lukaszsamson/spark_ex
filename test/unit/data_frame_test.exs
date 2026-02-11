@@ -133,6 +133,24 @@ defmodule SparkEx.DataFrameTest do
     end
   end
 
+  describe "SparkEx.udf/1" do
+    test "returns UDF registration accessor" do
+      assert SparkEx.udf(self()) == SparkEx.UDFRegistration
+    end
+  end
+
+  describe "SparkEx.udtf/1" do
+    test "returns UDTF registration accessor" do
+      assert SparkEx.udtf(self()) == SparkEx.UDFRegistration
+    end
+  end
+
+  describe "SparkEx.data_source/1" do
+    test "returns data source registration accessor" do
+      assert SparkEx.data_source(self()) == SparkEx.UDFRegistration
+    end
+  end
+
   describe "select/2" do
     test "creates project plan from Column structs" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
@@ -198,6 +216,16 @@ defmodule SparkEx.DataFrameTest do
                group_type: :grouping_sets,
                grouping_sets: [[{:col, "id"}], [{:col, "dept"}]]
              } = grouped
+    end
+  end
+
+  describe "groupby/2" do
+    test "aliases group_by" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      grouped = DataFrame.groupby(df, ["dept"])
+
+      assert %SparkEx.GroupedData{group_type: :groupby, grouping_exprs: [{:col, "dept"}]} =
+               grouped
     end
   end
 
@@ -288,6 +316,16 @@ defmodule SparkEx.DataFrameTest do
       assert %DataFrame{
                plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, nil}]}
              } = result
+    end
+  end
+
+  describe "sort/2" do
+    test "aliases order_by" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.sort(df, ["name"])
+
+      assert %DataFrame{plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, nil}]}} =
+               result
     end
   end
 
@@ -661,31 +699,6 @@ defmodule SparkEx.DataFrameTest do
     end
   end
 
-  describe "cache/1" do
-    defmodule PersistSession do
-      use GenServer
-
-      def start_link() do
-        GenServer.start_link(__MODULE__, :ok, [])
-      end
-
-      @impl true
-      def init(:ok), do: {:ok, :ok}
-
-      @impl true
-      def handle_call({:analyze_persist, _plan, _opts}, _from, state) do
-        {:reply, :ok, state}
-      end
-    end
-
-    test "delegates to persist with defaults" do
-      {:ok, session} = PersistSession.start_link()
-      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
-
-      assert :ok = DataFrame.cache(df)
-    end
-  end
-
   describe "registerTempTable/3" do
     defmodule TempViewSession do
       use GenServer
@@ -741,6 +754,229 @@ defmodule SparkEx.DataFrameTest do
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
       assert {:ok, "tmp"} = DataFrame.register_temp_table(df, "tmp")
+    end
+  end
+
+  describe "checkpoint/2" do
+    defmodule CheckpointSession do
+      use GenServer
+
+      def start_link(test_pid) do
+        GenServer.start_link(__MODULE__, test_pid, [])
+      end
+
+      @impl true
+      def init(test_pid), do: {:ok, test_pid}
+
+      @impl true
+      def handle_call(
+            {:execute_command_with_result, {:checkpoint, _plan, local, eager, storage_level},
+             _opts},
+            _from,
+            test_pid
+          ) do
+        send(test_pid, {:checkpoint_args, local, eager, storage_level})
+
+        result =
+          %Spark.Connect.CheckpointCommandResult{
+            relation: %Spark.Connect.CachedRemoteRelation{relation_id: "rel-1"}
+          }
+
+        {:reply, {:ok, {:checkpoint, result}}, test_pid}
+      end
+    end
+
+    test "returns cached remote relation" do
+      {:ok, session} = CheckpointSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert %DataFrame{plan: {:cached_remote_relation, "rel-1"}} = DataFrame.checkpoint(df)
+      assert_receive {:checkpoint_args, false, false, nil}
+    end
+
+    test "checkpoint/1 aliases checkpoint/2" do
+      {:ok, session} = CheckpointSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert %DataFrame{plan: {:cached_remote_relation, "rel-1"}} = DataFrame.checkpoint(df)
+      assert_receive {:checkpoint_args, false, false, nil}
+    end
+  end
+
+  describe "local_checkpoint/2" do
+    defmodule LocalCheckpointSession do
+      use GenServer
+
+      def start_link(test_pid) do
+        GenServer.start_link(__MODULE__, test_pid, [])
+      end
+
+      @impl true
+      def init(test_pid), do: {:ok, test_pid}
+
+      @impl true
+      def handle_call(
+            {:execute_command_with_result, {:checkpoint, _plan, local, eager, storage_level},
+             _opts},
+            _from,
+            test_pid
+          ) do
+        send(test_pid, {:local_checkpoint_args, local, eager, storage_level})
+
+        result =
+          %Spark.Connect.CheckpointCommandResult{
+            relation: %Spark.Connect.CachedRemoteRelation{relation_id: "rel-2"}
+          }
+
+        {:reply, {:ok, {:checkpoint, result}}, test_pid}
+      end
+    end
+
+    test "uses local flag and storage level" do
+      {:ok, session} = LocalCheckpointSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+      storage_level = %Spark.Connect.StorageLevel{use_memory: true}
+
+      assert %DataFrame{plan: {:cached_remote_relation, "rel-2"}} =
+               DataFrame.local_checkpoint(df, eager: true, storage_level: storage_level)
+
+      assert_receive {:local_checkpoint_args, true, true, ^storage_level}
+    end
+
+    test "localCheckpoint/1 aliases local_checkpoint/2" do
+      {:ok, session} = LocalCheckpointSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert %DataFrame{plan: {:cached_remote_relation, "rel-2"}} = DataFrame.localCheckpoint(df)
+      assert_receive {:local_checkpoint_args, true, false, nil}
+    end
+  end
+
+  describe "to/2" do
+    test "wraps plan in to_schema" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.to(df, "id LONG")
+
+      assert %DataFrame{plan: {:to_schema, {:sql, _, _}, "id LONG"}} = result
+    end
+  end
+
+  describe "is_cached/1" do
+    defmodule StorageLevelSession do
+      use GenServer
+
+      def start_link(storage_level) do
+        GenServer.start_link(__MODULE__, storage_level, [])
+      end
+
+      @impl true
+      def init(storage_level), do: {:ok, storage_level}
+
+      @impl true
+      def handle_call({:analyze_get_storage_level, _plan}, _from, storage_level) do
+        {:reply, {:ok, storage_level}, storage_level}
+      end
+    end
+
+    test "returns true when storage level is active" do
+      {:ok, session} =
+        StorageLevelSession.start_link(%Spark.Connect.StorageLevel{use_memory: true})
+
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, true} = DataFrame.is_cached(df)
+    end
+
+    test "returns false when storage level is NONE" do
+      {:ok, session} =
+        StorageLevelSession.start_link(%Spark.Connect.StorageLevel{
+          use_disk: false,
+          use_memory: false,
+          use_off_heap: false,
+          replication: 0
+        })
+
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, false} = DataFrame.is_cached(df)
+    end
+
+    test "is_cached?/1 aliases is_cached" do
+      {:ok, session} =
+        StorageLevelSession.start_link(%Spark.Connect.StorageLevel{use_memory: true})
+
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, true} = DataFrame.is_cached?(df)
+    end
+  end
+
+  describe "cache/1" do
+    defmodule PersistSession do
+      use GenServer
+
+      def start_link() do
+        GenServer.start_link(__MODULE__, :ok, [])
+      end
+
+      @impl true
+      def init(:ok), do: {:ok, :ok}
+
+      @impl true
+      def handle_call({:analyze_persist, _plan, _opts}, _from, state) do
+        {:reply, :ok, state}
+      end
+    end
+
+    test "delegates to persist with defaults" do
+      {:ok, session} = PersistSession.start_link()
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert :ok = DataFrame.cache(df)
+    end
+  end
+
+  describe "execution_info/1" do
+    defmodule ExecutionMetricsSession do
+      use GenServer
+
+      def start_link(metrics) do
+        GenServer.start_link(__MODULE__, metrics, [])
+      end
+
+      @impl true
+      def init(metrics), do: {:ok, metrics}
+
+      @impl true
+      def handle_call(:last_execution_metrics, _from, metrics) do
+        {:reply, {:ok, metrics}, metrics}
+      end
+    end
+
+    test "returns last execution metrics" do
+      {:ok, session} = ExecutionMetricsSession.start_link(%{"stage" => 1})
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, %{"stage" => 1}} = DataFrame.execution_info(df)
+    end
+
+    test "executionInfo/1 aliases execution_info" do
+      {:ok, session} = ExecutionMetricsSession.start_link(%{"stage" => 1})
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, %{"stage" => 1}} = DataFrame.executionInfo(df)
+    end
+  end
+
+  describe "spark_session/1" do
+    test "returns the stored session" do
+      df = %DataFrame{session: :session_pid, plan: {:sql, "SELECT 1", nil}}
+      assert DataFrame.spark_session(df) == :session_pid
+    end
+
+    test "sparkSession/1 aliases spark_session" do
+      df = %DataFrame{session: :session_pid, plan: {:sql, "SELECT 1", nil}}
+      assert DataFrame.sparkSession(df) == :session_pid
     end
   end
 

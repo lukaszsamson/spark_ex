@@ -115,11 +115,15 @@ defmodule SparkEx.Connect.ResultDecoder do
             {:streaming_query_listener_events_result, result} ->
               {:cont, {:ok, %{state | command_result: {:listener_events, result}}}}
 
+            {:checkpoint_command_result, result} ->
+              {:cont, {:ok, %{state | command_result: {:checkpoint, result}}}}
+
             {:execution_progress, progress} ->
               :telemetry.execute(
                 [:spark_ex, :result, :progress],
                 %{num_inflight_tasks: progress.num_inflight_tasks || 0},
                 %{
+                  session_id: session && session.session_id,
                   stages:
                     Enum.map(progress.stages || [], fn stage ->
                       %{
@@ -248,6 +252,7 @@ defmodule SparkEx.Connect.ResultDecoder do
                 [:spark_ex, :result, :progress],
                 %{num_inflight_tasks: progress.num_inflight_tasks || 0},
                 %{
+                  session_id: session && session.session_id,
                   stages:
                     Enum.map(progress.stages || [], fn stage ->
                       %{

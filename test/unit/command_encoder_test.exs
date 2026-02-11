@@ -290,4 +290,30 @@ defmodule SparkEx.Unit.CommandEncoderTest do
                ds.data_source
     end
   end
+
+  describe "encode/2 for checkpoint" do
+    test "encodes checkpoint command" do
+      plan = {:sql, "SELECT 1", nil}
+
+      {%Plan{op_type: {:command, command}}, _counter} =
+        CommandEncoder.encode({:checkpoint, plan, false, true, nil}, 0)
+
+      assert %Command{command_type: {:checkpoint_command, checkpoint}} = command
+      assert %Spark.Connect.CheckpointCommand{} = checkpoint
+      assert checkpoint.local == false
+      assert checkpoint.eager == true
+      assert checkpoint.storage_level == nil
+    end
+  end
+
+  describe "encode/2 for remove_cached_remote_relation" do
+    test "encodes remove cached remote relation command" do
+      {%Plan{op_type: {:command, command}}, _counter} =
+        CommandEncoder.encode({:remove_cached_remote_relation, "rel-9"}, 0)
+
+      assert %Command{command_type: {:remove_cached_remote_relation_command, remove}} = command
+      assert %Spark.Connect.RemoveCachedRemoteRelationCommand{} = remove
+      assert %Spark.Connect.CachedRemoteRelation{relation_id: "rel-9"} = remove.relation
+    end
+  end
 end

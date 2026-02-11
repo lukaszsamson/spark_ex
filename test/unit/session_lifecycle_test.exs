@@ -150,6 +150,122 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
     end
   end
 
+  describe "Session tag management" do
+    defmodule TagSession do
+      use GenServer
+
+      def start_link() do
+        GenServer.start_link(__MODULE__, [], [])
+      end
+
+      @impl true
+      def init(_), do: {:ok, []}
+
+      @impl true
+      def handle_cast({:add_tag, tag}, tags), do: {:noreply, tags ++ [tag]}
+
+      @impl true
+      def handle_cast({:remove_tag, tag}, tags), do: {:noreply, Enum.reject(tags, &(&1 == tag))}
+
+      @impl true
+      def handle_cast(:clear_tags, _tags), do: {:noreply, []}
+
+      @impl true
+      def handle_call(:get_tags, _from, tags), do: {:reply, tags, tags}
+    end
+
+    test "add/remove/get/clear tags" do
+      {:ok, session} = TagSession.start_link()
+
+      :ok = SparkEx.Session.add_tag(session, "tag-1")
+      :ok = SparkEx.Session.add_tag(session, "tag-2")
+      assert SparkEx.Session.get_tags(session) == ["tag-1", "tag-2"]
+
+      :ok = SparkEx.Session.remove_tag(session, "tag-1")
+      assert SparkEx.Session.get_tags(session) == ["tag-2"]
+
+      :ok = SparkEx.Session.clear_tags(session)
+      assert SparkEx.Session.get_tags(session) == []
+    end
+
+    test "rejects invalid tags" do
+      {:ok, session} = TagSession.start_link()
+
+      assert_raise ArgumentError, ~r/non-empty string/, fn ->
+        SparkEx.Session.add_tag(session, "")
+      end
+
+      assert_raise ArgumentError, ~r/cannot contain ','/, fn ->
+        SparkEx.Session.add_tag(session, "a,b")
+      end
+    end
+  end
+
+  describe "Session progress handlers" do
+    test "registers and removes progress handlers via telemetry" do
+      session = %SparkEx.Session{session_id: "progress-session"}
+
+      {:ok, pid} = Agent.start_link(fn -> [] end)
+
+      handler = fn payload ->
+        Agent.update(pid, fn payloads -> [payload | payloads] end)
+      end
+
+      :ok = SparkEx.Session.register_progress_handler(session, handler)
+
+      :telemetry.execute(
+        [:spark_ex, :result, :progress],
+        %{num_inflight_tasks: 1},
+        %{session_id: "progress-session"}
+      )
+
+      :telemetry.execute(
+        [:spark_ex, :result, :progress],
+        %{num_inflight_tasks: 2},
+        %{session_id: "other-session"}
+      )
+
+      assert Agent.get(pid, &length/1) == 1
+
+      :ok = SparkEx.Session.remove_progress_handler(session, handler)
+
+      :telemetry.execute(
+        [:spark_ex, :result, :progress],
+        %{num_inflight_tasks: 3},
+        %{session_id: "progress-session"}
+      )
+
+      assert Agent.get(pid, &length/1) == 1
+    end
+
+    test "clears all progress handlers" do
+      session = %SparkEx.Session{session_id: "progress-session-clear"}
+
+      {:ok, pid} = Agent.start_link(fn -> [] end)
+
+      handler_a = fn payload ->
+        Agent.update(pid, fn payloads -> [payload | payloads] end)
+      end
+
+      handler_b = fn payload ->
+        Agent.update(pid, fn payloads -> [payload | payloads] end)
+      end
+
+      :ok = SparkEx.Session.register_progress_handler(session, handler_a)
+      :ok = SparkEx.Session.register_progress_handler(session, handler_b)
+
+      :ok = SparkEx.Session.clear_progress_handlers(session)
+
+      :telemetry.execute(
+        [:spark_ex, :result, :progress],
+        %{num_inflight_tasks: 1},
+        %{session_id: "progress-session-clear"}
+      )
+
+      assert Agent.get(pid, &length/1) == 0
+    end
+  end
+
   describe "Session struct released field" do
     test "defaults to false" do
       session = %SparkEx.Session{
@@ -159,6 +275,16 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       }
 
       assert session.released == false
+    end
+  end
+
+  describe "Session.is_stopped" do
+    test "reflects released flag" do
+      session = %SparkEx.Session{session_id: "sess-1", released: false}
+      refute SparkEx.Session.is_stopped(session)
+
+      released = %SparkEx.Session{session_id: "sess-1", released: true}
+      assert SparkEx.Session.is_stopped(released)
     end
   end
 end

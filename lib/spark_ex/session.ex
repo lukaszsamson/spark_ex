@@ -25,6 +25,8 @@ defmodule SparkEx.Session do
     allow_arrow_batch_chunking: true,
     preferred_arrow_chunk_size: nil,
     plan_id_counter: 0,
+    last_execution_metrics: %{},
+    tags: [],
     released: false
   ]
 
@@ -38,6 +40,8 @@ defmodule SparkEx.Session do
           allow_arrow_batch_chunking: boolean(),
           preferred_arrow_chunk_size: non_neg_integer() | nil,
           plan_id_counter: non_neg_integer(),
+          last_execution_metrics: map(),
+          tags: [String.t()],
           released: boolean()
         }
 
@@ -91,6 +95,81 @@ defmodule SparkEx.Session do
   @spec update_server_side_session_id(GenServer.server(), String.t()) :: :ok
   def update_server_side_session_id(session, server_side_session_id) do
     GenServer.cast(session, {:update_server_side_session_id, server_side_session_id})
+  end
+
+  @doc """
+  Adds a tag to be applied to all subsequent operations in this session.
+  """
+  @spec add_tag(GenServer.server(), String.t()) :: :ok
+  def add_tag(session, tag) when is_binary(tag) do
+    validate_tag!(tag)
+    GenServer.cast(session, {:add_tag, tag})
+  end
+
+  @doc """
+  Removes a tag from the session.
+  """
+  @spec remove_tag(GenServer.server(), String.t()) :: :ok
+  def remove_tag(session, tag) when is_binary(tag) do
+    GenServer.cast(session, {:remove_tag, tag})
+  end
+
+  @doc """
+  Returns all tags set on the session.
+  """
+  @spec get_tags(GenServer.server()) :: [String.t()]
+  def get_tags(session) do
+    GenServer.call(session, :get_tags)
+  end
+
+  @doc """
+  Clears all tags from the session.
+  """
+  @spec clear_tags(GenServer.server()) :: :ok
+  def clear_tags(session) do
+    GenServer.cast(session, :clear_tags)
+  end
+
+  @doc """
+  Registers a progress handler callback for this session.
+
+  The handler receives a map with `:event`, `:measurements`, and `:metadata`.
+  """
+  @spec register_progress_handler(GenServer.server(), (map() -> any())) :: :ok
+  def register_progress_handler(session, handler) when is_function(handler, 1) do
+    session_id = session_id_for(session)
+    SparkEx.ProgressHandlerRegistry.register(session_id, handler)
+  end
+
+  @doc """
+  Removes a previously registered progress handler for this session.
+  """
+  @spec remove_progress_handler(GenServer.server(), (map() -> any())) :: :ok
+  def remove_progress_handler(session, handler) when is_function(handler, 1) do
+    session_id = session_id_for(session)
+    SparkEx.ProgressHandlerRegistry.remove(session_id, handler)
+  end
+
+  @doc """
+  Clears all progress handlers registered for this session.
+  """
+  @spec clear_progress_handlers(GenServer.server()) :: :ok
+  def clear_progress_handlers(session) do
+    session_id = session_id_for(session)
+    SparkEx.ProgressHandlerRegistry.clear(session_id)
+  end
+
+  @doc """
+  Returns whether the session has been released/stopped.
+  """
+  @spec is_stopped(GenServer.server() | t()) :: boolean()
+  def is_stopped(session) do
+    if is_pid(session) do
+      GenServer.call(session, :is_stopped)
+    else
+      %__MODULE__{released: released} = session
+      released
+    end
   end
 
   @doc """
@@ -148,6 +227,14 @@ defmodule SparkEx.Session do
           {:ok, non_neg_integer()} | {:error, term()}
   def execute_count(session, plan) do
     GenServer.call(session, {:execute_count, plan}, :timer.seconds(60))
+  end
+
+  @doc """
+  Returns execution metrics captured from the last action on this session.
+  """
+  @spec last_execution_metrics(GenServer.server()) :: {:ok, map()} | {:error, term()}
+  def last_execution_metrics(session) do
+    GenServer.call(session, :last_execution_metrics)
   end
 
   @doc """
@@ -580,6 +667,38 @@ defmodule SparkEx.Session do
     {:reply, state, state}
   end
 
+  def handle_call(:get_tags, _from, state) do
+    {:reply, state.tags, state}
+  end
+
+  def handle_call(:get_session_id, _from, state) do
+    {:reply, state.session_id, state}
+  end
+
+  def handle_call(:is_stopped, _from, state) do
+    {:reply, state.released, state}
+  end
+
+  def handle_call(:last_execution_metrics, _from, state) do
+    {:reply, {:ok, state.last_execution_metrics}, state}
+  end
+
+  @impl true
+  def handle_cast({:add_tag, tag}, state) do
+    validate_tag!(tag)
+    {:noreply, %{state | tags: state.tags ++ [tag]}}
+  end
+
+  @impl true
+  def handle_cast({:remove_tag, tag}, state) do
+    {:noreply, %{state | tags: Enum.reject(state.tags, &(&1 == tag))}}
+  end
+
+  @impl true
+  def handle_cast(:clear_tags, state) do
+    {:noreply, %{state | tags: []}}
+  end
+
   def handle_call({:clone_session, _new_session_id}, _from, %{released: true} = state) do
     {:reply, {:error, :session_released}, state}
   end
@@ -669,9 +788,12 @@ defmodule SparkEx.Session do
     {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
     state = %{state | plan_id_counter: counter}
 
+    opts = merge_session_tags(opts, state.tags)
+
     case Client.execute_plan(state, proto_plan, opts) do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
+        state = %{state | last_execution_metrics: result.execution_metrics}
         SparkEx.Observation.store_observed_metrics(result.observed_metrics)
         {:reply, {:ok, result.rows}, state}
 
@@ -695,9 +817,12 @@ defmodule SparkEx.Session do
     {proto_plan, counter} = PlanEncoder.encode(effective_plan, state.plan_id_counter)
     state = %{state | plan_id_counter: counter}
 
+    decoder_opts = merge_session_tags(decoder_opts, state.tags)
+
     case Client.execute_plan_explorer(state, proto_plan, decoder_opts) do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
+        state = %{state | last_execution_metrics: result.execution_metrics}
         SparkEx.Observation.store_observed_metrics(result.observed_metrics)
         {:reply, {:ok, result.dataframe}, state}
 
@@ -710,9 +835,12 @@ defmodule SparkEx.Session do
     {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
     state = %{state | plan_id_counter: counter}
 
+    opts = merge_session_tags(opts, state.tags)
+
     case Client.execute_plan_arrow(state, proto_plan, opts) do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
+        state = %{state | last_execution_metrics: result.execution_metrics}
         SparkEx.Observation.store_observed_metrics(result.observed_metrics)
         {:reply, {:ok, result.arrow}, state}
 
@@ -725,9 +853,10 @@ defmodule SparkEx.Session do
     {proto_plan, counter} = PlanEncoder.encode_count(plan, state.plan_id_counter)
     state = %{state | plan_id_counter: counter}
 
-    case Client.execute_plan(state, proto_plan) do
+    case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
+        state = %{state | last_execution_metrics: result.execution_metrics}
         SparkEx.Observation.store_observed_metrics(result.observed_metrics)
 
         case extract_count(result.rows) do
@@ -1064,9 +1193,12 @@ defmodule SparkEx.Session do
     {proto_plan, counter} = CommandEncoder.encode(command, state.plan_id_counter)
     state = %{state | plan_id_counter: counter}
 
+    opts = merge_session_tags(opts, state.tags)
+
     case Client.execute_plan(state, proto_plan, opts) do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
+        state = %{state | last_execution_metrics: result.execution_metrics}
         {:reply, :ok, state}
 
       {:error, _} = error ->
@@ -1080,9 +1212,12 @@ defmodule SparkEx.Session do
     {proto_plan, counter} = CommandEncoder.encode(command, state.plan_id_counter)
     state = %{state | plan_id_counter: counter}
 
+    opts = merge_session_tags(opts, state.tags)
+
     case Client.execute_plan(state, proto_plan, opts) do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
+        state = %{state | last_execution_metrics: result.execution_metrics}
         {:reply, {:ok, result.command_result}, state}
 
       {:error, _} = error ->
@@ -1095,6 +1230,8 @@ defmodule SparkEx.Session do
 
     {proto_plan, counter} = CommandEncoder.encode(command, state.plan_id_counter)
     state = %{state | plan_id_counter: counter}
+
+    opts = merge_session_tags(opts, state.tags)
 
     case Client.execute_plan_raw_stream(state, proto_plan, opts) do
       {:ok, stream} ->
@@ -1109,9 +1246,10 @@ defmodule SparkEx.Session do
     {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
     state = %{state | plan_id_counter: counter}
 
-    case Client.execute_plan(state, proto_plan) do
+    case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
+        state = %{state | last_execution_metrics: result.execution_metrics}
 
         case extract_show_string(result.rows) do
           {:ok, str} -> {:reply, {:ok, str}, state}
@@ -1389,5 +1527,35 @@ defmodule SparkEx.Session do
 
   defp resolve_connect_opts(_url, _connect_opts) do
     {:error, {:invalid_connect_opts, "expected :url or :connect_opts"}}
+  end
+
+  defp session_id_for(session) do
+    if is_pid(session) do
+      GenServer.call(session, :get_session_id)
+    else
+      %__MODULE__{session_id: session_id} = session
+      session_id
+    end
+  end
+
+  defp merge_session_tags(opts, session_tags) do
+    request_tags = Keyword.get(opts, :tags, [])
+    combined = request_tags ++ session_tags
+
+    if combined == [] do
+      opts
+    else
+      Keyword.put(opts, :tags, combined)
+    end
+  end
+
+  defp validate_tag!(""), do: raise(ArgumentError, "Spark Connect tag must be a non-empty string")
+
+  defp validate_tag!(tag) when is_binary(tag) do
+    if String.contains?(tag, ",") do
+      raise ArgumentError, "Spark Connect tag cannot contain ','"
+    end
+
+    :ok
   end
 end

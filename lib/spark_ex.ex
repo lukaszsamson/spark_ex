@@ -96,6 +96,120 @@ defmodule SparkEx do
   end
 
   @doc """
+  Returns a Table Valued Function accessor (PySpark-style `spark.tvf`).
+  """
+  @spec tvf(GenServer.server()) :: SparkEx.TableValuedFunction.t()
+  def tvf(session) do
+    SparkEx.TableValuedFunction.new(session)
+  end
+
+  @doc """
+  Returns a UDF registration accessor (PySpark-style `spark.udf`).
+  """
+  @spec udf(GenServer.server()) :: module()
+  def udf(_session), do: SparkEx.UDFRegistration
+
+  @doc """
+  Returns a UDTF registration accessor (PySpark-style `spark.udtf`).
+  """
+  @spec udtf(GenServer.server()) :: module()
+  def udtf(_session), do: SparkEx.UDFRegistration
+
+  @doc """
+  Returns a DataSource registration accessor (PySpark-style `spark.dataSource`).
+  """
+  @spec data_source(GenServer.server()) :: module()
+  def data_source(_session), do: SparkEx.UDFRegistration
+
+  @doc """
+  Registers a progress handler callback for the given session.
+  """
+  @spec register_progress_handler(GenServer.server(), (map() -> any())) :: :ok
+  def register_progress_handler(session, handler) when is_function(handler, 1) do
+    SparkEx.Session.register_progress_handler(session, handler)
+  end
+
+  @doc """
+  Removes a previously registered progress handler for the given session.
+  """
+  @spec remove_progress_handler(GenServer.server(), (map() -> any())) :: :ok
+  def remove_progress_handler(session, handler) when is_function(handler, 1) do
+    SparkEx.Session.remove_progress_handler(session, handler)
+  end
+
+  @doc """
+  Clears all progress handlers registered for the given session.
+  """
+  @spec clear_progress_handlers(GenServer.server()) :: :ok
+  def clear_progress_handlers(session) do
+    SparkEx.Session.clear_progress_handlers(session)
+  end
+
+  @doc """
+  Returns whether the session has been released/stopped.
+  """
+  @spec is_stopped(GenServer.server()) :: boolean()
+  def is_stopped(session) do
+    SparkEx.Session.is_stopped(session)
+  end
+
+  @doc """
+  Attaches a thread-local user context extension (protobuf Any).
+  """
+  @spec add_threadlocal_user_context_extension(Google.Protobuf.Any.t()) :: :ok
+  def add_threadlocal_user_context_extension(extension) do
+    SparkEx.UserContextExtensions.add_threadlocal_user_context_extension(extension)
+  end
+
+  @doc """
+  Attaches a global user context extension (protobuf Any).
+  """
+  @spec add_global_user_context_extension(Google.Protobuf.Any.t()) :: :ok
+  def add_global_user_context_extension(extension) do
+    SparkEx.UserContextExtensions.add_global_user_context_extension(extension)
+  end
+
+  @doc """
+  Removes a user context extension by type URL.
+  """
+  @spec remove_user_context_extension(String.t()) :: :ok
+  def remove_user_context_extension(extension_id) when is_binary(extension_id) do
+    SparkEx.UserContextExtensions.remove_user_context_extension(extension_id)
+  end
+
+  @doc """
+  Clears all user context extensions (global and thread-local).
+  """
+  @spec clear_user_context_extensions() :: :ok
+  def clear_user_context_extensions do
+    SparkEx.UserContextExtensions.clear_user_context_extensions()
+  end
+
+  @doc """
+  Sets retry policies for Spark Connect operations.
+  """
+  @spec set_retry_policies(map() | keyword()) :: :ok
+  def set_retry_policies(policies) do
+    SparkEx.RetryPolicyRegistry.set_policies(policies)
+  end
+
+  @doc """
+  Returns the current retry policy configuration.
+  """
+  @spec get_retry_policies() :: map()
+  def get_retry_policies do
+    SparkEx.RetryPolicyRegistry.get_policies()
+  end
+
+  @doc """
+  Formats a SQL string with positional or named parameters.
+  """
+  @spec format_sql(String.t(), list() | map() | nil) :: String.t()
+  def format_sql(sql, args \\ nil) when is_binary(sql) do
+    SparkEx.SqlFormatter.format(sql, args)
+  end
+
+  @doc """
   Creates a DataFrame from a range of integers.
 
   Supports both signatures:
@@ -356,6 +470,38 @@ defmodule SparkEx do
   @spec interrupt_tag(GenServer.server(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
   def interrupt_tag(session, tag) when is_binary(tag) do
     SparkEx.Session.interrupt_tag(session, tag)
+  end
+
+  @doc """
+  Adds a tag to be applied to all subsequent operations in this session.
+  """
+  @spec add_tag(GenServer.server(), String.t()) :: :ok
+  def add_tag(session, tag) when is_binary(tag) do
+    SparkEx.Session.add_tag(session, tag)
+  end
+
+  @doc """
+  Removes a tag from the session.
+  """
+  @spec remove_tag(GenServer.server(), String.t()) :: :ok
+  def remove_tag(session, tag) when is_binary(tag) do
+    SparkEx.Session.remove_tag(session, tag)
+  end
+
+  @doc """
+  Returns all tags set on the session.
+  """
+  @spec get_tags(GenServer.server()) :: [String.t()]
+  def get_tags(session) do
+    SparkEx.Session.get_tags(session)
+  end
+
+  @doc """
+  Clears all tags from the session.
+  """
+  @spec clear_tags(GenServer.server()) :: :ok
+  def clear_tags(session) do
+    SparkEx.Session.clear_tags(session)
   end
 
   @doc """

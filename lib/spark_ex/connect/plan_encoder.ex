@@ -9,14 +9,17 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   alias Spark.Connect.{
     CachedLocalRelation,
+    CachedRemoteRelation,
     Catalog,
     ChunkedCachedLocalRelation,
+    DataType,
     Expression,
     LocalRelation,
     Plan,
     Relation,
     RelationCommon,
     SQL,
+    ToSchema,
     Range,
     WithRelations
   }
@@ -147,6 +150,17 @@ defmodule SparkEx.Connect.PlanEncoder do
            dataHashes: data_hashes,
            schemaHash: schema_hash
          }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:cached_remote_relation, relation_id}, counter) do
+    {plan_id, counter} = next_id(counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:cached_remote_relation, %CachedRemoteRelation{relation_id: relation_id}}
     }
 
     {relation, counter}
@@ -768,6 +782,18 @@ defmodule SparkEx.Connect.PlanEncoder do
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
       rel_type: {:subquery_alias, %Spark.Connect.SubqueryAlias{input: child, alias: alias_name}}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:to_schema, child_plan, schema}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:to_schema, %ToSchema{input: child, schema: encode_schema(schema)}}
     }
 
     {relation, counter}
@@ -2189,6 +2215,16 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_sql_argument({:lambda_var, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:subquery, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument(value), do: encode_literal_expression(value)
+
+  defp encode_schema(%DataType{} = schema), do: schema
+
+  defp encode_schema(schema) when is_binary(schema) do
+    %DataType{kind: {:unparsed, %DataType.Unparsed{data_type_string: schema}}}
+  end
+
+  defp encode_schema({:struct, _} = schema) do
+    encode_schema(SparkEx.Types.schema_to_string(schema))
+  end
 
   defp validate_subquery_opts!(:table_arg, opts) when is_list(opts) do
     case Keyword.get(opts, :table_arg_options) do

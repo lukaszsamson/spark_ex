@@ -12,12 +12,14 @@ defmodule SparkEx.Connect.CommandEncoder do
     CommonInlineUserDefinedFunction,
     CommonInlineUserDefinedTableFunction,
     CreateDataFrameViewCommand,
+    CheckpointCommand,
     Expression,
     JavaUDF,
     MergeAction,
     MergeIntoTableCommand,
     Plan,
     PythonUDTF,
+    RemoveCachedRemoteRelationCommand,
     StreamingQueryCommand,
     StreamingQueryInstanceId,
     StreamingQueryListenerBusCommand,
@@ -216,6 +218,40 @@ defmodule SparkEx.Connect.CommandEncoder do
     }
 
     command = %Command{command_type: {:register_data_source, data_source}}
+    {command, counter}
+  end
+
+  # --- CheckpointCommand ---
+
+  def encode_command({:checkpoint, df_plan, local, eager, storage_level}, counter) do
+    {relation, counter} = PlanEncoder.encode_relation(df_plan, counter)
+
+    command = %Command{
+      command_type:
+        {:checkpoint_command,
+         %CheckpointCommand{
+           relation: relation,
+           local: local,
+           eager: eager,
+           storage_level: storage_level
+         }}
+    }
+
+    {command, counter}
+  end
+
+  # --- RemoveCachedRemoteRelationCommand ---
+
+  def encode_command({:remove_cached_remote_relation, relation_id}, counter)
+      when is_binary(relation_id) do
+    command = %Command{
+      command_type:
+        {:remove_cached_remote_relation_command,
+         %RemoveCachedRemoteRelationCommand{
+           relation: %Spark.Connect.CachedRemoteRelation{relation_id: relation_id}
+         }}
+    }
+
     {command, counter}
   end
 

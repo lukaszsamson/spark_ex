@@ -98,4 +98,41 @@ defmodule SparkEx.Unit.WriterV2Test do
       assert w.table_properties == %{}
     end
   end
+
+  describe "createOrReplace/2" do
+    defmodule CreateOrReplaceSession do
+      use GenServer
+
+      def start_link(test_pid) do
+        GenServer.start_link(__MODULE__, test_pid, [])
+      end
+
+      @impl true
+      def init(test_pid), do: {:ok, test_pid}
+
+      @impl true
+      def handle_call(
+            {:execute_command, {:write_operation_v2, _plan, table, v2_opts}, _opts},
+            _from,
+            test_pid
+          ) do
+        send(test_pid, {:create_or_replace_called, table, v2_opts})
+        {:reply, :ok, test_pid}
+      end
+    end
+
+    test "delegates to create_or_replace" do
+      {:ok, session} = CreateOrReplaceSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      writer =
+        df
+        |> DataFrame.write_v2("my_table")
+        |> WriterV2.using("parquet")
+
+      assert :ok = WriterV2.createOrReplace(writer)
+      assert_receive {:create_or_replace_called, "my_table", v2_opts}
+      assert Keyword.get(v2_opts, :mode) == :create_or_replace
+    end
+  end
 end

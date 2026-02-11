@@ -53,6 +53,14 @@ defmodule SparkEx.StreamWriter do
     %{writer | source: source}
   end
 
+  @doc """
+  Sets the output path for the streaming sink.
+  """
+  @spec path(t(), String.t()) :: t()
+  def path(%__MODULE__{} = writer, path) when is_binary(path) do
+    %{writer | path: path}
+  end
+
   @spec option(t(), String.t(), term()) :: t()
   def option(%__MODULE__{} = writer, key, value) when is_binary(key) do
     if is_nil(value) do
@@ -170,6 +178,16 @@ defmodule SparkEx.StreamWriter do
   def start(%__MODULE__{} = writer, opts \\ []) do
     write_opts = build_write_opts(writer)
     execute_stream_start(writer.df, write_opts, opts)
+  end
+
+  @doc """
+  Starts the streaming query writing XML to the given path.
+  """
+  @spec xml(t(), String.t()) :: t()
+  def xml(%__MODULE__{} = writer, path) when is_binary(path) do
+    writer
+    |> format("xml")
+    |> path(path)
   end
 
   @doc """

@@ -37,6 +37,16 @@ defmodule SparkEx.M14.StreamingTest do
       assert {:data_source, ds} = read.read_type
       assert ds.schema == "id INT, name STRING"
     end
+
+    test "encodes xml streaming source" do
+      plan = {:read_data_source_streaming, "xml", ["/data/stream"], nil, %{}}
+      {relation, _counter} = PlanEncoder.encode_relation(plan, 0)
+
+      assert {:read, read} = relation.rel_type
+      assert read.is_streaming == true
+      assert {:data_source, ds} = read.read_type
+      assert ds.format == "xml"
+    end
   end
 
   describe "encode_relation for read_named_table_streaming" do
@@ -646,6 +656,16 @@ defmodule SparkEx.M14.StreamingTest do
       assert writer.source == "console"
     end
 
+    test "path sets the sink path" do
+      writer = %SparkEx.StreamWriter{df: nil} |> SparkEx.StreamWriter.path("/data/output")
+      assert writer.path == "/data/output"
+    end
+
+    test "path sets the sink path" do
+      writer = %SparkEx.StreamWriter{df: nil} |> SparkEx.StreamWriter.path("/data/output")
+      assert writer.path == "/data/output"
+    end
+
     test "option adds an option" do
       writer = %SparkEx.StreamWriter{df: nil} |> SparkEx.StreamWriter.option("key", "val")
       assert writer.options == %{"key" => "val"}
@@ -726,6 +746,18 @@ defmodule SparkEx.M14.StreamingTest do
         |> SparkEx.StreamWriter.options(%{"a" => "1", "b" => nil})
 
       assert writer.options == %{"a" => "1"}
+    end
+
+    test "xml sets format and path" do
+      df = %SparkEx.DataFrame{session: :s, plan: {:sql, "SELECT 1", nil}}
+
+      writer =
+        %SparkEx.StreamWriter{df: df}
+        |> SparkEx.StreamWriter.xml("/data/output")
+
+      assert writer.df == df
+      assert writer.source == "xml"
+      assert writer.path == "/data/output"
     end
 
     test "foreach_writer sets foreach function" do

@@ -106,7 +106,8 @@ defmodule SparkEx.Connect.Errors do
   """
 
   alias Spark.Connect.SparkConnectService.Stub
-  alias Spark.Connect.{FetchErrorDetailsRequest, FetchErrorDetailsResponse, UserContext}
+  alias Spark.Connect.{FetchErrorDetailsRequest, FetchErrorDetailsResponse}
+  alias SparkEx.UserContextExtensions
 
   @error_info_type_url "type.googleapis.com/google.rpc.ErrorInfo"
 
@@ -175,7 +176,7 @@ defmodule SparkEx.Connect.Errors do
   defp do_fetch_error_details(error_id, session) do
     request = %FetchErrorDetailsRequest{
       session_id: session.session_id,
-      user_context: %UserContext{user_id: session.user_id},
+      user_context: UserContextExtensions.build_user_context(session.user_id),
       client_type: session.client_type,
       client_observed_server_side_session_id: session.server_side_session_id,
       error_id: error_id
