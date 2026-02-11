@@ -178,7 +178,7 @@ defmodule SparkEx.M11.PlanEncoderTest do
     test "encodes table_arg subquery" do
       expr =
         PlanEncoder.encode_expression(
-          {:subquery, :table_arg, {:plan_id, 5, {:sql, "SELECT 1", nil}}, []}
+          {:subquery, :table_arg, {:plan_id, 5, {:sql, "SELECT 1", nil}}, [table_arg_options: []]}
         )
 
       assert %Expression{expr_type: {:subquery_expression, sq}} = expr

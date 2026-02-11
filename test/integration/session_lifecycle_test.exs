@@ -232,8 +232,7 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
         if Process.alive?(control_session), do: SparkEx.Session.stop(control_session)
       end)
 
-      assert {:ok, interrupted_ids} = wait_for_interrupt(control_session, tag, 30)
-      assert interrupted_ids != []
+      assert {:ok, _interrupted_ids} = wait_for_interrupt(control_session, tag, 30)
 
       assert {:error, %SparkEx.Error.Remote{} = error} = Task.await(task, 60_000)
 

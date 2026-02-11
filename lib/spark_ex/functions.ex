@@ -97,8 +97,8 @@ defmodule SparkEx.Functions do
 
     named_exprs =
       Enum.map(named_args, fn
-        {key, %Column{expr: expr}} when is_binary(key) -> {:named_arg, key, expr}
-        {key, value} when is_binary(key) -> {:named_arg, key, {:lit, value}}
+        {key, %Column{expr: expr}} -> {:named_arg, to_string(key), expr}
+        {key, value} -> {:named_arg, to_string(key), {:lit, value}}
       end)
 
     %Column{expr: {:call_function, name, arg_exprs ++ named_exprs}}
@@ -143,7 +143,8 @@ defmodule SparkEx.Functions do
   def hours(col), do: %Column{expr: {:fn, "hours", [to_expr(col)], false}}
 
   defp normalize_expr_arg(%Column{expr: expr}), do: expr
-  defp normalize_expr_arg(value), do: {:lit, value}
+  defp normalize_expr_arg(value) when is_binary(value), do: {:lit, value}
+  defp normalize_expr_arg(value), do: to_expr(value)
 
   # ── Sort helpers (hand-written delegates) ──
 

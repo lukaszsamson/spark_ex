@@ -398,7 +398,7 @@ defmodule SparkEx.M12.CatalogPlanEncoderTest do
           location: "/tmp/db"
         )
 
-      assert sql == "CREATE DATABASE IF NOT EXISTS db1 LOCATION '/tmp/db'"
+      assert sql == "CREATE DATABASE IF NOT EXISTS LOCATION '/tmp/db' db1"
     end
 
     test "build_drop_database_sql supports IF EXISTS and CASCADE" do

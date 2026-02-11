@@ -326,6 +326,8 @@ defmodule SparkEx.Connect.ResultDecoderTest do
 
       assert {:ok, result} = ResultDecoder.decode_stream_arrow(stream)
       assert result.arrow == <<1, 2, 3>>
+      assert result.observed_metrics == %{}
+      assert result.execution_metrics == %{}
     end
   end
 end

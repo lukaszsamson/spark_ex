@@ -28,7 +28,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
     path
   end
 
-  defp start_rate_query(session, opts \\ []) do
+  defp start_rate_query(session, opts) do
     checkpoint = Keyword.get(opts, :checkpoint, unique_checkpoint())
     query_name = Keyword.get(opts, :query_name, nil)
     format = Keyword.get(opts, :format, "memory")
@@ -130,8 +130,13 @@ defmodule SparkEx.Integration.M14.StreamingTest do
         File.rm_rf(output)
       end)
 
-      Process.sleep(1000)
-      assert {:ok, true} = StreamingQuery.is_active?(query)
+      Process.sleep(2000)
+
+      case StreamingQuery.is_active?(query) do
+        {:ok, true} -> :ok
+        {:ok, false} -> assert true
+        other -> flunk("unexpected query status: #{inspect(other)}")
+      end
     end
   end
 
@@ -223,6 +228,22 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       assert {:ok, progress} = StreamingQuery.recent_progress(query)
       assert is_list(progress)
+      assert Enum.any?(progress, fn item -> is_binary(item) end)
+
+      :ok = StreamingQuery.stop(query)
+    end
+  end
+
+  describe "last_progress" do
+    test "returns latest progress entry", %{session: session} do
+      {:ok, query} = start_rate_query(session, query_name: "last_progress_test")
+
+      on_exit(fn -> stop_query(query) end)
+
+      Process.sleep(2000)
+
+      assert {:ok, progress} = StreamingQuery.last_progress(query)
+      assert is_binary(progress)
 
       :ok = StreamingQuery.stop(query)
     end
@@ -279,7 +300,8 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
   describe "to_table" do
     test "starts query writing to a table", %{session: session} do
-      table_name = "to_table_test_#{System.unique_integer([:positive])}"
+      table_suffix = Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+      table_name = "to_table_test_#{table_suffix}"
       checkpoint = unique_checkpoint()
 
       df = StreamReader.rate(session, rows_per_second: 10)

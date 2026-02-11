@@ -211,8 +211,8 @@ defmodule SparkEx.Unit.ArtifactTest do
       File.write!(file_path, "file-data")
 
       assert {:ok, artifacts} = Artifacts.prepare([jar_path, file_path], "jars")
-      assert {"jars/artifact_jar.txt", "jar-data"} in artifacts
-      assert {"jars/artifact_file.txt", "file-data"} in artifacts
+      assert {"jars/spark_ex_artifact_jar.txt", "jar-data"} in artifacts
+      assert {"jars/spark_ex_artifact_file.txt", "file-data"} in artifacts
     end
 
     test "returns error for missing file" do

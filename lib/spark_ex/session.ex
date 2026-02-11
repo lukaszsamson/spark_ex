@@ -683,22 +683,6 @@ defmodule SparkEx.Session do
     {:reply, {:ok, state.last_execution_metrics}, state}
   end
 
-  @impl true
-  def handle_cast({:add_tag, tag}, state) do
-    validate_tag!(tag)
-    {:noreply, %{state | tags: state.tags ++ [tag]}}
-  end
-
-  @impl true
-  def handle_cast({:remove_tag, tag}, state) do
-    {:noreply, %{state | tags: Enum.reject(state.tags, &(&1 == tag))}}
-  end
-
-  @impl true
-  def handle_cast(:clear_tags, state) do
-    {:noreply, %{state | tags: []}}
-  end
-
   def handle_call({:clone_session, _new_session_id}, _from, %{released: true} = state) do
     {:reply, {:error, :session_released}, state}
   end
@@ -1259,6 +1243,22 @@ defmodule SparkEx.Session do
       {:error, _} = error ->
         {:reply, error, state}
     end
+  end
+
+  @impl true
+  def handle_cast({:add_tag, tag}, state) do
+    validate_tag!(tag)
+    {:noreply, %{state | tags: state.tags ++ [tag]}}
+  end
+
+  @impl true
+  def handle_cast({:remove_tag, tag}, state) do
+    {:noreply, %{state | tags: Enum.reject(state.tags, &(&1 == tag))}}
+  end
+
+  @impl true
+  def handle_cast(:clear_tags, state) do
+    {:noreply, %{state | tags: []}}
   end
 
   @impl true

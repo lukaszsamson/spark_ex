@@ -1250,7 +1250,7 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression{
       expr_type:
         {:call_function,
-         %Expression.CallFunction{
+         %Spark.Connect.CallFunction{
            function_name: name,
            arguments: Enum.map(args, &encode_expression/1)
          }}
@@ -1261,7 +1261,7 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression{
       expr_type:
         {:named_argument_expression,
-         %Expression.NamedArgumentExpression{key: key, value: encode_expression(value)}}
+         %Spark.Connect.NamedArgumentExpression{key: key, value: encode_expression(value)}}
     }
   end
 
@@ -1494,6 +1494,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:cached_local_relation, _hash} = plan, plan_ids, refs, counter),
     do: {plan, plan_ids, refs, counter}
 
+  defp rewrite_plan({:cached_remote_relation, relation_id} = plan, plan_ids, refs, counter)
+       when is_binary(relation_id),
+       do: {plan, plan_ids, refs, counter}
+
   defp rewrite_plan(
          {:chunked_cached_local_relation, _data_hashes, _schema_hash} = plan,
          plan_ids,
@@ -1501,6 +1505,11 @@ defmodule SparkEx.Connect.PlanEncoder do
          counter
        ),
        do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan({:to_schema, child_plan, schema}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:to_schema, child_plan, schema}, plan_ids, refs, counter}
+  end
 
   defp rewrite_plan({:limit, child_plan, n}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
@@ -2509,7 +2518,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_null_ordering(:nulls_last), do: :SORT_NULLS_LAST
 
   defp time_to_nanos(%Time{microsecond: {usec, precision}} = time) do
-    seconds = Time.to_seconds_after_midnight(time)
+    {seconds, _usecs} = Time.to_seconds_after_midnight(time)
     normalized_usecs = normalize_microseconds(usec, precision)
     seconds * 1_000_000_000 + normalized_usecs * 1000
   end

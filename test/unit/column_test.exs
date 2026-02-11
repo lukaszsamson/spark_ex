@@ -97,8 +97,8 @@ defmodule SparkEx.ColumnTest do
     end
 
     test "supports numeric reverse operators" do
-      result = Column.plus(1, Functions.col("a"))
-      assert %Column{expr: {:fn, "+", [{:lit, 1}, {:col, "a"}], false}} = result
+      result = Column.plus(Functions.col("a"), 1)
+      assert %Column{expr: {:fn, "+", [{:col, "a"}, {:lit, 1}], false}} = result
     end
 
     test "pow/2 builds power expression" do

@@ -19,6 +19,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SPARK_HOME="$PROJECT_ROOT/test/spark-4.1.1-bin-hadoop3-connect"
 PORT=15002
+SQLITE_JDBC_JAR="$PROJECT_ROOT/test/jars/sqlite-jdbc-3.51.2.0.jar"
 
 # --- Validate SPARK_HOME ---
 if [ ! -d "$SPARK_HOME/sbin" ]; then
@@ -40,6 +41,15 @@ if [ -z "${JAVA_HOME:-}" ]; then
   elif command -v /usr/libexec/java_home &>/dev/null; then
     export JAVA_HOME="$(/usr/libexec/java_home -v 21 2>/dev/null || /usr/libexec/java_home -v 17 2>/dev/null || true)"
   fi
+fi
+
+# --- Validate sqlite JDBC jar ---
+if [ ! -f "$SQLITE_JDBC_JAR" ]; then
+  echo "ERROR: sqlite JDBC jar not found at $SQLITE_JDBC_JAR"
+  echo "Download with:"
+  echo "  curl -L -o \"$SQLITE_JDBC_JAR\" \\\""
+  echo "    https://repo1.maven.org/maven2/org/xerial/sqlite-jdbc/3.51.2.0/sqlite-jdbc-3.51.2.0.jar"
+  exit 1
 fi
 
 if [ -z "${JAVA_HOME:-}" ]; then

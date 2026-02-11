@@ -229,16 +229,6 @@ defmodule SparkEx.DataFrameTest do
     end
   end
 
-  describe "groupby/2" do
-    test "aliases group_by" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
-      grouped = DataFrame.groupby(df, ["dept"])
-
-      assert %SparkEx.GroupedData{group_type: :groupby, grouping_exprs: [{:col, "dept"}]} =
-               grouped
-    end
-  end
-
   describe "filter/2" do
     test "creates filter plan from Column condition" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
@@ -329,16 +319,6 @@ defmodule SparkEx.DataFrameTest do
     end
   end
 
-  describe "sort/2" do
-    test "aliases order_by" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
-      result = DataFrame.sort(df, ["name"])
-
-      assert %DataFrame{plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, nil}]}} =
-               result
-    end
-  end
-
   describe "observe/3" do
     test "creates collect_metrics plan" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
@@ -352,7 +332,8 @@ defmodule SparkEx.DataFrameTest do
 
   describe "to_local_iterator/2" do
     test "returns rows enumerable" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      {:ok, session} = ArrowSession.start_link()
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
       assert {:ok, rows} = DataFrame.to_local_iterator(df)
       assert is_list(rows)

@@ -315,7 +315,7 @@ defmodule SparkEx.Connect.ResultDecoder do
     decode_stream_arrow(stream, session, nil)
   end
 
-  defp decode_stream_arrow(stream, session, opts) do
+  defp decode_stream_arrow(stream, session, _opts) do
     state = %{
       arrow_parts: [],
       current_chunked_batch: nil,
@@ -348,7 +348,12 @@ defmodule SparkEx.Connect.ResultDecoder do
               end
 
             {:result_complete, _} ->
-              {:halt, {:ok, finalize_arrow_result(state)}}
+              arrow_state =
+                state
+                |> Map.put_new(:arrow_parts, [])
+                |> Map.put(:current_chunked_batch, nil)
+
+              {:halt, {:ok, finalize_arrow_result(arrow_state)}}
 
             _ ->
               {:cont, {:ok, state}}
@@ -363,10 +368,18 @@ defmodule SparkEx.Connect.ResultDecoder do
       end)
 
     case result do
+      {:ok, %{arrow: _} = arrow_result} ->
+        {:ok, arrow_result}
+
       {:ok, state} ->
-        case state.current_chunked_batch do
+        finalize_state =
+          state
+          |> Map.put_new(:current_chunked_batch, nil)
+          |> Map.put_new(:arrow_parts, [])
+
+        case finalize_state.current_chunked_batch do
           nil ->
-            {:ok, finalize_arrow_result(state)}
+            {:ok, finalize_arrow_result(finalize_state)}
 
           current ->
             {:error,
@@ -498,6 +511,22 @@ defmodule SparkEx.Connect.ResultDecoder do
       execution_metrics: state.execution_metrics
     }
   end
+
+  defp maybe_set_schema(state, nil), do: state
+
+  defp maybe_set_schema(state, schema) do
+    %{state | schema: schema}
+  end
+
+  defp maybe_set_server_session(state, %ExecutePlanResponse{server_side_session_id: nil}),
+    do: state
+
+  defp maybe_set_server_session(state, %ExecutePlanResponse{server_side_session_id: id})
+       when is_binary(id) do
+    %{state | server_side_session_id: id}
+  end
+
+  defp maybe_set_server_session(state, _resp), do: state
 
   defp validate_batch_start_offset(_state, %ExecutePlanResponse.ArrowBatch{start_offset: nil}),
     do: :ok

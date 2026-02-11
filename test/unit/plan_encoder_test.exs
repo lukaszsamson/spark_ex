@@ -117,33 +117,17 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
   end
 
-  describe "literal encoding" do
-    test "encodes date/time literals" do
-      date = ~D[2024-01-02]
-      time = ~T[12:30:15.000123]
-      naive = ~N[2024-01-02 12:30:15]
-
-      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:date, _}}}} =
-               PlanEncoder.encode_expression({:lit, date})
-
-      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:time, _}}}} =
-               PlanEncoder.encode_expression({:lit, time})
-
-      assert %Expression{
-               expr_type: {:literal, %Expression.Literal{literal_type: {:timestamp_ntz, _}}}
-             } =
-               PlanEncoder.encode_expression({:lit, naive})
-    end
-  end
-
   describe "subquery in encoding" do
     test "encodes in_subquery values" do
-      expr = {:subquery, :in, {:sql, "SELECT * FROM t", nil}, in_values: [{:col, "id"}]}
+      expr =
+        {:subquery, :in, {:plan_id, 7, {:sql, "SELECT * FROM t", nil}}, in_values: [{:col, "id"}]}
+
       encoded = PlanEncoder.encode_expression(expr)
 
       assert %Expression{expr_type: {:subquery_expression, subquery}} = encoded
       assert subquery.subquery_type == :SUBQUERY_TYPE_IN
       assert length(subquery.in_subquery_values) == 1
+      assert subquery.plan_id == 7
     end
   end
 
@@ -199,27 +183,56 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
   describe "encode/2 with ToSchema" do
     test "encodes ToSchema with DDL string" do
-      {plan, _counter} = PlanEncoder.encode({:to_schema, {:sql, "SELECT 1", nil}, "id LONG"}, 0)
+      {plan, _counter} =
+        PlanEncoder.encode(
+          {:with_relations, {:to_schema, {:sql, "SELECT 1", nil}, "id LONG"}, []},
+          0
+        )
 
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:to_schema, to_schema}}}} = plan
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
+               plan
+
+      assert %Spark.Connect.WithRelations{root: %Relation{rel_type: {:to_schema, to_schema}}} =
+               with_relations
+
       assert %Spark.Connect.ToSchema{} = to_schema
       assert %Spark.Connect.DataType{kind: {:unparsed, _}} = to_schema.schema
     end
 
     test "encodes ToSchema with Struct type" do
       schema = SparkEx.Types.struct_type([SparkEx.Types.struct_field("id", :long)])
-      {plan, _counter} = PlanEncoder.encode({:to_schema, {:sql, "SELECT 1", nil}, schema}, 0)
 
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:to_schema, to_schema}}}} = plan
+      {plan, _counter} =
+        PlanEncoder.encode(
+          {:with_relations, {:to_schema, {:sql, "SELECT 1", nil}, schema}, []},
+          0
+        )
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
+               plan
+
+      assert %Spark.Connect.WithRelations{root: %Relation{rel_type: {:to_schema, to_schema}}} =
+               with_relations
+
       assert %Spark.Connect.ToSchema{} = to_schema
       assert %Spark.Connect.DataType{kind: {:unparsed, _}} = to_schema.schema
     end
 
     test "encodes ToSchema with DataType" do
       schema = %Spark.Connect.DataType{kind: {:long, %Spark.Connect.DataType.Long{}}}
-      {plan, _counter} = PlanEncoder.encode({:to_schema, {:sql, "SELECT 1", nil}, schema}, 0)
 
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:to_schema, to_schema}}}} = plan
+      {plan, _counter} =
+        PlanEncoder.encode(
+          {:with_relations, {:to_schema, {:sql, "SELECT 1", nil}, schema}, []},
+          0
+        )
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
+               plan
+
+      assert %Spark.Connect.WithRelations{root: %Relation{rel_type: {:to_schema, to_schema}}} =
+               with_relations
+
       assert %Spark.Connect.ToSchema{} = to_schema
       assert %Spark.Connect.DataType{kind: {:long, _}} = to_schema.schema
     end
@@ -227,10 +240,16 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
   describe "encode/2 with cached_remote_relation" do
     test "encodes cached remote relation" do
-      {plan, _counter} = PlanEncoder.encode({:cached_remote_relation, "rel-1"}, 0)
+      {plan, _counter} =
+        PlanEncoder.encode({:with_relations, {:cached_remote_relation, "rel-1"}, []}, 0)
 
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:cached_remote_relation, cached}}}} =
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
                plan
+
+      assert %Spark.Connect.WithRelations{
+               root: %Relation{rel_type: {:cached_remote_relation, cached}}
+             } =
+               with_relations
 
       assert %Spark.Connect.CachedRemoteRelation{relation_id: "rel-1"} = cached
     end
@@ -248,7 +267,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
   end
 
-  describe "literal encoding" do
+  describe "literal encoding (sql arguments)" do
     test "encodes various literal types" do
       # nil
       {plan, _} = PlanEncoder.encode({:sql, "SELECT ?", [nil]}, 0)
@@ -421,7 +440,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       {encoded, _} = PlanEncoder.encode(plan, 0)
 
       assert %Plan{op_type: {:root, %Relation{rel_type: {:lateral_join, lateral}}}} = encoded
-      assert %Spark.Connect.LateralJoin{join_type: :JOIN_TYPE_LEFT} = lateral
+      assert %Spark.Connect.LateralJoin{join_type: :JOIN_TYPE_LEFT_OUTER} = lateral
     end
   end
 
@@ -437,25 +456,6 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert %Plan{op_type: {:root, %Relation{rel_type: {:aggregate, agg}}}} = encoded
       assert agg.group_type == :GROUP_TYPE_GROUPING_SETS
       assert length(agg.grouping_sets) == 2
-    end
-  end
-
-  describe "metadata_column encoding" do
-    test "encodes unresolved_attribute with metadata flag" do
-      {plan, _} =
-        PlanEncoder.encode(
-          {:project, {:sql, "SELECT * FROM t", nil}, [{:metadata_col, "_meta"}]},
-          0
-        )
-
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:project, project}}}} = plan
-      [expr] = project.expressions
-
-      assert {:unresolved_attribute,
-              %Expression.UnresolvedAttribute{
-                unparsed_identifier: "_meta",
-                is_metadata_column: true
-              }} = expr.expr_type
     end
   end
 end

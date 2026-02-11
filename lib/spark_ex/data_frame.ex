@@ -1235,7 +1235,7 @@ defmodule SparkEx.DataFrame do
   - `:eager` — whether to checkpoint eagerly (default: false)
   """
   @spec checkpoint(t(), keyword()) :: t() | {:error, term()}
-  def checkpoint(%__MODULE__{} = df, opts \\ []) do
+  def checkpoint(%__MODULE__{} = df, opts) do
     eager = Keyword.get(opts, :eager, false)
 
     case SparkEx.Session.execute_command_with_result(
@@ -1267,7 +1267,7 @@ defmodule SparkEx.DataFrame do
   - `:storage_level` — optional `Spark.Connect.StorageLevel` struct
   """
   @spec local_checkpoint(t(), keyword()) :: t() | {:error, term()}
-  def local_checkpoint(%__MODULE__{} = df, opts \\ []) do
+  def local_checkpoint(%__MODULE__{} = df, opts) do
     eager = Keyword.get(opts, :eager, false)
     storage_level = Keyword.get(opts, :storage_level, nil)
 

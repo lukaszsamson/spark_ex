@@ -661,11 +661,6 @@ defmodule SparkEx.M14.StreamingTest do
       assert writer.path == "/data/output"
     end
 
-    test "path sets the sink path" do
-      writer = %SparkEx.StreamWriter{df: nil} |> SparkEx.StreamWriter.path("/data/output")
-      assert writer.path == "/data/output"
-    end
-
     test "option adds an option" do
       writer = %SparkEx.StreamWriter{df: nil} |> SparkEx.StreamWriter.option("key", "val")
       assert writer.options == %{"key" => "val"}
