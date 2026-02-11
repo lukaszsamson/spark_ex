@@ -75,6 +75,76 @@ defmodule SparkEx.Functions do
     %Column{expr: {:star}}
   end
 
+  @doc """
+  Builds a named argument expression.
+  """
+  @spec named_arg(String.t(), Column.t() | term()) :: Column.t()
+  def named_arg(key, %Column{expr: expr}) when is_binary(key) do
+    %Column{expr: {:named_arg, key, expr}}
+  end
+
+  def named_arg(key, value) when is_binary(key) do
+    %Column{expr: {:named_arg, key, {:lit, value}}}
+  end
+
+  @doc """
+  Calls a function with positional and named arguments.
+  """
+  @spec call_function(String.t(), [Column.t() | term()], keyword()) :: Column.t()
+  def call_function(name, args \\ [], named_args \\ [])
+      when is_binary(name) and is_list(args) and is_list(named_args) do
+    arg_exprs = Enum.map(args, &normalize_expr_arg/1)
+
+    named_exprs =
+      Enum.map(named_args, fn
+        {key, %Column{expr: expr}} when is_binary(key) -> {:named_arg, key, expr}
+        {key, value} when is_binary(key) -> {:named_arg, key, {:lit, value}}
+      end)
+
+    %Column{expr: {:call_function, name, arg_exprs ++ named_exprs}}
+  end
+
+  @doc """
+  Returns the bucket number for a value and number of buckets.
+  """
+  @spec bucket(Column.t() | integer(), Column.t() | String.t()) :: Column.t()
+  def bucket(num_buckets, col) do
+    num_expr =
+      case num_buckets do
+        %Column{expr: expr} -> expr
+        value when is_integer(value) -> {:lit, value}
+      end
+
+    %Column{expr: {:fn, "bucket", [num_expr, to_expr(col)], false}}
+  end
+
+  @doc """
+  Extracts years from an interval expression.
+  """
+  @spec years(Column.t() | String.t()) :: Column.t()
+  def years(col), do: %Column{expr: {:fn, "years", [to_expr(col)], false}}
+
+  @doc """
+  Extracts months from an interval expression.
+  """
+  @spec months(Column.t() | String.t()) :: Column.t()
+  def months(col), do: %Column{expr: {:fn, "months", [to_expr(col)], false}}
+
+  @doc """
+  Extracts days from an interval expression.
+  """
+  @spec days(Column.t() | String.t()) :: Column.t()
+  def days(col), do: %Column{expr: {:fn, "days", [to_expr(col)], false}}
+
+  @doc """
+  Extracts hours from an interval expression.
+  """
+  @spec hours(Column.t() | String.t()) :: Column.t()
+  def hours(col), do: %Column{expr: {:fn, "hours", [to_expr(col)], false}}
+
+  defp normalize_expr_arg(%Column{expr: expr}), do: expr
+  defp normalize_expr_arg(value), do: {:lit, value}
+
   # ── Sort helpers (hand-written delegates) ──
 
   @doc "Sort ascending by the given column"
@@ -128,6 +198,152 @@ defmodule SparkEx.Functions do
 
   def otherwise(%Column{expr: {:fn, "when", args, false}} = _when_col, value) do
     %Column{expr: {:fn, "when", args ++ [{:lit, value}], false}}
+  end
+
+  @doc """
+  Calls a registered UDF by name with the given column arguments.
+
+  Equivalent to PySpark's `call_udf`.
+  """
+  @spec call_udf(String.t(), [Column.t() | String.t()]) :: Column.t()
+  def call_udf(name, cols) when is_binary(name) and is_list(cols) do
+    %Column{expr: {:fn, name, Enum.map(cols, &to_expr/1), false}}
+  end
+
+  @doc """
+  Returns the value of a user-defined type (UDT) as its underlying SQL representation.
+  """
+  @spec unwrap_udt(Column.t() | String.t()) :: Column.t()
+  def unwrap_udt(col) do
+    %Column{expr: {:fn, "unwrap_udt", [to_expr(col)], false}}
+  end
+
+  @doc """
+  Decodes Avro binary using the provided JSON schema.
+  """
+  @spec from_avro(Column.t() | String.t(), String.t(), map() | nil) :: Column.t()
+  def from_avro(col, json_schema, options \\ nil)
+      when is_binary(json_schema) and (is_map(options) or is_nil(options)) do
+    args =
+      case options do
+        nil -> [to_expr(col), {:lit, json_schema}]
+        opts -> [to_expr(col), {:lit, json_schema}, options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "from_avro", args, false}}
+  end
+
+  @doc """
+  Encodes a column to Avro binary using an optional JSON schema.
+  """
+  @spec to_avro(Column.t() | String.t(), String.t() | nil) :: Column.t()
+  def to_avro(col, json_schema \\ nil) when is_binary(json_schema) or is_nil(json_schema) do
+    args =
+      case json_schema do
+        nil -> [to_expr(col)]
+        schema -> [to_expr(col), {:lit, schema}]
+      end
+
+    %Column{expr: {:fn, "to_avro", args, false}}
+  end
+
+  @doc """
+  Decodes Protobuf binary using the provided message name and descriptor.
+
+  Either `desc_file_path` or `binary_descriptor_set` can be provided (only one).
+  """
+  @spec from_protobuf(Column.t() | String.t(), String.t(), keyword()) :: Column.t()
+  def from_protobuf(col, message_name, opts \\ [])
+      when is_binary(message_name) and is_list(opts) do
+    desc_file_path = Keyword.get(opts, :desc_file_path)
+    binary_descriptor_set = Keyword.get(opts, :binary_descriptor_set)
+    options = Keyword.get(opts, :options)
+
+    if desc_file_path && binary_descriptor_set do
+      raise ArgumentError, "provide only one of :desc_file_path or :binary_descriptor_set"
+    end
+
+    args =
+      cond do
+        binary_descriptor_set && options ->
+          [
+            to_expr(col),
+            {:lit, message_name},
+            {:lit, binary_descriptor_set},
+            options_expr(options)
+          ]
+
+        binary_descriptor_set ->
+          [to_expr(col), {:lit, message_name}, {:lit, binary_descriptor_set}]
+
+        desc_file_path && options ->
+          [
+            to_expr(col),
+            {:lit, message_name},
+            {:lit, File.read!(desc_file_path)},
+            options_expr(options)
+          ]
+
+        desc_file_path ->
+          [to_expr(col), {:lit, message_name}, {:lit, File.read!(desc_file_path)}]
+
+        options ->
+          [to_expr(col), {:lit, message_name}, options_expr(options)]
+
+        true ->
+          [to_expr(col), {:lit, message_name}]
+      end
+
+    %Column{expr: {:fn, "from_protobuf", args, false}}
+  end
+
+  @doc """
+  Encodes a column to Protobuf binary using the provided message name and descriptor.
+
+  Either `desc_file_path` or `binary_descriptor_set` can be provided (only one).
+  """
+  @spec to_protobuf(Column.t() | String.t(), String.t(), keyword()) :: Column.t()
+  def to_protobuf(col, message_name, opts \\ []) when is_binary(message_name) and is_list(opts) do
+    desc_file_path = Keyword.get(opts, :desc_file_path)
+    binary_descriptor_set = Keyword.get(opts, :binary_descriptor_set)
+    options = Keyword.get(opts, :options)
+
+    if desc_file_path && binary_descriptor_set do
+      raise ArgumentError, "provide only one of :desc_file_path or :binary_descriptor_set"
+    end
+
+    args =
+      cond do
+        binary_descriptor_set && options ->
+          [
+            to_expr(col),
+            {:lit, message_name},
+            {:lit, binary_descriptor_set},
+            options_expr(options)
+          ]
+
+        binary_descriptor_set ->
+          [to_expr(col), {:lit, message_name}, {:lit, binary_descriptor_set}]
+
+        desc_file_path && options ->
+          [
+            to_expr(col),
+            {:lit, message_name},
+            {:lit, File.read!(desc_file_path)},
+            options_expr(options)
+          ]
+
+        desc_file_path ->
+          [to_expr(col), {:lit, message_name}, {:lit, File.read!(desc_file_path)}]
+
+        options ->
+          [to_expr(col), {:lit, message_name}, options_expr(options)]
+
+        true ->
+          [to_expr(col), {:lit, message_name}]
+      end
+
+    %Column{expr: {:fn, "to_protobuf", args, false}}
   end
 
   # ── Higher-order functions (HOF) with lambda support ──
@@ -333,4 +549,16 @@ defmodule SparkEx.Functions do
 
   defp to_expr_or_lit(%Column{expr: e}), do: e
   defp to_expr_or_lit(value), do: {:lit, value}
+
+  defp options_expr(options) when is_map(options) do
+    kvs =
+      options
+      |> Enum.flat_map(fn {k, v} -> [lit_expr(to_string(k)), lit_expr(to_string(v))] end)
+
+    {:fn, "map", kvs, false}
+  end
+
+  defp options_expr(options) do
+    raise ArgumentError, "options must be a map, got: #{inspect(options)}"
+  end
 end

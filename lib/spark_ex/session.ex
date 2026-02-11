@@ -70,6 +70,14 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Executes a plan and returns Arrow IPC data.
+  """
+  @spec execute_arrow(GenServer.server(), term(), keyword()) :: {:ok, term()} | {:error, term()}
+  def execute_arrow(session, plan, opts \\ []) do
+    GenServer.call(session, {:execute_arrow, plan, opts}, call_timeout(opts))
+  end
+
+  @doc """
   Generates the next plan ID and returns it.
   """
   @spec next_plan_id(GenServer.server()) :: non_neg_integer()
@@ -466,6 +474,15 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Registers a data source. Convenience delegate to `SparkEx.UDFRegistration.register_data_source/4`.
+  """
+  @spec register_data_source(GenServer.server(), String.t(), binary(), keyword()) ::
+          :ok | {:error, term()}
+  def register_data_source(session, name, python_command, opts \\ []) do
+    SparkEx.UDFRegistration.register_data_source(session, name, python_command, opts)
+  end
+
+  @doc """
   Executes a ShowString plan and returns the formatted string.
   """
   @spec execute_show(GenServer.server(), term()) ::
@@ -655,6 +672,7 @@ defmodule SparkEx.Session do
     case Client.execute_plan(state, proto_plan, opts) do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
+        SparkEx.Observation.store_observed_metrics(result.observed_metrics)
         {:reply, {:ok, result.rows}, state}
 
       {:error, _} = error ->
@@ -680,7 +698,23 @@ defmodule SparkEx.Session do
     case Client.execute_plan_explorer(state, proto_plan, decoder_opts) do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
+        SparkEx.Observation.store_observed_metrics(result.observed_metrics)
         {:reply, {:ok, result.dataframe}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:execute_arrow, plan, opts}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    case Client.execute_plan_arrow(state, proto_plan, opts) do
+      {:ok, result} ->
+        state = maybe_update_server_session(state, result.server_side_session_id)
+        SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+        {:reply, {:ok, result.arrow}, state}
 
       {:error, _} = error ->
         {:reply, error, state}
@@ -694,6 +728,7 @@ defmodule SparkEx.Session do
     case Client.execute_plan(state, proto_plan) do
       {:ok, result} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
+        SparkEx.Observation.store_observed_metrics(result.observed_metrics)
 
         case extract_count(result.rows) do
           {:ok, count} -> {:reply, {:ok, count}, state}

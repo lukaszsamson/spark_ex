@@ -392,6 +392,36 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   def encode_relation(
+        {:aggregate, child_plan, :grouping_sets, grouping_exprs, agg_exprs, grouping_sets},
+        counter
+      ) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    grouping_sets_proto =
+      Enum.map(grouping_sets, fn set ->
+        %Spark.Connect.Aggregate.GroupingSets{
+          grouping_set: Enum.map(set, &encode_expression/1)
+        }
+      end)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:aggregate,
+         %Spark.Connect.Aggregate{
+           input: child,
+           group_type: :GROUP_TYPE_GROUPING_SETS,
+           grouping_expressions: Enum.map(grouping_exprs, &encode_expression/1),
+           aggregate_expressions: Enum.map(agg_exprs, &encode_expression/1),
+           grouping_sets: grouping_sets_proto
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation(
         {:aggregate, child_plan, :pivot, grouping_exprs, agg_exprs, pivot_col, pivot_values},
         counter
       ) do
@@ -743,6 +773,106 @@ defmodule SparkEx.Connect.PlanEncoder do
     {relation, counter}
   end
 
+  def encode_relation(
+        {:as_of_join, left_plan, right_plan, left_as_of, right_as_of, join_expr, using_columns,
+         join_type, tolerance, allow_exact_matches, direction},
+        counter
+      ) do
+    {plan_id, counter} = next_id(counter)
+    {left, counter} = encode_relation(left_plan, counter)
+    {right, counter} = encode_relation(right_plan, counter)
+
+    as_of_join = %Spark.Connect.AsOfJoin{
+      left: left,
+      right: right
+    }
+
+    as_of_join =
+      if left_as_of == {:lit, nil},
+        do: as_of_join,
+        else: %{as_of_join | left_as_of: encode_expression(left_as_of)}
+
+    as_of_join =
+      if right_as_of == {:lit, nil},
+        do: as_of_join,
+        else: %{as_of_join | right_as_of: encode_expression(right_as_of)}
+
+    as_of_join =
+      if join_expr == {:lit, nil},
+        do: as_of_join,
+        else: %{as_of_join | join_expr: encode_expression(join_expr)}
+
+    as_of_join =
+      if using_columns == [],
+        do: as_of_join,
+        else: %{as_of_join | using_columns: using_columns}
+
+    as_of_join =
+      if join_type == nil,
+        do: as_of_join,
+        else: %{as_of_join | join_type: join_type}
+
+    as_of_join =
+      if tolerance == {:lit, nil},
+        do: as_of_join,
+        else: %{as_of_join | tolerance: encode_expression(tolerance)}
+
+    as_of_join =
+      if allow_exact_matches == nil,
+        do: as_of_join,
+        else: %{as_of_join | allow_exact_matches: allow_exact_matches}
+
+    as_of_join =
+      if direction == nil,
+        do: as_of_join,
+        else: %{as_of_join | direction: direction}
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:as_of_join, as_of_join}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:lateral_join, left_plan, right_plan, join_condition, join_type}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {left, counter} = encode_relation(left_plan, counter)
+    {right, counter} = encode_relation(right_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:lateral_join,
+         %Spark.Connect.LateralJoin{
+           left: left,
+           right: right,
+           join_condition: encode_expression(join_condition),
+           join_type: encode_join_type(join_type)
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:collect_metrics, child_plan, name, metrics}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:collect_metrics,
+         %Spark.Connect.CollectMetrics{
+           input: child,
+           name: name,
+           metrics: Enum.map(metrics, &encode_expression/1)
+         }}
+    }
+
+    {relation, counter}
+  end
+
   # --- NA Relations ---
 
   def encode_relation({:na_fill, child_plan, cols, values}, counter) do
@@ -1056,6 +1186,14 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
+  def encode_expression({:metadata_col, name}) do
+    %Expression{
+      expr_type:
+        {:unresolved_attribute,
+         %Expression.UnresolvedAttribute{unparsed_identifier: name, is_metadata_column: true}}
+    }
+  end
+
   def encode_expression({:lit, value}) do
     encode_literal_expression(value)
   end
@@ -1064,6 +1202,10 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression{
       expr_type: {:expression_string, %Expression.ExpressionString{expression: string}}
     }
+  end
+
+  def encode_expression({:col_regex, name}) do
+    %Expression{expr_type: {:unresolved_regex, %Expression.UnresolvedRegex{col_name: name}}}
   end
 
   def encode_expression({:fn, name, args, is_distinct}) do
@@ -1075,6 +1217,25 @@ defmodule SparkEx.Connect.PlanEncoder do
            arguments: Enum.map(args, &encode_expression/1),
            is_distinct: is_distinct
          }}
+    }
+  end
+
+  def encode_expression({:call_function, name, args}) do
+    %Expression{
+      expr_type:
+        {:call_function,
+         %Expression.CallFunction{
+           function_name: name,
+           arguments: Enum.map(args, &encode_expression/1)
+         }}
+    }
+  end
+
+  def encode_expression({:named_arg, key, value}) do
+    %Expression{
+      expr_type:
+        {:named_argument_expression,
+         %Expression.NamedArgumentExpression{key: key, value: encode_expression(value)}}
     }
   end
 
@@ -1140,6 +1301,21 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
+  # --- Struct update fields (withField/dropFields) ---
+
+  def encode_expression({:update_fields, struct_expr, field_name, value_expr})
+      when is_binary(field_name) do
+    %Expression{
+      expr_type:
+        {:update_fields,
+         %Expression.UpdateFields{
+           struct_expression: encode_expression(struct_expr),
+           field_name: field_name,
+           value_expression: maybe_encode_update_value(value_expr)
+         }}
+    }
+  end
+
   # --- Lambda function ---
 
   def encode_expression({:lambda, body, variables}) do
@@ -1193,6 +1369,8 @@ defmodule SparkEx.Connect.PlanEncoder do
   # for encoding the referenced plan and wrapping the root in {:with_relations, ...}.
 
   def encode_expression({:subquery, subquery_type, plan_id, opts}) when is_integer(plan_id) do
+    validate_subquery_opts!(subquery_type, opts)
+
     subquery_type_enum =
       case subquery_type do
         :scalar -> :SUBQUERY_TYPE_SCALAR
@@ -1418,6 +1596,33 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp rewrite_plan(
+         {:aggregate, child_plan, :grouping_sets, grouping_exprs, agg_exprs, grouping_sets},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {grouping_exprs, plan_ids, refs, counter} =
+      rewrite_expr_list(grouping_exprs, plan_ids, refs, counter)
+
+    {agg_exprs, plan_ids, refs, counter} = rewrite_expr_list(agg_exprs, plan_ids, refs, counter)
+
+    {grouping_sets, plan_ids, refs, counter} =
+      Enum.reduce(grouping_sets, {[], plan_ids, refs, counter}, fn set,
+                                                                   {sets_acc, plan_ids, refs,
+                                                                    counter} ->
+        {set, plan_ids, refs, counter} = rewrite_expr_list(set, plan_ids, refs, counter)
+        {[set | sets_acc], plan_ids, refs, counter}
+      end)
+
+    grouping_sets = Enum.reverse(grouping_sets)
+
+    {{:aggregate, child_plan, :grouping_sets, grouping_exprs, agg_exprs, grouping_sets}, plan_ids,
+     refs, counter}
+  end
+
+  defp rewrite_plan(
          {:join, left_plan, right_plan, join_condition, join_type, using_columns},
          plan_ids,
          refs,
@@ -1580,6 +1785,45 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:subquery_alias, child_plan, alias_name}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
     {{:subquery_alias, child_plan, alias_name}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:as_of_join, left_plan, right_plan, left_as_of, right_as_of, join_expr, using_columns,
+          join_type, tolerance, allow_exact_matches, direction},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {left_plan, plan_ids, refs, counter} = rewrite_plan(left_plan, plan_ids, refs, counter)
+    {right_plan, plan_ids, refs, counter} = rewrite_plan(right_plan, plan_ids, refs, counter)
+    {left_as_of, plan_ids, refs, counter} = rewrite_expr(left_as_of, plan_ids, refs, counter)
+    {right_as_of, plan_ids, refs, counter} = rewrite_expr(right_as_of, plan_ids, refs, counter)
+    {join_expr, plan_ids, refs, counter} = rewrite_expr(join_expr, plan_ids, refs, counter)
+    {tolerance, plan_ids, refs, counter} = rewrite_expr(tolerance, plan_ids, refs, counter)
+
+    {{:as_of_join, left_plan, right_plan, left_as_of, right_as_of, join_expr, using_columns,
+      join_type, tolerance, allow_exact_matches, direction}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:lateral_join, left_plan, right_plan, join_condition, join_type},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {left_plan, plan_ids, refs, counter} = rewrite_plan(left_plan, plan_ids, refs, counter)
+    {right_plan, plan_ids, refs, counter} = rewrite_plan(right_plan, plan_ids, refs, counter)
+
+    {join_condition, plan_ids, refs, counter} =
+      rewrite_expr(join_condition, plan_ids, refs, counter)
+
+    {{:lateral_join, left_plan, right_plan, join_condition, join_type}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:collect_metrics, child_plan, name, metrics}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {metrics, plan_ids, refs, counter} = rewrite_expr_list(metrics, plan_ids, refs, counter)
+    {{:collect_metrics, child_plan, name, metrics}, plan_ids, refs, counter}
   end
 
   # ── NA operations ──
@@ -1799,6 +2043,25 @@ defmodule SparkEx.Connect.PlanEncoder do
     {{:unresolved_extract_value, child, extraction}, plan_ids, refs, counter}
   end
 
+  defp rewrite_expr(
+         {:update_fields, struct_expr, field_name, value_expr},
+         plan_ids,
+         refs,
+         counter
+       )
+       when is_binary(field_name) do
+    {struct_expr, plan_ids, refs, counter} =
+      rewrite_expr(struct_expr, plan_ids, refs, counter)
+
+    {value_expr, plan_ids, refs, counter} =
+      case value_expr do
+        nil -> {nil, plan_ids, refs, counter}
+        _ -> rewrite_expr(value_expr, plan_ids, refs, counter)
+      end
+
+    {{:update_fields, struct_expr, field_name, value_expr}, plan_ids, refs, counter}
+  end
+
   defp rewrite_expr({:lambda, body, variables}, plan_ids, refs, counter) do
     {body, plan_ids, refs, counter} = rewrite_expr(body, plan_ids, refs, counter)
     {{:lambda, body, variables}, plan_ids, refs, counter}
@@ -1926,6 +2189,37 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_sql_argument({:lambda_var, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:subquery, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument(value), do: encode_literal_expression(value)
+
+  defp validate_subquery_opts!(:table_arg, opts) when is_list(opts) do
+    case Keyword.get(opts, :table_arg_options) do
+      nil ->
+        raise ArgumentError, "table_arg subquery requires :table_arg_options"
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp validate_subquery_opts!(:in, opts) when is_list(opts) do
+    case Keyword.get(opts, :in_values) do
+      nil ->
+        raise ArgumentError, "in subquery requires :in_values"
+
+      [] ->
+        raise ArgumentError, "in subquery requires non-empty :in_values"
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp validate_subquery_opts!(type, opts) when is_list(opts) do
+    if Keyword.get(opts, :table_arg_options) do
+      raise ArgumentError, "#{type} subquery does not accept :table_arg_options"
+    end
+
+    :ok
+  end
 
   # ── Catalog type encoding ──
 
@@ -2057,9 +2351,95 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.Literal{literal_type: {:double, v}}
   end
 
+  defp encode_literal({:decimal, value}) when is_binary(value) do
+    %Expression.Literal{literal_type: {:decimal, %Expression.Literal.Decimal{value: value}}}
+  end
+
+  defp encode_literal({:decimal, value, precision, scale})
+       when is_binary(value) and is_integer(precision) and is_integer(scale) do
+    %Expression.Literal{
+      literal_type:
+        {:decimal, %Expression.Literal.Decimal{value: value, precision: precision, scale: scale}}
+    }
+  end
+
+  defp encode_literal({:binary, value}) when is_binary(value) do
+    %Expression.Literal{literal_type: {:binary, value}}
+  end
+
+  defp encode_literal({:calendar_interval, months, days, microseconds})
+       when is_integer(months) and is_integer(days) and is_integer(microseconds) do
+    %Expression.Literal{
+      literal_type:
+        {:calendar_interval,
+         %Expression.Literal.CalendarInterval{
+           months: months,
+           days: days,
+           microseconds: microseconds
+         }}
+    }
+  end
+
+  defp encode_literal({:year_month_interval, months}) when is_integer(months) do
+    %Expression.Literal{literal_type: {:year_month_interval, months}}
+  end
+
+  defp encode_literal({:day_time_interval, microseconds}) when is_integer(microseconds) do
+    %Expression.Literal{literal_type: {:day_time_interval, microseconds}}
+  end
+
+  defp encode_literal({:array, elements}) when is_list(elements) do
+    %Expression.Literal{
+      literal_type:
+        {:array, %Expression.Literal.Array{elements: Enum.map(elements, &encode_literal/1)}}
+    }
+  end
+
+  defp encode_literal({:map, map}) when is_map(map) do
+    {keys, values} =
+      map
+      |> Enum.map(fn {k, v} -> {encode_literal(k), encode_literal(v)} end)
+      |> Enum.unzip()
+
+    %Expression.Literal{
+      literal_type: {:map, %Expression.Literal.Map{keys: keys, values: values}}
+    }
+  end
+
+  defp encode_literal({:struct, elements}) when is_list(elements) do
+    %Expression.Literal{
+      literal_type:
+        {:struct, %Expression.Literal.Struct{elements: Enum.map(elements, &encode_literal/1)}}
+    }
+  end
+
   defp encode_literal(v) when is_binary(v) do
     %Expression.Literal{literal_type: {:string, v}}
   end
+
+  defp encode_literal(%Date{} = date) do
+    %Expression.Literal{literal_type: {:date, Date.diff(date, ~D[1970-01-01])}}
+  end
+
+  defp encode_literal(%DateTime{} = datetime) do
+    %Expression.Literal{literal_type: {:timestamp, DateTime.to_unix(datetime, :microsecond)}}
+  end
+
+  defp encode_literal(%NaiveDateTime{} = datetime) do
+    %Expression.Literal{
+      literal_type:
+        {:timestamp_ntz, NaiveDateTime.diff(datetime, ~N[1970-01-01 00:00:00], :microsecond)}
+    }
+  end
+
+  defp encode_literal(%Time{} = time) do
+    %Expression.Literal{
+      literal_type: {:time, %Expression.Literal.Time{nano: time_to_nanos(time)}}
+    }
+  end
+
+  defp maybe_encode_update_value(nil), do: nil
+  defp maybe_encode_update_value(expr), do: encode_expression(expr)
 
   defp encode_sort_order({:sort_order, expr, direction, null_ordering}) do
     %Expression.SortOrder{
@@ -2091,6 +2471,18 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_null_ordering(nil), do: :SORT_NULLS_UNSPECIFIED
   defp encode_null_ordering(:nulls_first), do: :SORT_NULLS_FIRST
   defp encode_null_ordering(:nulls_last), do: :SORT_NULLS_LAST
+
+  defp time_to_nanos(%Time{microsecond: {usec, precision}} = time) do
+    seconds = Time.to_seconds_after_midnight(time)
+    normalized_usecs = normalize_microseconds(usec, precision)
+    seconds * 1_000_000_000 + normalized_usecs * 1000
+  end
+
+  defp normalize_microseconds(usec, precision) when precision < 6 do
+    usec * Integer.pow(10, 6 - precision)
+  end
+
+  defp normalize_microseconds(usec, _precision), do: usec
 
   defp encode_join_type(:inner), do: :JOIN_TYPE_INNER
   defp encode_join_type(:full), do: :JOIN_TYPE_FULL_OUTER

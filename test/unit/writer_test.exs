@@ -95,6 +95,23 @@ defmodule SparkEx.Unit.WriterTest do
     end
   end
 
+  describe "format helpers" do
+    test "avro/3 creates writer with avro format", %{df: df} do
+      writer = %Writer{df: df} |> Writer.format("avro")
+      assert writer.source == "avro"
+    end
+
+    test "xml/3 creates writer with xml format", %{df: df} do
+      writer = %Writer{df: df} |> Writer.format("xml")
+      assert writer.source == "xml"
+    end
+
+    test "jdbc/4 creates writer with jdbc format", %{df: df} do
+      writer = %Writer{df: df} |> Writer.format("jdbc")
+      assert writer.source == "jdbc"
+    end
+  end
+
   describe "DataFrame.write/1" do
     test "returns a Writer struct", %{df: df} do
       w = DataFrame.write(df)

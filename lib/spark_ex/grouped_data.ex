@@ -10,12 +10,22 @@ defmodule SparkEx.GroupedData do
   alias SparkEx.Column
   alias SparkEx.DataFrame
 
-  defstruct [:session, :plan, :grouping_exprs, :pivot_col, :pivot_values]
+  defstruct [
+    :session,
+    :plan,
+    :grouping_exprs,
+    :group_type,
+    :grouping_sets,
+    :pivot_col,
+    :pivot_values
+  ]
 
   @type t :: %__MODULE__{
           session: GenServer.server(),
           plan: term(),
           grouping_exprs: [Column.expr()],
+          group_type: atom(),
+          grouping_sets: [[Column.expr()]] | nil,
           pivot_col: Column.expr() | nil,
           pivot_values: [term()] | nil
         }
@@ -48,10 +58,17 @@ defmodule SparkEx.GroupedData do
 
     case gd.pivot_col do
       nil ->
-        %DataFrame{
-          session: gd.session,
-          plan: {:aggregate, gd.plan, :groupby, gd.grouping_exprs, agg_exprs}
-        }
+        plan =
+          case gd.group_type do
+            :grouping_sets ->
+              {:aggregate, gd.plan, :grouping_sets, gd.grouping_exprs, agg_exprs,
+               gd.grouping_sets}
+
+            group_type ->
+              {:aggregate, gd.plan, group_type, gd.grouping_exprs, agg_exprs}
+          end
+
+        %DataFrame{session: gd.session, plan: plan}
 
       pivot_col ->
         %DataFrame{

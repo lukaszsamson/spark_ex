@@ -3,9 +3,11 @@ defmodule SparkEx.Unit.CommandEncoderTest do
 
   alias Spark.Connect.{
     Command,
+    CommonInlineUserDefinedDataSource,
     CreateDataFrameViewCommand,
     Plan,
     Relation,
+    PythonDataSource,
     WriteOperation,
     WriteOperationV2
   }
@@ -270,6 +272,22 @@ defmodule SparkEx.Unit.CommandEncoderTest do
 
       assert %Command{command_type: {:write_operation_v2, write_v2}} = command
       assert write_v2.overwrite_condition != nil
+    end
+  end
+
+  describe "encode/2 for register_data_source" do
+    test "encodes data source registration" do
+      {%Plan{op_type: {:command, command}}, _counter} =
+        CommandEncoder.encode(
+          {:register_data_source, "my_source", <<1, 2, 3>>, "3.11"},
+          0
+        )
+
+      assert %Command{command_type: {:register_data_source, ds}} = command
+      assert %CommonInlineUserDefinedDataSource{name: "my_source"} = ds
+
+      assert {:python_data_source, %PythonDataSource{command: <<1, 2, 3>>, python_ver: "3.11"}} =
+               ds.data_source
     end
   end
 end

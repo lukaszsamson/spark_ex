@@ -10,6 +10,7 @@ defmodule SparkEx.Unit.ArtifactTest do
   }
 
   alias SparkEx.Connect.Client
+  alias SparkEx.Artifacts
 
   setup do
     session = %SparkEx.Session{
@@ -199,6 +200,29 @@ defmodule SparkEx.Unit.ArtifactTest do
       assert {:batch, %AddArtifactsRequest.Batch{artifacts: [%{name: "small-2.txt"}]}} =
                batch_2.payload
     end
+  end
+
+  describe "Artifacts.prepare/2" do
+    test "reads local files and prefixes names" do
+      jar_path = tmp_path("artifact_jar.txt")
+      file_path = tmp_path("artifact_file.txt")
+
+      File.write!(jar_path, "jar-data")
+      File.write!(file_path, "file-data")
+
+      assert {:ok, artifacts} = Artifacts.prepare([jar_path, file_path], "jars")
+      assert {"jars/artifact_jar.txt", "jar-data"} in artifacts
+      assert {"jars/artifact_file.txt", "file-data"} in artifacts
+    end
+
+    test "returns error for missing file" do
+      missing = tmp_path("missing.txt")
+      assert {:error, {:file_read_error, ^missing, _}} = Artifacts.prepare(missing, "files/")
+    end
+  end
+
+  defp tmp_path(name) do
+    Path.join(System.tmp_dir!(), "spark_ex_" <> name)
   end
 
   describe "AddArtifactsResponse parsing" do

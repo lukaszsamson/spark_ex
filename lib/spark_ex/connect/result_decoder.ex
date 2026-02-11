@@ -15,13 +15,25 @@ defmodule SparkEx.Connect.ResultDecoder do
   @type decode_result :: %{
           rows: [map()],
           schema: term() | nil,
-          server_side_session_id: String.t() | nil
+          server_side_session_id: String.t() | nil,
+          observed_metrics: map(),
+          execution_metrics: map()
         }
 
   @type explorer_result :: %{
           dataframe: Explorer.DataFrame.t(),
           schema: term() | nil,
-          server_side_session_id: String.t() | nil
+          server_side_session_id: String.t() | nil,
+          observed_metrics: map(),
+          execution_metrics: map()
+        }
+
+  @type arrow_result :: %{
+          arrow: term(),
+          schema: term() | nil,
+          server_side_session_id: String.t() | nil,
+          observed_metrics: map(),
+          execution_metrics: map()
         }
 
   @type decode_error ::
@@ -54,7 +66,9 @@ defmodule SparkEx.Connect.ResultDecoder do
       schema: nil,
       server_side_session_id: nil,
       num_records: 0,
-      command_result: nil
+      command_result: nil,
+      observed_metrics: %{},
+      execution_metrics: %{}
     }
 
     result =
@@ -66,6 +80,15 @@ defmodule SparkEx.Connect.ResultDecoder do
           }
 
           state = if resp.schema, do: %{state | schema: resp.schema}, else: state
+
+          observed_metrics = merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
+          execution_metrics = merge_execution_metrics(state.execution_metrics, resp.metrics)
+
+          state = %{
+            state
+            | observed_metrics: observed_metrics,
+              execution_metrics: execution_metrics
+          }
 
           case resp.response_type do
             {:arrow_batch, batch} ->
@@ -145,7 +168,9 @@ defmodule SparkEx.Connect.ResultDecoder do
                rows: state.rows,
                schema: state.schema,
                server_side_session_id: state.server_side_session_id,
-               command_result: state.command_result
+               command_result: state.command_result,
+               observed_metrics: state.observed_metrics,
+               execution_metrics: state.execution_metrics
              }}
 
           current ->
@@ -187,7 +212,9 @@ defmodule SparkEx.Connect.ResultDecoder do
       num_records: 0,
       total_bytes: 0,
       max_rows: max_rows,
-      max_bytes: max_bytes
+      max_bytes: max_bytes,
+      observed_metrics: %{},
+      execution_metrics: %{}
     }
 
     result =
@@ -199,6 +226,15 @@ defmodule SparkEx.Connect.ResultDecoder do
           }
 
           state = if resp.schema, do: %{state | schema: resp.schema}, else: state
+
+          observed_metrics = merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
+          execution_metrics = merge_execution_metrics(state.execution_metrics, resp.metrics)
+
+          state = %{
+            state
+            | observed_metrics: observed_metrics,
+              execution_metrics: execution_metrics
+          }
 
           case resp.response_type do
             {:arrow_batch, batch} ->
@@ -265,6 +301,79 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
+  @doc """
+  Decodes an ExecutePlan response stream into a raw Arrow IPC payload.
+  """
+  @spec decode_stream_arrow(Enumerable.t(), SparkEx.Session.t() | nil) ::
+          {:ok, arrow_result()} | {:error, term()}
+  def decode_stream_arrow(stream, session \\ nil) do
+    decode_stream_arrow(stream, session, nil)
+  end
+
+  defp decode_stream_arrow(stream, session, opts) do
+    state = %{
+      arrow_parts: [],
+      current_chunked_batch: nil,
+      schema: nil,
+      server_side_session_id: nil,
+      num_records: 0,
+      observed_metrics: %{},
+      execution_metrics: %{}
+    }
+
+    result =
+      Enum.reduce_while(stream, {:ok, state}, fn
+        {:ok, %ExecutePlanResponse{} = resp}, {:ok, state} ->
+          state = maybe_set_schema(state, resp.schema)
+          state = maybe_set_server_session(state, resp)
+          observed_metrics = merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
+          execution_metrics = merge_execution_metrics(state.execution_metrics, resp.metrics)
+
+          state = %{
+            state
+            | observed_metrics: observed_metrics,
+              execution_metrics: execution_metrics
+          }
+
+          case resp.response_type do
+            {:arrow_batch, %ExecutePlanResponse.ArrowBatch{} = batch} ->
+              case handle_arrow_batch_arrow(state, batch) do
+                {:ok, state} -> {:cont, {:ok, state}}
+                {:error, _} = error -> {:halt, error}
+              end
+
+            {:result_complete, _} ->
+              {:halt, {:ok, finalize_arrow_result(state)}}
+
+            _ ->
+              {:cont, {:ok, state}}
+          end
+
+        {:error, %GRPC.RPCError{} = error}, {:ok, _state} ->
+          err = if session, do: Errors.from_grpc_error(error, session), else: error
+          {:halt, {:error, err}}
+
+        {:error, reason}, {:ok, _state} ->
+          {:halt, {:error, reason}}
+      end)
+
+    case result do
+      {:ok, state} ->
+        case state.current_chunked_batch do
+          nil ->
+            {:ok, finalize_arrow_result(state)}
+
+          current ->
+            {:error,
+             {:incomplete_arrow_batch,
+              %{expected_chunks: current.expected_chunks, received_chunks: length(current.parts)}}}
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
   # --- Arrow batch handling (rows mode) ---
 
   defp handle_arrow_batch(state, %ExecutePlanResponse.ArrowBatch{} = batch) do
@@ -312,6 +421,77 @@ defmodule SparkEx.Connect.ResultDecoder do
           end
         end
     end
+  end
+
+  defp handle_arrow_batch_arrow(state, %ExecutePlanResponse.ArrowBatch{} = batch) do
+    chunk_index = batch.chunk_index || 0
+    num_chunks = batch.num_chunks_in_batch || 0
+
+    case state.current_chunked_batch do
+      nil ->
+        with :ok <- validate_batch_start_offset(state, batch),
+             :ok <- validate_new_batch_chunk_index(chunk_index) do
+          if num_chunks > 1 do
+            {:ok,
+             %{
+               state
+               | current_chunked_batch: %{
+                   expected_chunks: num_chunks,
+                   next_chunk_index: 1,
+                   row_count: batch.row_count,
+                   start_offset: batch.start_offset,
+                   parts: [batch.data]
+                 }
+             }}
+          else
+            {:ok,
+             %{
+               state
+               | arrow_parts: state.arrow_parts ++ [batch.data],
+                 num_records: state.num_records + batch.row_count
+             }}
+          end
+        end
+
+      current ->
+        with :ok <- validate_continuation_chunk_index(current, chunk_index),
+             :ok <- validate_continuation_num_chunks(current, num_chunks),
+             :ok <- validate_continuation_row_count(current, batch.row_count),
+             :ok <- validate_continuation_start_offset(current, batch.start_offset) do
+          updated = %{
+            current
+            | next_chunk_index: current.next_chunk_index + 1,
+              parts: current.parts ++ [batch.data]
+          }
+
+          if length(updated.parts) == updated.expected_chunks do
+            assembled = IO.iodata_to_binary(updated.parts)
+
+            state = %{
+              state
+              | current_chunked_batch: nil,
+                arrow_parts: state.arrow_parts ++ [assembled],
+                num_records: state.num_records + updated.row_count
+            }
+
+            {:ok, state}
+          else
+            {:ok, %{state | current_chunked_batch: updated}}
+          end
+        end
+    end
+  end
+
+  defp finalize_arrow_result(state) do
+    arrow_ipc = IO.iodata_to_binary(state.arrow_parts)
+
+    %{
+      arrow: arrow_ipc,
+      schema: state.schema,
+      server_side_session_id: state.server_side_session_id,
+      observed_metrics: state.observed_metrics,
+      execution_metrics: state.execution_metrics
+    }
   end
 
   defp validate_batch_start_offset(_state, %ExecutePlanResponse.ArrowBatch{start_offset: nil}),
@@ -562,7 +742,9 @@ defmodule SparkEx.Connect.ResultDecoder do
        %{
          dataframe: empty_df,
          schema: state.schema,
-         server_side_session_id: state.server_side_session_id
+         server_side_session_id: state.server_side_session_id,
+         observed_metrics: state.observed_metrics,
+         execution_metrics: state.execution_metrics
        }}
     else
       {:error, {:missing_dependency, :explorer}}
@@ -576,7 +758,9 @@ defmodule SparkEx.Connect.ResultDecoder do
      %{
        dataframe: dataframe,
        schema: state.schema,
-       server_side_session_id: state.server_side_session_id
+       server_side_session_id: state.server_side_session_id,
+       observed_metrics: state.observed_metrics,
+       execution_metrics: state.execution_metrics
      }}
   end
 
@@ -588,7 +772,9 @@ defmodule SparkEx.Connect.ResultDecoder do
      %{
        dataframe: dataframe,
        schema: state.schema,
-       server_side_session_id: state.server_side_session_id
+       server_side_session_id: state.server_side_session_id,
+       observed_metrics: state.observed_metrics,
+       execution_metrics: state.execution_metrics
      }}
   end
 
@@ -709,4 +895,59 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp normalize_json_value(value), do: value
+
+  defp merge_observed_metrics(acc, nil), do: acc
+
+  defp merge_observed_metrics(acc, observed_metrics) when is_list(observed_metrics) do
+    if Enum.empty?(observed_metrics) do
+      acc
+    else
+      Enum.reduce(observed_metrics, acc, &merge_observed_metric/2)
+    end
+  end
+
+  defp merge_observed_metric(%ExecutePlanResponse.ObservedMetrics{} = metric, acc) do
+    keys = metric.keys || []
+    values = metric.values || []
+
+    entry =
+      if keys == [] do
+        %{"_1" => SparkEx.Observation.decode_literal(Enum.at(values, 0))}
+      else
+        keys
+        |> Enum.with_index()
+        |> Enum.map(fn {key, index} ->
+          {key, SparkEx.Observation.decode_literal(Enum.at(values, index))}
+        end)
+        |> Map.new()
+      end
+
+    Map.update(acc, metric.name, entry, fn existing ->
+      Map.merge(existing, entry, fn _key, _left, right -> right end)
+    end)
+  end
+
+  defp merge_execution_metrics(acc, nil), do: acc
+
+  defp merge_execution_metrics(acc, %ExecutePlanResponse.Metrics{metrics: metrics}) do
+    if metrics == [] do
+      acc
+    else
+      Enum.reduce(metrics, acc, fn metric, acc ->
+        key = metric_key(metric)
+        value = execution_metric_value(metric)
+        Map.put(acc, key, value)
+      end)
+    end
+  end
+
+  defp metric_key(%ExecutePlanResponse.Metrics.MetricObject{name: name, plan_id: plan_id}) do
+    {name, plan_id}
+  end
+
+  defp execution_metric_value(%ExecutePlanResponse.Metrics.MetricObject{
+         execution_metrics: metrics
+       }) do
+    Map.new(metrics, fn {k, v} -> {k, v.value} end)
+  end
 end

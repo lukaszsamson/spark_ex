@@ -57,6 +57,26 @@ defmodule SparkEx.Connect.ResultDecoderTest do
       assert result.rows == []
     end
 
+    test "captures observed metrics" do
+      metrics =
+        %ExecutePlanResponse.ObservedMetrics{
+          name: "obs1",
+          keys: ["total"],
+          values: [%Spark.Connect.Expression.Literal{literal_type: {:long, 5}}]
+        }
+
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           observed_metrics: [metrics],
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      assert {:ok, result} = ResultDecoder.decode_stream(stream)
+      assert result.observed_metrics == %{"obs1" => %{"total" => 5}}
+    end
+
     test "returns error for incomplete chunked arrow batch" do
       stream = [
         {:ok,
@@ -240,6 +260,58 @@ defmodule SparkEx.Connect.ResultDecoderTest do
 
       assert error.grpc_status == 3
       assert error.message == "bad request"
+    end
+
+    test "captures execution metrics" do
+      metrics =
+        %ExecutePlanResponse.Metrics{
+          metrics: [
+            %ExecutePlanResponse.Metrics.MetricObject{
+              name: "scan",
+              plan_id: 1,
+              execution_metrics: %{
+                "numRows" => %ExecutePlanResponse.Metrics.MetricValue{value: 10}
+              }
+            }
+          ]
+        }
+
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           metrics: metrics,
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      assert {:ok, result} = ResultDecoder.decode_stream(stream)
+      assert result.execution_metrics[{"scan", 1}] == %{"numRows" => 10}
+    end
+  end
+
+  describe "decode_stream_arrow/2" do
+    test "returns arrow bytes" do
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: <<1, 2, 3>>,
+                start_offset: 0,
+                chunk_index: 0,
+                num_chunks_in_batch: 1
+              }}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      assert {:ok, result} = ResultDecoder.decode_stream_arrow(stream)
+      assert result.arrow == <<1, 2, 3>>
     end
   end
 end

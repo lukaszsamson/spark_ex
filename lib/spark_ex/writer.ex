@@ -266,6 +266,83 @@ defmodule SparkEx.Writer do
   end
 
   @doc """
+  Writes the DataFrame as Avro.
+
+  ## Options
+
+  - `:mode` — save mode (default: `:error_if_exists`)
+  - `:options` — map of Avro writer options
+  - `:partition_by` — partitioning columns
+  """
+  @spec avro(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def avro(df, path, opts \\ []) do
+    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options, :partition_by])
+
+    writer =
+      %__MODULE__{df: df, source: "avro"}
+      |> maybe_set_mode(write_opts)
+      |> maybe_set_options(write_opts)
+      |> maybe_set_partition_by(write_opts)
+
+    save(writer, path, exec_opts)
+  end
+
+  @doc """
+  Writes the DataFrame as XML.
+
+  ## Options
+
+  - `:mode` — save mode (default: `:error_if_exists`)
+  - `:options` — map of XML writer options
+  - `:partition_by` — partitioning columns
+  """
+  @spec xml(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def xml(df, path, opts \\ []) do
+    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options, :partition_by])
+
+    writer =
+      %__MODULE__{df: df, source: "xml"}
+      |> maybe_set_mode(write_opts)
+      |> maybe_set_options(write_opts)
+      |> maybe_set_partition_by(write_opts)
+
+    save(writer, path, exec_opts)
+  end
+
+  @doc """
+  Writes the DataFrame via JDBC.
+
+  ## Options
+
+  - `:mode` — save mode (default: `:error_if_exists`)
+  - `:options` — map of JDBC writer options (e.g. `url`, `dbtable`)
+  """
+  @spec jdbc(SparkEx.DataFrame.t(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def jdbc(df, url, table, opts \\ []) when is_binary(url) and is_binary(table) do
+    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options])
+    opts_options = write_opts |> Keyword.get(:options, %{}) |> stringify_options()
+    merged = opts_options |> Map.put("url", url) |> Map.put("dbtable", table)
+
+    writer =
+      %__MODULE__{df: df, source: "jdbc", options: merged}
+      |> maybe_set_mode(write_opts)
+
+    execute_write(writer.df, build_write_opts(writer, []), exec_opts)
+  end
+
+  @spec jdbc(SparkEx.DataFrame.t(), keyword()) :: :ok | {:error, term()}
+  def jdbc(df, opts) when is_list(opts) do
+    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options])
+
+    writer =
+      %__MODULE__{df: df, source: "jdbc"}
+      |> maybe_set_mode(write_opts)
+      |> maybe_set_options(write_opts)
+
+    execute_write(writer.df, build_write_opts(writer, []), exec_opts)
+  end
+
+  @doc """
   Writes the DataFrame as text (single column).
 
   ## Options

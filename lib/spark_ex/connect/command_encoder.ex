@@ -205,6 +205,20 @@ defmodule SparkEx.Connect.CommandEncoder do
     {command, counter}
   end
 
+  # --- RegisterDataSource ---
+
+  def encode_command({:register_data_source, name, python_command, python_ver}, counter) do
+    data_source = %Spark.Connect.CommonInlineUserDefinedDataSource{
+      name: name,
+      data_source:
+        {:python_data_source,
+         %Spark.Connect.PythonDataSource{command: python_command, python_ver: python_ver}}
+    }
+
+    command = %Command{command_type: {:register_data_source, data_source}}
+    {command, counter}
+  end
+
   # --- WriteStreamOperationStart ---
 
   def encode_command({:write_stream_operation_start, df_plan, write_opts}, counter) do

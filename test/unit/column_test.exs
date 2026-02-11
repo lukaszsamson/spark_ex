@@ -34,6 +34,11 @@ defmodule SparkEx.ColumnTest do
       result = Column.lte(Functions.col("a"), Functions.lit(10))
       assert %Column{expr: {:fn, "<=", [{:col, "a"}, {:lit, 10}], false}} = result
     end
+
+    test "eq_null_safe/2 supports date literals" do
+      result = Column.eq_null_safe(Functions.col("d"), ~D[2024-01-01])
+      assert %Column{expr: {:fn, "<=>", [{:col, "d"}, {:lit, ~D[2024-01-01]}], false}} = result
+    end
   end
 
   describe "boolean operations" do
@@ -90,6 +95,16 @@ defmodule SparkEx.ColumnTest do
       result = Column.divide(Functions.col("a"), Functions.lit(2))
       assert %Column{expr: {:fn, "/", [{:col, "a"}, {:lit, 2}], false}} = result
     end
+
+    test "supports numeric reverse operators" do
+      result = Column.plus(1, Functions.col("a"))
+      assert %Column{expr: {:fn, "+", [{:lit, 1}, {:col, "a"}], false}} = result
+    end
+
+    test "pow/2 builds power expression" do
+      result = Column.pow(Functions.col("a"), 2)
+      assert %Column{expr: {:fn, "power", [{:col, "a"}, {:lit, 2}], false}} = result
+    end
   end
 
   describe "cast" do
@@ -142,6 +157,68 @@ defmodule SparkEx.ColumnTest do
     test "like/2" do
       result = Column.like(Functions.col("name"), Functions.lit("%test%"))
       assert %Column{expr: {:fn, "like", [{:col, "name"}, {:lit, "%test%"}], false}} = result
+    end
+
+    test "rlike/2" do
+      result = Column.rlike(Functions.col("name"), "%test%")
+      assert %Column{expr: {:fn, "rlike", [{:col, "name"}, {:lit, "%test%"}], false}} = result
+    end
+
+    test "ilike/2" do
+      result = Column.ilike(Functions.col("name"), "%test%")
+      assert %Column{expr: {:fn, "ilike", [{:col, "name"}, {:lit, "%test%"}], false}} = result
+    end
+  end
+
+  describe "membership / range" do
+    test "isin/2 accepts tagged decimal literals" do
+      result = Column.isin(Functions.col("a"), [{:decimal, "1.20", 3, 2}])
+
+      assert %Column{expr: {:fn, "in", [{:col, "a"}, {:lit, {:decimal, "1.20", 3, 2}}], false}} =
+               result
+    end
+
+    test "between/3 accepts tagged intervals" do
+      result =
+        Column.between(
+          Functions.col("a"),
+          {:day_time_interval, 100},
+          {:day_time_interval, 200}
+        )
+
+      assert %Column{expr: {:fn, "and", [_, _], false}} = result
+    end
+  end
+
+  describe "struct field helpers" do
+    test "with_field/3 creates update_fields expression" do
+      result = Column.with_field(Functions.col("s"), "name", Functions.lit("bob"))
+
+      assert %Column{expr: {:update_fields, {:col, "s"}, "name", {:lit, "bob"}}} = result
+    end
+
+    test "drop_fields/2 chains update_fields" do
+      result = Column.drop_fields(Functions.col("s"), ["a", "b"])
+
+      assert %Column{expr: {:update_fields, {:update_fields, {:col, "s"}, "a", nil}, "b", nil}} =
+               result
+    end
+  end
+
+  describe "when_/2 and otherwise/2" do
+    test "builds when_/otherwise expression chain" do
+      condition = Column.gt(Functions.col("score"), Functions.lit(90))
+      result = Column.when_(condition, Functions.lit("A")) |> Column.otherwise("B")
+
+      assert %Column{
+               expr:
+                 {:fn, "when",
+                  [
+                    {:fn, ">", [{:col, "score"}, {:lit, 90}], false},
+                    {:lit, "A"},
+                    {:lit, "B"}
+                  ], false}
+             } = result
     end
   end
 end

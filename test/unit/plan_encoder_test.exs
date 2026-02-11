@@ -48,6 +48,126 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
   end
 
+  describe "col_regex encoding" do
+    test "encodes unresolved_regex expression" do
+      {plan, _} =
+        PlanEncoder.encode({:project, {:sql, "SELECT * FROM t", nil}, [{:col_regex, "^name"}]}, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:project, project}}}} = plan
+      [expr] = project.expressions
+      assert {:unresolved_regex, %Expression.UnresolvedRegex{col_name: "^name"}} = expr.expr_type
+    end
+  end
+
+  describe "metadata_column encoding" do
+    test "encodes unresolved_attribute with metadata flag" do
+      {plan, _} =
+        PlanEncoder.encode(
+          {:project, {:sql, "SELECT * FROM t", nil}, [{:metadata_col, "_meta"}]},
+          0
+        )
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:project, project}}}} = plan
+      [expr] = project.expressions
+
+      assert {:unresolved_attribute,
+              %Expression.UnresolvedAttribute{
+                unparsed_identifier: "_meta",
+                is_metadata_column: true
+              }} =
+               expr.expr_type
+    end
+  end
+
+  describe "literal encoding" do
+    test "encodes date/time literals" do
+      date = ~D[2024-01-02]
+      time = ~T[12:30:15.000123]
+      naive = ~N[2024-01-02 12:30:15]
+
+      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:date, _}}}} =
+               PlanEncoder.encode_expression({:lit, date})
+
+      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:time, _}}}} =
+               PlanEncoder.encode_expression({:lit, time})
+
+      assert %Expression{
+               expr_type: {:literal, %Expression.Literal{literal_type: {:timestamp_ntz, _}}}
+             } =
+               PlanEncoder.encode_expression({:lit, naive})
+    end
+
+    test "encodes decimal/binary/complex literals" do
+      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:decimal, _}}}} =
+               PlanEncoder.encode_expression({:lit, {:decimal, "12.34", 4, 2}})
+
+      assert %Expression{
+               expr_type: {:literal, %Expression.Literal{literal_type: {:binary, <<1, 2>>}}}
+             } =
+               PlanEncoder.encode_expression({:lit, {:binary, <<1, 2>>}})
+
+      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:array, _}}}} =
+               PlanEncoder.encode_expression({:lit, {:array, [1, 2]}})
+
+      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:map, _}}}} =
+               PlanEncoder.encode_expression({:lit, {:map, %{1 => 2}}})
+
+      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:struct, _}}}} =
+               PlanEncoder.encode_expression({:lit, {:struct, [1, "a"]}})
+    end
+  end
+
+  describe "literal encoding" do
+    test "encodes date/time literals" do
+      date = ~D[2024-01-02]
+      time = ~T[12:30:15.000123]
+      naive = ~N[2024-01-02 12:30:15]
+
+      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:date, _}}}} =
+               PlanEncoder.encode_expression({:lit, date})
+
+      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:time, _}}}} =
+               PlanEncoder.encode_expression({:lit, time})
+
+      assert %Expression{
+               expr_type: {:literal, %Expression.Literal{literal_type: {:timestamp_ntz, _}}}
+             } =
+               PlanEncoder.encode_expression({:lit, naive})
+    end
+  end
+
+  describe "subquery in encoding" do
+    test "encodes in_subquery values" do
+      expr = {:subquery, :in, {:sql, "SELECT * FROM t", nil}, in_values: [{:col, "id"}]}
+      encoded = PlanEncoder.encode_expression(expr)
+
+      assert %Expression{expr_type: {:subquery_expression, subquery}} = encoded
+      assert subquery.subquery_type == :SUBQUERY_TYPE_IN
+      assert length(subquery.in_subquery_values) == 1
+    end
+  end
+
+  describe "call_function encoding" do
+    test "encodes call_function expression" do
+      expr = {:call_function, "my_fn", [{:lit, 1}, {:named_arg, "k", {:lit, 2}}]}
+      encoded = PlanEncoder.encode_expression(expr)
+
+      assert %Expression{expr_type: {:call_function, call}} = encoded
+      assert %Spark.Connect.CallFunction{function_name: "my_fn"} = call
+      assert length(call.arguments) == 2
+    end
+  end
+
+  describe "named_argument encoding" do
+    test "encodes named argument expression" do
+      expr = {:named_arg, "key", {:lit, 10}}
+      encoded = PlanEncoder.encode_expression(expr)
+
+      assert %Expression{expr_type: {:named_argument_expression, named}} = encoded
+      assert %Spark.Connect.NamedArgumentExpression{key: "key"} = named
+    end
+  end
+
   describe "encode/2 with Range" do
     test "encodes range plan" do
       {plan, counter} = PlanEncoder.encode({:range, 0, 100, 1, nil}, 0)
@@ -137,6 +257,27 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
   end
 
+  describe "update_fields encoding" do
+    test "encodes with_field expression" do
+      expr = {:update_fields, {:col, "s"}, "name", {:lit, "bob"}}
+      encoded = PlanEncoder.encode_expression(expr)
+
+      assert %Expression{expr_type: {:update_fields, update}} = encoded
+      assert update.field_name == "name"
+      assert %Expression{expr_type: {:unresolved_attribute, _}} = update.struct_expression
+      assert %Expression{expr_type: {:literal, _}} = update.value_expression
+    end
+
+    test "encodes drop_fields expression" do
+      expr = {:update_fields, {:col, "s"}, "name", nil}
+      encoded = PlanEncoder.encode_expression(expr)
+
+      assert %Expression{expr_type: {:update_fields, update}} = encoded
+      assert update.field_name == "name"
+      assert update.value_expression == nil
+    end
+  end
+
   describe "plan ID counter" do
     test "increments monotonically across nested plans" do
       # limit -> sql: 2 plan IDs
@@ -162,6 +303,120 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert length(wr.references) == 2
       assert [%Relation{}, %Relation{}] = wr.references
       assert counter == 4
+    end
+  end
+
+  describe "subquery with_relations" do
+    test "adds referenced plans for subquery expressions" do
+      subquery_plan = {:sql, "SELECT 1", nil}
+
+      plan =
+        {:project, {:sql, "SELECT * FROM t", nil},
+         [{:subquery, :scalar, {:plan_id, 42, subquery_plan}, []}]}
+
+      {encoded, _} = PlanEncoder.encode(plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
+      assert length(wr.references) == 1
+    end
+
+    test "rewrites subquery table arg options" do
+      table_arg =
+        SparkEx.sql(self(), "SELECT * FROM t")
+        |> SparkEx.DataFrame.as_table()
+        |> SparkEx.TableArg.partition_by(["id"])
+        |> SparkEx.TableArg.order_by(["id"])
+
+      expr = SparkEx.TableArg.to_subquery_expr(table_arg)
+      plan = {:project, {:sql, "SELECT * FROM t", nil}, [expr]}
+
+      {encoded, _} = PlanEncoder.encode(plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
+      assert length(wr.references) == 1
+    end
+
+    test "rejects table_arg without options" do
+      assert_raise ArgumentError, ~r/table_arg subquery requires/, fn ->
+        PlanEncoder.encode_expression({:subquery, :table_arg, 1, []})
+      end
+    end
+
+    test "rejects in subquery without values" do
+      assert_raise ArgumentError, ~r/in subquery requires/, fn ->
+        PlanEncoder.encode_expression({:subquery, :in, 1, []})
+      end
+    end
+  end
+
+  describe "collect_metrics encoding" do
+    test "encodes collect_metrics plan" do
+      plan = {:collect_metrics, {:sql, "SELECT * FROM t", nil}, "obs", [{:col, "x"}]}
+      {encoded, _} = PlanEncoder.encode(plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:collect_metrics, cm}}}} = encoded
+      assert %Spark.Connect.CollectMetrics{name: "obs"} = cm
+      assert [%Expression{expr_type: {:unresolved_attribute, _}}] = cm.metrics
+    end
+  end
+
+  describe "as_of_join encoding" do
+    test "encodes as_of_join plan" do
+      plan =
+        {:as_of_join, {:sql, "SELECT * FROM t1", nil}, {:sql, "SELECT * FROM t2", nil},
+         {:col, "t1"}, {:col, "t2"}, {:col, "id"}, [], "inner", {:lit, 5}, false, "forward"}
+
+      {encoded, _} = PlanEncoder.encode(plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:as_of_join, as_of}}}} = encoded
+      assert %Spark.Connect.AsOfJoin{join_type: "inner", allow_exact_matches: false} = as_of
+    end
+  end
+
+  describe "lateral_join encoding" do
+    test "encodes lateral_join plan" do
+      plan =
+        {:lateral_join, {:sql, "SELECT * FROM t1", nil}, {:sql, "SELECT * FROM t2", nil},
+         {:col, "id"}, :left}
+
+      {encoded, _} = PlanEncoder.encode(plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:lateral_join, lateral}}}} = encoded
+      assert %Spark.Connect.LateralJoin{join_type: :JOIN_TYPE_LEFT} = lateral
+    end
+  end
+
+  describe "grouping_sets encoding" do
+    test "encodes grouping sets aggregate" do
+      plan =
+        {:aggregate, {:sql, "SELECT * FROM t", nil}, :grouping_sets,
+         [{:col, "id"}, {:col, "dept"}], [{:fn, "count", [{:lit, 1}], false}],
+         [[{:col, "id"}], [{:col, "dept"}]]}
+
+      {encoded, _} = PlanEncoder.encode(plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:aggregate, agg}}}} = encoded
+      assert agg.group_type == :GROUP_TYPE_GROUPING_SETS
+      assert length(agg.grouping_sets) == 2
+    end
+  end
+
+  describe "metadata_column encoding" do
+    test "encodes unresolved_attribute with metadata flag" do
+      {plan, _} =
+        PlanEncoder.encode(
+          {:project, {:sql, "SELECT * FROM t", nil}, [{:metadata_col, "_meta"}]},
+          0
+        )
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:project, project}}}} = plan
+      [expr] = project.expressions
+
+      assert {:unresolved_attribute,
+              %Expression.UnresolvedAttribute{
+                unparsed_identifier: "_meta",
+                is_metadata_column: true
+              }} = expr.expr_type
     end
   end
 end

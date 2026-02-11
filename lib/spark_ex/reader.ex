@@ -267,6 +267,63 @@ defmodule SparkEx.Reader do
     data_source(session, "orc", paths, opts)
   end
 
+  @doc """
+  Creates a DataFrame by reading Avro file(s).
+
+  ## Options
+
+  - `:schema` — optional schema string
+  - `:options` — map of Avro reader options
+  """
+  @spec avro(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def avro(session, paths, opts \\ []) do
+    data_source(session, "avro", paths, opts)
+  end
+
+  @doc """
+  Creates a DataFrame by reading XML file(s).
+
+  ## Options
+
+  - `:schema` — optional schema string
+  - `:options` — map of XML reader options
+  """
+  @spec xml(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def xml(session, paths, opts \\ []) do
+    data_source(session, "xml", paths, opts)
+  end
+
+  @doc """
+  Creates a DataFrame by reading binary files.
+
+  ## Options
+
+  - `:options` — map of BinaryFile reader options
+  """
+  @spec binary_file(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def binary_file(session, paths, opts \\ []) do
+    data_source(session, "binaryFile", paths, opts)
+  end
+
+  @doc """
+  Creates a DataFrame by reading from JDBC.
+
+  ## Options
+
+  - `:options` — map of JDBC reader options (e.g. `url`, `dbtable`)
+  """
+  @spec jdbc(GenServer.server(), String.t(), String.t(), keyword()) :: DataFrame.t()
+  def jdbc(session, url, table, opts \\ []) when is_binary(url) and is_binary(table) do
+    opts_options = opts |> Keyword.get(:options, %{}) |> normalize_options()
+    merged = opts_options |> Map.put("url", url) |> Map.put("dbtable", table)
+    data_source(session, "jdbc", [], Keyword.put(opts, :options, merged))
+  end
+
+  @spec jdbc(GenServer.server(), keyword()) :: DataFrame.t()
+  def jdbc(session, opts) when is_list(opts) do
+    data_source(session, "jdbc", [], opts)
+  end
+
   # --- Private ---
 
   defp load_from_builder(reader, paths, opts) do

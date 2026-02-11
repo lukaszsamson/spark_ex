@@ -34,6 +34,7 @@ defmodule SparkEx.Column do
           | {:star, String.t()}
           | {:window, expr(), [expr()], [expr()], term()}
           | {:unresolved_extract_value, expr(), expr()}
+          | {:update_fields, expr(), String.t(), expr() | nil}
           | {:lambda, expr(), [{:lambda_var, String.t()}]}
           | {:lambda_var, String.t()}
           | {:subquery, atom(), term(), keyword()}
@@ -161,6 +162,33 @@ defmodule SparkEx.Column do
     %__MODULE__{expr: {:unresolved_extract_value, col.expr, {:lit, field_name}}}
   end
 
+  @doc """
+  Adds or replaces a field in a struct column.
+  """
+  @spec with_field(t(), String.t(), t() | term()) :: t()
+  def with_field(%__MODULE__{} = col, field_name, %__MODULE__{} = value)
+      when is_binary(field_name) do
+    %__MODULE__{expr: {:update_fields, col.expr, field_name, value.expr}}
+  end
+
+  def with_field(%__MODULE__{} = col, field_name, value) when is_binary(field_name) do
+    %__MODULE__{expr: {:update_fields, col.expr, field_name, {:lit, value}}}
+  end
+
+  @doc """
+  Drops fields from a struct column.
+  """
+  @spec drop_fields(t(), [String.t()]) :: t()
+  def drop_fields(%__MODULE__{} = col, field_names) when is_list(field_names) do
+    Enum.reduce(field_names, col, fn field_name, acc ->
+      if not is_binary(field_name) do
+        raise ArgumentError, "field name must be a string, got: #{inspect(field_name)}"
+      end
+
+      %__MODULE__{expr: {:update_fields, acc.expr, field_name, nil}}
+    end)
+  end
+
   # ── String operations ──
 
   @doc "Returns a substring starting at `pos` for `len` characters."
@@ -169,6 +197,44 @@ defmodule SparkEx.Column do
     %__MODULE__{
       expr: {:fn, "substr", [col.expr, coerce_expr(pos), coerce_expr(len)], false}
     }
+  end
+
+  @doc """
+  Computes `col` raised to the given power.
+  """
+  @spec pow(t(), t() | term()) :: t()
+  def pow(%__MODULE__{} = col, other) do
+    %__MODULE__{expr: {:fn, "power", [col.expr, coerce_expr(other)], false}}
+  end
+
+  @doc """
+  Alias for `pow/2`.
+  """
+  @spec power(t(), t() | term()) :: t()
+  def power(%__MODULE__{} = col, other), do: pow(col, other)
+
+  @doc """
+  Adds a `when` condition to the column expression.
+  """
+  @spec when_(t(), t() | term()) :: t()
+  def when_(%__MODULE__{} = col, %__MODULE__{} = value) do
+    %__MODULE__{expr: {:fn, "when", [col.expr, value.expr], false}}
+  end
+
+  def when_(%__MODULE__{} = col, value) do
+    %__MODULE__{expr: {:fn, "when", [col.expr, {:lit, value}], false}}
+  end
+
+  @doc """
+  Adds a fallback value to a `when/2` expression chain.
+  """
+  @spec otherwise(t(), t() | term()) :: t()
+  def otherwise(%__MODULE__{expr: {:fn, "when", args, false}} = _when_col, %__MODULE__{} = value) do
+    %__MODULE__{expr: {:fn, "when", args ++ [value.expr], false}}
+  end
+
+  def otherwise(%__MODULE__{expr: {:fn, "when", args, false}} = _when_col, value) do
+    %__MODULE__{expr: {:fn, "when", args ++ [{:lit, value}], false}}
   end
 
   # ── Window binding ──
@@ -240,6 +306,19 @@ defmodule SparkEx.Column do
 
   defp binary_fn(name, %__MODULE__{} = left, %__MODULE__{} = right) do
     %__MODULE__{expr: {:fn, name, [left.expr, right.expr], false}}
+  end
+
+  defp binary_fn(name, left, right) when is_number(left) do
+    binary_fn(name, %__MODULE__{expr: {:lit, left}}, right)
+  end
+
+  defp binary_fn(name, left, right) when is_number(right) do
+    binary_fn(name, left, %__MODULE__{expr: {:lit, right}})
+  end
+
+  defp binary_fn(name, left, right) do
+    raise ArgumentError,
+          "expected Column or numeric literal, got: #{inspect(left)} and #{inspect(right)} for #{name}"
   end
 
   defp coerce_expr(%__MODULE__{expr: e}), do: e

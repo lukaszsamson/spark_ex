@@ -29,6 +29,15 @@ defmodule SparkEx.Connect.TypeMapper do
   end
 
   @doc """
+  Converts a Spark Connect `DataType` to a Spark DDL type string.
+  """
+  @spec data_type_to_ddl(DataType.t()) :: String.t()
+  def data_type_to_ddl(dt) do
+    {:ok, dtype} = to_explorer_dtype(dt)
+    to_spark_ddl_type(dtype)
+  end
+
+  @doc """
   Converts a Spark Connect schema (`DataType.Struct`) to Explorer dtypes map.
 
   Returns a keyword list of `{column_name, dtype}` pairs.

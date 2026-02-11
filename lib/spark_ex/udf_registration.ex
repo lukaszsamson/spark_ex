@@ -1,11 +1,11 @@
 defmodule SparkEx.UDFRegistration do
   @moduledoc """
-  Registers user-defined functions (UDFs) and user-defined table functions (UDTFs)
-  with a Spark session.
+  Registers user-defined functions (UDFs), table functions (UDTFs),
+  and data sources with a Spark session.
 
-  Supports Java UDF registration via `register_java/4` and UDTF registration
-  via `register_udtf/4`. Registered functions become available for SQL queries
-  and DataFrame operations.
+  Supports Java UDF registration via `register_java/4`, UDTF registration
+  via `register_udtf/4`, and data source registration via `register_data_source/4`.
+  Registered functions become available for SQL queries and DataFrame operations.
   """
 
   @doc """
@@ -76,6 +76,29 @@ defmodule SparkEx.UDFRegistration do
     command =
       {:register_udtf, name, python_command, return_type, eval_type, python_ver, deterministic}
 
+    SparkEx.Session.execute_command(session, command)
+  end
+
+  @doc """
+  Registers a custom data source.
+
+  The data source is registered using the `register_data_source` command with the
+  `CommonInlineUserDefinedDataSource` protocol.
+
+  ## Parameters
+
+  - `session` — the SparkEx session (GenServer reference).
+  - `name` — the data source name.
+  - `python_command` — serialized Python data source command bytes.
+  - `opts` — keyword options:
+    - `:python_ver` — Python version string (default: "3.11").
+  """
+  @spec register_data_source(GenServer.server(), String.t(), binary(), keyword()) ::
+          :ok | {:error, term()}
+  def register_data_source(session, name, python_command, opts \\ [])
+      when is_binary(name) and is_binary(python_command) do
+    python_ver = Keyword.get(opts, :python_ver, "3.11")
+    command = {:register_data_source, name, python_command, python_ver}
     SparkEx.Session.execute_command(session, command)
   end
 end

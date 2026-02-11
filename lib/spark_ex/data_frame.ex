@@ -68,6 +68,30 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
+  Selects columns by regex.
+
+  ## Examples
+
+      df |> DataFrame.col_regex("^name_.*")
+  """
+  @spec col_regex(t(), String.t()) :: t()
+  def col_regex(%__MODULE__{} = df, pattern) when is_binary(pattern) do
+    %__MODULE__{df | plan: {:project, df.plan, [{:col_regex, pattern}]}}
+  end
+
+  @doc """
+  Selects a metadata column by name.
+
+  ## Examples
+
+      df |> DataFrame.metadata_column("_metadata")
+  """
+  @spec metadata_column(t(), String.t()) :: t()
+  def metadata_column(%__MODULE__{} = df, name) when is_binary(name) do
+    %__MODULE__{df | plan: {:project, df.plan, [{:metadata_col, name}]}}
+  end
+
+  @doc """
   Filters rows based on a boolean condition.
 
   ## Examples
@@ -166,7 +190,64 @@ defmodule SparkEx.DataFrame do
     %SparkEx.GroupedData{
       session: df.session,
       plan: df.plan,
-      grouping_exprs: grouping_exprs
+      grouping_exprs: grouping_exprs,
+      group_type: :groupby,
+      grouping_sets: nil
+    }
+  end
+
+  @doc """
+  Groups by rollup of the specified columns.
+  """
+  @spec rollup(t(), [Column.t() | String.t() | atom()]) :: SparkEx.GroupedData.t()
+  def rollup(%__MODULE__{} = df, columns) when is_list(columns) do
+    grouping_exprs = Enum.map(columns, &normalize_column_expr/1)
+
+    %SparkEx.GroupedData{
+      session: df.session,
+      plan: df.plan,
+      grouping_exprs: grouping_exprs,
+      group_type: :rollup,
+      grouping_sets: nil
+    }
+  end
+
+  @doc """
+  Groups by cube of the specified columns.
+  """
+  @spec cube(t(), [Column.t() | String.t() | atom()]) :: SparkEx.GroupedData.t()
+  def cube(%__MODULE__{} = df, columns) when is_list(columns) do
+    grouping_exprs = Enum.map(columns, &normalize_column_expr/1)
+
+    %SparkEx.GroupedData{
+      session: df.session,
+      plan: df.plan,
+      grouping_exprs: grouping_exprs,
+      group_type: :cube,
+      grouping_sets: nil
+    }
+  end
+
+  @doc """
+  Groups by grouping sets.
+
+  Accepts a list of column lists.
+  """
+  @spec grouping_sets(t(), [[Column.t() | String.t() | atom()]]) :: SparkEx.GroupedData.t()
+  def grouping_sets(%__MODULE__{} = df, sets) when is_list(sets) do
+    grouping_sets =
+      Enum.map(sets, fn set ->
+        Enum.map(set, &normalize_column_expr/1)
+      end)
+
+    grouping_exprs = Enum.uniq(List.flatten(grouping_sets))
+
+    %SparkEx.GroupedData{
+      session: df.session,
+      plan: df.plan,
+      grouping_exprs: grouping_exprs,
+      group_type: :grouping_sets,
+      grouping_sets: grouping_sets
     }
   end
 
@@ -211,6 +292,85 @@ defmodule SparkEx.DataFrame do
     %__MODULE__{
       left
       | plan: {:join, left.plan, right.plan, condition, canonical_join_type, using_columns}
+    }
+  end
+
+  @doc """
+  Performs an as-of join between two DataFrames.
+
+  ## Options
+
+  - `:tolerance` — optional tolerance expression (e.g. `Functions.lit(10)`)
+  - `:allow_exact_matches` — whether exact matches are allowed (default: true)
+  - `:direction` — join direction string (default: "backward")
+
+  ## Examples
+
+      import SparkEx.Functions, only: [col: 1, lit: 1]
+
+      DataFrame.as_of_join(df1, df2, col("t1"), col("t2"), on: col("id"), tolerance: lit(5))
+  """
+  @spec as_of_join(
+          t(),
+          t(),
+          Column.t(),
+          Column.t(),
+          keyword()
+        ) :: t()
+  def as_of_join(
+        %__MODULE__{} = left,
+        %__MODULE__{} = right,
+        %Column{} = left_as_of,
+        %Column{} = right_as_of,
+        opts \\ []
+      ) do
+    ensure_same_session!(left, right, :as_of_join)
+
+    {join_expr, using_columns} = normalize_join_on(Keyword.get(opts, :on, []))
+    join_type = Keyword.get(opts, :join_type, "inner")
+    tolerance = Keyword.get(opts, :tolerance, {:lit, nil})
+    allow_exact_matches = Keyword.get(opts, :allow_exact_matches, true)
+    direction = Keyword.get(opts, :direction, "backward")
+
+    join_expr =
+      case join_expr do
+        nil -> {:lit, nil}
+        expr -> expr
+      end
+
+    tolerance_expr =
+      case tolerance do
+        %Column{expr: expr} -> expr
+        {:lit, _} = expr -> expr
+        other -> normalize_column_expr(other)
+      end
+
+    %__MODULE__{
+      left
+      | plan:
+          {:as_of_join, left.plan, right.plan, left_as_of.expr, right_as_of.expr, join_expr,
+           using_columns, join_type, tolerance_expr, allow_exact_matches, direction}
+    }
+  end
+
+  @doc """
+  Performs a lateral join between two DataFrames.
+
+  The right plan is expected to reference columns from the left plan where supported.
+  """
+  @spec lateral_join(t(), t(), Column.t(), atom() | String.t()) :: t()
+  def lateral_join(
+        %__MODULE__{} = left,
+        %__MODULE__{} = right,
+        %Column{} = condition,
+        join_type \\ :inner
+      ) do
+    ensure_same_session!(left, right, :lateral_join)
+    canonical = normalize_join_type(join_type)
+
+    %__MODULE__{
+      left
+      | plan: {:lateral_join, left.plan, right.plan, condition.expr, canonical}
     }
   end
 
@@ -329,12 +489,23 @@ defmodule SparkEx.DataFrame do
         {"const", lit(42)}
       ])
   """
-  @spec with_columns(t(), [{String.t(), Column.t()}]) :: t()
+  @spec with_columns(t(), [{String.t(), Column.t()}] | map()) :: t()
   def with_columns(%__MODULE__{} = df, columns) when is_list(columns) do
     aliases =
       Enum.map(columns, fn
         {name, %Column{} = col} when is_binary(name) -> {:alias, col.expr, name}
+        {name, value} when is_binary(name) -> {:alias, {:lit, value}, name}
         %Column{expr: {:alias, _, _} = expr} -> expr
+      end)
+
+    %__MODULE__{df | plan: {:with_columns, df.plan, aliases}}
+  end
+
+  def with_columns(%__MODULE__{} = df, columns) when is_map(columns) do
+    aliases =
+      Enum.map(columns, fn
+        {name, %Column{} = col} when is_binary(name) -> {:alias, col.expr, name}
+        {name, value} when is_binary(name) -> {:alias, {:lit, value}, name}
       end)
 
     %__MODULE__{df | plan: {:with_columns, df.plan, aliases}}
@@ -448,6 +619,27 @@ defmodule SparkEx.DataFrame do
         exprs = Enum.map(cols, &normalize_column_expr/1)
         %__MODULE__{df | plan: {:repartition_by_expression, df.plan, exprs, num_partitions}}
     end
+  end
+
+  @doc """
+  Repartitions the DataFrame by range using sort order expressions.
+
+  This uses the `RepartitionByExpression` relation with sort-order expressions.
+  """
+  @spec repartition_by_range(t(), pos_integer(), [Column.t() | String.t() | atom()]) :: t()
+  def repartition_by_range(%__MODULE__{} = df, num_partitions, cols)
+      when is_integer(num_partitions) and is_list(cols) do
+    sort_exprs = Enum.map(cols, &normalize_sort_expr/1)
+    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, sort_exprs, num_partitions}}
+  end
+
+  @doc """
+  Repartitions the DataFrame by range using sort order expressions without specifying partitions.
+  """
+  @spec repartition_by_range(t(), [Column.t() | String.t() | atom()]) :: t()
+  def repartition_by_range(%__MODULE__{} = df, cols) when is_list(cols) do
+    sort_exprs = Enum.map(cols, &normalize_sort_expr/1)
+    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, sort_exprs, nil}}
   end
 
   @doc """
@@ -568,6 +760,21 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
+  Observes metrics during query execution.
+
+  Accepts an `SparkEx.Observation` or a name string and a list of Column expressions.
+  """
+  @spec observe(t(), SparkEx.Observation.t() | String.t(), [Column.t()]) :: t()
+  def observe(%__MODULE__{} = df, %SparkEx.Observation{name: name}, exprs) when is_list(exprs) do
+    observe(df, name, exprs)
+  end
+
+  def observe(%__MODULE__{} = df, name, exprs) when is_binary(name) and is_list(exprs) do
+    metric_exprs = Enum.map(exprs, &normalize_column_expr/1)
+    %__MODULE__{df | plan: {:collect_metrics, df.plan, name, metric_exprs}}
+  end
+
+  @doc """
   Returns the first `n` rows as a list of maps.
 
   Equivalent to `take/3` but follows PySpark naming.
@@ -606,11 +813,28 @@ defmodule SparkEx.DataFrame do
   @doc """
   Adds a query optimization hint.
 
-  Supports primitive values, `Column`s, and lists of primitive values.
+  Supports primitive values, `Column`s, and lists of primitive values/columns.
   """
   @spec hint(t(), String.t(), term()) :: t()
   def hint(%__MODULE__{} = df, name, parameters \\ []) when is_binary(name) do
     %__MODULE__{df | plan: {:hint, df.plan, name, normalize_hint_parameters(parameters)}}
+  end
+
+  @doc """
+  Applies a transformation function to the DataFrame.
+
+  The function receives the DataFrame and must return a DataFrame.
+  """
+  @spec transform(t(), (t() -> t())) :: t()
+  def transform(%__MODULE__{} = df, fun) when is_function(fun, 1) do
+    case fun.(df) do
+      %__MODULE__{} = result ->
+        result
+
+      other ->
+        raise ArgumentError,
+              "expected transform function to return DataFrame, got: #{inspect(other)}"
+    end
   end
 
   @doc """
@@ -650,22 +874,30 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.drop_duplicates(["id", "name"])
   """
-  @spec drop_duplicates(t(), [String.t()]) :: t()
+  @spec drop_duplicates(t(), [Column.t() | String.t() | atom()]) :: t()
   def drop_duplicates(%__MODULE__{} = df, subset \\ []) when is_list(subset) do
     case subset do
-      [] -> distinct(df)
-      cols -> %__MODULE__{df | plan: {:deduplicate, df.plan, cols, false}}
+      [] ->
+        distinct(df)
+
+      cols ->
+        names = Enum.map(cols, &normalize_dedup_column/1)
+        %__MODULE__{df | plan: {:deduplicate, df.plan, names, false}}
     end
   end
 
   @doc """
   Drops duplicate rows within the watermark window.
   """
-  @spec drop_duplicates_within_watermark(t(), [String.t()]) :: t()
+  @spec drop_duplicates_within_watermark(t(), [Column.t() | String.t() | atom()]) :: t()
   def drop_duplicates_within_watermark(%__MODULE__{} = df, subset \\ []) when is_list(subset) do
     case subset do
-      [] -> %__MODULE__{df | plan: {:deduplicate, df.plan, [], true, true}}
-      cols -> %__MODULE__{df | plan: {:deduplicate, df.plan, cols, false, true}}
+      [] ->
+        %__MODULE__{df | plan: {:deduplicate, df.plan, [], true, true}}
+
+      cols ->
+        names = Enum.map(cols, &normalize_dedup_column/1)
+        %__MODULE__{df | plan: {:deduplicate, df.plan, names, false, true}}
     end
   end
 
@@ -744,9 +976,41 @@ defmodule SparkEx.DataFrame do
   @spec where(t(), Column.t()) :: t()
   def where(%__MODULE__{} = df, condition), do: filter(df, condition)
 
+  @doc "Alias for `group_by/2` (PySpark `groupby`)."
+  @spec groupby(t(), [Column.t() | String.t() | atom()]) :: SparkEx.GroupedData.t()
+  def groupby(%__MODULE__{} = df, columns), do: group_by(df, columns)
+
+  @doc "Alias for `order_by/2` (PySpark `sort`)."
+  @spec sort(t(), [Column.t() | String.t() | atom()]) :: t()
+  def sort(%__MODULE__{} = df, columns), do: order_by(df, columns)
+
   @doc "Alias for `union/2`."
   @spec union_all(t(), t()) :: t()
   def union_all(%__MODULE__{} = left, %__MODULE__{} = right), do: union(left, right)
+
+  @doc "Alias for `union/2` (PySpark `unionAll`)."
+  @spec unionAll(t(), t()) :: t()
+  def unionAll(%__MODULE__{} = left, %__MODULE__{} = right), do: union(left, right)
+
+  @doc "Alias for `except_all/2`."
+  @spec subtract(t(), t()) :: t()
+  def subtract(%__MODULE__{} = left, %__MODULE__{} = right), do: except_all(left, right)
+
+  @doc "Alias for `persist/2` with default storage level (PySpark `cache`)."
+  @spec cache(t()) :: :ok | {:error, term()}
+  def cache(%__MODULE__{} = df), do: persist(df)
+
+  @doc "Alias for `create_or_replace_temp_view/3` (PySpark `registerTempTable`)."
+  @spec register_temp_table(t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def register_temp_table(%__MODULE__{} = df, name, opts \\ []) when is_binary(name) do
+    create_or_replace_temp_view(df, name, opts)
+  end
+
+  @doc "Alias for `create_or_replace_temp_view/3` (PySpark `registerTempTable`)."
+  @spec registerTempTable(t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def registerTempTable(%__MODULE__{} = df, name, opts \\ []) when is_binary(name) do
+    create_or_replace_temp_view(df, name, opts)
+  end
 
   @doc "Cross join — shorthand for `join(df, other, [], :cross)`."
   @spec cross_join(t(), t()) :: t()
@@ -945,6 +1209,17 @@ defmodule SparkEx.DataFrame do
     %Column{expr: {:subquery, :exists, df.plan, []}}
   end
 
+  @doc """
+  Returns this DataFrame as an IN subquery expression.
+
+  Accepts a list of expressions to compare against the subquery values.
+  """
+  @spec in_subquery(t(), [Column.t()]) :: Column.t()
+  def in_subquery(%__MODULE__{} = df, values) when is_list(values) do
+    in_values = Enum.map(values, fn %Column{expr: expr} -> expr end)
+    %Column{expr: {:subquery, :in, df.plan, [in_values: in_values]}}
+  end
+
   # ── Actions (execute against Spark) ──
 
   @doc """
@@ -974,6 +1249,16 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
+  Materializes the DataFrame as a raw Arrow IPC binary.
+
+  Returns an `Arrow.Table` if the `:arrow` dependency is available.
+  """
+  @spec to_arrow(t(), keyword()) :: {:ok, term()} | {:error, term()}
+  def to_arrow(%__MODULE__{} = df, opts \\ []) do
+    SparkEx.Session.execute_arrow(df.session, df.plan, merge_tags(df, opts))
+  end
+
+  @doc """
   Collects all rows from the DataFrame as a list of maps.
 
   ## Options
@@ -983,6 +1268,50 @@ defmodule SparkEx.DataFrame do
   @spec collect(t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def collect(%__MODULE__{} = df, opts \\ []) do
     SparkEx.Session.execute_collect(df.session, df.plan, merge_tags(df, opts))
+  end
+
+  @doc """
+  Applies a function to each row on the driver.
+  """
+  @spec foreach(t(), (map() -> term()), keyword()) :: :ok | {:error, term()}
+  def foreach(%__MODULE__{} = df, fun, opts \\ []) when is_function(fun, 1) do
+    case collect(df, opts) do
+      {:ok, rows} ->
+        Enum.each(rows, fun)
+        :ok
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc """
+  Applies a function to each partition (driver-side shim).
+  """
+  @spec foreach_partition(t(), (Enumerable.t() -> term()), keyword()) :: :ok | {:error, term()}
+  def foreach_partition(%__MODULE__{} = df, fun, opts \\ []) when is_function(fun, 1) do
+    case collect(df, opts) do
+      {:ok, rows} ->
+        fun.(rows)
+        :ok
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc """
+  Returns an enumerable of rows, fetched in batches.
+
+  This is a convenience wrapper over `collect/2` and currently fetches
+  all rows before returning an enumerable.
+  """
+  @spec to_local_iterator(t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
+  def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
+    case collect(df, opts) do
+      {:ok, rows} -> {:ok, rows}
+      {:error, _} = error -> error
+    end
   end
 
   @doc """
@@ -1008,6 +1337,31 @@ defmodule SparkEx.DataFrame do
   @spec schema(t()) :: {:ok, term()} | {:error, term()}
   def schema(%__MODULE__{} = df) do
     SparkEx.Session.analyze_schema(df.session, df.plan)
+  end
+
+  @doc """
+  Returns a list of column names.
+  """
+  @spec columns(t()) :: {:ok, [String.t()]} | {:error, term()}
+  def columns(%__MODULE__{} = df) do
+    with {:ok, schema} <- schema(df) do
+      {:ok, Enum.map(schema.fields, & &1.name)}
+    end
+  end
+
+  @doc """
+  Returns list of `{column_name, type_string}` tuples.
+  """
+  @spec dtypes(t()) :: {:ok, [{String.t(), String.t()}]} | {:error, term()}
+  def dtypes(%__MODULE__{} = df) do
+    with {:ok, schema} <- schema(df) do
+      dtypes =
+        Enum.map(schema.fields, fn field ->
+          {field.name, SparkEx.Connect.TypeMapper.data_type_to_ddl(field.data_type)}
+        end)
+
+      {:ok, dtypes}
+    end
   end
 
   @doc """
@@ -1254,8 +1608,11 @@ defmodule SparkEx.DataFrame do
     parameters
     |> List.wrap()
     |> Enum.flat_map(fn
-      vals when is_list(vals) -> if(Enum.all?(vals, &primitive_hint?/1), do: vals, else: [vals])
-      val -> [val]
+      vals when is_list(vals) ->
+        if Enum.all?(vals, &valid_hint_param?/1), do: vals, else: [vals]
+
+      val ->
+        [val]
     end)
     |> Enum.map(fn
       %Column{} = c ->
@@ -1270,11 +1627,25 @@ defmodule SparkEx.DataFrame do
     end)
   end
 
+  defp valid_hint_param?(%Column{}), do: true
+  defp valid_hint_param?(v), do: primitive_hint?(v)
+
   defp primitive_hint?(v), do: is_binary(v) or is_integer(v) or is_float(v)
 
   defp normalize_column_expr(%Column{} = col), do: col.expr
   defp normalize_column_expr(name) when is_binary(name), do: {:col, name}
   defp normalize_column_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
+  defp normalize_column_expr({:col_regex, _} = expr), do: expr
+  defp normalize_column_expr({:metadata_col, _} = expr), do: expr
+
+  defp normalize_dedup_column(%Column{expr: {:col, name}}), do: name
+
+  defp normalize_dedup_column(%Column{}) do
+    raise ArgumentError, "expected column names for deduplicate subset"
+  end
+
+  defp normalize_dedup_column(name) when is_binary(name), do: name
+  defp normalize_dedup_column(name) when is_atom(name), do: Atom.to_string(name)
 
   defp normalize_sort_expr(%Column{expr: {:sort_order, _, _, _}} = col), do: col.expr
 

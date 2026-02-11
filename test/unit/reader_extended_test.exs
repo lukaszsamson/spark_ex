@@ -28,6 +28,57 @@ defmodule SparkEx.Unit.ReaderExtendedTest do
     end
   end
 
+  describe "avro/3" do
+    test "creates DataFrame with avro format" do
+      df = Reader.avro(@session, "/data/events.avro")
+      assert %DataFrame{plan: {:read_data_source, "avro", ["/data/events.avro"], nil, %{}}} = df
+    end
+  end
+
+  describe "xml/3" do
+    test "creates DataFrame with xml format" do
+      df = Reader.xml(@session, "/data/events.xml")
+      assert %DataFrame{plan: {:read_data_source, "xml", ["/data/events.xml"], nil, %{}}} = df
+    end
+  end
+
+  describe "binary_file/3" do
+    test "creates DataFrame with binaryFile format" do
+      df = Reader.binary_file(@session, "/data/files")
+      assert %DataFrame{plan: {:read_data_source, "binaryFile", ["/data/files"], nil, %{}}} = df
+    end
+  end
+
+  describe "jdbc/3" do
+    test "creates DataFrame with jdbc format and options" do
+      df = Reader.jdbc(@session, "jdbc:postgresql://host/db", "public.users")
+
+      assert %DataFrame{
+               plan:
+                 {:read_data_source, "jdbc", [], nil,
+                  %{"url" => "jdbc:postgresql://host/db", "dbtable" => "public.users"}}
+             } = df
+    end
+
+    test "passes explicit options" do
+      df =
+        Reader.jdbc(@session, "jdbc:postgresql://host/db", "public.users",
+          options: %{"user" => "alice", "password" => "secret"}
+        )
+
+      assert %DataFrame{
+               plan:
+                 {:read_data_source, "jdbc", [], nil,
+                  %{
+                    "url" => "jdbc:postgresql://host/db",
+                    "dbtable" => "public.users",
+                    "user" => "alice",
+                    "password" => "secret"
+                  }}
+             } = df
+    end
+  end
+
   describe "load/4" do
     test "creates DataFrame with generic format" do
       df = Reader.load(@session, "avro", "/data/events.avro")

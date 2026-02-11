@@ -237,6 +237,15 @@ defmodule SparkEx do
   end
 
   @doc """
+  Uploads JAR files from local paths.
+  """
+  @spec add_jars_from_paths(GenServer.server(), String.t() | [String.t()]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_jars_from_paths(session, paths) do
+    SparkEx.Artifacts.add_jars(session, paths)
+  end
+
+  @doc """
   Uploads file artifacts to the server.
 
   Artifact names are automatically prefixed with `files/`.
@@ -248,6 +257,15 @@ defmodule SparkEx do
   end
 
   @doc """
+  Uploads files from local paths.
+  """
+  @spec add_files_from_paths(GenServer.server(), String.t() | [String.t()]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_files_from_paths(session, paths) do
+    SparkEx.Artifacts.add_files(session, paths)
+  end
+
+  @doc """
   Uploads archive artifacts to the server.
 
   Artifact names are automatically prefixed with `archives/`.
@@ -256,6 +274,26 @@ defmodule SparkEx do
           {:ok, [{String.t(), boolean()}]} | {:error, term()}
   def add_archives(session, artifacts) do
     SparkEx.Session.add_archives(session, artifacts)
+  end
+
+  @doc """
+  Uploads archives from local paths.
+  """
+  @spec add_archives_from_paths(GenServer.server(), String.t() | [String.t()]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_archives_from_paths(session, paths) do
+    SparkEx.Artifacts.add_archives(session, paths)
+  end
+
+  @doc """
+  Uploads Python files from local paths.
+
+  Artifact names are automatically prefixed with `pyfiles/`.
+  """
+  @spec add_pyfiles_from_paths(GenServer.server(), String.t() | [String.t()]) ::
+          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  def add_pyfiles_from_paths(session, paths) do
+    SparkEx.Artifacts.add_pyfiles(session, paths)
   end
 
   @doc """

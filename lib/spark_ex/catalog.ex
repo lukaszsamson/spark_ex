@@ -130,6 +130,24 @@ defmodule SparkEx.Catalog do
     execute_scalar(session, {:database_exists, db_name})
   end
 
+  @spec create_database(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
+  def create_database(session, db_name, opts \\ []) when is_binary(db_name) do
+    sql = build_create_database_sql(db_name, opts)
+    execute_sql_void(session, sql)
+  end
+
+  @spec drop_database(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
+  def drop_database(session, db_name, opts \\ []) when is_binary(db_name) do
+    sql = build_drop_database_sql(db_name, opts)
+    execute_sql_void(session, sql)
+  end
+
+  @spec alter_database(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
+  def alter_database(session, db_name, opts) when is_binary(db_name) and is_list(opts) do
+    sql = build_alter_database_sql(db_name, opts)
+    execute_sql_void(session, sql)
+  end
+
   # ── Table Management ──
 
   @spec list_tables(GenServer.server(), String.t() | nil, String.t() | nil) ::
@@ -165,6 +183,18 @@ defmodule SparkEx.Catalog do
     end
   end
 
+  @spec drop_table(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
+  def drop_table(session, table_name, opts \\ []) when is_binary(table_name) do
+    sql = build_drop_table_sql(table_name, opts)
+    execute_sql_void(session, sql)
+  end
+
+  @spec alter_table(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
+  def alter_table(session, table_name, opts) when is_binary(table_name) and is_list(opts) do
+    sql = build_alter_table_sql(table_name, opts)
+    execute_sql_void(session, sql)
+  end
+
   # ── Function Management ──
 
   @spec list_functions(GenServer.server(), String.t() | nil, String.t() | nil) ::
@@ -189,6 +219,20 @@ defmodule SparkEx.Catalog do
           {:ok, boolean()} | {:error, term()}
   def function_exists?(session, function_name, db_name \\ nil) when is_binary(function_name) do
     execute_scalar(session, {:function_exists, function_name, db_name})
+  end
+
+  @spec create_function(GenServer.server(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, term()}
+  def create_function(session, function_name, class_name, opts \\ [])
+      when is_binary(function_name) and is_binary(class_name) do
+    sql = build_create_function_sql(function_name, class_name, opts)
+    execute_sql_void(session, sql)
+  end
+
+  @spec drop_function(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
+  def drop_function(session, function_name, opts \\ []) when is_binary(function_name) do
+    sql = build_drop_function_sql(function_name, opts)
+    execute_sql_void(session, sql)
   end
 
   # ── Temp Views ──
@@ -320,6 +364,193 @@ defmodule SparkEx.Catalog do
       {:ok, _} -> :ok
       {:error, _} = err -> err
     end
+  end
+
+  defp execute_sql_void(session, sql) when is_binary(sql) do
+    df = SparkEx.sql(session, sql)
+
+    case DataFrame.collect(df) do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc false
+  def build_create_database_sql(db_name, opts) do
+    if_not_exists = Keyword.get(opts, :if_not_exists, false)
+    comment = Keyword.get(opts, :comment)
+    location = Keyword.get(opts, :location)
+
+    clauses =
+      []
+      |> maybe_add("IF NOT EXISTS", if_not_exists)
+      |> then(fn acc ->
+        if comment do
+          acc ++ ["COMMENT", sql_string(comment)]
+        else
+          acc
+        end
+      end)
+      |> then(fn acc ->
+        if location do
+          acc ++ ["LOCATION", sql_string(location)]
+        else
+          acc
+        end
+      end)
+
+    join_sql(["CREATE", "DATABASE"] ++ clauses ++ [db_name])
+  end
+
+  @doc false
+  def build_drop_database_sql(db_name, opts) do
+    if_exists = Keyword.get(opts, :if_exists, false)
+    cascade = Keyword.get(opts, :cascade, false)
+
+    clauses =
+      []
+      |> maybe_add("IF EXISTS", if_exists)
+      |> maybe_add("CASCADE", cascade)
+
+    join_sql(["DROP", "DATABASE"] ++ clauses ++ [db_name])
+  end
+
+  @doc false
+  def build_alter_database_sql(db_name, opts) do
+    location = Keyword.get(opts, :set_location)
+    properties = Keyword.get(opts, :set_properties)
+
+    case {location, properties} do
+      {nil, nil} ->
+        raise ArgumentError, "alter_database requires :set_location or :set_properties"
+
+      {loc, nil} ->
+        join_sql(["ALTER", "DATABASE", db_name, "SET", "LOCATION", sql_string(loc)])
+
+      {nil, props} when is_map(props) ->
+        props_sql = format_properties(props)
+        join_sql(["ALTER", "DATABASE", db_name, "SET", "DBPROPERTIES", props_sql])
+
+      {_loc, _props} ->
+        raise ArgumentError,
+              "alter_database supports only one of :set_location or :set_properties"
+    end
+  end
+
+  @doc false
+  def build_drop_table_sql(table_name, opts) do
+    if_exists = Keyword.get(opts, :if_exists, false)
+    purge = Keyword.get(opts, :purge, false)
+
+    clauses =
+      []
+      |> maybe_add("IF EXISTS", if_exists)
+      |> then(fn acc ->
+        if purge do
+          acc ++ ["PURGE"]
+        else
+          acc
+        end
+      end)
+
+    join_sql(["DROP", "TABLE"] ++ clauses ++ [table_name])
+  end
+
+  @doc false
+  def build_alter_table_sql(table_name, opts) do
+    rename_to = Keyword.get(opts, :rename_to)
+    properties = Keyword.get(opts, :set_properties)
+
+    case {rename_to, properties} do
+      {nil, nil} ->
+        raise ArgumentError, "alter_table requires :rename_to or :set_properties"
+
+      {new_name, nil} when is_binary(new_name) ->
+        join_sql(["ALTER", "TABLE", table_name, "RENAME", "TO", new_name])
+
+      {nil, props} when is_map(props) ->
+        props_sql = format_properties(props)
+        join_sql(["ALTER", "TABLE", table_name, "SET", "TBLPROPERTIES", props_sql])
+
+      {_new_name, _props} ->
+        raise ArgumentError, "alter_table supports only one of :rename_to or :set_properties"
+    end
+  end
+
+  @doc false
+  def build_create_function_sql(function_name, class_name, opts) do
+    temporary = Keyword.get(opts, :temporary, false)
+    if_not_exists = Keyword.get(opts, :if_not_exists, false)
+    using_jar = Keyword.get(opts, :using_jar)
+    using_jars = Keyword.get(opts, :using_jars)
+
+    if using_jar && using_jars do
+      raise ArgumentError, "provide only one of :using_jar or :using_jars"
+    end
+
+    using_clause =
+      cond do
+        is_binary(using_jar) ->
+          ["USING", "JAR", sql_string(using_jar)]
+
+        is_list(using_jars) ->
+          jars = Enum.map(using_jars, &join_sql(["JAR", sql_string(&1)]))
+          ["USING", Enum.join(jars, ", ")]
+
+        true ->
+          []
+      end
+
+    clauses =
+      []
+      |> maybe_add("TEMPORARY", temporary)
+      |> maybe_add("IF NOT EXISTS", if_not_exists)
+
+    join_sql(
+      ["CREATE"] ++
+        clauses ++ ["FUNCTION", function_name, "AS", sql_string(class_name)] ++ using_clause
+    )
+  end
+
+  @doc false
+  def build_drop_function_sql(function_name, opts) do
+    temporary = Keyword.get(opts, :temporary, false)
+    if_exists = Keyword.get(opts, :if_exists, false)
+
+    clauses =
+      []
+      |> maybe_add("TEMPORARY", temporary)
+      |> maybe_add("IF EXISTS", if_exists)
+
+    join_sql(["DROP"] ++ clauses ++ ["FUNCTION", function_name])
+  end
+
+  defp format_properties(props) when is_map(props) do
+    pairs =
+      props
+      |> Enum.map(fn {k, v} ->
+        "#{sql_string(k)}=#{sql_string(v)}"
+      end)
+      |> Enum.join(", ")
+
+    "(" <> pairs <> ")"
+  end
+
+  defp sql_string(value) do
+    value
+    |> to_string()
+    |> String.replace("'", "''")
+    |> then(&("'" <> &1 <> "'"))
+  end
+
+  defp maybe_add(list, _value, false), do: list
+  defp maybe_add(list, value, true), do: list ++ [value]
+
+  defp join_sql(parts) do
+    parts
+    |> List.flatten()
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join(" ")
   end
 
   # ── Row Parsers ──

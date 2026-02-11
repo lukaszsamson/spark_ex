@@ -5,6 +5,27 @@ defmodule SparkEx.DataFrameTest do
   alias SparkEx.Column
   alias SparkEx.Functions
 
+  defmodule ArrowSession do
+    use GenServer
+
+    def start_link() do
+      GenServer.start_link(__MODULE__, :ok, [])
+    end
+
+    @impl true
+    def init(:ok), do: {:ok, :ok}
+
+    @impl true
+    def handle_call({:execute_arrow, _plan, _opts}, _from, state) do
+      {:reply, {:ok, :arrow_data}, state}
+    end
+
+    @impl true
+    def handle_call({:execute_collect, _plan, _opts}, _from, state) do
+      {:reply, {:ok, [%{"id" => 1}]}, state}
+    end
+  end
+
   describe "struct" do
     test "holds session and plan" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
@@ -33,6 +54,60 @@ defmodule SparkEx.DataFrameTest do
       assert_raise ArgumentError, ~r/expected :args to be a list, map, or nil/, fn ->
         SparkEx.sql(self(), "SELECT ?", args: MapSet.new([1, 2, 3]))
       end
+    end
+  end
+
+  defmodule SchemaSession do
+    use GenServer
+
+    def start_link(schema) do
+      GenServer.start_link(__MODULE__, schema, [])
+    end
+
+    @impl true
+    def init(schema), do: {:ok, schema}
+
+    @impl true
+    def handle_call({:analyze_schema, _plan}, _from, schema) do
+      {:reply, {:ok, schema}, schema}
+    end
+  end
+
+  describe "columns/1" do
+    test "returns column names from schema" do
+      schema = %Spark.Connect.DataType.Struct{
+        fields: [
+          %Spark.Connect.DataType.StructField{
+            name: "id",
+            data_type: %Spark.Connect.DataType{kind: {:long, %Spark.Connect.DataType.Long{}}},
+            nullable: true
+          }
+        ]
+      }
+
+      {:ok, session} = SchemaSession.start_link(schema)
+      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      assert {:ok, ["id"]} = DataFrame.columns(df)
+    end
+  end
+
+  describe "dtypes/1" do
+    test "returns dtype tuples from schema" do
+      schema = %Spark.Connect.DataType.Struct{
+        fields: [
+          %Spark.Connect.DataType.StructField{
+            name: "id",
+            data_type: %Spark.Connect.DataType{kind: {:long, %Spark.Connect.DataType.Long{}}},
+            nullable: true
+          }
+        ]
+      }
+
+      {:ok, session} = SchemaSession.start_link(schema)
+      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      assert {:ok, [{"id", "LONG"}]} = DataFrame.dtypes(df)
     end
   end
 
@@ -78,6 +153,64 @@ defmodule SparkEx.DataFrameTest do
     end
   end
 
+  describe "col_regex/2" do
+    test "creates project plan with col regex" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.col_regex(df, "^name_.*")
+
+      assert %DataFrame{plan: {:project, {:sql, _, _}, [{:col_regex, "^name_.*"}]}} = result
+    end
+  end
+
+  describe "metadata_column/2" do
+    test "creates project plan with metadata column" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.metadata_column(df, "_metadata")
+
+      assert %DataFrame{plan: {:project, {:sql, _, _}, [{:metadata_col, "_metadata"}]}} = result
+    end
+  end
+
+  describe "rollup/2" do
+    test "creates grouped data with rollup group type" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      grouped = DataFrame.rollup(df, ["id"])
+
+      assert %SparkEx.GroupedData{group_type: :rollup, grouping_exprs: [{:col, "id"}]} = grouped
+    end
+  end
+
+  describe "cube/2" do
+    test "creates grouped data with cube group type" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      grouped = DataFrame.cube(df, ["id"])
+
+      assert %SparkEx.GroupedData{group_type: :cube, grouping_exprs: [{:col, "id"}]} = grouped
+    end
+  end
+
+  describe "grouping_sets/2" do
+    test "creates grouped data with grouping sets" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      grouped = DataFrame.grouping_sets(df, [["id"], ["dept"]])
+
+      assert %SparkEx.GroupedData{
+               group_type: :grouping_sets,
+               grouping_sets: [[{:col, "id"}], [{:col, "dept"}]]
+             } = grouped
+    end
+  end
+
+  describe "groupby/2" do
+    test "aliases group_by" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      grouped = DataFrame.groupby(df, ["dept"])
+
+      assert %SparkEx.GroupedData{group_type: :groupby, grouping_exprs: [{:col, "dept"}]} =
+               grouped
+    end
+  end
+
   describe "filter/2" do
     test "creates filter plan from Column condition" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
@@ -101,6 +234,17 @@ defmodule SparkEx.DataFrameTest do
                  {:with_columns, {:sql, _, _},
                   [{:alias, {:fn, "+", [{:col, "a"}, {:lit, 1}], false}, "a_plus_1"}]}
              } = result
+    end
+  end
+
+  describe "with_columns/2" do
+    test "accepts map of column values" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.with_columns(df, %{"a" => 1, "b" => Functions.col("b")})
+
+      assert %DataFrame{plan: {:with_columns, {:sql, _, _}, aliases}} = result
+      assert {:alias, {:lit, 1}, "a"} in aliases
+      assert {:alias, {:col, "b"}, "b"} in aliases
     end
   end
 
@@ -147,11 +291,94 @@ defmodule SparkEx.DataFrameTest do
     end
   end
 
+  describe "sort/2" do
+    test "aliases order_by" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.sort(df, ["name"])
+
+      assert %DataFrame{plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, nil}]}} =
+               result
+    end
+  end
+
+  describe "observe/3" do
+    test "creates collect_metrics plan" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      obs = SparkEx.Observation.new("obs")
+
+      result = DataFrame.observe(df, obs, [Functions.col("value")])
+
+      assert %DataFrame{plan: {:collect_metrics, {:sql, _, _}, "obs", [{:col, "value"}]}} = result
+    end
+  end
+
+  describe "to_local_iterator/2" do
+    test "returns rows enumerable" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, rows} = DataFrame.to_local_iterator(df)
+      assert is_list(rows)
+    end
+  end
+
+  describe "to_arrow/2" do
+    test "delegates to session" do
+      {:ok, session} = ArrowSession.start_link()
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, :arrow_data} = DataFrame.to_arrow(df)
+    end
+  end
+
+  describe "foreach/3" do
+    test "applies function over collected rows" do
+      {:ok, session} = ArrowSession.start_link()
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert :ok = DataFrame.foreach(df, fn _ -> :ok end)
+    end
+  end
+
+  describe "foreach_partition/3" do
+    test "applies function over rows as a single partition" do
+      {:ok, session} = ArrowSession.start_link()
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert :ok = DataFrame.foreach_partition(df, fn _ -> :ok end)
+    end
+  end
+
   describe "limit/2" do
     test "creates limit plan" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.limit(df, 10)
       assert %DataFrame{plan: {:limit, {:sql, _, _}, 10}} = result
+    end
+  end
+
+  describe "repartition_by_range/2" do
+    test "creates repartition_by_expression plan with sort orders" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.repartition_by_range(df, ["id"])
+
+      assert %DataFrame{
+               plan:
+                 {:repartition_by_expression, {:sql, _, _},
+                  [{:sort_order, {:col, "id"}, :asc, nil}], nil}
+             } = result
+    end
+  end
+
+  describe "repartition_by_range/3" do
+    test "creates repartition_by_expression plan with num partitions" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.repartition_by_range(df, 10, [Functions.col("id")])
+
+      assert %DataFrame{
+               plan:
+                 {:repartition_by_expression, {:sql, _, _},
+                  [{:sort_order, {:col, "id"}, :asc, nil}], 10}
+             } = result
     end
   end
 
@@ -276,12 +503,118 @@ defmodule SparkEx.DataFrameTest do
     end
   end
 
+  describe "as_of_join/5" do
+    test "creates as-of join plan" do
+      df1 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t1", nil}}
+      df2 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t2", nil}}
+
+      result =
+        DataFrame.as_of_join(
+          df1,
+          df2,
+          Functions.col("t1"),
+          Functions.col("t2"),
+          on: Functions.col("id"),
+          tolerance: Functions.lit(5),
+          allow_exact_matches: false,
+          direction: "forward"
+        )
+
+      assert %DataFrame{
+               plan:
+                 {:as_of_join, {:sql, _, _}, {:sql, _, _}, {:col, "t1"}, {:col, "t2"},
+                  {:col, "id"}, [], "inner", {:lit, 5}, false, "forward"}
+             } = result
+    end
+  end
+
+  describe "lateral_join/4" do
+    test "creates lateral join plan" do
+      df1 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t1", nil}}
+      df2 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t2", nil}}
+      condition = Column.eq(Functions.col("t1.id"), Functions.col("t2.id"))
+
+      result = DataFrame.lateral_join(df1, df2, condition, :left)
+
+      assert %DataFrame{plan: {:lateral_join, {:sql, _, _}, {:sql, _, _}, _, :left}} = result
+    end
+  end
+
+  describe "in_subquery/2" do
+    test "creates in subquery expression" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.in_subquery(df, [Functions.col("id")])
+
+      assert %SparkEx.Column{expr: {:subquery, :in, {:sql, _, _}, [in_values: [{:col, "id"}]]}} =
+               result
+    end
+  end
+
   describe "distinct/1" do
     test "creates deduplicate plan" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.distinct(df)
 
       assert %DataFrame{plan: {:deduplicate, {:sql, _, _}, [], true}} = result
+    end
+  end
+
+  describe "drop_duplicates/2" do
+    test "accepts column names and atoms" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.drop_duplicates(df, ["id", :dept])
+
+      assert %DataFrame{plan: {:deduplicate, {:sql, _, _}, ["id", "dept"], false}} = result
+    end
+
+    test "accepts column struct with col expr" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.drop_duplicates(df, [Functions.col("id")])
+
+      assert %DataFrame{plan: {:deduplicate, {:sql, _, _}, ["id"], false}} = result
+    end
+
+    test "raises for non-column expressions" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert_raise ArgumentError, ~r/expected column names/, fn ->
+        DataFrame.drop_duplicates(df, [Column.desc(Functions.col("id"))])
+      end
+    end
+  end
+
+  describe "hint/3" do
+    test "accepts list of columns and primitives" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      params = [Functions.col("id"), "broadcast"]
+      result = DataFrame.hint(df, "merge", params)
+
+      assert %DataFrame{plan: {:hint, {:sql, _, _}, "merge", [_, _]}} = result
+    end
+
+    test "rejects unsupported hint parameters" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert_raise ArgumentError, ~r/invalid hint parameter/, fn ->
+        DataFrame.hint(df, "merge", [Date.utc_today()])
+      end
+    end
+  end
+
+  describe "transform/2" do
+    test "applies transform function" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.transform(df, &DataFrame.limit(&1, 5))
+
+      assert %DataFrame{plan: {:limit, {:sql, _, _}, 5}} = result
+    end
+
+    test "raises when transform returns non-DataFrame" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert_raise ArgumentError, ~r/expected transform function to return DataFrame/, fn ->
+        DataFrame.transform(df, fn _ -> :ok end)
+      end
     end
   end
 
@@ -305,6 +638,109 @@ defmodule SparkEx.DataFrameTest do
       assert_raise ArgumentError, ~r/different sessions/, fn ->
         DataFrame.union(df1, df2)
       end
+    end
+  end
+
+  describe "unionAll/2" do
+    test "aliases union" do
+      df1 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM a", nil}}
+      df2 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM b", nil}}
+      result = DataFrame.unionAll(df1, df2)
+
+      assert %DataFrame{plan: {:set_operation, _, _, :union, true}} = result
+    end
+  end
+
+  describe "subtract/2" do
+    test "aliases except_all" do
+      df1 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM a", nil}}
+      df2 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM b", nil}}
+      result = DataFrame.subtract(df1, df2)
+
+      assert %DataFrame{plan: {:set_operation, _, _, :except, true}} = result
+    end
+  end
+
+  describe "cache/1" do
+    defmodule PersistSession do
+      use GenServer
+
+      def start_link() do
+        GenServer.start_link(__MODULE__, :ok, [])
+      end
+
+      @impl true
+      def init(:ok), do: {:ok, :ok}
+
+      @impl true
+      def handle_call({:analyze_persist, _plan, _opts}, _from, state) do
+        {:reply, :ok, state}
+      end
+    end
+
+    test "delegates to persist with defaults" do
+      {:ok, session} = PersistSession.start_link()
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert :ok = DataFrame.cache(df)
+    end
+  end
+
+  describe "registerTempTable/3" do
+    defmodule TempViewSession do
+      use GenServer
+
+      def start_link() do
+        GenServer.start_link(__MODULE__, :ok, [])
+      end
+
+      @impl true
+      def init(:ok), do: {:ok, :ok}
+
+      @impl true
+      def handle_call(
+            {:execute_command, {:create_dataframe_view, _plan, name, false, true}, _opts},
+            _from,
+            state
+          ) do
+        {:reply, {:ok, name}, state}
+      end
+    end
+
+    test "delegates to create_or_replace_temp_view" do
+      {:ok, session} = TempViewSession.start_link()
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, "tmp"} = DataFrame.registerTempTable(df, "tmp")
+    end
+  end
+
+  describe "register_temp_table/3" do
+    defmodule TempViewSnakeSession do
+      use GenServer
+
+      def start_link() do
+        GenServer.start_link(__MODULE__, :ok, [])
+      end
+
+      @impl true
+      def init(:ok), do: {:ok, :ok}
+
+      @impl true
+      def handle_call(
+            {:execute_command, {:create_dataframe_view, _plan, name, false, true}, _opts},
+            _from,
+            state
+          ) do
+        {:reply, {:ok, name}, state}
+      end
+    end
+
+    test "delegates to create_or_replace_temp_view" do
+      {:ok, session} = TempViewSnakeSession.start_link()
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, "tmp"} = DataFrame.register_temp_table(df, "tmp")
     end
   end
 

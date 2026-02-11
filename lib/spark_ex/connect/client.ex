@@ -519,6 +519,50 @@ defmodule SparkEx.Connect.Client do
   end
 
   @doc """
+  Calls `ExecutePlan` and decodes the response as raw Arrow IPC bytes.
+  """
+  @spec execute_plan_arrow(SparkEx.Session.t(), Plan.t(), keyword()) ::
+          {:ok, ResultDecoder.arrow_result()} | {:error, term()}
+  def execute_plan_arrow(session, plan, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, 60_000)
+    tags = Keyword.get(opts, :tags, [])
+    reattachable = Keyword.get(opts, :reattachable, true)
+    operation_id = if reattachable, do: generate_operation_id(), else: nil
+
+    request = build_execute_request(session, plan, tags, operation_id, reattachable, opts)
+
+    metadata = %{
+      rpc: :execute_plan_arrow,
+      session_id: session.session_id,
+      operation_id: operation_id
+    }
+
+    rpc_telemetry_span(metadata, fn ->
+      if reattachable do
+        execute_reattachable(session, request, operation_id, timeout, opts, fn responses ->
+          ResultDecoder.decode_stream_arrow(responses, session)
+        end)
+      else
+        retry_with_backoff(
+          fn ->
+            case Stub.execute_plan(session.channel, request, timeout: timeout) do
+              {:ok, stream} ->
+                ResultDecoder.decode_stream_arrow(stream, session)
+
+              {:error, %GRPC.RPCError{} = error} ->
+                {:error, Errors.from_grpc_error(error, session)}
+
+              {:error, reason} ->
+                {:error, reason}
+            end
+          end,
+          opts
+        )
+      end
+    end)
+  end
+
+  @doc """
   Executes a command plan and returns the raw gRPC response stream.
 
   Used for long-lived streaming operations like the listener bus where
