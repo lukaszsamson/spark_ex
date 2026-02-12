@@ -58,6 +58,7 @@ defmodule SparkEx.Error do
       :sql_state,
       :message_parameters,
       :query_contexts,
+      :stacktrace,
       :server_message,
       :grpc_status
     ]
@@ -68,6 +69,7 @@ defmodule SparkEx.Error do
             sql_state: String.t() | nil,
             message_parameters: map() | nil,
             query_contexts: [map()] | nil,
+            stacktrace: [map()] | nil,
             server_message: String.t() | nil,
             grpc_status: non_neg_integer() | nil
           }
@@ -209,7 +211,10 @@ defmodule SparkEx.Connect.Errors do
                     context_type: ctx.context_type,
                     object_type: ctx.object_type,
                     object_name: ctx.object_name,
+                    start_index: ctx.start_index,
+                    stop_index: ctx.stop_index,
                     fragment: ctx.fragment,
+                    call_site: ctx.call_site,
                     summary: ctx.summary
                   }
                 end)
@@ -218,7 +223,8 @@ defmodule SparkEx.Connect.Errors do
                 error_class: t.error_class || error.error_class,
                 sql_state: t.sql_state || error.sql_state,
                 message_parameters: t.message_parameters || error.message_parameters,
-                query_contexts: contexts
+                query_contexts: contexts,
+                stacktrace: Map.get(t, :stack_trace) || Map.get(t, :stacktrace)
               }
 
             _ ->

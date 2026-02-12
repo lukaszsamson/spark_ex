@@ -196,6 +196,12 @@ defmodule SparkEx.Integration.WriterTest do
     test "writes data to a table and reads back", %{session: session} do
       table_name = "spark_ex_test_table_#{System.unique_integer([:positive])}"
 
+      SparkEx.sql(session, "DROP TABLE IF EXISTS #{table_name}") |> DataFrame.collect()
+
+      on_exit(fn ->
+        SparkEx.sql(session, "DROP TABLE IF EXISTS #{table_name}") |> DataFrame.collect()
+      end)
+
       df = SparkEx.sql(session, "SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)")
 
       assert :ok =

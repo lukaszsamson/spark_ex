@@ -3,6 +3,7 @@ defmodule SparkEx.Unit.WriterV2Test do
 
   alias SparkEx.WriterV2
   alias SparkEx.DataFrame
+  alias SparkEx.Functions
 
   setup do
     df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
@@ -35,6 +36,12 @@ defmodule SparkEx.Unit.WriterV2Test do
              }
     end
 
+    test "option/3 rejects non-primitive values", %{writer: writer} do
+      assert_raise ArgumentError, ~r/writer_v2 option value must be a primitive/, fn ->
+        WriterV2.option(writer, "bad", %{a: 1})
+      end
+    end
+
     test "options/2 merges options", %{writer: writer} do
       w =
         writer
@@ -54,6 +61,12 @@ defmodule SparkEx.Unit.WriterV2Test do
       assert w.table_properties == %{"retention_days" => "7", "audited" => "true"}
     end
 
+    test "table_property/3 rejects non-primitive values", %{writer: writer} do
+      assert_raise ArgumentError, ~r/writer_v2 option value must be a primitive/, fn ->
+        WriterV2.table_property(writer, "bad", [:list])
+      end
+    end
+
     test "table_properties/2 merges properties", %{writer: writer} do
       w =
         writer
@@ -71,6 +84,24 @@ defmodule SparkEx.Unit.WriterV2Test do
     test "partitioned_by/2 sets partitioning expressions", %{writer: writer} do
       w = WriterV2.partitioned_by(writer, ["year", "month"])
       assert w.partitioned_by == [{:col, "year"}, {:col, "month"}]
+    end
+
+    test "partitioned_by/2 accepts partitioning helper expressions", %{writer: writer} do
+      bucket = Functions.bucket(4, "id")
+      years = Functions.years("interval_col")
+      months = Functions.months("interval_col")
+      days = Functions.days("interval_col")
+      hours = Functions.hours("interval_col")
+
+      w = WriterV2.partitioned_by(writer, [bucket, years, months, days, hours])
+
+      assert w.partitioned_by == [
+               {:fn, "bucket", [{:lit, 4}, {:col, "id"}], false},
+               {:fn, "years", [{:col, "interval_col"}], false},
+               {:fn, "months", [{:col, "interval_col"}], false},
+               {:fn, "days", [{:col, "interval_col"}], false},
+               {:fn, "hours", [{:col, "interval_col"}], false}
+             ]
     end
 
     test "chaining builders", %{writer: writer} do

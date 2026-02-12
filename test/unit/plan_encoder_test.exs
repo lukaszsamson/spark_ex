@@ -115,6 +115,30 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:struct, _}}}} =
                PlanEncoder.encode_expression({:lit, {:struct, [1, "a"]}})
     end
+
+    test "encodes interval literals" do
+      assert %Expression{
+               expr_type: {
+                 :literal,
+                 %Expression.Literal{
+                   literal_type: {:calendar_interval, %Expression.Literal.CalendarInterval{}}
+                 }
+               }
+             } =
+               PlanEncoder.encode_expression({:lit, {:calendar_interval, 1, 2, 3}})
+
+      assert %Expression{
+               expr_type:
+                 {:literal, %Expression.Literal{literal_type: {:year_month_interval, 12}}}
+             } =
+               PlanEncoder.encode_expression({:lit, {:year_month_interval, 12}})
+
+      assert %Expression{
+               expr_type:
+                 {:literal, %Expression.Literal{literal_type: {:day_time_interval, 1_000}}}
+             } =
+               PlanEncoder.encode_expression({:lit, {:day_time_interval, 1_000}})
+    end
   end
 
   describe "subquery in encoding" do

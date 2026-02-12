@@ -410,9 +410,8 @@ defmodule SparkEx.Catalog do
     clauses =
       []
       |> maybe_add("IF EXISTS", if_exists)
-      |> maybe_add("CASCADE", cascade)
 
-    join_sql(["DROP", "DATABASE"] ++ clauses ++ [db_name])
+    join_sql(["DROP", "DATABASE"] ++ clauses ++ [db_name] ++ maybe_add([], "CASCADE", cascade))
   end
 
   @doc false
@@ -445,15 +444,14 @@ defmodule SparkEx.Catalog do
     clauses =
       []
       |> maybe_add("IF EXISTS", if_exists)
-      |> then(fn acc ->
-        if purge do
-          acc ++ ["PURGE"]
-        else
-          acc
-        end
-      end)
 
-    join_sql(["DROP", "TABLE"] ++ clauses ++ [table_name])
+    base = ["DROP", "TABLE"] ++ clauses ++ [table_name]
+
+    if purge do
+      join_sql(base ++ ["PURGE"])
+    else
+      join_sql(base)
+    end
   end
 
   @doc false

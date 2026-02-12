@@ -129,6 +129,40 @@ defmodule SparkEx.Integration.ReattachTest do
       assert is_binary(metadata.operation_id)
       assert String.length(metadata.operation_id) == 36
     end
+
+    test "emits retry telemetry on transient failure", %{session: session} do
+      on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
+
+      SparkEx.RetryPolicyRegistry.set_policies(
+        retry: %{sleep_fun: fn _ -> :ok end, jitter_fun: fn ms -> ms end}
+      )
+
+      ref = make_ref()
+      pid = self()
+
+      :telemetry.attach(
+        "retry-attempt-#{inspect(ref)}",
+        [:spark_ex, :retry, :attempt],
+        fn _event, measurements, metadata, _ ->
+          send(pid, {:retry_attempt, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("retry-attempt-#{inspect(ref)}") end)
+
+      df = SparkEx.sql(session, "SELECT missing_column FROM range(1)")
+      assert {:error, %SparkEx.Error.Remote{grpc_status: 13}} = DataFrame.collect(df)
+
+      receive do
+        {:retry_attempt, measurements, metadata} ->
+          assert is_integer(measurements.backoff_ms)
+          assert metadata.grpc_status == 13
+      after
+        5_000 ->
+          assert true
+      end
+    end
   end
 
   describe "multiple concurrent reattachable executions" do

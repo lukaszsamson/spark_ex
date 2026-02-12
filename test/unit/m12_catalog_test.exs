@@ -408,7 +408,7 @@ defmodule SparkEx.M12.CatalogPlanEncoderTest do
           cascade: true
         )
 
-      assert sql == "DROP DATABASE IF EXISTS CASCADE db1"
+      assert sql == "DROP DATABASE IF EXISTS db1 CASCADE"
     end
 
     test "build_alter_database_sql supports set_location" do
@@ -423,7 +423,7 @@ defmodule SparkEx.M12.CatalogPlanEncoderTest do
 
     test "build_drop_table_sql supports IF EXISTS and PURGE" do
       sql = SparkEx.Catalog.build_drop_table_sql("t1", if_exists: true, purge: true)
-      assert sql == "DROP TABLE IF EXISTS PURGE t1"
+      assert sql == "DROP TABLE IF EXISTS t1 PURGE"
     end
 
     test "build_alter_table_sql supports rename_to" do

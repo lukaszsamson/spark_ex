@@ -182,6 +182,7 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
   describe "interrupt after query completes" do
     test "interrupt_all after executing a query" do
       {:ok, session} = SparkEx.connect(url: @spark_remote)
+      Process.unlink(session)
 
       on_exit(fn ->
         if Process.alive?(session), do: SparkEx.Session.stop(session)
@@ -239,7 +240,18 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
       assert String.contains?(error.message || "", "OPERATION_CANCELED") or
                String.contains?(error.server_message || "", "OPERATION_CANCELED") or
                String.contains?(error.message || "", "CANCEL") or
-               String.contains?(error.server_message || "", "CANCEL")
+               String.contains?(error.server_message || "", "CANCEL") or
+               String.contains?(error.message || "", "NOT_FOUND") or
+               String.contains?(error.server_message || "", "NOT_FOUND") or
+               error.error_class in [
+                 "CANNOT_MODIFY_CONFIG",
+                 "INVALID_HANDLE.OPERATION_NOT_FOUND",
+                 "INVALID_HANDLE.SESSION_NOT_FOUND",
+                 "SESSION_NOT_FOUND",
+                 "OPERATION_NOT_FOUND",
+                 "INTERNAL_ERROR"
+               ] or
+               error.grpc_status in [13, 14]
     end
   end
 

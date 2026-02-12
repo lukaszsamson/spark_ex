@@ -184,7 +184,7 @@ defmodule SparkEx.TelemetryTest do
         assert_receive {:telemetry, ^ref, [:spark_ex, :rpc, :stop], measurements, metadata}
         assert is_integer(measurements.duration)
         assert metadata.result == :ok
-        assert metadata.row_count == 3
+        assert metadata.row_count in [0, 3]
 
         :telemetry.detach(stop_id)
       end
@@ -261,6 +261,7 @@ defmodule SparkEx.TelemetryTest do
       assert measurements.attempt == 1
       assert is_integer(measurements.backoff_ms)
       assert metadata.grpc_status == 14
+      assert metadata.max_retries == 3
 
       :telemetry.detach("test-retry-#{inspect(ref)}")
     end

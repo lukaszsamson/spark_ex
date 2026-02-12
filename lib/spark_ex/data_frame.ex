@@ -1452,8 +1452,8 @@ defmodule SparkEx.DataFrame do
   """
   @spec columns(t()) :: {:ok, [String.t()]} | {:error, term()}
   def columns(%__MODULE__{} = df) do
-    with {:ok, schema} <- schema(df) do
-      {:ok, Enum.map(schema.fields, & &1.name)}
+    with {:ok, struct} <- unwrap_schema(df) do
+      {:ok, Enum.map(struct.fields, & &1.name)}
     end
   end
 
@@ -1462,13 +1462,22 @@ defmodule SparkEx.DataFrame do
   """
   @spec dtypes(t()) :: {:ok, [{String.t(), String.t()}]} | {:error, term()}
   def dtypes(%__MODULE__{} = df) do
-    with {:ok, schema} <- schema(df) do
+    with {:ok, struct} <- unwrap_schema(df) do
       dtypes =
-        Enum.map(schema.fields, fn field ->
+        Enum.map(struct.fields, fn field ->
           {field.name, SparkEx.Connect.TypeMapper.data_type_to_ddl(field.data_type)}
         end)
 
       {:ok, dtypes}
+    end
+  end
+
+  defp unwrap_schema(%__MODULE__{} = df) do
+    case schema(df) do
+      {:ok, %Spark.Connect.DataType{kind: {:struct, struct}}} -> {:ok, struct}
+      {:ok, %Spark.Connect.DataType.Struct{} = struct} -> {:ok, struct}
+      {:ok, other} -> {:error, {:unexpected_schema, other}}
+      {:error, _} = error -> error
     end
   end
 

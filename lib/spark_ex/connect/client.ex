@@ -1728,6 +1728,7 @@ defmodule SparkEx.Connect.Client do
   defp result_status({:ok, _}), do: :ok
   defp result_status({:ok, _, _}), do: :ok
   defp result_status({:error, _}), do: :error
+  defp result_status(_), do: :error
 
   defp row_count_metadata({:ok, %{rows: rows}}) when is_list(rows) do
     %{row_count: length(rows)}

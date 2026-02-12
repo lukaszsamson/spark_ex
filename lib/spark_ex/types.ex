@@ -27,6 +27,7 @@ defmodule SparkEx.Types do
           | :float
           | :double
           | :string
+          | {:string, String.t()}
           | :binary
           | :date
           | :timestamp
@@ -149,6 +150,7 @@ defmodule SparkEx.Types do
   defp type_to_ddl(:float), do: "FLOAT"
   defp type_to_ddl(:double), do: "DOUBLE"
   defp type_to_ddl(:string), do: "STRING"
+  defp type_to_ddl({:string, collation}), do: "STRING COLLATE #{collation}"
   defp type_to_ddl(:binary), do: "BINARY"
   defp type_to_ddl(:date), do: "DATE"
   defp type_to_ddl(:timestamp), do: "TIMESTAMP"
@@ -176,6 +178,11 @@ defmodule SparkEx.Types do
   defp type_to_json(:float), do: "float"
   defp type_to_json(:double), do: "double"
   defp type_to_json(:string), do: "string"
+
+  defp type_to_json({:string, collation}) do
+    %{"type" => "string", "collation" => collation}
+  end
+
   defp type_to_json(:binary), do: "binary"
   defp type_to_json(:date), do: "date"
   defp type_to_json(:timestamp), do: "timestamp"

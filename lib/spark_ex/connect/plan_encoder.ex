@@ -34,8 +34,21 @@ defmodule SparkEx.Connect.PlanEncoder do
   @spec encode(term(), non_neg_integer()) :: {Plan.t(), non_neg_integer()}
   def encode(plan, counter) do
     {plan, counter} = attach_with_relations(plan, counter)
-    {relation, counter} = encode_relation(plan, counter)
-    {%Plan{op_type: {:root, relation}}, counter}
+
+    case plan do
+      {:compressed_operation, data, op_type, codec} ->
+        compressed = %Plan.CompressedOperation{
+          data: data,
+          op_type: op_type,
+          compression_codec: codec
+        }
+
+        {%Plan{op_type: {:compressed_operation, compressed}}, counter}
+
+      _ ->
+        {relation, counter} = encode_relation(plan, counter)
+        {%Plan{op_type: {:root, relation}}, counter}
+    end
   end
 
   @doc """
@@ -1445,6 +1458,10 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp next_id(counter), do: {counter, counter + 1}
 
+  defp attach_with_relations({:compressed_operation, _, _, _} = plan, counter) do
+    {plan, counter}
+  end
+
   defp attach_with_relations(plan, counter) do
     {updated_plan, refs, counter} = collect_subquery_references(plan, counter)
 
@@ -2379,7 +2396,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_na_literal(v) when is_binary(v), do: %Expression.Literal{literal_type: {:string, v}}
 
   defp encode_literal(nil),
-    do: %Expression.Literal{literal_type: {:null, %Spark.Connect.DataType.NULL{}}}
+    do: %Expression.Literal{
+      literal_type:
+        {:null, %Spark.Connect.DataType{kind: {:null, %Spark.Connect.DataType.NULL{}}}}
+    }
 
   defp encode_literal(true), do: %Expression.Literal{literal_type: {:boolean, true}}
   defp encode_literal(false), do: %Expression.Literal{literal_type: {:boolean, false}}
