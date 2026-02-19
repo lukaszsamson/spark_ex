@@ -101,6 +101,23 @@ defmodule SparkEx.Integration.CreateDataFrameTest do
       assert {:ok, rows} = DataFrame.collect(df)
       assert length(rows) == 2
     end
+
+    test "creates DataFrame from list column without LargeList remote failure", %{
+      session: session
+    } do
+      explorer_df =
+        Explorer.DataFrame.new(%{
+          "id" => [1, 2],
+          "tags" => [["a", "b"], ["c"]]
+        })
+
+      {:ok, df} =
+        SparkEx.create_dataframe(session, explorer_df, schema: "id INT, tags ARRAY<STRING>")
+
+      assert {:ok, rows} = DataFrame.collect(df)
+      ordered = Enum.sort_by(rows, & &1["id"])
+      assert Enum.map(ordered, & &1["tags"]) == [["a", "b"], ["c"]]
+    end
   end
 
   describe "create_dataframe from list of maps" do
@@ -151,6 +168,15 @@ defmodule SparkEx.Integration.CreateDataFrameTest do
       {:ok, df} = SparkEx.create_dataframe(session, data)
       {:ok, rows} = DataFrame.collect(df)
       assert length(rows) == 3
+    end
+
+    test "creates DataFrame from column map with arrays", %{session: session} do
+      data = %{"id" => [1, 2], "tags" => [["x"], ["y", "z"]]}
+
+      {:ok, df} = SparkEx.create_dataframe(session, data, schema: "id INT, tags ARRAY<STRING>")
+      {:ok, rows} = DataFrame.collect(df)
+      ordered = Enum.sort_by(rows, & &1["id"])
+      assert Enum.map(ordered, & &1["tags"]) == [["x"], ["y", "z"]]
     end
   end
 
@@ -211,6 +237,23 @@ defmodule SparkEx.Integration.CreateDataFrameTest do
 
       {:ok, rows} = DataFrame.collect(filtered)
       assert length(rows) == 100
+    end
+
+    test "list payload works when cache_threshold is low", %{session: session} do
+      data =
+        Explorer.DataFrame.new(%{
+          "id" => Enum.to_list(1..200),
+          "tags" => Enum.map(1..200, fn i -> [Integer.to_string(i)] end)
+        })
+
+      {:ok, df} =
+        SparkEx.create_dataframe(session, data,
+          schema: "id INT, tags ARRAY<STRING>",
+          cache_threshold: 100
+        )
+
+      {:ok, count} = DataFrame.count(df)
+      assert count == 200
     end
 
     test "reuses already cached artifacts for identical payload", %{session: session} do

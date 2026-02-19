@@ -50,11 +50,55 @@ defmodule SparkEx.Integration.StreamingListenerTest do
     %{session: session}
   end
 
+  defp assert_query_eventually_active(query, deadline_ms) do
+    case StreamingQuery.is_active?(query) do
+      {:ok, true} ->
+        :ok
+
+      {:ok, false} when deadline_ms > 0 ->
+        wait_tick(100)
+        assert_query_eventually_active(query, deadline_ms - 100)
+
+      {:ok, false} ->
+        flunk("stream query never became active")
+
+      other ->
+        flunk("unexpected query status: #{inspect(other)}")
+    end
+  end
+
+  defp wait_tick(ms) when is_integer(ms) and ms > 0 do
+    receive do
+    after
+      ms -> :ok
+    end
+  end
+
   test "listener bus lifecycle and progress events", %{session: session} do
     TestListener.set_listener_pid(self())
     on_exit(fn -> TestListener.clear_listener_pid() end)
 
     {:ok, bus} = StreamingQueryListenerBus.start_link(session)
+    on_exit(fn ->
+      if Process.alive?(bus) do
+        _ =
+          try do
+            StreamingQueryListenerBus.remove_listener(bus, TestListener)
+          catch
+            :exit, _ -> :ok
+          end
+
+        _ =
+          try do
+            StreamingQueryListenerBus.stop(bus)
+          catch
+            :exit, _ -> :ok
+          end
+      end
+
+      :ok
+    end)
+
     :ok = StreamingQueryListenerBus.add_listener(bus, TestListener)
     send(bus, {:listener_event, %{type: :progress, raw_json: "{}", data: %{}}})
     assert_receive {:listener_progress, %{type: :progress, raw_json: "{}"}}, 5_000
@@ -72,15 +116,12 @@ defmodule SparkEx.Integration.StreamingListenerTest do
     {:ok, query} = StreamWriter.start(writer)
     on_exit(fn -> StreamingQuery.stop(query) end)
 
-    Process.sleep(1_500)
+    assert_query_eventually_active(query, 5_000)
     :ok = StreamingQuery.stop(query)
     assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
 
     assert {:ok, listeners} = StreamingQueryManager.list_listeners(session)
     assert is_list(listeners)
-
-    :ok = StreamingQueryListenerBus.remove_listener(bus, TestListener)
-    :ok = StreamingQueryListenerBus.stop(bus)
   end
 
   test "streaming query exposes id/run_id/name", %{session: session} do

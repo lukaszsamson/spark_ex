@@ -28,6 +28,10 @@ defmodule SparkEx.Integration.M14.StreamingTest do
     path
   end
 
+  defp unique_query_name(prefix) do
+    "#{prefix}_#{System.unique_integer([:positive, :monotonic])}"
+  end
+
   defp start_rate_query(session, opts) do
     checkpoint = Keyword.get(opts, :checkpoint, unique_checkpoint())
     query_name = Keyword.get(opts, :query_name, nil)
@@ -66,7 +70,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
         :ok
 
       {:ok, false} when deadline_ms > 0 ->
-        Process.sleep(100)
+        wait_tick(100)
         assert_query_eventually_active(query, deadline_ms - 100)
 
       {:ok, false} ->
@@ -83,7 +87,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
         :ok
 
       {:ok, true} when deadline_ms > 0 ->
-        Process.sleep(100)
+        wait_tick(100)
         assert_query_eventually_inactive(query, deadline_ms - 100)
 
       {:ok, true} ->
@@ -103,9 +107,16 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       if deadline_ms <= 0 do
         {:error, :timeout}
       else
-        Process.sleep(100)
+        wait_tick(100)
         await_condition(fetch_fun, predicate_fun, deadline_ms - 100)
       end
+    end
+  end
+
+  defp wait_tick(ms) when is_integer(ms) and ms > 0 do
+    receive do
+    after
+      ms -> :ok
     end
   end
 
@@ -123,7 +134,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
   describe "start/stop query" do
     test "start and stop a streaming query", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: "start_stop_test")
+      {:ok, query} = start_rate_query(session, query_name: unique_query_name("start_stop_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -131,7 +142,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       assert is_binary(query.query_id)
       assert is_binary(query.run_id)
 
-      assert {:ok, true} = StreamingQuery.is_active?(query)
+      assert_query_eventually_active(query, 5000)
       assert :ok = StreamingQuery.stop(query)
       assert_query_eventually_inactive(query, 5000)
     end
@@ -139,7 +150,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
   describe "query status" do
     test "returns status fields", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: "status_test")
+      {:ok, query} = start_rate_query(session, query_name: unique_query_name("status_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -181,7 +192,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
   describe "await_termination" do
     test "returns terminated status after stop", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: "await_test")
+      {:ok, query} = start_rate_query(session, query_name: unique_query_name("await_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -194,7 +205,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
   describe "process_all_available" do
     test "completes without error", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: "process_all_test")
+      {:ok, query} = start_rate_query(session, query_name: unique_query_name("process_all_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -207,7 +218,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
   describe "query manager" do
     test "active returns list of queries", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: "mgr_active_test")
+      {:ok, query} = start_rate_query(session, query_name: unique_query_name("mgr_active_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -224,7 +235,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
     end
 
     test "get returns specific query", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: "mgr_get_test")
+      {:ok, query} = start_rate_query(session, query_name: unique_query_name("mgr_get_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -238,7 +249,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
     end
 
     test "await_any_termination after stop", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: "mgr_await_test")
+      {:ok, query} = start_rate_query(session, query_name: unique_query_name("mgr_await_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -256,7 +267,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
   describe "recent_progress" do
     test "returns progress list", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: "progress_test")
+      {:ok, query} = start_rate_query(session, query_name: unique_query_name("progress_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -279,7 +290,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
   describe "last_progress" do
     test "returns latest progress entry", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: "last_progress_test")
+      {:ok, query} = start_rate_query(session, query_name: unique_query_name("last_progress_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -301,7 +312,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
   describe "explain" do
     test "returns explain string", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: "explain_test")
+      {:ok, query} = start_rate_query(session, query_name: unique_query_name("explain_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -317,7 +328,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
   describe "exception" do
     test "returns nil when no exception", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: "exception_test")
+      {:ok, query} = start_rate_query(session, query_name: unique_query_name("exception_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -374,7 +385,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       on_exit(fn -> stop_query(query) end)
 
       assert %StreamingQuery{} = query
-      assert {:ok, true} = StreamingQuery.is_active?(query)
+      assert_query_eventually_active(query, 5000)
 
       :ok = StreamingQuery.stop(query)
     end
@@ -401,20 +412,20 @@ defmodule SparkEx.Integration.M14.StreamingTest do
     test "processing_time trigger starts query", %{session: session} do
       {:ok, query} =
         start_rate_query(session,
-          query_name: "trigger_pt_test",
+          query_name: unique_query_name("trigger_pt_test"),
           trigger: [processing_time: "2 seconds"]
         )
 
       on_exit(fn -> stop_query(query) end)
 
-      assert {:ok, true} = StreamingQuery.is_active?(query)
+      assert_query_eventually_active(query, 5000)
       :ok = StreamingQuery.stop(query)
     end
 
     test "available_now trigger processes and stops", %{session: session} do
       {:ok, query} =
         start_rate_query(session,
-          query_name: "trigger_an_test",
+          query_name: unique_query_name("trigger_an_test"),
           trigger: [available_now: true]
         )
 
@@ -426,7 +437,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
     test "once trigger processes one batch", %{session: session} do
       {:ok, query} =
         start_rate_query(session,
-          query_name: "trigger_once_test",
+          query_name: unique_query_name("trigger_once_test"),
           trigger: [once: true]
         )
 
@@ -459,7 +470,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       # No queries running + short timeout should return a result
       :ok = StreamingQueryManager.reset_terminated(session)
 
-      result = StreamingQueryManager.await_any_termination(session, timeout: 100)
+      result = StreamingQueryManager.await_any_termination(session, timeout: 500)
 
       case result do
         {:ok, false} ->

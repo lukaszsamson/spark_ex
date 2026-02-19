@@ -51,7 +51,7 @@ defmodule SparkEx.Integration.StreamingSinksTest do
         :ok
 
       {:ok, false} when deadline_ms > 0 ->
-        Process.sleep(100)
+        wait_tick(100)
         assert_query_eventually_active(query, deadline_ms - 100)
 
       {:ok, false} ->
@@ -71,9 +71,16 @@ defmodule SparkEx.Integration.StreamingSinksTest do
       if deadline_ms <= 0 do
         {:error, :timeout}
       else
-        Process.sleep(100)
+        wait_tick(100)
         await_condition(fetch_fun, predicate_fun, deadline_ms - 100)
       end
+    end
+  end
+
+  defp wait_tick(ms) when is_integer(ms) and ms > 0 do
+    receive do
+    after
+      ms -> :ok
     end
   end
 

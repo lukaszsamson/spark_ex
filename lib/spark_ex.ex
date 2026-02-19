@@ -432,6 +432,8 @@ defmodule SparkEx do
 
   - `:schema` — DDL schema string (e.g. `"id INT, name STRING"`)
   - `:cache_threshold` — byte size above which data is cached (default: 4 MB)
+  - `:normalize_local_relation_arrow` — when `true` (default), list-heavy payloads are sent
+    via SQL/JSON local relation to avoid Spark Connect `LargeList` Arrow incompatibilities
 
   ## Examples
 

@@ -1133,7 +1133,7 @@ defmodule SparkEx.Session do
 
   def handle_call({:create_dataframe, data, opts}, from, state) do
     case prepare_local_data(data, opts) do
-      {:ok, arrow_ipc, schema_ddl} ->
+      {:ok, {:local_relation, arrow_ipc, schema_ddl}} ->
         cache_threshold = Keyword.get(opts, :cache_threshold, 4 * 1024 * 1024)
 
         if byte_size(arrow_ipc) <= cache_threshold do
@@ -1143,6 +1143,10 @@ defmodule SparkEx.Session do
         else
           handle_call({:create_dataframe_chunked_cache, arrow_ipc, schema_ddl}, from, state)
         end
+
+      {:ok, {:sql_relation, query, args}} ->
+        df = %SparkEx.DataFrame{session: self(), plan: {:sql, query, args}}
+        {:reply, {:ok, df}, state}
 
       {:error, _} = error ->
         {:reply, error, state}
@@ -1343,9 +1347,13 @@ defmodule SparkEx.Session do
   defp prepare_local_data(data, opts) when is_struct(data, Explorer.DataFrame) do
     schema_ddl = Keyword.get(opts, :schema, nil) || explorer_to_ddl(data)
 
-    case Explorer.DataFrame.dump_ipc_stream(data) do
-      {:ok, ipc_bytes} -> {:ok, ipc_bytes, schema_ddl}
-      {:error, reason} -> {:error, {:arrow_encode_error, reason}}
+    if normalize_local_relation_arrow?(opts) and dataframe_contains_list_dtype?(data) do
+      prepare_sql_json_relation(data, schema_ddl)
+    else
+      case Explorer.DataFrame.dump_ipc_stream(data) do
+        {:ok, ipc_bytes} -> {:ok, {:local_relation, ipc_bytes, schema_ddl}}
+        {:error, reason} -> {:error, {:arrow_encode_error, reason}}
+      end
     end
   end
 
@@ -1447,6 +1455,91 @@ defmodule SparkEx.Session do
     TypeMapper.explorer_schema_to_ddl(ordered_dtypes)
   end
 
+  defp prepare_sql_json_relation(explorer_df, schema_ddl) do
+    rows = Explorer.DataFrame.to_rows(explorer_df)
+
+    with {:ok, row_json} <- encode_rows_as_json(rows) do
+      query = json_rows_to_sql_query(length(row_json), schema_ddl)
+      {:ok, {:sql_relation, query, row_json}}
+    end
+  end
+
+  defp encode_rows_as_json(rows) do
+    Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
+      case Jason.encode(row) do
+        {:ok, json} -> {:cont, {:ok, [json | acc]}}
+        {:error, reason} -> {:halt, {:error, {:data_conversion_error, Exception.message(reason)}}}
+      end
+    end)
+    |> case do
+      {:ok, json_rows_rev} -> {:ok, Enum.reverse(json_rows_rev)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp json_rows_to_sql_query(0, schema_ddl) do
+    escaped_schema = sql_escape_string(schema_ddl)
+
+    """
+    SELECT parsed.*
+    FROM (SELECT from_json(NULL, '#{escaped_schema}') AS parsed) _spark_ex_parsed
+    WHERE 1 = 0
+    """
+    |> String.trim()
+  end
+
+  defp json_rows_to_sql_query(row_count, schema_ddl) when row_count > 0 do
+    escaped_schema = sql_escape_string(schema_ddl)
+
+    placeholders =
+      1..row_count
+      |> Enum.map(fn _ -> "(?)" end)
+      |> Enum.join(", ")
+
+    """
+    SELECT parsed.*
+    FROM (
+      SELECT from_json(_spark_ex_json, '#{escaped_schema}') AS parsed
+      FROM VALUES #{placeholders} AS _spark_ex_input(_spark_ex_json)
+    ) _spark_ex_parsed
+    """
+    |> String.trim()
+  end
+
+  defp sql_escape_string(value) when is_binary(value) do
+    String.replace(value, "'", "''")
+  end
+
+  defp normalize_local_relation_arrow?(opts) do
+    Keyword.get(opts, :normalize_local_relation_arrow, true)
+  end
+
+  defp dataframe_contains_list_dtype?(explorer_df) do
+    explorer_df
+    |> Explorer.DataFrame.dtypes()
+    |> Map.values()
+    |> Enum.any?(&dtype_contains_list?/1)
+  end
+
+  defp dtype_contains_list?({:list, _inner}), do: true
+
+  defp dtype_contains_list?({:struct, fields}) when is_list(fields) do
+    Enum.any?(fields, fn
+      {_name, field_dtype} -> dtype_contains_list?(field_dtype)
+      _other -> false
+    end)
+  end
+
+  defp dtype_contains_list?({:map, key_dtype, value_dtype}) do
+    dtype_contains_list?(key_dtype) or dtype_contains_list?(value_dtype)
+  end
+
+  defp dtype_contains_list?({_tag, inner}) do
+    dtype_contains_list?(inner)
+  end
+
+  defp dtype_contains_list?(_other), do: false
+
   defp read_local_file(local_path) do
     case File.read(local_path) do
       {:ok, data} -> {:ok, data}
@@ -1527,5 +1620,4 @@ defmodule SparkEx.Session do
       Keyword.put(opts, :tags, combined)
     end
   end
-
 end

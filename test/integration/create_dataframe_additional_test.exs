@@ -26,26 +26,15 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
         schema: "id INT, tags ARRAY<STRING>, meta MAP<STRING, STRING>"
       )
 
-    case DataFrame.collect(df) do
-      {:ok, [row]} ->
-        assert row["id"] == 1
-        assert row["tags"] == ["a", "b"]
+    assert {:ok, [row]} = DataFrame.collect(df)
+    assert row["id"] == 1
+    assert row["tags"] == ["a", "b"]
 
-        meta =
-          row["meta"]
-          |> Enum.into(%{}, fn %{"key" => key, "value" => value} -> {key, value} end)
+    meta =
+      row["meta"]
+      |> Enum.into(%{}, fn %{"key" => key, "value" => value} -> {key, value} end)
 
-        assert meta["k"] == "v"
-
-      {:error, %SparkEx.Error.Remote{} = error} ->
-        if error.error_class == "UNSUPPORTED_ARROWTYPE" and
-             error.message_parameters["typeName"] == "LargeList" and
-             error.sql_state == "0A000" do
-          assert error.message =~ "Unsupported arrow type LargeList"
-        else
-          flunk("unexpected create_dataframe nested-types error: #{inspect(error)}")
-        end
-    end
+    assert meta["k"] == "v"
   end
 
   test "create_dataframe nullability and coercion", %{session: session} do
@@ -75,6 +64,26 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
     {:ok, df} = SparkEx.create_dataframe(session, data, schema: "id INT")
     assert {:ok, rows} = DataFrame.take(df, 5)
     assert length(rows) == 5
+  end
+
+  test "create_dataframe can disable local Arrow normalization", %{session: session} do
+    data = [%{"id" => 1, "tags" => ["a", "b"], "meta" => %{"k" => "v"}}]
+
+    {:ok, df} =
+      SparkEx.create_dataframe(session, data,
+        schema: "id INT, tags ARRAY<STRING>, meta MAP<STRING, STRING>",
+        normalize_local_relation_arrow: false
+      )
+
+    case DataFrame.collect(df) do
+      {:ok, [row]} ->
+        assert row["id"] == 1
+        assert row["tags"] == ["a", "b"]
+
+      {:error, %SparkEx.Error.Remote{} = error} ->
+        assert error.error_class == "UNSUPPORTED_ARROWTYPE"
+        assert error.message_parameters["typeName"] == "LargeList"
+    end
   end
 
   test "head/first/take correctness", %{session: session} do
