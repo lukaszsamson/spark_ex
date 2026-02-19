@@ -118,7 +118,14 @@ defmodule SparkEx.Integration.QueryTest do
     test "returns schema for SQL query", %{session: session} do
       df = SparkEx.sql(session, "SELECT 1 AS n, 'hello' AS s")
       assert {:ok, schema} = SparkEx.DataFrame.schema(df)
-      assert schema != nil
+      assert {:struct, struct} = schema.kind
+      assert Enum.map(struct.fields, & &1.name) == ["n", "s"]
+
+      assert Enum.map(struct.fields, fn field ->
+               case field.data_type.kind do
+                 {type, _} -> type
+               end
+             end) == [:integer, :string]
     end
   end
 

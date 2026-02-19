@@ -63,6 +63,9 @@ defmodule SparkEx.Integration.FunctionCategoryTest do
     assert row["abs_num"] == 9
     assert row["len"] == 3
     assert row["upper_text"] == "ABC"
-    assert row["dt_plus"] != nil
+    assert date_to_iso8601(row["dt_plus"]) == "2024-01-15"
   end
+
+  defp date_to_iso8601(%Date{} = d), do: Date.to_iso8601(d)
+  defp date_to_iso8601(v) when is_binary(v), do: v
 end

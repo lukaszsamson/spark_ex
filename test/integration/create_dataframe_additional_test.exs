@@ -51,7 +51,7 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
 
     case DataFrame.collect(df) do
       {:ok, [row]} ->
-        assert row["id"] in [42, "42"]
+        assert row["id"] == 42
         assert row["note"] == nil
 
       {:error, %SparkEx.Error.Remote{} = error} ->

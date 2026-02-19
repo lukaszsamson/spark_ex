@@ -34,7 +34,7 @@ defmodule SparkEx.Integration.FunctionCategoryParityTest do
     assert row["sqrt"] == 3.0
     assert row["upper"] == "HELLO"
     assert row["len"] == 5
-    assert row["dt_plus"] != nil
+    assert date_to_iso8601(row["dt_plus"]) == "2024-01-02"
   end
 
   test "collection/map functions execute", %{session: session} do
@@ -254,4 +254,7 @@ defmodule SparkEx.Integration.FunctionCategoryParityTest do
     assert row["bits"] == 1
     assert row["upper_x"] == "X"
   end
+
+  defp date_to_iso8601(%Date{} = d), do: Date.to_iso8601(d)
+  defp date_to_iso8601(v) when is_binary(v), do: v
 end

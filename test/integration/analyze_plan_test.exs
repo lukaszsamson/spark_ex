@@ -63,7 +63,14 @@ defmodule SparkEx.Integration.AnalyzePlanTest do
   describe "analyze_ddl_parse" do
     test "parses simple DDL string", %{session: session} do
       assert {:ok, parsed} = SparkEx.Session.analyze_ddl_parse(session, "id INT, name STRING")
-      assert parsed != nil
+      assert {:struct, struct} = parsed.kind
+      assert Enum.map(struct.fields, & &1.name) == ["id", "name"]
+
+      assert Enum.map(struct.fields, fn field ->
+               case field.data_type.kind do
+                 {type, _} -> type
+               end
+             end) == [:integer, :string]
     end
 
     test "parses struct DDL", %{session: session} do
@@ -73,7 +80,13 @@ defmodule SparkEx.Integration.AnalyzePlanTest do
                  "id BIGINT, data STRUCT<name: STRING, age: INT>"
                )
 
-      assert parsed != nil
+      assert {:struct, struct} = parsed.kind
+      assert Enum.map(struct.fields, & &1.name) == ["id", "data"]
+
+      [id_field, data_field] = struct.fields
+      assert {:long, _} = id_field.data_type.kind
+      assert {:struct, nested} = data_field.data_type.kind
+      assert Enum.map(nested.fields, & &1.name) == ["name", "age"]
     end
   end
 
