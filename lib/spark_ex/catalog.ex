@@ -381,9 +381,8 @@ defmodule SparkEx.Catalog do
     comment = Keyword.get(opts, :comment)
     location = Keyword.get(opts, :location)
 
-    clauses =
+    tail_clauses =
       []
-      |> maybe_add("IF NOT EXISTS", if_not_exists)
       |> then(fn acc ->
         if comment do
           acc ++ ["COMMENT", sql_string(comment)]
@@ -399,7 +398,10 @@ defmodule SparkEx.Catalog do
         end
       end)
 
-    join_sql(["CREATE", "DATABASE"] ++ clauses ++ [db_name])
+    join_sql(
+      ["CREATE", "DATABASE"] ++
+        maybe_add([], "IF NOT EXISTS", if_not_exists) ++ [db_name] ++ tail_clauses
+    )
   end
 
   @doc false
@@ -515,12 +517,11 @@ defmodule SparkEx.Catalog do
     temporary = Keyword.get(opts, :temporary, false)
     if_exists = Keyword.get(opts, :if_exists, false)
 
-    clauses =
-      []
-      |> maybe_add("TEMPORARY", temporary)
-      |> maybe_add("IF EXISTS", if_exists)
-
-    join_sql(["DROP"] ++ clauses ++ ["FUNCTION", function_name])
+    join_sql(
+      ["DROP"] ++
+        maybe_add([], "TEMPORARY", temporary) ++
+        ["FUNCTION"] ++ maybe_add([], "IF EXISTS", if_exists) ++ [function_name]
+    )
   end
 
   defp format_properties(props) when is_map(props) do

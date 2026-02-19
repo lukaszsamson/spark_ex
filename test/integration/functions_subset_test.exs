@@ -54,7 +54,10 @@ defmodule SparkEx.Integration.FunctionsSubsetTest do
         assert row["decoded"] in [%{"id" => 1}, %{"id" => 1.0}]
 
       {:error, %SparkEx.Error.Remote{error_class: "AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"}} ->
-        assert true
+        :ok
+
+      {:error, %SparkEx.Error.Remote{} = error} ->
+        flunk("unexpected avro error: #{inspect(error.error_class)}")
     end
   end
 
@@ -81,7 +84,10 @@ defmodule SparkEx.Integration.FunctionsSubsetTest do
         assert row["decoded"] in [%{"id" => 1}, %{"id" => 1.0}]
 
       {:error, %SparkEx.Error.Remote{error_class: "PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"}} ->
-        assert true
+        :ok
+
+      {:error, %SparkEx.Error.Remote{} = error} ->
+        flunk("unexpected protobuf error: #{inspect(error.error_class)}")
     end
   end
 

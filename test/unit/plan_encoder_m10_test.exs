@@ -371,10 +371,10 @@ defmodule SparkEx.Unit.PlanEncoderM10Test do
   describe "plan ID counter" do
     test "counter increments correctly for new relation types" do
       {_, counter} = PlanEncoder.encode_relation({:offset, @base_plan, 10}, 0)
-      assert counter > 1
+      assert counter == 2
 
       {_, counter} = PlanEncoder.encode_relation({:hint, @base_plan, "broadcast", []}, 0)
-      assert counter > 1
+      assert counter == 2
     end
   end
 

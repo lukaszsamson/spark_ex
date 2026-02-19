@@ -68,9 +68,7 @@ defmodule SparkEx.Integration.M13.UDFTVFTest do
           "com.example.NonExistentUDF"
         )
 
-      # The server should either accept this (lazy registration) or return an error
-      # Either way, the command was encoded and sent correctly
-      assert result == :ok or match?({:error, _}, result)
+      assert {:error, %SparkEx.Error.Remote{}} = result
     end
   end
 
@@ -78,20 +76,28 @@ defmodule SparkEx.Integration.M13.UDFTVFTest do
 
   describe "register_udtf" do
     test "UDTF registration command is sent correctly", %{session: session} do
+      function_name = "test_udtf_#{System.unique_integer([:positive])}"
+
       # Register a UDTF with dummy Python command bytes
-      # This will fail server-side because we're not running Python, but
-      # verifies the command encoding path works end-to-end
       result =
         SparkEx.Session.register_udtf(
           session,
-          "test_udtf_#{System.unique_integer([:positive])}",
+          function_name,
           <<0, 0, 0>>,
           eval_type: 0,
           python_ver: "3.11"
         )
 
-      # Server may accept registration or reject the invalid Python command
-      assert result == :ok or match?({:error, _}, result)
+      case result do
+        :ok ->
+          assert {:error, %SparkEx.Error.Remote{}} =
+                   session
+                   |> SparkEx.sql("SELECT * FROM #{function_name}()")
+                   |> DataFrame.collect()
+
+        {:error, %SparkEx.Error.Remote{}} ->
+          :ok
+      end
     end
   end
 end

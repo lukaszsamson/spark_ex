@@ -40,7 +40,8 @@ defmodule SparkEx.Connect.Channel do
   def parse_uri(uri_string) when is_binary(uri_string) do
     with {:ok, {host, port, params_string}} <- split_uri(uri_string),
          {:ok, params} <- parse_params(params_string),
-         {:ok, auth_transport, params} <- pop_auth_transport(params) do
+         {:ok, auth_transport, params} <- pop_auth_transport(params),
+         :ok <- validate_token(params) do
       {token, rest} = Map.pop(params, "token")
       {use_ssl_str, rest} = Map.pop(rest, "use_ssl", "false")
 
@@ -120,23 +121,33 @@ defmodule SparkEx.Connect.Channel do
   # --- Private ---
 
   defp split_uri(uri_string) do
+    authority =
+      uri_string
+      |> String.replace_prefix("sc://", "")
+      |> String.split("/", parts: 2)
+      |> hd()
+
     case URI.parse(uri_string) do
       %URI{scheme: "sc", host: host, port: port, path: path}
       when is_binary(host) and host != "" ->
-        port = port || @default_port
+        if malformed_port?(authority, port) do
+          {:error, {:invalid_uri, "port must be numeric"}}
+        else
+          port = port || @default_port
 
-        case path do
-          nil ->
-            {:ok, {host, port, ""}}
+          case path do
+            nil ->
+              {:ok, {host, port, ""}}
 
-          "/" ->
-            {:ok, {host, port, ""}}
+            "/" ->
+              {:ok, {host, port, ""}}
 
-          "/;" <> rest ->
-            {:ok, {host, port, rest}}
+            "/;" <> rest ->
+              {:ok, {host, port, rest}}
 
-          other ->
-            {:error, {:invalid_uri, "path component '#{other}' must be empty"}}
+            other ->
+              {:error, {:invalid_uri, "path component '#{other}' must be empty"}}
+          end
         end
 
       %URI{scheme: nil} ->
@@ -194,4 +205,19 @@ defmodule SparkEx.Connect.Channel do
         %{"authorization" => "Bearer #{token}"}
     end
   end
+
+  defp validate_token(%{"token" => ""}), do: {:error, {:invalid_param, "token="}}
+  defp validate_token(_params), do: :ok
+
+  defp malformed_port?(authority, nil) do
+    case String.split(authority, ":", parts: 2) do
+      [_host] ->
+        false
+
+      [_host, maybe_port] ->
+        maybe_port != "" and not String.match?(maybe_port, ~r/^\d+$/)
+    end
+  end
+
+  defp malformed_port?(_authority, _port), do: false
 end

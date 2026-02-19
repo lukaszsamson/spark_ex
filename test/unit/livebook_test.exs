@@ -122,7 +122,8 @@ defmodule SparkEx.LivebookTest do
     end
   else
     test "kino/explorer optional deps are not loaded in this test environment" do
-      assert true
+      refute Code.ensure_loaded?(Kino.Render)
+      refute Code.ensure_loaded?(Explorer.DataFrame)
     end
   end
 end

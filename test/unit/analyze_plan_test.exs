@@ -32,21 +32,6 @@ defmodule SparkEx.Unit.AnalyzePlanTest do
       assert is_nil(msg_no_level.level)
     end
 
-    test "IsLocal request has plan" do
-      msg = %AnalyzePlanRequest.IsLocal{plan: %Plan{}}
-      assert msg.plan == %Plan{}
-    end
-
-    test "IsStreaming request has plan" do
-      msg = %AnalyzePlanRequest.IsStreaming{plan: %Plan{}}
-      assert msg.plan == %Plan{}
-    end
-
-    test "InputFiles request has plan" do
-      msg = %AnalyzePlanRequest.InputFiles{plan: %Plan{}}
-      assert msg.plan == %Plan{}
-    end
-
     test "DDLParse request has ddl_string" do
       msg = %AnalyzePlanRequest.DDLParse{ddl_string: "id INT, name STRING"}
       assert msg.ddl_string == "id INT, name STRING"

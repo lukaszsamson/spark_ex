@@ -245,8 +245,10 @@ defmodule SparkEx.Integration.M13.NAStatTest do
 
       desc = Stat.describe(df, ["score"])
       {:ok, rows} = DataFrame.collect(desc)
-      # Should have summary column + score column
-      assert length(rows) > 0
+      summaries = Map.new(rows, &{&1["summary"], &1})
+      assert summaries["count"]["score"] == "3"
+      assert summaries["min"]["score"] == "10"
+      assert summaries["max"]["score"] == "30"
     end
 
     test "DataFrame.describe/1 convenience delegate", %{session: session} do
@@ -356,10 +358,11 @@ defmodule SparkEx.Integration.M13.NAStatTest do
       assert {:ok, quantiles} = Stat.approx_quantile(df, "value", [0.0, 0.5, 1.0])
       assert is_list(quantiles)
       assert length(quantiles) == 3
-      # Min should be ~1.0, median ~5.0, max ~10.0
+      # Min should be ~1.0, median ~5.5, max ~10.0
       [q0, q50, q100] = quantiles
-      assert q0 <= q50
-      assert q50 <= q100
+      assert_in_delta q0, 1.0, 0.001
+      assert_in_delta q50, 5.5, 0.5
+      assert_in_delta q100, 10.0, 0.001
     end
 
     test "computes approximate quantiles for multiple columns", %{session: session} do

@@ -126,13 +126,13 @@ defmodule SparkEx.FunctionsTest do
     test "regexp_substr/2 builds expression" do
       result = Functions.regexp_substr(Functions.col("name"), "foo")
 
-      assert %Column{expr: {:fn, "regexp_substr", [{:col, "name"}, {:col, "foo"}], false}} =
+      assert %Column{expr: {:fn, "regexp_substr", [{:col, "name"}, {:lit, "foo"}], false}} =
                result
     end
 
     test "regexp_like/2 builds expression" do
       result = Functions.regexp_like(Functions.col("name"), "foo")
-      assert %Column{expr: {:fn, "regexp_like", [{:col, "name"}, {:col, "foo"}], false}} = result
+      assert %Column{expr: {:fn, "regexp_like", [{:col, "name"}, {:lit, "foo"}], false}} = result
     end
   end
 

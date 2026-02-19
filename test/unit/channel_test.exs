@@ -88,6 +88,15 @@ defmodule SparkEx.Connect.ChannelTest do
       assert opts.extra_params["x-my-header"] == "hello world"
       assert opts.extra_params["user_agent"] == "Agent123 /3.4"
     end
+
+    test "rejects empty token parameter" do
+      assert {:error, {:invalid_param, "token="}} =
+               Channel.parse_uri("sc://localhost:15002/;token=")
+    end
+
+    test "rejects non-numeric port" do
+      assert {:error, {:invalid_uri, _}} = Channel.parse_uri("sc://localhost:abc")
+    end
   end
 
   describe "build_grpc_opts/1" do

@@ -27,8 +27,7 @@ defmodule SparkEx.Integration.ColumnResolutionEdgeCasesTest do
 
     assert error.error_class in [
              "AMBIGUOUS_REFERENCE",
-             "AMBIGUOUS_COLUMN_REFERENCE",
-             "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+             "AMBIGUOUS_COLUMN_REFERENCE"
            ]
   end
 
@@ -67,8 +66,7 @@ defmodule SparkEx.Integration.ColumnResolutionEdgeCasesTest do
 
     assert error.error_class in [
              "AMBIGUOUS_REFERENCE",
-             "AMBIGUOUS_COLUMN_REFERENCE",
-             "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+             "AMBIGUOUS_COLUMN_REFERENCE"
            ]
   end
 

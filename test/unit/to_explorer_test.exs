@@ -18,85 +18,82 @@ defmodule SparkEx.DataFrame.ToExplorerTest do
 
     test "decode_stream_explorer returns Explorer.DataFrame" do
       ipc_data = build_test_ipc_data()
+      assert ipc_data != <<>>
 
-      if ipc_data != <<>> do
-        batch = %ExecutePlanResponse.ArrowBatch{
-          data: ipc_data,
-          row_count: 1,
-          start_offset: 0
-        }
+      batch = %ExecutePlanResponse.ArrowBatch{
+        data: ipc_data,
+        row_count: 1,
+        start_offset: 0
+      }
 
-        stream = [
-          {:ok,
-           %ExecutePlanResponse{
-             response_type: {:arrow_batch, batch},
-             server_side_session_id: "test"
-           }},
-          {:ok,
-           %ExecutePlanResponse{
-             response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
-           }}
-        ]
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:arrow_batch, batch},
+           server_side_session_id: "test"
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
 
-        {:ok, result} = ResultDecoder.decode_stream_explorer(stream, nil)
-        assert %Explorer.DataFrame{} = result.dataframe
-        assert Explorer.DataFrame.n_rows(result.dataframe) == 1
-      end
+      {:ok, result} = ResultDecoder.decode_stream_explorer(stream, nil)
+      assert %Explorer.DataFrame{} = result.dataframe
+      assert Explorer.DataFrame.n_rows(result.dataframe) == 1
     end
 
     test "decode_stream_explorer enforces max_rows limit" do
       ipc_data = build_multi_row_ipc_data(5)
+      assert ipc_data != <<>>
 
-      if ipc_data != <<>> do
-        batch = %ExecutePlanResponse.ArrowBatch{
-          data: ipc_data,
-          row_count: 5,
-          start_offset: 0
-        }
+      batch = %ExecutePlanResponse.ArrowBatch{
+        data: ipc_data,
+        row_count: 5,
+        start_offset: 0
+      }
 
-        stream = [
-          {:ok,
-           %ExecutePlanResponse{
-             response_type: {:arrow_batch, batch},
-             server_side_session_id: "test"
-           }},
-          {:ok,
-           %ExecutePlanResponse{
-             response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
-           }}
-        ]
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:arrow_batch, batch},
+           server_side_session_id: "test"
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
 
-        result = ResultDecoder.decode_stream_explorer(stream, nil, max_rows: 3)
-        assert {:error, %SparkEx.Error.LimitExceeded{limit_type: :rows}} = result
-      end
+      result = ResultDecoder.decode_stream_explorer(stream, nil, max_rows: 3)
+      assert {:error, %SparkEx.Error.LimitExceeded{limit_type: :rows}} = result
     end
 
     test "decode_stream_explorer enforces max_bytes limit" do
       ipc_data = build_test_ipc_data()
+      assert ipc_data != <<>>
 
-      if ipc_data != <<>> do
-        batch = %ExecutePlanResponse.ArrowBatch{
-          data: ipc_data,
-          row_count: 1,
-          start_offset: 0
-        }
+      batch = %ExecutePlanResponse.ArrowBatch{
+        data: ipc_data,
+        row_count: 1,
+        start_offset: 0
+      }
 
-        stream = [
-          {:ok,
-           %ExecutePlanResponse{
-             response_type: {:arrow_batch, batch},
-             server_side_session_id: "test"
-           }},
-          {:ok,
-           %ExecutePlanResponse{
-             response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
-           }}
-        ]
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:arrow_batch, batch},
+           server_side_session_id: "test"
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
 
-        # Set max_bytes very low to trigger limit
-        result = ResultDecoder.decode_stream_explorer(stream, nil, max_bytes: 1)
-        assert {:error, %SparkEx.Error.LimitExceeded{limit_type: :bytes}} = result
-      end
+      # Set max_bytes very low to trigger limit
+      result = ResultDecoder.decode_stream_explorer(stream, nil, max_bytes: 1)
+      assert {:error, %SparkEx.Error.LimitExceeded{limit_type: :bytes}} = result
     end
 
     test "decode_stream_explorer returns empty dataframe for no batches" do
@@ -149,40 +146,39 @@ defmodule SparkEx.DataFrame.ToExplorerTest do
     test "decode_stream_explorer concatenates multiple batches" do
       ipc_data1 = build_test_ipc_data()
       ipc_data2 = build_test_ipc_data()
+      assert ipc_data1 != <<>>
 
-      if ipc_data1 != <<>> do
-        stream = [
-          {:ok,
-           %ExecutePlanResponse{
-             response_type:
-               {:arrow_batch,
-                %ExecutePlanResponse.ArrowBatch{
-                  data: ipc_data1,
-                  row_count: 1,
-                  start_offset: 0
-                }},
-             server_side_session_id: "test"
-           }},
-          {:ok,
-           %ExecutePlanResponse{
-             response_type:
-               {:arrow_batch,
-                %ExecutePlanResponse.ArrowBatch{
-                  data: ipc_data2,
-                  row_count: 1,
-                  start_offset: 1
-                }},
-             server_side_session_id: "test"
-           }},
-          {:ok,
-           %ExecutePlanResponse{
-             response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
-           }}
-        ]
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                data: ipc_data1,
+                row_count: 1,
+                start_offset: 0
+              }},
+           server_side_session_id: "test"
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                data: ipc_data2,
+                row_count: 1,
+                start_offset: 1
+              }},
+           server_side_session_id: "test"
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
 
-        {:ok, result} = ResultDecoder.decode_stream_explorer(stream, nil)
-        assert Explorer.DataFrame.n_rows(result.dataframe) == 2
-      end
+      {:ok, result} = ResultDecoder.decode_stream_explorer(stream, nil)
+      assert Explorer.DataFrame.n_rows(result.dataframe) == 2
     end
 
     test "returns error for incomplete chunked arrow batch in explorer mode" do

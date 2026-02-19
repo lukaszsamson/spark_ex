@@ -136,6 +136,11 @@ defmodule SparkEx.Connect.ErrorsTest do
       msg = Exception.message(error)
       assert msg =~ "Server says no"
     end
+
+    test "message/1 falls back to unknown message when both message fields are nil" do
+      error = %Remote{message: nil, server_message: nil}
+      assert Exception.message(error) == "Unknown Spark error"
+    end
   end
 
   defp build_fake_session do

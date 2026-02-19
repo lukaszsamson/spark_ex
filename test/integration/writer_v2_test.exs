@@ -48,6 +48,9 @@ defmodule SparkEx.Integration.WriterV2Test do
 
         {:error, %SparkEx.Error.Remote{message: message}} ->
           assert message =~ "Cannot write into v1 table"
+
+        other ->
+          flunk("unexpected append result: #{inspect(other)}")
       end
 
       case df3 |> DataFrame.write_v2(table_name) |> WriterV2.replace() do
@@ -58,6 +61,9 @@ defmodule SparkEx.Integration.WriterV2Test do
         {:error, %SparkEx.Error.Remote{message: message}} ->
           assert message =~ "Cannot write into v1 table" or
                    message =~ "does not support REPLACE TABLE AS SELECT"
+
+        other ->
+          flunk("unexpected replace result: #{inspect(other)}")
       end
     end
 
@@ -92,6 +98,9 @@ defmodule SparkEx.Integration.WriterV2Test do
 
         {:error, %SparkEx.Error.Remote{message: message}} ->
           assert message =~ "Cannot write into v1 table"
+
+        other ->
+          flunk("unexpected overwrite result: #{inspect(other)}")
       end
     end
 
@@ -133,6 +142,9 @@ defmodule SparkEx.Integration.WriterV2Test do
 
         {:error, %SparkEx.Error.Remote{message: message}} ->
           assert message =~ "Cannot write into v1 table"
+
+        other ->
+          flunk("unexpected overwrite_partitions result: #{inspect(other)}")
       end
     end
   end

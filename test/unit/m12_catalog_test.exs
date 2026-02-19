@@ -398,7 +398,7 @@ defmodule SparkEx.M12.CatalogPlanEncoderTest do
           location: "/tmp/db"
         )
 
-      assert sql == "CREATE DATABASE IF NOT EXISTS LOCATION '/tmp/db' db1"
+      assert sql == "CREATE DATABASE IF NOT EXISTS db1 LOCATION '/tmp/db'"
     end
 
     test "build_drop_database_sql supports IF EXISTS and CASCADE" do
@@ -449,7 +449,7 @@ defmodule SparkEx.M12.CatalogPlanEncoderTest do
 
     test "build_drop_function_sql supports temporary and IF EXISTS" do
       sql = SparkEx.Catalog.build_drop_function_sql("f1", temporary: true, if_exists: true)
-      assert sql == "DROP TEMPORARY IF EXISTS FUNCTION f1"
+      assert sql == "DROP TEMPORARY FUNCTION IF EXISTS f1"
     end
   end
 end

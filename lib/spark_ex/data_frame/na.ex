@@ -63,6 +63,11 @@ defmodule SparkEx.DataFrame.NA do
     %DataFrame{df | plan: {:na_fill, df.plan, cols, [value]}}
   end
 
+  def fill(%DataFrame{}, value, _opts) do
+    raise ArgumentError,
+          "expected fill value to be a number, string, boolean, or map, got: #{inspect(value)}"
+  end
+
   @doc """
   Drops rows containing null values.
 

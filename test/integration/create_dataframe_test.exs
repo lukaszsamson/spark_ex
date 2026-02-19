@@ -31,8 +31,9 @@ defmodule SparkEx.Integration.CreateDataFrameTest do
 
       assert {:ok, rows} = DataFrame.collect(df)
       assert length(rows) == 3
-      assert Enum.any?(rows, fn row -> row["name"] == "Alice" end)
-      assert Enum.any?(rows, fn row -> row["id"] == 2 end)
+      ordered = Enum.sort_by(rows, & &1["id"])
+      assert Enum.map(ordered, & &1["id"]) == [1, 2, 3]
+      assert Enum.map(ordered, & &1["name"]) == ["Alice", "Bob", "Charlie"]
     end
 
     test "creates DataFrame and applies filter", %{session: session} do

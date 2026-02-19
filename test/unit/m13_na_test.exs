@@ -37,6 +37,12 @@ defmodule SparkEx.M13.NATest do
       # PySpark encodes a single literal value with multiple cols, not duplicated values
       assert %DataFrame{plan: {:na_fill, :test_plan, ["age", "salary"], [0]}} = df
     end
+
+    test "raises on unsupported scalar value type" do
+      assert_raise ArgumentError, ~r/expected fill value/, fn ->
+        NA.fill(make_df(), [:invalid])
+      end
+    end
   end
 
   describe "fill/2 with map" do

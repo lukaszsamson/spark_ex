@@ -51,12 +51,12 @@ defmodule SparkEx.Integration.M14.StreamingTest do
   end
 
   defp stop_query(query) do
-    try do
-      StreamingQuery.stop(query)
-    rescue
-      _ -> :ok
-    catch
-      _, _ -> :ok
+    case StreamingQuery.stop(query) do
+      :ok ->
+        :ok
+
+      {:error, %SparkEx.Error.Remote{}} ->
+        :ok
     end
   end
 
@@ -74,6 +74,38 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       other ->
         flunk("unexpected query status: #{inspect(other)}")
+    end
+  end
+
+  defp assert_query_eventually_inactive(query, deadline_ms) do
+    case StreamingQuery.is_active?(query) do
+      {:ok, false} ->
+        :ok
+
+      {:ok, true} when deadline_ms > 0 ->
+        Process.sleep(100)
+        assert_query_eventually_inactive(query, deadline_ms - 100)
+
+      {:ok, true} ->
+        flunk("stream query did not terminate in time")
+
+      other ->
+        flunk("unexpected query status: #{inspect(other)}")
+    end
+  end
+
+  defp await_condition(fetch_fun, predicate_fun, deadline_ms) do
+    value = fetch_fun.()
+
+    if predicate_fun.(value) do
+      {:ok, value}
+    else
+      if deadline_ms <= 0 do
+        {:error, :timeout}
+      else
+        Process.sleep(100)
+        await_condition(fetch_fun, predicate_fun, deadline_ms - 100)
+      end
     end
   end
 
@@ -101,11 +133,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       assert {:ok, true} = StreamingQuery.is_active?(query)
       assert :ok = StreamingQuery.stop(query)
-
-      # After stop, query should not be active
-      # Give Spark a moment to process the stop
-      Process.sleep(500)
-      assert {:ok, false} = StreamingQuery.is_active?(query)
+      assert_query_eventually_inactive(query, 5000)
     end
   end
 
@@ -115,8 +143,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       on_exit(fn -> stop_query(query) end)
 
-      # Let the query process a bit
-      Process.sleep(1000)
+      assert_query_eventually_active(query, 5000)
 
       assert {:ok, status} = StreamingQuery.status(query)
       assert is_map(status)
@@ -148,7 +175,6 @@ defmodule SparkEx.Integration.M14.StreamingTest do
         File.rm_rf(output)
       end)
 
-      Process.sleep(2000)
       assert_query_eventually_active(query, 3000)
     end
   end
@@ -161,9 +187,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       # Stop the query first, then await termination without timeout
       :ok = StreamingQuery.stop(query)
-      Process.sleep(500)
-
-      # After stopping, await_termination should return true (terminated)
+      assert_query_eventually_inactive(query, 5000)
       assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 5000)
     end
   end
@@ -174,7 +198,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       on_exit(fn -> stop_query(query) end)
 
-      Process.sleep(500)
+      assert_query_eventually_active(query, 5000)
       assert :ok = StreamingQuery.process_all_available(query)
 
       :ok = StreamingQuery.stop(query)
@@ -187,7 +211,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       on_exit(fn -> stop_query(query) end)
 
-      Process.sleep(500)
+      assert_query_eventually_active(query, 5000)
 
       assert {:ok, queries} = StreamingQueryManager.active(session)
       assert is_list(queries)
@@ -204,7 +228,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       on_exit(fn -> stop_query(query) end)
 
-      Process.sleep(500)
+      assert_query_eventually_active(query, 5000)
 
       assert {:ok, found} = StreamingQueryManager.get(session, query.query_id)
       assert %StreamingQuery{} = found
@@ -220,7 +244,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       # Stop the query first, then await
       :ok = StreamingQuery.stop(query)
-      Process.sleep(500)
+      assert_query_eventually_inactive(query, 5000)
 
       assert {:ok, true} = StreamingQueryManager.await_any_termination(session, timeout: 5000)
     end
@@ -236,10 +260,16 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       on_exit(fn -> stop_query(query) end)
 
-      # Let query run for a bit to generate progress
-      Process.sleep(2000)
+      assert {:ok, {:ok, progress}} =
+               await_condition(
+                 fn -> StreamingQuery.recent_progress(query) end,
+                 fn
+                   {:ok, values} -> length(values) > 0
+                   _ -> false
+                 end,
+                 5000
+               )
 
-      assert {:ok, progress} = StreamingQuery.recent_progress(query)
       assert is_list(progress)
       assert Enum.any?(progress, fn item -> is_binary(item) end)
 
@@ -253,9 +283,16 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       on_exit(fn -> stop_query(query) end)
 
-      Process.sleep(2000)
+      assert {:ok, {:ok, progress}} =
+               await_condition(
+                 fn -> StreamingQuery.last_progress(query) end,
+                 fn
+                   {:ok, value} -> is_binary(value) and byte_size(value) > 0
+                   _ -> false
+                 end,
+                 5000
+               )
 
-      assert {:ok, progress} = StreamingQuery.last_progress(query)
       assert is_binary(progress)
 
       :ok = StreamingQuery.stop(query)
@@ -268,7 +305,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       on_exit(fn -> stop_query(query) end)
 
-      Process.sleep(500)
+      assert_query_eventually_active(query, 5000)
 
       assert {:ok, plan} = StreamingQuery.explain(query)
       assert is_binary(plan)
@@ -284,7 +321,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       on_exit(fn -> stop_query(query) end)
 
-      Process.sleep(500)
+      assert_query_eventually_active(query, 5000)
 
       assert {:ok, nil} = StreamingQuery.exception(query)
 
@@ -299,12 +336,19 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       on_exit(fn -> stop_query(query) end)
 
-      # Let some data accumulate
-      Process.sleep(3000)
+      assert {:ok, {:ok, rows}} =
+               await_condition(
+                 fn ->
+                   result_df = SparkEx.sql(session, "SELECT * FROM #{table_name}")
+                   DataFrame.collect(result_df)
+                 end,
+                 fn
+                   {:ok, values} -> length(values) > 0
+                   _ -> false
+                 end,
+                 10_000
+               )
 
-      # Query the memory table via SQL
-      result_df = SparkEx.sql(session, "SELECT * FROM #{table_name}")
-      assert {:ok, rows} = DataFrame.collect(result_df)
       assert length(rows) > 0
 
       :ok = StreamingQuery.stop(query)
@@ -376,13 +420,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       on_exit(fn -> stop_query(query) end)
 
-      # available_now should process all available data then terminate
-      # Give it time to start and finish
-      Process.sleep(3000)
-
-      # Query should have terminated by now (or still running briefly)
-      result = StreamingQuery.is_active?(query)
-      assert {:ok, _active} = result
+      assert_query_eventually_inactive(query, 10_000)
     end
 
     test "once trigger processes one batch", %{session: session} do
@@ -394,11 +432,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       on_exit(fn -> stop_query(query) end)
 
-      # once trigger should process one micro-batch then terminate
-      Process.sleep(3000)
-
-      result = StreamingQuery.is_active?(query)
-      assert {:ok, _active} = result
+      assert_query_eventually_inactive(query, 10_000)
     end
   end
 
@@ -410,8 +444,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       :ok = StreamingQueryManager.reset_terminated(session)
 
       assert {:ok, queries} = StreamingQueryManager.active(session)
-      assert is_list(queries)
-      # May or may not be empty depending on server state, but should not error
+      assert queries == []
     end
 
     test "get returns result for nonexistent query", %{session: session} do
@@ -419,11 +452,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       fake_id = "00000000-0000-0000-0000-000000000000"
 
       result = StreamingQueryManager.get(session, fake_id)
-      # Should either return {:ok, _} or {:error, _}, not crash
-      case result do
-        {:ok, _} -> :ok
-        {:error, _} -> :ok
-      end
+      assert {:error, _} = result
     end
 
     test "await_any_termination with short timeout", %{session: session} do

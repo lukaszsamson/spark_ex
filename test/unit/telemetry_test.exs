@@ -25,6 +25,8 @@ defmodule SparkEx.TelemetryTest do
         nil
       )
 
+      on_exit(fn -> :telemetry.detach("test-batch-#{inspect(ref)}") end)
+
       # Build a minimal valid Arrow IPC stream for a single-row batch
       # We'll test that the event is at least _attempted_ to be emitted
       # by using a mock stream with a valid arrow batch
@@ -48,19 +50,11 @@ defmodule SparkEx.TelemetryTest do
          }}
       ]
 
-      case ResultDecoder.decode_stream(stream) do
-        {:ok, _result} ->
-          assert_receive {:telemetry, ^ref, [:spark_ex, :result, :batch], measurements, metadata}
-          assert is_integer(measurements.row_count)
-          assert is_integer(measurements.bytes)
-          assert is_integer(metadata.batch_index)
-
-        {:error, _reason} ->
-          # IPC data might not be valid in test env, that's ok
-          :ok
-      end
-
-      :telemetry.detach("test-batch-#{inspect(ref)}")
+      assert {:ok, _result} = ResultDecoder.decode_stream(stream)
+      assert_receive {:telemetry, ^ref, [:spark_ex, :result, :batch], measurements, metadata}
+      assert measurements.row_count == 1
+      assert is_integer(measurements.bytes)
+      assert is_integer(metadata.batch_index)
     end
 
     test "emits [:spark_ex, :result, :progress] on execution progress" do
@@ -75,6 +69,8 @@ defmodule SparkEx.TelemetryTest do
         end,
         nil
       )
+
+      on_exit(fn -> :telemetry.detach("test-progress-#{inspect(ref)}") end)
 
       progress = %ExecutePlanResponse.ExecutionProgress{
         stages: [
@@ -109,8 +105,6 @@ defmodule SparkEx.TelemetryTest do
       assert stage.stage_id == 0
       assert stage.num_tasks == 10
       assert stage.num_completed_tasks == 5
-
-      :telemetry.detach("test-progress-#{inspect(ref)}")
     end
   end
 
@@ -130,6 +124,8 @@ defmodule SparkEx.TelemetryTest do
         nil
       )
 
+      on_exit(fn -> :telemetry.detach(start_id) end)
+
       :telemetry.attach(
         stop_id,
         [:spark_ex, :rpc, :stop],
@@ -138,6 +134,8 @@ defmodule SparkEx.TelemetryTest do
         end,
         nil
       )
+
+      on_exit(fn -> :telemetry.detach(stop_id) end)
 
       metadata = %{rpc: :execute_plan, session_id: "s-1"}
       result = Client.rpc_telemetry_span(metadata, fn -> {:ok, %{rows: [%{"id" => 1}]}} end)
@@ -152,9 +150,6 @@ defmodule SparkEx.TelemetryTest do
       assert is_integer(stop_measurements.duration)
       assert stop_meta.result == :ok
       assert stop_meta.row_count == 1
-
-      :telemetry.detach(start_id)
-      :telemetry.detach(stop_id)
     end
 
     test "emits rpc stop row_count for explorer results" do
@@ -172,6 +167,8 @@ defmodule SparkEx.TelemetryTest do
           nil
         )
 
+        on_exit(fn -> :telemetry.detach(stop_id) end)
+
         df = Explorer.DataFrame.new(%{"id" => [1, 2, 3]})
 
         result =
@@ -184,9 +181,7 @@ defmodule SparkEx.TelemetryTest do
         assert_receive {:telemetry, ^ref, [:spark_ex, :rpc, :stop], measurements, metadata}
         assert is_integer(measurements.duration)
         assert metadata.result == :ok
-        assert metadata.row_count in [0, 3]
-
-        :telemetry.detach(stop_id)
+        assert metadata.row_count == 3
       end
     end
 
@@ -204,6 +199,8 @@ defmodule SparkEx.TelemetryTest do
         nil
       )
 
+      on_exit(fn -> :telemetry.detach(exception_id) end)
+
       assert_raise RuntimeError, "boom", fn ->
         Client.rpc_telemetry_span(%{rpc: :execute_plan, session_id: "s-3"}, fn ->
           raise "boom"
@@ -216,8 +213,6 @@ defmodule SparkEx.TelemetryTest do
       assert metadata.kind == :error
       assert %RuntimeError{} = metadata.reason
       assert is_list(metadata.stacktrace)
-
-      :telemetry.detach(exception_id)
     end
   end
 
@@ -241,6 +236,8 @@ defmodule SparkEx.TelemetryTest do
         nil
       )
 
+      on_exit(fn -> :telemetry.detach("test-retry-#{inspect(ref)}") end)
+
       # Simulate a transient failure followed by success
       call_count = :counters.new(1, [:atomics])
 
@@ -263,8 +260,6 @@ defmodule SparkEx.TelemetryTest do
       assert metadata.grpc_status == 14
       assert metadata.max_retries == 3
       assert metadata.retry_delay_ms == nil
-
-      :telemetry.detach("test-retry-#{inspect(ref)}")
     end
 
     test "includes retry_delay_ms in retry metadata" do
@@ -286,6 +281,8 @@ defmodule SparkEx.TelemetryTest do
         nil
       )
 
+      on_exit(fn -> :telemetry.detach("test-retry-delay-#{inspect(ref)}") end)
+
       result =
         Client.retry_with_backoff(fn ->
           {:error, %SparkEx.Error.Remote{grpc_status: 14, retry_delay_ms: 250}}
@@ -296,8 +293,6 @@ defmodule SparkEx.TelemetryTest do
       assert measurements.attempt == 1
       assert measurements.backoff_ms == 250
       assert metadata.retry_delay_ms == 250
-
-      :telemetry.detach("test-retry-delay-#{inspect(ref)}")
     end
   end
 

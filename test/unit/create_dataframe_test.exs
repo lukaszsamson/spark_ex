@@ -67,23 +67,4 @@ defmodule SparkEx.Unit.CreateDataFrameTest do
       assert Explorer.DataFrame.n_rows(df) == 2
     end
   end
-
-  describe "SHA-256 cache key computation" do
-    test "produces consistent hex hash for same data" do
-      data = "test data for hashing"
-      hash1 = :crypto.hash(:sha256, data) |> Base.encode16(case: :lower)
-      hash2 = :crypto.hash(:sha256, data) |> Base.encode16(case: :lower)
-
-      assert hash1 == hash2
-      assert String.length(hash1) == 64
-      assert String.match?(hash1, ~r/^[0-9a-f]{64}$/)
-    end
-
-    test "produces different hashes for different data" do
-      hash1 = :crypto.hash(:sha256, "data1") |> Base.encode16(case: :lower)
-      hash2 = :crypto.hash(:sha256, "data2") |> Base.encode16(case: :lower)
-
-      assert hash1 != hash2
-    end
-  end
 end

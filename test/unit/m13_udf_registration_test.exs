@@ -1,48 +1,6 @@
 defmodule SparkEx.M13.UDFRegistrationTest do
   use ExUnit.Case, async: true
 
-  describe "register_java/4" do
-    test "builds correct command tuple" do
-      # We can't test actual execution without a session, but verify the command
-      # would be constructed correctly by testing the command encoder directly
-      command = {:register_java_udf, "my_upper", "com.example.UpperUDF", nil, false}
-
-      assert {:register_java_udf, "my_upper", "com.example.UpperUDF", nil, false} = command
-    end
-
-    test "builds command with return_type option" do
-      return_type = %Spark.Connect.DataType{kind: {:string, %Spark.Connect.DataType.String{}}}
-      command = {:register_java_udf, "my_fn", "com.example.MyFn", return_type, false}
-
-      assert {:register_java_udf, "my_fn", "com.example.MyFn", ^return_type, false} = command
-    end
-
-    test "builds command with aggregate option" do
-      command = {:register_java_udf, "my_sum", "com.example.SumUDAF", nil, true}
-      assert {:register_java_udf, "my_sum", "com.example.SumUDAF", nil, true} = command
-    end
-  end
-
-  describe "register_udtf/4" do
-    test "builds correct command tuple for UDTF" do
-      command =
-        {:register_udtf, "my_udtf", <<1, 2, 3>>, nil, 0, "3.11", true}
-
-      assert {:register_udtf, "my_udtf", <<1, 2, 3>>, nil, 0, "3.11", true} = command
-    end
-
-    test "builds command with return_type option" do
-      return_type = %Spark.Connect.DataType{
-        kind: {:struct, %Spark.Connect.DataType.Struct{}}
-      }
-
-      command =
-        {:register_udtf, "my_udtf", <<1, 2, 3>>, return_type, 0, "3.11", true}
-
-      assert {:register_udtf, "my_udtf", <<1, 2, 3>>, ^return_type, 0, "3.11", true} = command
-    end
-  end
-
   describe "command encoder for register_java_udf" do
     alias SparkEx.Connect.CommandEncoder
 

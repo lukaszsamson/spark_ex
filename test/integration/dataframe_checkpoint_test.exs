@@ -27,10 +27,10 @@ defmodule SparkEx.Integration.DataFrameCheckpointTest do
         assert Enum.map(rows, & &1["id"]) == [0, 1, 2]
 
       {:error, %SparkEx.Error.Remote{error_class: "_LEGACY_ERROR_TEMP_3016"}} ->
-        assert true
+        :ok
 
       {:error, %SparkEx.Error.Remote{error_class: "CANNOT_MODIFY_CONFIG"}} ->
-        assert true
+        :ok
     end
   end
 
@@ -45,10 +45,10 @@ defmodule SparkEx.Integration.DataFrameCheckpointTest do
         assert Enum.map(rows, & &1["id"]) == [0, 1]
 
       {:error, %SparkEx.Error.Remote{error_class: "_LEGACY_ERROR_TEMP_3016"}} ->
-        assert true
+        :ok
 
       {:error, %SparkEx.Error.Remote{error_class: "CANNOT_MODIFY_CONFIG"}} ->
-        assert true
+        :ok
     end
   end
 

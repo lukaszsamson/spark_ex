@@ -1,70 +1,42 @@
 defmodule SparkEx.Unit.SessionLifecycleTest do
   use ExUnit.Case, async: true
 
-  alias Spark.Connect.{
-    CloneSessionRequest,
-    InterruptRequest,
-    ReleaseSessionRequest,
-    UserContext
-  }
+  alias Spark.Connect.{CloneSessionRequest, ReleaseSessionRequest, UserContext}
 
-  describe "Client.build_interrupt_request (via interrupt type matching)" do
-    setup do
-      session = %SparkEx.Session{
-        channel: nil,
-        session_id: "test-session-123",
-        server_side_session_id: "server-side-456",
-        user_id: "test_user",
-        client_type: "elixir/test",
-        plan_id_counter: 0
-      }
+  defmodule InterruptSession do
+    use GenServer
 
-      %{session: session}
+    def start_link(parent) do
+      GenServer.start_link(__MODULE__, parent, [])
     end
 
-    test "builds interrupt ALL request", %{session: session} do
-      # Test the request building by verifying the struct fields
-      request = %InterruptRequest{
-        session_id: session.session_id,
-        client_observed_server_side_session_id: session.server_side_session_id,
-        user_context: %UserContext{user_id: session.user_id},
-        client_type: session.client_type,
-        interrupt_type: :INTERRUPT_TYPE_ALL
-      }
+    @impl true
+    def init(parent), do: {:ok, parent}
 
-      assert request.session_id == "test-session-123"
-      assert request.interrupt_type == :INTERRUPT_TYPE_ALL
-      assert request.client_observed_server_side_session_id == "server-side-456"
-      assert request.user_context.user_id == "test_user"
-      assert request.interrupt == nil
+    @impl true
+    def handle_call({:interrupt, payload}, _from, parent) do
+      send(parent, {:interrupt_called, payload})
+      {:reply, {:ok, ["op-1"]}, parent}
+    end
+  end
+
+  describe "Session interrupt helpers" do
+    test "interrupt_all/1 issues :all interrupt payload" do
+      {:ok, session} = InterruptSession.start_link(self())
+      assert {:ok, ["op-1"]} = SparkEx.Session.interrupt_all(session)
+      assert_received {:interrupt_called, :all}
     end
 
-    test "builds interrupt TAG request", %{session: session} do
-      request = %InterruptRequest{
-        session_id: session.session_id,
-        client_observed_server_side_session_id: session.server_side_session_id,
-        user_context: %UserContext{user_id: session.user_id},
-        client_type: session.client_type,
-        interrupt_type: :INTERRUPT_TYPE_TAG,
-        interrupt: {:operation_tag, "etl-job-42"}
-      }
-
-      assert request.interrupt_type == :INTERRUPT_TYPE_TAG
-      assert request.interrupt == {:operation_tag, "etl-job-42"}
+    test "interrupt_tag/2 issues tagged interrupt payload" do
+      {:ok, session} = InterruptSession.start_link(self())
+      assert {:ok, ["op-1"]} = SparkEx.Session.interrupt_tag(session, "etl-job-42")
+      assert_received {:interrupt_called, {:tag, "etl-job-42"}}
     end
 
-    test "builds interrupt OPERATION_ID request", %{session: session} do
-      request = %InterruptRequest{
-        session_id: session.session_id,
-        client_observed_server_side_session_id: session.server_side_session_id,
-        user_context: %UserContext{user_id: session.user_id},
-        client_type: session.client_type,
-        interrupt_type: :INTERRUPT_TYPE_OPERATION_ID,
-        interrupt: {:operation_id, "op-789"}
-      }
-
-      assert request.interrupt_type == :INTERRUPT_TYPE_OPERATION_ID
-      assert request.interrupt == {:operation_id, "op-789"}
+    test "interrupt_operation/2 issues operation-id payload" do
+      {:ok, session} = InterruptSession.start_link(self())
+      assert {:ok, ["op-1"]} = SparkEx.Session.interrupt_operation(session, "op-789")
+      assert_received {:interrupt_called, {:operation_id, "op-789"}}
     end
   end
 
