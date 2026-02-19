@@ -51,6 +51,7 @@ defmodule SparkEx.RetryPolicyRegistry do
       max_retries: 3,
       initial_backoff_ms: 100,
       max_backoff_ms: 5_000,
+      max_server_retry_delay: 10 * 60 * 1000,
       jitter_fun: &default_jitter/1,
       sleep_fun: &Process.sleep/1
     }
@@ -71,7 +72,15 @@ defmodule SparkEx.RetryPolicyRegistry do
   defp normalize_policy(policy) when is_list(policy), do: normalize_policy(Map.new(policy))
 
   defp normalize_policy(policy) when is_map(policy) do
-    allowed = [:max_retries, :initial_backoff_ms, :max_backoff_ms, :jitter_fun, :sleep_fun]
+    allowed = [
+      :max_retries,
+      :initial_backoff_ms,
+      :max_backoff_ms,
+      :max_server_retry_delay,
+      :jitter_fun,
+      :sleep_fun
+    ]
+
     normalized = Map.take(policy, allowed)
     validate_policy!(normalized)
     Map.merge(default_policy(), normalized)
@@ -81,6 +90,7 @@ defmodule SparkEx.RetryPolicyRegistry do
     validate_nonneg_int!(policy, :max_retries)
     validate_nonneg_int!(policy, :initial_backoff_ms)
     validate_nonneg_int!(policy, :max_backoff_ms)
+    validate_nonneg_int!(policy, :max_server_retry_delay)
     validate_fun!(policy, :jitter_fun, 1)
     validate_fun!(policy, :sleep_fun, 1)
     :ok

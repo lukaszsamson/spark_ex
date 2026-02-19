@@ -60,7 +60,8 @@ defmodule SparkEx.Error do
       :query_contexts,
       :stacktrace,
       :server_message,
-      :grpc_status
+      :grpc_status,
+      :retry_delay_ms
     ]
 
     @type t :: %__MODULE__{
@@ -71,7 +72,8 @@ defmodule SparkEx.Error do
             query_contexts: [map()] | nil,
             stacktrace: [map()] | nil,
             server_message: String.t() | nil,
-            grpc_status: non_neg_integer() | nil
+            grpc_status: non_neg_integer() | nil,
+            retry_delay_ms: non_neg_integer() | nil
           }
 
     @impl true
@@ -112,6 +114,7 @@ defmodule SparkEx.Connect.Errors do
   alias SparkEx.UserContextExtensions
 
   @error_info_type_url "type.googleapis.com/google.rpc.ErrorInfo"
+  @retry_info_type_url "type.googleapis.com/google.rpc.RetryInfo"
 
   @doc """
   Converts a gRPC error into a structured SparkEx error.
@@ -121,15 +124,18 @@ defmodule SparkEx.Connect.Errors do
   """
   @spec from_grpc_error(GRPC.RPCError.t(), SparkEx.Session.t()) :: SparkEx.Error.Remote.t()
   def from_grpc_error(%GRPC.RPCError{} = error, session) do
+    retry_delay_ms = extract_retry_delay_ms(error)
+
     case extract_error_info(error) do
       {:ok, error_info} ->
         enriched = fetch_error_details(error_info, error, session)
-        enriched
+        maybe_add_retry_delay(enriched, retry_delay_ms)
 
       :no_error_info ->
         %SparkEx.Error.Remote{
           message: error.message,
-          grpc_status: error.status
+          grpc_status: error.status,
+          retry_delay_ms: retry_delay_ms
         }
     end
   end
@@ -148,6 +154,38 @@ defmodule SparkEx.Connect.Errors do
   end
 
   defp extract_error_info(_), do: :no_error_info
+
+  defp extract_retry_delay_ms(%GRPC.RPCError{details: details}) when is_list(details) do
+    details
+    |> Enum.find_value(nil, fn
+      %Google.Protobuf.Any{type_url: @retry_info_type_url, value: value} ->
+        info = Protobuf.decode(value, Google.Rpc.RetryInfo)
+        retry_info_to_ms(info)
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp extract_retry_delay_ms(_), do: nil
+
+  defp retry_info_to_ms(%Google.Rpc.RetryInfo{retry_delay: nil}), do: 0
+
+  defp retry_info_to_ms(%Google.Rpc.RetryInfo{
+         retry_delay: %Google.Protobuf.Duration{} = duration
+       }) do
+    duration_to_ms(duration)
+  end
+
+  defp duration_to_ms(%Google.Protobuf.Duration{seconds: seconds, nanos: nanos}) do
+    seconds * 1000 + div(nanos, 1_000_000)
+  end
+
+  defp maybe_add_retry_delay(%SparkEx.Error.Remote{} = error, nil), do: error
+
+  defp maybe_add_retry_delay(%SparkEx.Error.Remote{} = error, retry_delay_ms) do
+    %{error | retry_delay_ms: retry_delay_ms}
+  end
 
   defp fetch_error_details(error_info, grpc_error, session) do
     error_id = Map.get(error_info.metadata, "errorId")

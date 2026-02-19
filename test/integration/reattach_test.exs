@@ -158,6 +158,8 @@ defmodule SparkEx.Integration.ReattachTest do
         {:retry_attempt, measurements, metadata} ->
           assert is_integer(measurements.backoff_ms)
           assert metadata.grpc_status == 13
+          assert Map.has_key?(metadata, :retry_delay_ms)
+          assert metadata.retry_delay_ms == nil
       after
         5_000 ->
           assert true

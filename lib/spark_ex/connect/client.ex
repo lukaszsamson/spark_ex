@@ -1650,20 +1650,54 @@ defmodule SparkEx.Connect.Client do
     sleep_fun = Keyword.get(opts, :sleep_fun, default_policy.sleep_fun)
     jitter_fun = Keyword.get(opts, :jitter_fun, default_policy.jitter_fun)
 
-    do_retry(fun, 0, max_retries, initial_backoff, max_backoff, sleep_fun, jitter_fun)
+    max_server_retry_delay =
+      Keyword.get(opts, :max_server_retry_delay, default_policy.max_server_retry_delay)
+
+    do_retry(
+      fun,
+      0,
+      max_retries,
+      initial_backoff,
+      max_backoff,
+      sleep_fun,
+      jitter_fun,
+      max_server_retry_delay
+    )
   end
 
-  defp do_retry(fun, attempt, max_retries, initial_backoff, max_backoff, sleep_fun, jitter_fun) do
+  defp do_retry(
+         fun,
+         attempt,
+         max_retries,
+         initial_backoff,
+         max_backoff,
+         sleep_fun,
+         jitter_fun,
+         max_server_retry_delay
+       ) do
     case fun.() do
       {:error, %SparkEx.Error.Remote{grpc_status: status} = error}
       when status in [@status_unavailable, @status_deadline_exceeded] and
              attempt < max_retries ->
-        sleep_ms = backoff_ms(attempt, initial_backoff, max_backoff, jitter_fun)
+        sleep_ms =
+          backoff_with_retry_info(
+            attempt,
+            initial_backoff,
+            max_backoff,
+            max_server_retry_delay,
+            jitter_fun,
+            error.retry_delay_ms
+          )
 
         :telemetry.execute(
           [:spark_ex, :retry, :attempt],
           %{attempt: attempt + 1, backoff_ms: sleep_ms},
-          %{grpc_status: status, error: error, max_retries: max_retries}
+          %{
+            grpc_status: status,
+            error: error,
+            max_retries: max_retries,
+            retry_delay_ms: error.retry_delay_ms
+          }
         )
 
         sleep_fun.(sleep_ms)
@@ -1675,7 +1709,8 @@ defmodule SparkEx.Connect.Client do
           initial_backoff,
           max_backoff,
           sleep_fun,
-          jitter_fun
+          jitter_fun,
+          max_server_retry_delay
         )
 
       result ->
@@ -1687,6 +1722,38 @@ defmodule SparkEx.Connect.Client do
     base = initial_backoff * Integer.pow(2, attempt)
     capped = Kernel.min(base, max_backoff)
     jitter_fun.(capped)
+  end
+
+  defp backoff_with_retry_info(
+         attempt,
+         initial_backoff,
+         max_backoff,
+         max_server_retry_delay,
+         jitter_fun,
+         retry_delay_ms
+       )
+
+  defp backoff_with_retry_info(
+         _attempt,
+         _initial_backoff,
+         _max_backoff,
+         max_server_retry_delay,
+         _jitter_fun,
+         retry_delay_ms
+       )
+       when is_integer(retry_delay_ms) and retry_delay_ms > 0 do
+    Kernel.min(retry_delay_ms, max_server_retry_delay)
+  end
+
+  defp backoff_with_retry_info(
+         attempt,
+         initial_backoff,
+         max_backoff,
+         _max_server_retry_delay,
+         jitter_fun,
+         _retry_delay_ms
+       ) do
+    backoff_ms(attempt, initial_backoff, max_backoff, jitter_fun)
   end
 
   # --- Telemetry ---

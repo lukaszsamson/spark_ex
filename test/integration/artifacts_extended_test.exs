@@ -22,6 +22,6 @@ defmodule SparkEx.Integration.ArtifactsExtendedTest do
 
     name = Path.basename(tmp_path)
     assert {:ok, statuses} = SparkEx.artifact_status(session, ["files/#{name}"])
-    assert is_map(statuses)
+    assert statuses == %{"files/#{name}" => false}
   end
 end

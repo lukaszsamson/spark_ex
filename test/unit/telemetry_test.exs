@@ -262,8 +262,42 @@ defmodule SparkEx.TelemetryTest do
       assert is_integer(measurements.backoff_ms)
       assert metadata.grpc_status == 14
       assert metadata.max_retries == 3
+      assert metadata.retry_delay_ms == nil
 
       :telemetry.detach("test-retry-#{inspect(ref)}")
+    end
+
+    test "includes retry_delay_ms in retry metadata" do
+      ref = make_ref()
+      pid = self()
+
+      on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
+
+      SparkEx.RetryPolicyRegistry.set_policies(
+        retry: %{sleep_fun: fn _ -> :ok end, jitter_fun: fn ms -> ms end}
+      )
+
+      :telemetry.attach(
+        "test-retry-delay-#{inspect(ref)}",
+        [:spark_ex, :retry, :attempt],
+        fn event, measurements, metadata, _ ->
+          send(pid, {:telemetry, ref, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      result =
+        Client.retry_with_backoff(fn ->
+          {:error, %SparkEx.Error.Remote{grpc_status: 14, retry_delay_ms: 250}}
+        end)
+
+      assert {:error, %SparkEx.Error.Remote{grpc_status: 14}} = result
+      assert_receive {:telemetry, ^ref, [:spark_ex, :retry, :attempt], measurements, metadata}
+      assert measurements.attempt == 1
+      assert measurements.backoff_ms == 250
+      assert metadata.retry_delay_ms == 250
+
+      :telemetry.detach("test-retry-delay-#{inspect(ref)}")
     end
   end
 

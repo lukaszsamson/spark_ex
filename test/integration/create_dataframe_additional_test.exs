@@ -37,8 +37,9 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
 
         assert meta["k"] == "v"
 
-      {:error, %SparkEx.Error.Remote{error_class: "UNSUPPORTED_ARROWTYPE"}} ->
-        assert true
+      {:error, %SparkEx.Error.Remote{} = error} ->
+        assert error.error_class == "UNSUPPORTED_ARROWTYPE"
+        assert error.message_parameters["typeName"] == "LargeList"
     end
   end
 
@@ -52,8 +53,9 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
         assert row["id"] in [42, "42"]
         assert row["note"] == nil
 
-      {:error, %SparkEx.Error.Remote{error_class: "INVALID_COLUMN_OR_FIELD_DATA_TYPE"}} ->
-        assert true
+      {:error, %SparkEx.Error.Remote{} = error} ->
+        assert error.error_class == "INVALID_COLUMN_OR_FIELD_DATA_TYPE"
+        assert error.message_parameters["expectedType"] == "\"INT\""
     end
   end
 
@@ -68,13 +70,13 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
   test "head/first/take correctness", %{session: session} do
     {:ok, df} = SparkEx.create_dataframe(session, [%{"id" => 1}, %{"id" => 2}, %{"id" => 3}])
 
-    assert {:ok, [row | _]} = DataFrame.head(df, 1)
-    assert row["id"] in [1, 2, 3]
+    assert {:ok, [row]} = DataFrame.head(df, 1)
+    assert row["id"] == 1
 
     assert {:ok, first} = DataFrame.first(df)
-    assert first["id"] in [1, 2, 3]
+    assert first["id"] == 1
 
     assert {:ok, rows} = DataFrame.take(df, 2)
-    assert length(rows) == 2
+    assert Enum.map(rows, & &1["id"]) == [1, 2]
   end
 end

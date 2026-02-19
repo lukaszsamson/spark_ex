@@ -60,6 +60,23 @@ defmodule SparkEx.Integration.M14.StreamingTest do
     end
   end
 
+  defp assert_query_eventually_active(query, deadline_ms) do
+    case StreamingQuery.is_active?(query) do
+      {:ok, true} ->
+        :ok
+
+      {:ok, false} when deadline_ms > 0 ->
+        Process.sleep(100)
+        assert_query_eventually_active(query, deadline_ms - 100)
+
+      {:ok, false} ->
+        flunk("stream query never became active")
+
+      other ->
+        flunk("unexpected query status: #{inspect(other)}")
+    end
+  end
+
   describe "stream read + is_streaming" do
     test "streaming DataFrame reports is_streaming true", %{session: session} do
       df = StreamReader.rate(session, rows_per_second: 1)
@@ -122,6 +139,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
         df
         |> DataFrame.write_stream()
         |> StreamWriter.option("checkpointLocation", checkpoint)
+        |> StreamWriter.option("rowTag", "row")
         |> StreamWriter.xml(output)
         |> StreamWriter.start()
 
@@ -131,12 +149,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       end)
 
       Process.sleep(2000)
-
-      case StreamingQuery.is_active?(query) do
-        {:ok, true} -> :ok
-        {:ok, false} -> assert true
-        other -> flunk("unexpected query status: #{inspect(other)}")
-      end
+      assert_query_eventually_active(query, 3000)
     end
   end
 

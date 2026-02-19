@@ -62,7 +62,32 @@ defmodule SparkEx.Integration.ArtifactsEdgeCasesTest do
     assert {:ok, first} = SparkEx.Artifacts.add_files(session, [file_path])
     assert {:ok, second} = SparkEx.Artifacts.add_files(session, [file_path])
 
-    assert length(first) == 1
-    assert length(second) == 1
+    assert [{name, true}] = first
+    assert [{^name, true}] = second
+    assert {:ok, statuses} = SparkEx.artifact_status(session, [name])
+    assert statuses == %{name => false}
+  end
+
+  test "uploading files with same basename reports duplicates", %{session: session} do
+    tmp_dir = "/tmp/spark_ex_artifacts_dupname_#{System.unique_integer([:positive])}"
+    dir_a = Path.join(tmp_dir, "a")
+    dir_b = Path.join(tmp_dir, "b")
+    File.mkdir_p!(dir_a)
+    File.mkdir_p!(dir_b)
+
+    file_a = Path.join(dir_a, "dup.txt")
+    file_b = Path.join(dir_b, "dup.txt")
+
+    File.write!(file_a, "dup")
+    File.write!(file_b, "dup")
+
+    assert {:ok, first} = SparkEx.Artifacts.add_files(session, [file_a])
+    assert {:ok, second} = SparkEx.Artifacts.add_files(session, [file_b])
+
+    assert [{name, true}] = first
+    assert [{^name, true}] = second
+    assert name == "files/dup.txt"
+    assert {:ok, statuses} = SparkEx.artifact_status(session, [name])
+    assert statuses == %{name => false}
   end
 end

@@ -76,7 +76,7 @@ defmodule SparkEx.Integration.ArtifactTest do
 
       assert {:ok, _summaries} = SparkEx.add_artifacts(session, [{artifact_name, data}])
       assert {:ok, statuses} = SparkEx.artifact_status(session, [artifact_name])
-      assert is_boolean(statuses[artifact_name])
+      assert statuses == %{artifact_name => false}
     end
 
     test "uploads chunked artifact payloads larger than chunk threshold", %{session: session} do
@@ -87,7 +87,7 @@ defmodule SparkEx.Integration.ArtifactTest do
       assert {:ok, summaries} = SparkEx.add_artifacts(session, [{artifact_name, data}])
       assert [{^artifact_name, true}] = summaries
       assert {:ok, statuses} = SparkEx.artifact_status(session, [artifact_name])
-      assert is_boolean(statuses[artifact_name])
+      assert statuses == %{artifact_name => false}
     end
   end
 end

@@ -15,6 +15,7 @@ defmodule SparkEx.Connect.ErrorsTest do
       assert error.message == "bad request"
       assert error.grpc_status == 3
       assert error.error_class == nil
+      assert error.retry_delay_ms == nil
     end
 
     test "creates basic Remote error when details is nil" do
@@ -23,6 +24,7 @@ defmodule SparkEx.Connect.ErrorsTest do
 
       error = Errors.from_grpc_error(grpc_error, session)
       assert %Remote{message: "internal", grpc_status: 13} = error
+      assert error.retry_delay_ms == nil
     end
   end
 
@@ -84,6 +86,28 @@ defmodule SparkEx.Connect.ErrorsTest do
       assert %Remote{} = error
       assert error.error_class == "ANALYSIS.ERROR"
       assert error.grpc_status == 3
+    end
+
+    test "extracts RetryInfo retry_delay_ms when present" do
+      retry_info = %Google.Rpc.RetryInfo{
+        retry_delay: %Google.Protobuf.Duration{seconds: 1, nanos: 250_000_000}
+      }
+
+      details = [
+        %Google.Protobuf.Any{
+          type_url: "type.googleapis.com/google.rpc.RetryInfo",
+          value: Protobuf.encode(retry_info)
+        }
+      ]
+
+      grpc_error = %GRPC.RPCError{status: 14, message: "unavailable", details: details}
+      session = build_fake_session()
+
+      error = Errors.from_grpc_error(grpc_error, session)
+
+      assert %Remote{} = error
+      assert error.grpc_status == 14
+      assert error.retry_delay_ms == 1_250
     end
   end
 

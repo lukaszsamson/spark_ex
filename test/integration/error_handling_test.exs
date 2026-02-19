@@ -27,6 +27,7 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
       assert error.sql_state == "42703"
       assert is_map(error.message_parameters)
       assert Map.has_key?(error.message_parameters, "objectName")
+      assert Map.has_key?(error.message_parameters, "objectType")
       assert is_list(error.query_contexts)
 
       if error.query_contexts != [] do
@@ -34,6 +35,8 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
         assert is_binary(context.summary)
         assert String.contains?(context.summary, "missing_column")
         assert context.context_type in [:SQL, :DATAFRAME]
+        assert context.object_type in [nil, "column"]
+        assert context.object_name in [nil, "missing_column"]
         assert is_binary(context.fragment)
         assert String.contains?(context.fragment, "missing_column")
 
@@ -59,6 +62,54 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
         context = hd(error.query_contexts)
         assert is_binary(context.summary)
       end
+    end
+
+    test "invalid star reports object metadata", %{session: session} do
+      df = SparkEx.sql(session, "SELECT missing_alias.* FROM range(1)")
+
+      assert {:error, %SparkEx.Error.Remote{} = error} = DataFrame.collect(df)
+
+      assert error.error_class in [
+               "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+               "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+               "UNRESOLVED_STAR"
+             ]
+
+      assert is_map(error.message_parameters)
+      assert Map.has_key?(error.message_parameters, "objectName")
+      assert Map.has_key?(error.message_parameters, "objectType")
+
+      if error.query_contexts != [] do
+        context = hd(error.query_contexts)
+        assert context.object_type in [nil, "column", "*", "ambiguous"]
+        assert is_binary(context.fragment)
+      end
+    end
+
+    test "isin error includes message parameters", %{session: session} do
+      import SparkEx.Functions
+
+      df =
+        SparkEx.range(session, 1)
+        |> DataFrame.filter(SparkEx.Column.isin(col("missing"), [lit(1)]))
+
+      assert {:error, %SparkEx.Error.Remote{} = error} = DataFrame.collect(df)
+      assert is_map(error.message_parameters)
+      assert Map.has_key?(error.message_parameters, "objectName")
+      assert Map.has_key?(error.message_parameters, "objectType")
+    end
+
+    test "between error includes message parameters", %{session: session} do
+      import SparkEx.Functions
+
+      df =
+        SparkEx.range(session, 1)
+        |> DataFrame.filter(SparkEx.Column.between(col("missing"), lit(1), lit(2)))
+
+      assert {:error, %SparkEx.Error.Remote{} = error} = DataFrame.collect(df)
+      assert is_map(error.message_parameters)
+      assert Map.has_key?(error.message_parameters, "objectName")
+      assert Map.has_key?(error.message_parameters, "objectType")
     end
 
     test "illegal argument returns error class", %{session: session} do

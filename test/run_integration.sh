@@ -20,6 +20,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SPARK_HOME="$PROJECT_ROOT/test/spark-4.1.1-bin-hadoop3-connect"
 PORT=15002
 SQLITE_JDBC_JAR="$PROJECT_ROOT/test/jars/sqlite-jdbc-3.51.2.0.jar"
+ICEBERG_JAR="$PROJECT_ROOT/test/jars/iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
 
 # --- Validate SPARK_HOME ---
 if [ ! -d "$SPARK_HOME/sbin" ]; then
@@ -52,6 +53,15 @@ if [ ! -f "$SQLITE_JDBC_JAR" ]; then
   exit 1
 fi
 
+# --- Validate Iceberg runtime jar ---
+if [ ! -f "$ICEBERG_JAR" ]; then
+  echo "ERROR: Iceberg runtime jar not found at $ICEBERG_JAR"
+  echo "Download with:"
+  echo "  curl -L -o \"$ICEBERG_JAR\" \\\""
+  echo "    https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-4.0_2.13/1.10.1/iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
+  exit 1
+fi
+
 if [ -z "${JAVA_HOME:-}" ]; then
   echo "ERROR: JAVA_HOME not set and no Java 17/21 found."
   echo "Spark 4.1.1 requires Java 17 or 21."
@@ -71,7 +81,11 @@ else
   # --- Start Spark Connect server (daemon) ---
   echo "Starting Spark Connect server on port $PORT..."
   bash "$SPARK_HOME/sbin/start-connect-server.sh" \
-    --conf "spark.connect.grpc.binding.port=$PORT"
+    --conf "spark.connect.grpc.binding.port=$PORT" \
+    --conf "spark.jars=$SQLITE_JDBC_JAR,$ICEBERG_JAR" \
+    --conf "spark.sql.catalog.spark_catalog=org.apache.iceberg.spark.SparkSessionCatalog" \
+    --conf "spark.sql.catalog.spark_catalog.type=hadoop" \
+    --conf "spark.sql.catalog.spark_catalog.warehouse=/tmp/spark_ex_iceberg"
   STARTED_SERVER=true
 
   # --- Wait for server to be ready ---

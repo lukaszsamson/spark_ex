@@ -100,6 +100,31 @@ defmodule SparkEx.Integration.FunctionCategoryParityTest do
     assert length(rows) == 2
   end
 
+  test "additional map/generator functions execute", %{session: session} do
+    df = SparkEx.sql(session, "SELECT map('a', 1, 'b', 2) AS mp")
+
+    projected =
+      DataFrame.select(df, [
+        SparkEx.Column.alias_(Functions.map_entries(Functions.col("mp")), "entries"),
+        SparkEx.Column.alias_(Functions.map_values(Functions.col("mp")), "values")
+      ])
+
+    assert {:ok, [row]} = DataFrame.collect(projected)
+    assert is_list(row["entries"])
+    assert Enum.any?(row["entries"], &is_map/1)
+    assert Enum.sort(row["values"]) == [1, 2]
+
+    tvf = SparkEx.tvf(session)
+
+    posed =
+      SparkEx.TableValuedFunction.call(tvf, "posexplode", [
+        Functions.array([Functions.lit(1), Functions.lit(2)])
+      ])
+
+    assert {:ok, rows} = DataFrame.collect(posed)
+    assert length(rows) == 2
+  end
+
   test "tvf explode/inline execute", %{session: session} do
     tvf = SparkEx.tvf(session)
 
@@ -111,6 +136,28 @@ defmodule SparkEx.Integration.FunctionCategoryParityTest do
 
     assert {:ok, rows} = DataFrame.collect(exploded)
     assert length(rows) == 2
+
+    inline =
+      SparkEx.TableValuedFunction.inline(
+        tvf,
+        Functions.array([
+          Functions.struct([Functions.lit(1)]),
+          Functions.struct([Functions.lit(2)])
+        ])
+      )
+
+    stacked =
+      SparkEx.TableValuedFunction.stack(
+        tvf,
+        2,
+        [Functions.lit(1), Functions.lit("a"), Functions.lit(2), Functions.lit("b")]
+      )
+
+    assert {:ok, inline_rows} = DataFrame.collect(inline)
+    assert length(inline_rows) == 2
+
+    assert {:ok, stacked_rows} = DataFrame.collect(stacked)
+    assert length(stacked_rows) == 2
   end
 
   test "window functions execute", %{session: session} do
@@ -128,6 +175,66 @@ defmodule SparkEx.Integration.FunctionCategoryParityTest do
 
     assert {:ok, rows} = DataFrame.collect(projected)
     assert Enum.all?(rows, &is_integer(&1["row_num"]))
+  end
+
+  test "additional window functions execute", %{session: session} do
+    df = SparkEx.sql(session, "SELECT * FROM VALUES (1, 'a'), (2, 'a') AS t(id, grp)")
+
+    spec = Window.partition_by(["grp"]) |> WindowSpec.order_by(["id"])
+
+    frame_spec =
+      Window.partition_by(["grp"])
+      |> WindowSpec.order_by(["id"])
+      |> WindowSpec.rows_between(-1, 0)
+
+    projected =
+      DataFrame.select(df, [
+        Functions.col("id"),
+        SparkEx.Column.alias_(Column.over(Functions.rank(), spec), "rank"),
+        SparkEx.Column.alias_(Column.over(Functions.dense_rank(), spec), "dense_rank"),
+        SparkEx.Column.alias_(
+          Column.over(Functions.lag(Functions.col("id"), offset: 1), spec),
+          "lag_id"
+        ),
+        SparkEx.Column.alias_(Column.over(Functions.percent_rank(), spec), "percent_rank"),
+        SparkEx.Column.alias_(
+          Column.over(Functions.sum(Functions.col("id")), frame_spec),
+          "sum_id"
+        )
+      ])
+
+    assert {:ok, rows} = DataFrame.collect(projected)
+    assert Enum.all?(rows, &is_integer(&1["rank"]))
+    assert Enum.all?(rows, &is_integer(&1["dense_rank"]))
+    assert Enum.all?(rows, &is_float(&1["percent_rank"]))
+    assert Enum.all?(rows, &is_integer(&1["sum_id"]))
+  end
+
+  test "percentile and cume_dist functions execute", %{session: session} do
+    df = SparkEx.sql(session, "SELECT * FROM VALUES (1, 'a'), (2, 'a') AS t(id, grp)")
+
+    spec = Window.partition_by(["grp"]) |> WindowSpec.order_by(["id"])
+
+    projected =
+      DataFrame.select(df, [
+        SparkEx.Column.alias_(Column.over(Functions.cume_dist(), spec), "cume_dist"),
+        SparkEx.Column.alias_(Column.over(Functions.ntile(2), spec), "ntile")
+      ])
+
+    assert {:ok, rows} = DataFrame.collect(projected)
+    assert Enum.all?(rows, &is_float(&1["cume_dist"]))
+    assert Enum.all?(rows, &is_integer(&1["ntile"]))
+
+    agg =
+      df
+      |> DataFrame.group_by(["grp"])
+      |> SparkEx.GroupedData.agg([
+        SparkEx.Column.alias_(Functions.percentile_approx(Functions.col("id"), 0.5, 100), "p50")
+      ])
+
+    assert {:ok, [row]} = DataFrame.collect(agg)
+    values = Map.values(row)
+    assert Enum.any?(values, &is_number/1)
   end
 
   test "misc/hash/type functions execute", %{session: session} do
