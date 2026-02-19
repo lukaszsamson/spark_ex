@@ -418,6 +418,15 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert length(wr.references) == 1
     end
 
+    test "encode_expression accepts subquery plans without pre-wired plan_id" do
+      encoded = PlanEncoder.encode_expression({:subquery, :scalar, {:sql, "SELECT 1", nil}, []})
+
+      assert %Expression{expr_type: {:subquery_expression, subquery}} = encoded
+      assert is_integer(subquery.plan_id)
+      assert subquery.plan_id > 0
+      assert subquery.subquery_type == :SUBQUERY_TYPE_SCALAR
+    end
+
     test "rejects table_arg without options" do
       assert_raise ArgumentError, ~r/table_arg subquery requires/, fn ->
         PlanEncoder.encode_expression({:subquery, :table_arg, 1, []})

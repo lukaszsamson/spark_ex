@@ -309,5 +309,53 @@ defmodule SparkEx.Unit.ReattachTest do
 
       assert_receive :release_called
     end
+
+    test "reattach retry uses configured reattach sleep_fun", %{session: session} do
+      parent = self()
+
+      on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
+
+      SparkEx.RetryPolicyRegistry.set_policies(
+        reattach: %{
+          initial_backoff_ms: 7,
+          max_backoff_ms: 7,
+          jitter_fun: fn ms -> ms end,
+          sleep_fun: fn ms -> send(parent, {:reattach_slept, ms}) end
+        }
+      )
+
+      execute_stream_fun = fn _request, _timeout ->
+        {:ok, [{:ok, %ExecutePlanResponse{response_id: "r1"}}]}
+      end
+
+      reattach_attempts = :counters.new(1, [:atomics])
+
+      reattach_stream_fun = fn _last_response_id ->
+        attempt = :counters.get(reattach_attempts, 1)
+        :counters.add(reattach_attempts, 1, 1)
+
+        if attempt == 0 do
+          {:ok, []}
+        else
+          {:ok,
+           [
+             {:ok,
+              %ExecutePlanResponse{
+                response_id: "r2",
+                response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+              }}
+           ]}
+        end
+      end
+
+      assert {:ok, %{rows: []}} =
+               Client.execute_plan(session, %Plan{},
+                 execute_stream_fun: execute_stream_fun,
+                 reattach_stream_fun: reattach_stream_fun,
+                 release_execute_fun: fn _opts -> {:ok, nil} end
+               )
+
+      assert_receive {:reattach_slept, 7}
+    end
   end
 end

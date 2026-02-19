@@ -2213,8 +2213,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp extract_referenced_plan_id(plan) do
-    raise ArgumentError,
-          "expected subquery plan to carry plan_id via {plan_id, plan} or %{plan_id: plan_id, plan: plan}, got: #{inspect(plan)}"
+    # `encode/2` auto-wires subquery references via rewrite/with_relations.
+    # For direct `encode_expression/1` usage, synthesize a plan_id so callers
+    # are not forced to pre-wrap every subquery plan.
+    {System.unique_integer([:positive, :monotonic]), plan}
   end
 
   defp encode_literal_expression(value) do

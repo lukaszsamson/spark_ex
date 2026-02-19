@@ -237,7 +237,8 @@ defmodule SparkEx.Connect.Errors do
 
   defp enrich_from_response(error, %FetchErrorDetailsResponse{} = resp) do
     case {resp.root_error_idx, resp.errors} do
-      {idx, errors} when is_integer(idx) and is_list(errors) and length(errors) > idx ->
+      {idx, errors}
+      when is_integer(idx) and is_list(errors) and idx >= 0 and length(errors) > idx ->
         root = Enum.at(errors, idx)
 
         throwable_fields =

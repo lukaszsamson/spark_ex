@@ -47,6 +47,8 @@ defmodule SparkEx.Connect.Client do
   @status_deadline_exceeded 4
 
   @artifact_chunk_size 32 * 1024
+  @release_checkpoint_max_concurrency 8
+  @release_checkpoint_timeout 15_000
 
   # --- AnalyzePlan RPCs ---
 
@@ -1196,13 +1198,13 @@ defmodule SparkEx.Connect.Client do
        ) do
     case consume_until_error(stream) do
       {:ok, new_items, last_id, result_complete?} ->
-        all_items = acc ++ new_items
+        all_items = prepend_items(acc, new_items)
         final_last_id = last_id || last_response_id
 
         release_checkpoints_best_effort(release_execute_fun, new_items)
 
         if result_complete? do
-          {:ok, all_items, final_last_id}
+          {:ok, Enum.reverse(all_items), final_last_id}
         else
           retry_reattach(
             session,
@@ -1221,7 +1223,7 @@ defmodule SparkEx.Connect.Client do
         end
 
       {:error, error, new_items, last_id} ->
-        all_items = acc ++ new_items
+        all_items = prepend_items(acc, new_items)
         final_last_id = last_id || last_response_id
 
         release_checkpoints_best_effort(release_execute_fun, new_items)
@@ -1436,13 +1438,32 @@ defmodule SparkEx.Connect.Client do
   end
 
   defp release_checkpoints_best_effort(release_execute_fun, responses) do
-    responses
-    |> Enum.reject(fn resp -> match?({:result_complete, _}, resp.response_type) end)
-    |> Enum.map(&response_id_or_nil(&1.response_id))
-    |> Enum.reject(&is_nil/1)
-    |> Enum.each(fn response_id ->
-      release_execute_best_effort(release_execute_fun, until_response_id: response_id)
-    end)
+    response_ids =
+      responses
+      |> Enum.reject(fn resp -> match?({:result_complete, _}, resp.response_type) end)
+      |> Enum.map(&response_id_or_nil(&1.response_id))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    case response_ids do
+      [] ->
+        :ok
+
+      ids ->
+        Task.start(fn ->
+          ids
+          |> Task.async_stream(
+            fn response_id ->
+              release_execute_fun.(until_response_id: response_id)
+            end,
+            max_concurrency: @release_checkpoint_max_concurrency,
+            ordered: false,
+            timeout: @release_checkpoint_timeout,
+            on_timeout: :kill_task
+          )
+          |> Stream.run()
+        end)
+    end
   end
 
   defp retry_reattach(
@@ -1518,7 +1539,7 @@ defmodule SparkEx.Connect.Client do
         default_policy.jitter_fun
       )
 
-    Process.sleep(sleep_ms)
+    default_policy.sleep_fun.(sleep_ms)
 
     case reattach_stream_fun.(final_last_id) do
       {:ok, new_stream} ->
@@ -1722,6 +1743,12 @@ defmodule SparkEx.Connect.Client do
     base = initial_backoff * Integer.pow(2, attempt)
     capped = Kernel.min(base, max_backoff)
     jitter_fun.(capped)
+  end
+
+  defp prepend_items(acc, items) do
+    Enum.reduce(items, acc, fn item, rev_acc ->
+      [item | rev_acc]
+    end)
   end
 
   defp backoff_with_retry_info(

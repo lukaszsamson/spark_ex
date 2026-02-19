@@ -4,6 +4,8 @@ defmodule SparkEx.Integration.ReattachTest do
   @moduletag :integration
 
   alias SparkEx.DataFrame
+  alias SparkEx.Connect.Client
+  alias SparkEx.Error.Remote
 
   @spark_remote System.get_env("SPARK_REMOTE", "sc://localhost:15002")
 
@@ -130,7 +132,7 @@ defmodule SparkEx.Integration.ReattachTest do
       assert String.length(metadata.operation_id) == 36
     end
 
-    test "emits retry telemetry on transient failure", %{session: session} do
+    test "emits retry telemetry on transient failure", %{session: _session} do
       on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
 
       SparkEx.RetryPolicyRegistry.set_policies(
@@ -151,19 +153,31 @@ defmodule SparkEx.Integration.ReattachTest do
 
       on_exit(fn -> :telemetry.detach("retry-attempt-#{inspect(ref)}") end)
 
-      df = SparkEx.sql(session, "SELECT missing_column FROM range(1)")
-      assert {:error, %SparkEx.Error.Remote{grpc_status: 13}} = DataFrame.collect(df)
+      attempt_counter = :counters.new(1, [:atomics])
 
-      receive do
-        {:retry_attempt, measurements, metadata} ->
-          assert is_integer(measurements.backoff_ms)
-          assert metadata.grpc_status == 13
-          assert Map.has_key?(metadata, :retry_delay_ms)
-          assert metadata.retry_delay_ms == nil
-      after
-        5_000 ->
-          assert true
-      end
+      result =
+        Client.retry_with_backoff(
+          fn ->
+            attempt = :counters.get(attempt_counter, 1)
+            :counters.add(attempt_counter, 1, 1)
+
+            if attempt == 0 do
+              {:error, %Remote{message: "unavailable", grpc_status: 14}}
+            else
+              {:ok, :done}
+            end
+          end,
+          max_retries: 2
+        )
+
+      assert result == {:ok, :done}
+
+      assert_receive {:retry_attempt, measurements, metadata}, 5_000
+      assert measurements.attempt == 1
+      assert is_integer(measurements.backoff_ms)
+      assert measurements.backoff_ms >= 0
+      assert metadata.grpc_status == 14
+      assert metadata.retry_delay_ms == nil
     end
   end
 
