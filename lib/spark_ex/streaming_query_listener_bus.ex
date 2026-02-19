@@ -33,6 +33,7 @@ defmodule SparkEx.StreamingQueryListenerBus do
   use GenServer
 
   alias Spark.Connect.{ExecutePlanResponse, StreamingQueryListenerEvent}
+  require Logger
 
   defstruct [
     :session,
@@ -178,23 +179,27 @@ defmodule SparkEx.StreamingQueryListenerBus do
   end
 
   defp read_events(stream, parent) do
-    Enum.each(stream, fn
-      {:ok, %ExecutePlanResponse{} = resp} ->
-        case resp.response_type do
-          {:streaming_query_listener_events_result, result} ->
-            Enum.each(result.events, fn event ->
-              send(parent, {:listener_event, parse_event(event)})
-            end)
+    result =
+      Enum.reduce_while(stream, :normal, fn
+        {:ok, %ExecutePlanResponse{} = resp}, _acc ->
+          case resp.response_type do
+            {:streaming_query_listener_events_result, result} ->
+              Enum.each(result.events, fn event ->
+                send(parent, {:listener_event, parse_event(event)})
+              end)
 
-          _ ->
-            :ok
-        end
+            _ ->
+              :ok
+          end
 
-      {:error, _reason} ->
-        :ok
-    end)
+          {:cont, :normal}
 
-    send(parent, {:listener_stream_ended, :normal})
+        {:error, reason}, _acc ->
+          Logger.warning("StreamingQueryListenerBus stream error: #{inspect(reason)}")
+          {:halt, {:error, reason}}
+      end)
+
+    send(parent, {:listener_stream_ended, result})
   end
 
   defp parse_event(%StreamingQueryListenerEvent{} = event) do

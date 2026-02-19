@@ -2213,10 +2213,11 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp extract_referenced_plan_id(plan) do
-    # `encode/2` auto-wires subquery references via rewrite/with_relations.
-    # For direct `encode_expression/1` usage, synthesize a plan_id so callers
-    # are not forced to pre-wrap every subquery plan.
-    {System.unique_integer([:positive, :monotonic]), plan}
+    raise ArgumentError,
+          "subquery expression requires an explicit plan_id reference when encoded standalone. " <>
+            "Wrap as {:plan_id, id, plan} (or %{plan_id: id, plan: plan}), " <>
+            "or encode the containing plan via PlanEncoder.encode/2. " <>
+            "Got: #{inspect(plan)}"
   end
 
   defp encode_literal_expression(value) do

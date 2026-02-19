@@ -21,17 +21,7 @@ defmodule SparkEx.StreamingQueryManager do
       {:ok, {:streaming_query_manager, result}} ->
         case result.result_type do
           {:active, active_result} ->
-            queries =
-              Enum.map(active_result.active_queries, fn instance ->
-                %StreamingQuery{
-                  session: session,
-                  query_id: instance.id.id,
-                  run_id: instance.id.run_id,
-                  name: if(instance.name == "", do: nil, else: instance.name)
-                }
-              end)
-
-            {:ok, queries}
+            build_streaming_queries(session, active_result.active_queries)
 
           other ->
             {:error, {:unexpected_result, other}}
@@ -51,14 +41,7 @@ defmodule SparkEx.StreamingQueryManager do
       {:ok, {:streaming_query_manager, result}} ->
         case result.result_type do
           {:query, instance} ->
-            query = %StreamingQuery{
-              session: session,
-              query_id: instance.id.id,
-              run_id: instance.id.run_id,
-              name: if(instance.name == "", do: nil, else: instance.name)
-            }
-
-            {:ok, query}
+            build_streaming_query(session, instance)
 
           other ->
             {:error, {:unexpected_result, other}}
@@ -179,5 +162,33 @@ defmodule SparkEx.StreamingQueryManager do
       {:streaming_query_manager_command, cmd_type},
       opts
     )
+  end
+
+  defp build_streaming_queries(session, instances) do
+    Enum.reduce_while(instances, {:ok, []}, fn instance, {:ok, acc} ->
+      case build_streaming_query(session, instance) do
+        {:ok, query} -> {:cont, {:ok, [query | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, queries} -> {:ok, Enum.reverse(queries)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp build_streaming_query(session, %{id: %{id: query_id, run_id: run_id}} = instance)
+       when is_binary(query_id) and query_id != "" and is_binary(run_id) and run_id != "" do
+    {:ok,
+     %StreamingQuery{
+       session: session,
+       query_id: query_id,
+       run_id: run_id,
+       name: if(instance.name == "", do: nil, else: instance.name)
+     }}
+  end
+
+  defp build_streaming_query(_session, instance) do
+    {:error, {:unexpected_result, {:missing_query_ids, instance}}}
   end
 end

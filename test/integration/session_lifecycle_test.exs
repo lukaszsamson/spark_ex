@@ -236,22 +236,17 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
       assert {:ok, _interrupted_ids} = wait_for_interrupt(control_session, tag, 30)
 
       assert {:error, %SparkEx.Error.Remote{} = error} = Task.await(task, 60_000)
+      error_text = "#{error.message || ""} #{error.server_message || ""}"
 
-      assert String.contains?(error.message || "", "OPERATION_CANCELED") or
-               String.contains?(error.server_message || "", "OPERATION_CANCELED") or
-               String.contains?(error.message || "", "CANCEL") or
-               String.contains?(error.server_message || "", "CANCEL") or
-               String.contains?(error.message || "", "NOT_FOUND") or
-               String.contains?(error.server_message || "", "NOT_FOUND") or
+      assert String.contains?(error_text, "OPERATION_CANCELED") or
+               String.contains?(error_text, "CANCEL") or
+               String.contains?(error_text, "NOT_FOUND") or
                error.error_class in [
-                 "CANNOT_MODIFY_CONFIG",
+                 "INTERNAL_ERROR",
                  "INVALID_HANDLE.OPERATION_NOT_FOUND",
-                 "INVALID_HANDLE.SESSION_NOT_FOUND",
-                 "SESSION_NOT_FOUND",
-                 "OPERATION_NOT_FOUND",
-                 "INTERNAL_ERROR"
+                 "INVALID_HANDLE.SESSION_NOT_FOUND"
                ] or
-               error.grpc_status in [13, 14]
+               error.grpc_status in [4, 13, 14]
     end
   end
 

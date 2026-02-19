@@ -460,10 +460,14 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       :ok = StreamingQueryManager.reset_terminated(session)
 
       result = StreamingQueryManager.await_any_termination(session, timeout: 100)
-      # May return {:ok, false} or timeout-related result
+
       case result do
-        {:ok, _} -> :ok
-        {:error, _} -> :ok
+        {:ok, false} ->
+          :ok
+
+        {:error, %SparkEx.Error.Remote{} = error} ->
+          assert error.grpc_status == 13
+          assert String.contains?(error.message || "", "stream_error")
       end
     end
   end

@@ -26,11 +26,9 @@ defmodule SparkEx.Integration.DataFrameCheckpointTest do
         assert {:ok, rows} = DataFrame.collect(checkpointed)
         assert Enum.map(rows, & &1["id"]) == [0, 1, 2]
 
-      {:error, %SparkEx.Error.Remote{error_class: "_LEGACY_ERROR_TEMP_3016"}} ->
-        :ok
-
-      {:error, %SparkEx.Error.Remote{error_class: "CANNOT_MODIFY_CONFIG"}} ->
-        :ok
+      {:error, %SparkEx.Error.Remote{} = error} ->
+        assert error.error_class in ["_LEGACY_ERROR_TEMP_3016", "CANNOT_MODIFY_CONFIG"]
+        assert is_binary(error.message)
     end
   end
 
@@ -40,15 +38,12 @@ defmodule SparkEx.Integration.DataFrameCheckpointTest do
     case DataFrame.checkpoint(df, eager: true) do
       %DataFrame{} = checkpointed ->
         assert {:cached_remote_relation, _relation_id} = checkpointed.plan
-
         assert {:ok, rows} = DataFrame.collect(checkpointed)
         assert Enum.map(rows, & &1["id"]) == [0, 1]
 
-      {:error, %SparkEx.Error.Remote{error_class: "_LEGACY_ERROR_TEMP_3016"}} ->
-        :ok
-
-      {:error, %SparkEx.Error.Remote{error_class: "CANNOT_MODIFY_CONFIG"}} ->
-        :ok
+      {:error, %SparkEx.Error.Remote{} = error} ->
+        assert error.error_class in ["_LEGACY_ERROR_TEMP_3016", "CANNOT_MODIFY_CONFIG"]
+        assert is_binary(error.message)
     end
   end
 

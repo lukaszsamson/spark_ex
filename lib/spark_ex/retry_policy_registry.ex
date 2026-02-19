@@ -11,11 +11,9 @@ defmodule SparkEx.RetryPolicyRegistry do
   def set_policies(policies) when is_list(policies) or is_map(policies) do
     SparkEx.EtsTableOwner.ensure_table!(@table, :set)
 
-    updates = normalize_policies(policies)
-    current = get_policies()
-    merged = Map.merge(current, updates)
-
-    Enum.each(merged, fn {type, policy} ->
+    policies
+    |> normalize_policies()
+    |> Enum.each(fn {type, policy} ->
       :ets.insert(@table, {type, policy})
     end)
 

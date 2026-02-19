@@ -1245,7 +1245,13 @@ defmodule SparkEx.DataFrame do
            merge_tags(df, opts)
          ) do
       {:ok, {:checkpoint, %Spark.Connect.CheckpointCommandResult{relation: relation}}} ->
-        %__MODULE__{df | plan: {:cached_remote_relation, relation.relation_id}}
+        case relation do
+          %{relation_id: relation_id} when is_binary(relation_id) and relation_id != "" ->
+            %__MODULE__{df | plan: {:cached_remote_relation, relation_id}}
+
+          _ ->
+            {:error, {:unexpected_result, :missing_checkpoint_relation}}
+        end
 
       {:ok, other} ->
         {:error, {:unexpected_result, other}}
@@ -1278,7 +1284,13 @@ defmodule SparkEx.DataFrame do
            merge_tags(df, opts)
          ) do
       {:ok, {:checkpoint, %Spark.Connect.CheckpointCommandResult{relation: relation}}} ->
-        %__MODULE__{df | plan: {:cached_remote_relation, relation.relation_id}}
+        case relation do
+          %{relation_id: relation_id} when is_binary(relation_id) and relation_id != "" ->
+            %__MODULE__{df | plan: {:cached_remote_relation, relation_id}}
+
+          _ ->
+            {:error, {:unexpected_result, :missing_checkpoint_relation}}
+        end
 
       {:ok, other} ->
         {:error, {:unexpected_result, other}}

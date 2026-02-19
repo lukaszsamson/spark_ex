@@ -40,6 +40,7 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
       {:error, %SparkEx.Error.Remote{} = error} ->
         assert error.error_class == "UNSUPPORTED_ARROWTYPE"
         assert error.message_parameters["typeName"] == "LargeList"
+        assert error.sql_state == "0A000"
     end
   end
 
@@ -56,6 +57,7 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
       {:error, %SparkEx.Error.Remote{} = error} ->
         assert error.error_class == "INVALID_COLUMN_OR_FIELD_DATA_TYPE"
         assert error.message_parameters["expectedType"] == "\"INT\""
+        assert error.sql_state == "42000"
     end
   end
 

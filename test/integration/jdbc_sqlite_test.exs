@@ -34,28 +34,17 @@ defmodule SparkEx.Integration.JdbcSqliteTest do
 
     case Writer.jdbc(df, url, "people", mode: :overwrite, options: driver) do
       :ok ->
-        :ok
-
-      {:error, %SparkEx.Error.Remote{message: msg}} ->
-        if is_binary(msg) and String.contains?(msg, "no such table") do
-          :ok
-        else
-          flunk("unexpected jdbc error: #{inspect(msg)}")
-        end
-    end
-
-    read_df = Reader.jdbc(session, url, "people", options: driver)
-
-    case DataFrame.collect(read_df) do
-      {:ok, rows} ->
+        read_df = Reader.jdbc(session, url, "people", options: driver)
+        assert {:ok, rows} = DataFrame.collect(read_df)
         assert Enum.sort(Enum.map(rows, & &1["name"])) == ["a", "b"]
 
-      {:error, %SparkEx.Error.Remote{message: msg}} ->
-        if is_binary(msg) and String.contains?(msg, "no such table") do
-          assert msg =~ "no such table"
-        else
-          flunk("unexpected jdbc read error: #{inspect(msg)}")
-        end
+      {:error, %SparkEx.Error.Remote{} = error} ->
+        assert is_binary(error.message)
+        assert String.contains?(error.message, "no such table")
+
+        read_df = Reader.jdbc(session, url, "people", options: driver)
+        assert {:error, %SparkEx.Error.Remote{} = read_error} = DataFrame.collect(read_df)
+        assert String.contains?(read_error.message || "", "no such table")
     end
   end
 end

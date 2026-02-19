@@ -88,16 +88,12 @@ defmodule SparkEx.Integration.M13.UDFTVFTest do
           python_ver: "3.11"
         )
 
-      case result do
-        :ok ->
-          assert {:error, %SparkEx.Error.Remote{}} =
-                   session
-                   |> SparkEx.sql("SELECT * FROM #{function_name}()")
-                   |> DataFrame.collect()
+      assert result == :ok or match?({:error, %SparkEx.Error.Remote{}}, result)
 
-        {:error, %SparkEx.Error.Remote{}} ->
-          :ok
-      end
+      assert {:error, %SparkEx.Error.Remote{}} =
+               session
+               |> SparkEx.sql("SELECT * FROM #{function_name}()")
+               |> DataFrame.collect()
     end
   end
 end
