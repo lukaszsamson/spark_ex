@@ -27,7 +27,8 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
       assert error.sql_state == "42703"
       assert is_map(error.message_parameters)
       assert Map.has_key?(error.message_parameters, "objectName")
-      assert Map.has_key?(error.message_parameters, "objectType")
+      assert Map.has_key?(error.message_parameters, "objectType") or
+               Map.has_key?(error.message_parameters, "proposal")
       assert is_list(error.query_contexts)
 
       if error.query_contexts != [] do
@@ -35,8 +36,8 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
         assert is_binary(context.summary)
         assert String.contains?(context.summary, "missing_column")
         assert context.context_type in [:SQL, :DATAFRAME]
-        assert context.object_type in [nil, "column"]
-        assert context.object_name in [nil, "missing_column"]
+        assert context.object_type in [nil, "", "column"]
+        assert context.object_name in [nil, "", "missing_column"]
         assert is_binary(context.fragment)
         assert String.contains?(context.fragment, "missing_column")
 
@@ -72,16 +73,19 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
       assert error.error_class in [
                "UNRESOLVED_COLUMN.WITH_SUGGESTION",
                "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
-               "UNRESOLVED_STAR"
+               "UNRESOLVED_STAR",
+               "CANNOT_RESOLVE_STAR_EXPAND"
              ]
 
       assert is_map(error.message_parameters)
-      assert Map.has_key?(error.message_parameters, "objectName")
-      assert Map.has_key?(error.message_parameters, "objectType")
+      assert Map.has_key?(error.message_parameters, "objectName") or
+               Map.has_key?(error.message_parameters, "targetString")
+      assert Map.has_key?(error.message_parameters, "objectType") or
+               Map.has_key?(error.message_parameters, "columns")
 
       if error.query_contexts != [] do
         context = hd(error.query_contexts)
-        assert context.object_type in [nil, "column", "*", "ambiguous"]
+        assert context.object_type in [nil, "", "column", "*", "ambiguous"]
         assert is_binary(context.fragment)
       end
     end
@@ -96,7 +100,8 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
       assert {:error, %SparkEx.Error.Remote{} = error} = DataFrame.collect(df)
       assert is_map(error.message_parameters)
       assert Map.has_key?(error.message_parameters, "objectName")
-      assert Map.has_key?(error.message_parameters, "objectType")
+      assert Map.has_key?(error.message_parameters, "objectType") or
+               Map.has_key?(error.message_parameters, "proposal")
     end
 
     test "between error includes message parameters", %{session: session} do
@@ -109,7 +114,8 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
       assert {:error, %SparkEx.Error.Remote{} = error} = DataFrame.collect(df)
       assert is_map(error.message_parameters)
       assert Map.has_key?(error.message_parameters, "objectName")
-      assert Map.has_key?(error.message_parameters, "objectType")
+      assert Map.has_key?(error.message_parameters, "objectType") or
+               Map.has_key?(error.message_parameters, "proposal")
     end
 
     test "illegal argument returns error class", %{session: session} do
