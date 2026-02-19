@@ -30,6 +30,7 @@ defmodule SparkEx.DataFrame do
   """
 
   alias SparkEx.Column
+  alias SparkEx.Internal.Tag
 
   defstruct [:session, :plan, tags: []]
 
@@ -1203,7 +1204,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec tag(t(), String.t()) :: t()
   def tag(%__MODULE__{} = df, tag) when is_binary(tag) do
-    validate_tag!(tag)
+    Tag.validate!(tag)
     %{df | tags: df.tags ++ [tag]}
   end
 
@@ -1712,18 +1713,6 @@ defmodule SparkEx.DataFrame do
 
   defp merge_tags(%__MODULE__{tags: []}, opts), do: opts
   defp merge_tags(%__MODULE__{tags: tags}, opts), do: Keyword.put(opts, :tags, tags)
-
-  defp validate_tag!("") do
-    raise ArgumentError, "Spark Connect tag must be a non-empty string"
-  end
-
-  defp validate_tag!(tag) do
-    if String.contains?(tag, ",") do
-      raise ArgumentError, "Spark Connect tag cannot contain ','"
-    end
-
-    :ok
-  end
 
   defp normalize_hint_parameters(parameters) do
     parameters

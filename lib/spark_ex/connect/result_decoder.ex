@@ -169,7 +169,7 @@ defmodule SparkEx.Connect.ResultDecoder do
           nil ->
             {:ok,
              %{
-               rows: state.rows,
+               rows: Enum.reverse(state.rows),
                schema: state.schema,
                server_side_session_id: state.server_side_session_id,
                command_result: state.command_result,
@@ -427,11 +427,11 @@ defmodule SparkEx.Connect.ResultDecoder do
           updated = %{
             current
             | next_chunk_index: current.next_chunk_index + 1,
-              parts: current.parts ++ [batch.data]
+              parts: [batch.data | current.parts]
           }
 
-          if length(updated.parts) == updated.expected_chunks do
-            assembled = IO.iodata_to_binary(updated.parts)
+          if updated.next_chunk_index == updated.expected_chunks do
+            assembled = updated.parts |> Enum.reverse() |> IO.iodata_to_binary()
             state = %{state | current_chunked_batch: nil}
             decode_and_append_batch(state, assembled, updated.row_count)
           else
@@ -465,7 +465,7 @@ defmodule SparkEx.Connect.ResultDecoder do
             {:ok,
              %{
                state
-               | arrow_parts: state.arrow_parts ++ [batch.data],
+               | arrow_parts: [batch.data | state.arrow_parts],
                  num_records: state.num_records + batch.row_count
              }}
           end
@@ -479,16 +479,16 @@ defmodule SparkEx.Connect.ResultDecoder do
           updated = %{
             current
             | next_chunk_index: current.next_chunk_index + 1,
-              parts: current.parts ++ [batch.data]
+              parts: [batch.data | current.parts]
           }
 
-          if length(updated.parts) == updated.expected_chunks do
-            assembled = IO.iodata_to_binary(updated.parts)
+          if updated.next_chunk_index == updated.expected_chunks do
+            assembled = updated.parts |> Enum.reverse() |> IO.iodata_to_binary()
 
             state = %{
               state
               | current_chunked_batch: nil,
-                arrow_parts: state.arrow_parts ++ [assembled],
+                arrow_parts: [assembled | state.arrow_parts],
                 num_records: state.num_records + updated.row_count
             }
 
@@ -501,7 +501,7 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp finalize_arrow_result(state) do
-    arrow_ipc = IO.iodata_to_binary(state.arrow_parts)
+    arrow_ipc = state.arrow_parts |> Enum.reverse() |> IO.iodata_to_binary()
 
     %{
       arrow: arrow_ipc,
@@ -606,7 +606,7 @@ defmodule SparkEx.Connect.ResultDecoder do
       {:ok,
        %{
          state
-         | rows: state.rows ++ rows,
+         | rows: Enum.reverse(rows, state.rows),
            num_records: state.num_records + num_rows
        }}
     end
@@ -685,11 +685,11 @@ defmodule SparkEx.Connect.ResultDecoder do
           updated = %{
             current
             | next_chunk_index: current.next_chunk_index + 1,
-              parts: current.parts ++ [batch.data]
+              parts: [batch.data | current.parts]
           }
 
-          if length(updated.parts) == updated.expected_chunks do
-            assembled = IO.iodata_to_binary(updated.parts)
+          if updated.next_chunk_index == updated.expected_chunks do
+            assembled = updated.parts |> Enum.reverse() |> IO.iodata_to_binary()
             state = %{state | current_chunked_batch: nil}
             decode_and_append_batch_explorer(state, assembled, updated.row_count)
           else
@@ -741,7 +741,7 @@ defmodule SparkEx.Connect.ResultDecoder do
             {:ok,
              %{
                state
-               | dataframes: state.dataframes ++ [df],
+               | dataframes: [df | state.dataframes],
                  num_records: new_num_records,
                  total_bytes: new_total_bytes
              }}
@@ -799,7 +799,11 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp finalize_explorer_result(%{dataframes: dfs} = state) do
-    combined = Explorer.DataFrame.concat_rows(dfs)
+    combined =
+      dfs
+      |> Enum.reverse()
+      |> Explorer.DataFrame.concat_rows()
+
     dataframe = apply_schema_policy(combined, state.schema)
 
     {:ok,

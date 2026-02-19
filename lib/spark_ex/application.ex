@@ -6,6 +6,8 @@ defmodule SparkEx.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      {Task.Supervisor, name: SparkEx.TaskSupervisor},
+      {SparkEx.EtsTableOwner, []},
       {GRPC.Client.Supervisor, []}
     ]
 

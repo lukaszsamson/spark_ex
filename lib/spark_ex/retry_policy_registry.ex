@@ -9,7 +9,7 @@ defmodule SparkEx.RetryPolicyRegistry do
 
   @spec set_policies(map() | keyword()) :: :ok
   def set_policies(policies) when is_list(policies) or is_map(policies) do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
 
     updates = normalize_policies(policies)
     current = get_policies()
@@ -24,7 +24,7 @@ defmodule SparkEx.RetryPolicyRegistry do
 
   @spec get_policies() :: %{policy_type() => map()}
   def get_policies() do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
 
     stored =
       @table
@@ -128,18 +128,4 @@ defmodule SparkEx.RetryPolicyRegistry do
     :rand.uniform(capped + 1) - 1
   end
 
-  defp ensure_table!() do
-    case :ets.whereis(@table) do
-      :undefined ->
-        try do
-          :ets.new(@table, [:named_table, :public, :set])
-          :ok
-        rescue
-          ArgumentError -> :ok
-        end
-
-      _tid ->
-        :ok
-    end
-  end
 end

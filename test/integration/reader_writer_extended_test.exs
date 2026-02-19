@@ -63,7 +63,7 @@ defmodule SparkEx.Integration.ReaderWriterExtendedTest do
 
       {:error, %SparkEx.Error.Remote{message: msg}} ->
         if is_binary(msg) and String.contains?(msg, "data source: avro") do
-          assert true
+          assert msg =~ "data source: avro"
         else
           flunk("unexpected avro error: #{inspect(msg)}")
         end

@@ -52,7 +52,7 @@ defmodule SparkEx.Integration.JdbcSqliteTest do
 
       {:error, %SparkEx.Error.Remote{message: msg}} ->
         if is_binary(msg) and String.contains?(msg, "no such table") do
-          assert true
+          assert msg =~ "no such table"
         else
           flunk("unexpected jdbc read error: #{inspect(msg)}")
         end

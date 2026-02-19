@@ -9,7 +9,7 @@ defmodule SparkEx.ProgressHandlerRegistry do
   @spec register(String.t(), (map() -> any())) :: :ok
   def register(session_id, handler)
       when is_binary(session_id) and is_function(handler, 1) do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :bag)
     handler_id = {__MODULE__, session_id, make_ref()}
 
     :telemetry.attach(handler_id, @event, &__MODULE__.dispatch/4, %{
@@ -24,7 +24,7 @@ defmodule SparkEx.ProgressHandlerRegistry do
   @spec remove(String.t(), (map() -> any())) :: :ok
   def remove(session_id, handler)
       when is_binary(session_id) and is_function(handler, 1) do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :bag)
 
     case find_handler_entry(session_id, handler) do
       {:ok, {^session_id, handler_id, ^handler}} ->
@@ -39,7 +39,7 @@ defmodule SparkEx.ProgressHandlerRegistry do
 
   @spec clear(String.t()) :: :ok
   def clear(session_id) when is_binary(session_id) do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :bag)
 
     entries = :ets.lookup(@table, session_id)
 
@@ -77,18 +77,4 @@ defmodule SparkEx.ProgressHandlerRegistry do
     end
   end
 
-  defp ensure_table!() do
-    case :ets.whereis(@table) do
-      :undefined ->
-        try do
-          :ets.new(@table, [:named_table, :public, :bag])
-          :ok
-        rescue
-          ArgumentError -> :ok
-        end
-
-      _tid ->
-        :ok
-    end
-  end
 end

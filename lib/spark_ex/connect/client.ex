@@ -38,6 +38,7 @@ defmodule SparkEx.Connect.Client do
   @compile {:no_warn_undefined, Explorer.DataFrame}
 
   alias SparkEx.Connect.{Errors, ResultDecoder}
+  alias SparkEx.Internal.UUID
   alias SparkEx.{RetryPolicyRegistry, UserContextExtensions}
 
   require Logger
@@ -1024,7 +1025,13 @@ defmodule SparkEx.Connect.Client do
             end
 
           chunked = build_chunked_requests(session, name, data, chunk_size)
-          {Enum.reverse(chunked) ++ acc, [], 0}
+
+          acc =
+            Enum.reduce(chunked, acc, fn req, req_acc ->
+              [req | req_acc]
+            end)
+
+          {acc, [], 0}
         else
           if batch_size + data_size > chunk_size and batch != [] do
             acc = [build_batch_request(session, batch) | acc]
@@ -1432,9 +1439,11 @@ defmodule SparkEx.Connect.Client do
   end
 
   defp release_execute_best_effort(release_execute_fun, opts \\ []) do
-    Task.start(fn ->
+    Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
       release_execute_fun.(opts)
     end)
+
+    :ok
   end
 
   defp release_checkpoints_best_effort(release_execute_fun, responses) do
@@ -1450,7 +1459,7 @@ defmodule SparkEx.Connect.Client do
         :ok
 
       ids ->
-        Task.start(fn ->
+        Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
           ids
           |> Task.async_stream(
             fn response_id ->
@@ -1463,6 +1472,8 @@ defmodule SparkEx.Connect.Client do
           )
           |> Stream.run()
         end)
+
+        :ok
     end
   end
 
@@ -1602,27 +1613,7 @@ defmodule SparkEx.Connect.Client do
   defp response_id_or_nil(value), do: value
 
   defp generate_operation_id do
-    <<a::48, _::4, b::12, _::2, c::62>> = :crypto.strong_rand_bytes(16)
-
-    <<a::48, 4::4, b::12, 2::2, c::62>>
-    |> encode_uuid()
-  end
-
-  defp encode_uuid(<<a::32, b::16, c::16, d::16, e::48>>) do
-    hex = &Base.encode16(&1, case: :lower)
-
-    [
-      hex.(<<a::32>>),
-      "-",
-      hex.(<<b::16>>),
-      "-",
-      hex.(<<c::16>>),
-      "-",
-      hex.(<<d::16>>),
-      "-",
-      hex.(<<e::48>>)
-    ]
-    |> IO.iodata_to_binary()
+    UUID.generate_v4()
   end
 
   # --- Helpers ---

@@ -21,7 +21,7 @@ defmodule SparkEx.Observation do
   """
   @spec new(String.t()) :: t()
   def new(name) when is_binary(name) and name != "" do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
     %__MODULE__{name: name}
   end
 
@@ -32,7 +32,7 @@ defmodule SparkEx.Observation do
   """
   @spec get(t()) :: map()
   def get(%__MODULE__{name: name}) do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
 
     case :ets.lookup(@table, name) do
       [{^name, metrics}] -> metrics
@@ -44,7 +44,7 @@ defmodule SparkEx.Observation do
   @spec store_observed_metrics(map()) :: :ok
   def store_observed_metrics(observed_metrics) when is_map(observed_metrics) do
     if map_size(observed_metrics) > 0 do
-      ensure_table!()
+      SparkEx.EtsTableOwner.ensure_table!(@table, :set)
 
       Enum.each(observed_metrics, fn {name, metrics} ->
         :ets.insert(@table, {name, metrics})
@@ -105,18 +105,4 @@ defmodule SparkEx.Observation do
 
   def decode_literal(other), do: other
 
-  defp ensure_table!() do
-    case :ets.whereis(@table) do
-      :undefined ->
-        try do
-          :ets.new(@table, [:named_table, :public, :set])
-          :ok
-        rescue
-          ArgumentError -> :ok
-        end
-
-      _tid ->
-        :ok
-    end
-  end
 end

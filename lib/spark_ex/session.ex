@@ -14,6 +14,8 @@ defmodule SparkEx.Session do
   alias SparkEx.Connect.Client
   alias SparkEx.Connect.PlanEncoder
   alias SparkEx.Connect.TypeMapper
+  alias SparkEx.Internal.Tag
+  alias SparkEx.Internal.UUID
 
   defstruct [
     :channel,
@@ -102,7 +104,7 @@ defmodule SparkEx.Session do
   """
   @spec add_tag(GenServer.server(), String.t()) :: :ok
   def add_tag(session, tag) when is_binary(tag) do
-    validate_tag!(tag)
+    Tag.validate!(tag)
     GenServer.cast(session, {:add_tag, tag})
   end
 
@@ -638,7 +640,7 @@ defmodule SparkEx.Session do
     url_opt = Keyword.get(opts, :url)
     user_id = Keyword.get(opts, :user_id, "spark_ex")
     client_type = Keyword.get(opts, :client_type, default_client_type())
-    session_id = Keyword.get(opts, :session_id, generate_uuid())
+    session_id = Keyword.get(opts, :session_id, UUID.generate_v4())
     observed_server_session_id = Keyword.get(opts, :server_side_session_id, nil)
     allow_arrow_batch_chunking = Keyword.get(opts, :allow_arrow_batch_chunking, true)
     preferred_arrow_chunk_size = Keyword.get(opts, :preferred_arrow_chunk_size, nil)
@@ -721,8 +723,21 @@ defmodule SparkEx.Session do
     {:reply, id, %{state | plan_id_counter: id + 1}}
   end
 
-  def handle_call(:release_session, _from, %{released: true} = state) do
-    {:reply, :ok, state}
+  def handle_call(:release_session, _from, state) do
+    if state.released do
+      {:reply, :ok, state}
+    else
+      case Client.release_session(state) do
+        {:ok, server_side_session_id} ->
+          state = maybe_update_server_session(state, server_side_session_id)
+          Channel.disconnect(state.channel)
+          state = %{state | released: true, channel: nil}
+          {:reply, :ok, state}
+
+        {:error, _} = error ->
+          {:reply, error, state}
+      end
+    end
   end
 
   # --- Released guard: reject RPCs after session release ---
@@ -732,19 +747,6 @@ defmodule SparkEx.Session do
   end
 
   # --- Session lifecycle handlers ---
-
-  def handle_call(:release_session, _from, state) do
-    case Client.release_session(state) do
-      {:ok, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        Channel.disconnect(state.channel)
-        state = %{state | released: true, channel: nil}
-        {:reply, :ok, state}
-
-      {:error, _} = error ->
-        {:reply, error, state}
-    end
-  end
 
   def handle_call({:interrupt, type}, _from, state) do
     case Client.interrupt(state, type) do
@@ -1247,7 +1249,7 @@ defmodule SparkEx.Session do
 
   @impl true
   def handle_cast({:add_tag, tag}, state) do
-    validate_tag!(tag)
+    Tag.validate!(tag)
     {:noreply, %{state | tags: state.tags ++ [tag]}}
   end
 
@@ -1301,30 +1303,6 @@ defmodule SparkEx.Session do
 
   defp maybe_update_server_session(state, id) do
     %{state | server_side_session_id: id}
-  end
-
-  defp generate_uuid do
-    <<a::48, _::4, b::12, _::2, c::62>> = :crypto.strong_rand_bytes(16)
-
-    <<a::48, 4::4, b::12, 2::2, c::62>>
-    |> encode_uuid()
-  end
-
-  defp encode_uuid(<<a::32, b::16, c::16, d::16, e::48>>) do
-    hex = &Base.encode16(&1, case: :lower)
-
-    [
-      hex.(<<a::32>>),
-      "-",
-      hex.(<<b::16>>),
-      "-",
-      hex.(<<c::16>>),
-      "-",
-      hex.(<<d::16>>),
-      "-",
-      hex.(<<e::48>>)
-    ]
-    |> IO.iodata_to_binary()
   end
 
   @spark_ex_version Mix.Project.config()[:version]
@@ -1429,20 +1407,28 @@ defmodule SparkEx.Session do
   end
 
   defp list_of_maps_to_explorer([first | _] = data) when is_map(first) do
-    ordered_keys =
-      Enum.reduce(data, [], fn row, acc ->
-        row
-        |> Map.keys()
-        |> Enum.map(&to_string/1)
-        |> Enum.reduce(acc, fn key, inner_acc ->
-          if key in inner_acc, do: inner_acc, else: inner_acc ++ [key]
+    normalized_rows =
+      Enum.map(data, fn row ->
+        Map.new(row, fn {key, value} -> {to_string(key), value} end)
+      end)
+
+    {_seen, ordered_keys_rev} =
+      Enum.reduce(normalized_rows, {MapSet.new(), []}, fn row, {seen, keys_rev} ->
+        Enum.reduce(row, {seen, keys_rev}, fn {key, _value}, {seen_acc, keys_acc} ->
+          if MapSet.member?(seen_acc, key) do
+            {seen_acc, keys_acc}
+          else
+            {MapSet.put(seen_acc, key), [key | keys_acc]}
+          end
         end)
       end)
+
+    ordered_keys = Enum.reverse(ordered_keys_rev)
 
     columns =
       ordered_keys
       |> Enum.map(fn key ->
-        values = Enum.map(data, fn row -> value_for_key(row, key) end)
+        values = Enum.map(normalized_rows, fn row -> Map.get(row, key) end)
         {key, values}
       end)
       |> Map.new()
@@ -1487,13 +1473,6 @@ defmodule SparkEx.Session do
   end
 
   defp forward_to_fs_artifact_name(dest_path), do: "forward_to_fs" <> dest_path
-
-  defp value_for_key(row, key_name) do
-    case Enum.find(row, fn {key, _value} -> to_string(key) == key_name end) do
-      {_key, value} -> value
-      nil -> nil
-    end
-  end
 
   defp upload_missing_cache_artifacts(state, artifacts) do
     names = Enum.map(artifacts, fn {name, _data} -> name end)
@@ -1549,13 +1528,4 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp validate_tag!(""), do: raise(ArgumentError, "Spark Connect tag must be a non-empty string")
-
-  defp validate_tag!(tag) when is_binary(tag) do
-    if String.contains?(tag, ",") do
-      raise ArgumentError, "Spark Connect tag cannot contain ','"
-    end
-
-    :ok
-  end
 end

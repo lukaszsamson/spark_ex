@@ -19,14 +19,14 @@ defmodule SparkEx.UserContextExtensions do
 
   @spec add_global_user_context_extension(Any.t()) :: :ok
   def add_global_user_context_extension(%Any{} = extension) do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
     :ets.insert(@table, {extension.type_url, extension})
     :ok
   end
 
   @spec remove_user_context_extension(String.t()) :: :ok
   def remove_user_context_extension(extension_id) when is_binary(extension_id) do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
     :ets.delete(@table, extension_id)
 
     extensions = threadlocal_extensions()
@@ -36,7 +36,7 @@ defmodule SparkEx.UserContextExtensions do
 
   @spec clear_user_context_extensions() :: :ok
   def clear_user_context_extensions() do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
     :ets.delete_all_objects(@table)
     Process.put(@thread_key, %{})
     :ok
@@ -50,7 +50,7 @@ defmodule SparkEx.UserContextExtensions do
   @doc false
   @spec collect_extensions([Any.t()]) :: [Any.t()]
   def collect_extensions(extra \\ []) when is_list(extra) do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
 
     extensions =
       extra
@@ -75,25 +75,11 @@ defmodule SparkEx.UserContextExtensions do
   end
 
   defp global_extensions() do
-    ensure_table!()
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
 
     @table
     |> :ets.tab2list()
     |> Map.new(fn {id, extension} -> {id, extension} end)
   end
 
-  defp ensure_table!() do
-    case :ets.whereis(@table) do
-      :undefined ->
-        try do
-          :ets.new(@table, [:named_table, :public, :set])
-          :ok
-        rescue
-          ArgumentError -> :ok
-        end
-
-      _tid ->
-        :ok
-    end
-  end
 end

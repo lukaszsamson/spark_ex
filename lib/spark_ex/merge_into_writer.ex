@@ -62,14 +62,14 @@ defmodule SparkEx.MergeIntoWriter do
   @spec when_matched_delete(t(), Column.t() | nil) :: t()
   def when_matched_delete(%__MODULE__{} = m, condition \\ nil) do
     action = {:delete, normalize_condition(condition), []}
-    %{m | match_actions: m.match_actions ++ [action]}
+    %{m | match_actions: [action | m.match_actions]}
   end
 
   @doc "Updates all columns of matched rows."
   @spec when_matched_update_all(t(), Column.t() | nil) :: t()
   def when_matched_update_all(%__MODULE__{} = m, condition \\ nil) do
     action = {:update_star, normalize_condition(condition), []}
-    %{m | match_actions: m.match_actions ++ [action]}
+    %{m | match_actions: [action | m.match_actions]}
   end
 
   @doc """
@@ -81,7 +81,7 @@ defmodule SparkEx.MergeIntoWriter do
   def when_matched_update(%__MODULE__{} = m, assignments, condition \\ nil)
       when is_map(assignments) do
     action = {:update, normalize_condition(condition), normalize_assignments(assignments)}
-    %{m | match_actions: m.match_actions ++ [action]}
+    %{m | match_actions: [action | m.match_actions]}
   end
 
   # ── whenNotMatched actions ──
@@ -90,7 +90,7 @@ defmodule SparkEx.MergeIntoWriter do
   @spec when_not_matched_insert_all(t(), Column.t() | nil) :: t()
   def when_not_matched_insert_all(%__MODULE__{} = m, condition \\ nil) do
     action = {:insert_star, normalize_condition(condition), []}
-    %{m | not_matched_actions: m.not_matched_actions ++ [action]}
+    %{m | not_matched_actions: [action | m.not_matched_actions]}
   end
 
   @doc """
@@ -102,7 +102,7 @@ defmodule SparkEx.MergeIntoWriter do
   def when_not_matched_insert(%__MODULE__{} = m, assignments, condition \\ nil)
       when is_map(assignments) do
     action = {:insert, normalize_condition(condition), normalize_assignments(assignments)}
-    %{m | not_matched_actions: m.not_matched_actions ++ [action]}
+    %{m | not_matched_actions: [action | m.not_matched_actions]}
   end
 
   # ── whenNotMatchedBySource actions ──
@@ -111,14 +111,14 @@ defmodule SparkEx.MergeIntoWriter do
   @spec when_not_matched_by_source_delete(t(), Column.t() | nil) :: t()
   def when_not_matched_by_source_delete(%__MODULE__{} = m, condition \\ nil) do
     action = {:delete, normalize_condition(condition), []}
-    %{m | not_matched_by_source_actions: m.not_matched_by_source_actions ++ [action]}
+    %{m | not_matched_by_source_actions: [action | m.not_matched_by_source_actions]}
   end
 
   @doc "Updates all columns of target rows not matched by source."
   @spec when_not_matched_by_source_update_all(t(), Column.t() | nil) :: t()
   def when_not_matched_by_source_update_all(%__MODULE__{} = m, condition \\ nil) do
     action = {:update_star, normalize_condition(condition), []}
-    %{m | not_matched_by_source_actions: m.not_matched_by_source_actions ++ [action]}
+    %{m | not_matched_by_source_actions: [action | m.not_matched_by_source_actions]}
   end
 
   @doc """
@@ -131,7 +131,7 @@ defmodule SparkEx.MergeIntoWriter do
   def when_not_matched_by_source_update(%__MODULE__{} = m, assignments, condition \\ nil)
       when is_map(assignments) do
     action = {:update, normalize_condition(condition), normalize_assignments(assignments)}
-    %{m | not_matched_by_source_actions: m.not_matched_by_source_actions ++ [action]}
+    %{m | not_matched_by_source_actions: [action | m.not_matched_by_source_actions]}
   end
 
   @doc "Enables schema evolution for the merge operation."
@@ -152,8 +152,9 @@ defmodule SparkEx.MergeIntoWriter do
 
   def merge(%__MODULE__{} = m) do
     command =
-      {:merge_into_table, m.source_df.plan, m.target_table, m.condition, m.match_actions,
-       m.not_matched_actions, m.not_matched_by_source_actions, m.schema_evolution}
+      {:merge_into_table, m.source_df.plan, m.target_table, m.condition, Enum.reverse(m.match_actions),
+       Enum.reverse(m.not_matched_actions), Enum.reverse(m.not_matched_by_source_actions),
+       m.schema_evolution}
 
     SparkEx.Session.execute_command(m.source_df.session, command)
   end
