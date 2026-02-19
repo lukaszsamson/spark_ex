@@ -27,8 +27,11 @@ defmodule SparkEx.Integration.DataFrameCheckpointTest do
         assert Enum.map(rows, & &1["id"]) == [0, 1, 2]
 
       {:error, %SparkEx.Error.Remote{} = error} ->
-        assert error.error_class in ["_LEGACY_ERROR_TEMP_3016", "CANNOT_MODIFY_CONFIG"]
-        assert is_binary(error.message)
+        if error.error_class in ["_LEGACY_ERROR_TEMP_3016", "CANNOT_MODIFY_CONFIG"] do
+          assert is_binary(error.message)
+        else
+          flunk("unexpected checkpoint error: #{inspect(error)}")
+        end
     end
   end
 
@@ -42,8 +45,11 @@ defmodule SparkEx.Integration.DataFrameCheckpointTest do
         assert Enum.map(rows, & &1["id"]) == [0, 1]
 
       {:error, %SparkEx.Error.Remote{} = error} ->
-        assert error.error_class in ["_LEGACY_ERROR_TEMP_3016", "CANNOT_MODIFY_CONFIG"]
-        assert is_binary(error.message)
+        if error.error_class in ["_LEGACY_ERROR_TEMP_3016", "CANNOT_MODIFY_CONFIG"] do
+          assert is_binary(error.message)
+        else
+          flunk("unexpected checkpoint error: #{inspect(error)}")
+        end
     end
   end
 

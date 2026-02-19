@@ -71,7 +71,11 @@ defmodule SparkEx.Integration.ArtifactHelpersTest do
           assert File.read!(dest_path) == "hello from local file"
 
         {:error, %SparkEx.Error.Remote{message: message}} ->
-          assert message =~ "not supported"
+          if message =~ "not supported" do
+            assert message =~ "not supported"
+          else
+            flunk("unexpected copy_from_local_to_fs error: #{inspect(message)}")
+          end
       end
     end
 

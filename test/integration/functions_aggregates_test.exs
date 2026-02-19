@@ -35,7 +35,7 @@ defmodule SparkEx.Integration.FunctionsAggregatesTest do
 
     assert Enum.sort(row["vals_list"]) == ["a", "b", "b"]
     assert Enum.sort(row["vals_set"]) == ["a", "b"]
-    assert row["first_val"] in ["a", "b"]
-    assert row["last_val"] in ["a", "b"]
+    assert row["first_val"] == "a"
+    assert row["last_val"] == "b"
   end
 end

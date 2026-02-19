@@ -47,7 +47,11 @@ defmodule SparkEx.Integration.WriterV2Test do
                    SparkEx.sql(session, "SELECT * FROM #{table_name}") |> DataFrame.count()
 
         {:error, %SparkEx.Error.Remote{message: message}} ->
-          assert message =~ "Cannot write into v1 table"
+          if message =~ "Cannot write into v1 table" do
+            assert message =~ "Cannot write into v1 table"
+          else
+            flunk("unexpected WriterV2.append error: #{inspect(message)}")
+          end
 
         other ->
           flunk("unexpected append result: #{inspect(other)}")
@@ -59,8 +63,12 @@ defmodule SparkEx.Integration.WriterV2Test do
                    SparkEx.sql(session, "SELECT * FROM #{table_name}") |> DataFrame.count()
 
         {:error, %SparkEx.Error.Remote{message: message}} ->
-          assert message =~ "Cannot write into v1 table" or
-                   message =~ "does not support REPLACE TABLE AS SELECT"
+          if message =~ "Cannot write into v1 table" or
+               message =~ "does not support REPLACE TABLE AS SELECT" do
+            assert is_binary(message)
+          else
+            flunk("unexpected WriterV2.replace error: #{inspect(message)}")
+          end
 
         other ->
           flunk("unexpected replace result: #{inspect(other)}")
@@ -97,7 +105,11 @@ defmodule SparkEx.Integration.WriterV2Test do
           assert Enum.find(rows, fn row -> row["id"] == 2 end)["value"] == "bb"
 
         {:error, %SparkEx.Error.Remote{message: message}} ->
-          assert message =~ "Cannot write into v1 table"
+          if message =~ "Cannot write into v1 table" do
+            assert message =~ "Cannot write into v1 table"
+          else
+            flunk("unexpected WriterV2.overwrite error: #{inspect(message)}")
+          end
 
         other ->
           flunk("unexpected overwrite result: #{inspect(other)}")
@@ -141,7 +153,11 @@ defmodule SparkEx.Integration.WriterV2Test do
           assert Enum.any?(rows, fn row -> row["id"] == 10 and row["part"] == "A" end)
 
         {:error, %SparkEx.Error.Remote{message: message}} ->
-          assert message =~ "Cannot write into v1 table"
+          if message =~ "Cannot write into v1 table" do
+            assert message =~ "Cannot write into v1 table"
+          else
+            flunk("unexpected WriterV2.overwrite_partitions error: #{inspect(message)}")
+          end
 
         other ->
           flunk("unexpected overwrite_partitions result: #{inspect(other)}")

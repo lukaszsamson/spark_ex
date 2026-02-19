@@ -229,12 +229,11 @@ defmodule SparkEx.Integration.M13.NAStatTest do
       desc = Stat.describe(df)
       {:ok, rows} = DataFrame.collect(desc)
 
-      # describe returns rows with summary statistics: count, mean, stddev, min, max
-      summaries = Enum.map(rows, & &1["summary"])
-      assert "count" in summaries
-      assert "mean" in summaries
-      assert "min" in summaries
-      assert "max" in summaries
+      summaries = Map.new(rows, &{&1["summary"], &1})
+      assert summaries["count"]["num"] == "5"
+      assert summaries["min"]["num"] == "1"
+      assert summaries["max"]["num"] == "5"
+      assert summaries["mean"]["num"] == "3.0"
     end
 
     test "describe with specific columns", %{session: session} do
@@ -271,10 +270,10 @@ defmodule SparkEx.Integration.M13.NAStatTest do
       summ = Stat.summary(df, ["count", "min", "max"])
       {:ok, rows} = DataFrame.collect(summ)
 
-      summaries = Enum.map(rows, & &1["summary"])
-      assert "count" in summaries
-      assert "min" in summaries
-      assert "max" in summaries
+      summaries = Map.new(rows, &{&1["summary"], &1})
+      assert summaries["count"]["value"] == "5"
+      assert summaries["min"]["value"] == "1"
+      assert summaries["max"]["value"] == "5"
     end
   end
 

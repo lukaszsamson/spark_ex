@@ -28,7 +28,6 @@ defmodule SparkEx.Integration.ObservationTest do
     assert {:ok, _} = DataFrame.collect(df)
 
     metrics = Observation.get(obs)
-    assert is_map(metrics)
-    assert Map.has_key?(metrics, "sum_id")
+    assert metrics == %{"sum_id" => 10}
   end
 end

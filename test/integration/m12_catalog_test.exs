@@ -200,7 +200,7 @@ defmodule SparkEx.Integration.M12.CatalogTest do
       assert {:ok, false} = Catalog.is_cached?(session, view_name)
 
       # Clean up
-      Catalog.drop_temp_view(session, view_name)
+      assert {:ok, true} = Catalog.drop_temp_view(session, view_name)
     end
 
     test "clear_cache works", %{session: session} do
@@ -217,7 +217,7 @@ defmodule SparkEx.Integration.M12.CatalogTest do
       assert {:ok, false} = Catalog.is_cached?(session, view_name)
 
       # Clean up
-      Catalog.drop_temp_view(session, view_name)
+      assert {:ok, true} = Catalog.drop_temp_view(session, view_name)
     end
   end
 
@@ -240,12 +240,12 @@ defmodule SparkEx.Integration.M12.CatalogTest do
       SparkEx.DataFrame.create_temp_view(df, view_name)
 
       # Cache it first so refresh has something to do
-      Catalog.cache_table(session, view_name)
+      assert :ok = Catalog.cache_table(session, view_name)
       assert :ok = Catalog.refresh_table(session, view_name)
 
       # Clean up
-      Catalog.uncache_table(session, view_name)
-      Catalog.drop_temp_view(session, view_name)
+      assert :ok = Catalog.uncache_table(session, view_name)
+      assert {:ok, true} = Catalog.drop_temp_view(session, view_name)
     end
   end
 end

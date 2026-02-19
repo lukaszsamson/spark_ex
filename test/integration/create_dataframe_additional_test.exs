@@ -38,9 +38,13 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
         assert meta["k"] == "v"
 
       {:error, %SparkEx.Error.Remote{} = error} ->
-        assert error.error_class == "UNSUPPORTED_ARROWTYPE"
-        assert error.message_parameters["typeName"] == "LargeList"
-        assert error.sql_state == "0A000"
+        if error.error_class == "UNSUPPORTED_ARROWTYPE" and
+             error.message_parameters["typeName"] == "LargeList" and
+             error.sql_state == "0A000" do
+          assert error.message =~ "Unsupported arrow type LargeList"
+        else
+          flunk("unexpected create_dataframe nested-types error: #{inspect(error)}")
+        end
     end
   end
 
@@ -55,9 +59,13 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
         assert row["note"] == nil
 
       {:error, %SparkEx.Error.Remote{} = error} ->
-        assert error.error_class == "INVALID_COLUMN_OR_FIELD_DATA_TYPE"
-        assert error.message_parameters["expectedType"] == "\"INT\""
-        assert error.sql_state == "42000"
+        if error.error_class == "INVALID_COLUMN_OR_FIELD_DATA_TYPE" and
+             error.message_parameters["expectedType"] == "\"INT\"" and
+             error.sql_state == "42000" do
+          assert error.message_parameters["type"] == "\"STRING\""
+        else
+          flunk("unexpected coercion error: #{inspect(error)}")
+        end
     end
   end
 

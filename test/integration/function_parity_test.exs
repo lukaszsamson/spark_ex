@@ -33,7 +33,9 @@ defmodule SparkEx.Integration.FunctionParityTest do
       column = apply(Functions, name, [Functions.col("id")])
       projected = DataFrame.select(df, [column])
 
-      assert {:ok, _rows} = DataFrame.collect(projected)
+      assert {:ok, [row]} = DataFrame.collect(projected)
+      assert map_size(row) == 1
+      assert row |> Map.values() |> hd() != nil
     end)
   end
 

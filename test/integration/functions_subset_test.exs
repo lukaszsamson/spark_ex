@@ -54,8 +54,12 @@ defmodule SparkEx.Integration.FunctionsSubsetTest do
         assert row["decoded"] in [%{"id" => 1}, %{"id" => 1.0}]
 
       {:error, %SparkEx.Error.Remote{} = error} ->
-        assert error.error_class == "AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
-        assert error.sql_state == "22KD3"
+        if error.error_class == "AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE" and
+             error.sql_state == "22KD3" do
+          assert error.message_parameters["functionName"] == "FROM_AVRO"
+        else
+          flunk("unexpected avro roundtrip error: #{inspect(error)}")
+        end
     end
   end
 
@@ -82,8 +86,12 @@ defmodule SparkEx.Integration.FunctionsSubsetTest do
         assert row["decoded"] in [%{"id" => 1}, %{"id" => 1.0}]
 
       {:error, %SparkEx.Error.Remote{} = error} ->
-        assert error.error_class == "PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
-        assert is_binary(error.message)
+        if error.error_class == "PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND" do
+          assert is_binary(error.message)
+          assert error.message =~ "descriptor"
+        else
+          flunk("unexpected protobuf roundtrip error: #{inspect(error)}")
+        end
     end
   end
 

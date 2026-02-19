@@ -28,9 +28,9 @@ defmodule SparkEx.Integration.SessionPostStopTest do
       try do
         DataFrame.collect(df)
       catch
-        :exit, _ -> :exit
+        :exit, reason -> {:exit, reason}
       end
 
-    assert result == :exit or match?({:error, _}, result)
+    assert match?({:error, :session_released}, result) or match?({:exit, _}, result)
   end
 end

@@ -32,8 +32,7 @@ defmodule SparkEx.Integration.ArtifactTest do
       assert map_size(statuses) == 3
 
       Enum.each(names, fn name ->
-        assert Map.has_key?(statuses, name)
-        assert is_boolean(statuses[name])
+        assert Map.get(statuses, name) == false
       end)
     end
 

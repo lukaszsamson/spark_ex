@@ -25,13 +25,16 @@ defmodule SparkEx.TypesSerdeTest do
     assert length(decoded["fields"]) == 4
 
     detail = Enum.find(decoded["fields"], &(&1["name"] == "detail"))
+    refute is_nil(detail)
     assert detail["type"]["type"] == "struct"
 
     tags = Enum.find(decoded["fields"], &(&1["name"] == "tags"))
+    refute is_nil(tags)
     assert tags["type"]["type"] == "array"
     assert tags["type"]["elementType"] == "string"
 
     meta = Enum.find(decoded["fields"], &(&1["name"] == "meta"))
+    refute is_nil(meta)
     assert meta["type"]["type"] == "map"
     assert meta["type"]["keyType"] == "string"
     assert meta["type"]["valueType"] == "long"

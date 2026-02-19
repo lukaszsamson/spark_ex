@@ -56,7 +56,7 @@ defmodule SparkEx.Integration.ConfigOpsTest do
                SparkEx.config_get_option(session, ["spark.nonexistent.option.test.m7"])
 
       assert key == "spark.nonexistent.option.test.m7"
-      assert is_nil(val) or val == ""
+      assert normalize_optional_value(val) == nil
     end
   end
 
@@ -90,7 +90,7 @@ defmodule SparkEx.Integration.ConfigOpsTest do
 
       # After unset, get_option should return nil/empty
       assert {:ok, [{_, val}]} = SparkEx.config_get_option(session, ["spark.test.unset.key.m7"])
-      assert is_nil(val) or val == ""
+      assert normalize_optional_value(val) == nil
     end
   end
 
@@ -106,4 +106,7 @@ defmodule SparkEx.Integration.ConfigOpsTest do
       assert val in ["true", "false"]
     end
   end
+
+  defp normalize_optional_value(""), do: nil
+  defp normalize_optional_value(value), do: value
 end

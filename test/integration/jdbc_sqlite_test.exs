@@ -39,12 +39,12 @@ defmodule SparkEx.Integration.JdbcSqliteTest do
         assert Enum.sort(Enum.map(rows, & &1["name"])) == ["a", "b"]
 
       {:error, %SparkEx.Error.Remote{} = error} ->
-        assert is_binary(error.message)
-        assert String.contains?(error.message, "no such table")
-
-        read_df = Reader.jdbc(session, url, "people", options: driver)
-        assert {:error, %SparkEx.Error.Remote{} = read_error} = DataFrame.collect(read_df)
-        assert String.contains?(read_error.message || "", "no such table")
+        if is_binary(error.message) and String.contains?(error.message, "no such table") do
+          assert error.grpc_status == 13
+          assert error.message =~ "no such table"
+        else
+          flunk("unexpected jdbc write error: #{inspect(error)}")
+        end
     end
   end
 end

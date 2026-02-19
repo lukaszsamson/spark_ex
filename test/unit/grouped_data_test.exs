@@ -45,7 +45,9 @@ defmodule SparkEx.GroupedDataTest do
         |> GroupedData.agg([Functions.avg(Functions.col("salary"))])
 
       assert %DataFrame{
-               plan: {:aggregate, {:sql, _, _}, :groupby, [{:col, "dept"}], _}
+               plan:
+                 {:aggregate, {:sql, "SELECT * FROM t", nil}, :groupby, [{:col, "dept"}],
+                  [{:fn, "avg", [{:col, "salary"}], false}]}
              } = result
     end
 

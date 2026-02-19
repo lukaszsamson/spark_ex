@@ -155,19 +155,22 @@ defmodule SparkEx.DataFrameTest do
     test "creates project plan from Column structs" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.select(df, [Functions.col("a"), Functions.col("b")])
-      assert %DataFrame{plan: {:project, {:sql, _, _}, [{:col, "a"}, {:col, "b"}]}} = result
+      assert %DataFrame{plan: {:project, {:sql, "SELECT * FROM t", nil}, [{:col, "a"}, {:col, "b"}]}} =
+               result
     end
 
     test "creates project plan from string column names" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.select(df, ["a", "b"])
-      assert %DataFrame{plan: {:project, {:sql, _, _}, [{:col, "a"}, {:col, "b"}]}} = result
+      assert %DataFrame{plan: {:project, {:sql, "SELECT * FROM t", nil}, [{:col, "a"}, {:col, "b"}]}} =
+               result
     end
 
     test "creates project plan from atom column names" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.select(df, [:a, :b])
-      assert %DataFrame{plan: {:project, {:sql, _, _}, [{:col, "a"}, {:col, "b"}]}} = result
+      assert %DataFrame{plan: {:project, {:sql, "SELECT * FROM t", nil}, [{:col, "a"}, {:col, "b"}]}} =
+               result
     end
   end
 

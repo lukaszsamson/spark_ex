@@ -282,7 +282,7 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
     end
   end
 
-  defp wait_for_interrupt(_session, _tag, 0), do: {:ok, []}
+  defp wait_for_interrupt(_session, tag, 0), do: {:error, {:interrupt_timeout, tag}}
 
   defp wait_for_interrupt(session, tag, attempts_left) do
     case SparkEx.interrupt_tag(session, tag) do

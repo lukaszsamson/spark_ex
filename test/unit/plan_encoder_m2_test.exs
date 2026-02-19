@@ -63,7 +63,7 @@ defmodule SparkEx.Connect.PlanEncoderM2Test do
       {plan, counter} = PlanEncoder.encode(plan_tuple, 0)
 
       assert %Plan{op_type: {:root, %Relation{rel_type: {:project, proj}}}} = plan
-      assert %Relation{rel_type: {:sql, _}} = proj.input
+      assert %Relation{rel_type: {:sql, %Spark.Connect.SQL{query: "SELECT * FROM t"}}} = proj.input
       assert length(proj.expressions) == 2
 
       [expr_a, expr_b] = proj.expressions
@@ -80,7 +80,7 @@ defmodule SparkEx.Connect.PlanEncoderM2Test do
       {plan, counter} = PlanEncoder.encode(plan_tuple, 0)
 
       assert %Plan{op_type: {:root, %Relation{rel_type: {:filter, filt}}}} = plan
-      assert %Relation{rel_type: {:sql, _}} = filt.input
+      assert %Relation{rel_type: {:sql, %Spark.Connect.SQL{query: "SELECT * FROM t"}}} = filt.input
       assert {:unresolved_function, func} = filt.condition.expr_type
       assert func.function_name == ">"
       assert length(func.arguments) == 2
@@ -99,7 +99,7 @@ defmodule SparkEx.Connect.PlanEncoderM2Test do
       {plan, counter} = PlanEncoder.encode(plan_tuple, 0)
 
       assert %Plan{op_type: {:root, %Relation{rel_type: {:sort, sort}}}} = plan
-      assert %Relation{rel_type: {:sql, _}} = sort.input
+      assert %Relation{rel_type: {:sql, %Spark.Connect.SQL{query: "SELECT * FROM t"}}} = sort.input
       assert sort.is_global == true
       assert length(sort.order) == 2
 
