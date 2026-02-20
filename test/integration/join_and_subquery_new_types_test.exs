@@ -74,4 +74,16 @@ defmodule SparkEx.Integration.JoinAndSubqueryNewTypesTest do
     assert {:ok, rows} = DataFrame.collect(df)
     assert Enum.map(rows, & &1["id"]) == [1, 3]
   end
+
+  test "isin with DataFrame subquery plans with subquery expression", %{session: session} do
+    subquery = SparkEx.sql(session, "SELECT * FROM VALUES (1), (3) AS t(id)")
+
+    df =
+      SparkEx.range(session, 5)
+      |> DataFrame.filter(Column.isin(Functions.col("id"), subquery))
+      |> DataFrame.order_by(["id"])
+
+    assert {:ok, explain_str} = DataFrame.explain(df, :extended)
+    assert String.contains?(String.downcase(explain_str), "subquery")
+  end
 end

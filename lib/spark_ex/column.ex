@@ -17,6 +17,8 @@ defmodule SparkEx.Column do
       col("score") |> SparkEx.Column.desc()
   """
 
+  alias SparkEx.DataFrame
+
   defstruct [:expr]
 
   @type t :: %__MODULE__{expr: expr()}
@@ -125,8 +127,14 @@ defmodule SparkEx.Column do
 
   # ── Membership / range ──
 
-  @doc "Returns true if the column value is in the given list of values."
-  @spec isin(t(), [term()]) :: t()
+  @doc "Returns true if the column value is in the given list of values or subquery DataFrame."
+  @spec isin(t(), [term()] | DataFrame.t()) :: t()
+  def isin(%__MODULE__{} = col, %DataFrame{} = df) do
+    %__MODULE__{expr: {:subquery, :in, df.plan, [in_values: in_subquery_values(col.expr)]}}
+  end
+
+  def isin(%__MODULE__{} = col, [%DataFrame{} = df]), do: isin(col, df)
+
   def isin(%__MODULE__{} = col, values) when is_list(values) do
     value_exprs =
       Enum.map(values, fn
@@ -397,4 +405,7 @@ defmodule SparkEx.Column do
 
   defp coerce_expr(%__MODULE__{expr: e}), do: e
   defp coerce_expr(value), do: {:lit, value}
+
+  defp in_subquery_values({:fn, "struct", children, _is_distinct}), do: children
+  defp in_subquery_values(expr), do: [expr]
 end

@@ -2,6 +2,7 @@ defmodule SparkEx.M11.ColumnTest do
   use ExUnit.Case, async: true
 
   alias SparkEx.Column
+  alias SparkEx.DataFrame
   alias SparkEx.Functions
 
   # ── New binary operators with auto-coercion ──
@@ -137,6 +138,27 @@ defmodule SparkEx.M11.ColumnTest do
 
       assert %Column{
                expr: {:fn, "in", [{:col, "a"}, {:lit, 1}, {:lit, "two"}, {:col, "c"}], false}
+             } = result
+    end
+
+    test "creates in subquery expression with DataFrame" do
+      subquery = %DataFrame{session: self(), plan: {:sql, "SELECT id FROM t", nil}}
+      result = Column.isin(Functions.col("id"), subquery)
+
+      assert %Column{
+               expr:
+                 {:subquery, :in, {:sql, "SELECT id FROM t", nil}, [in_values: [{:col, "id"}]]}
+             } = result
+    end
+
+    test "expands struct lhs into in_subquery_values" do
+      subquery = %DataFrame{session: self(), plan: {:sql, "SELECT a, b FROM t", nil}}
+      result = Column.isin(Functions.struct([Functions.col("a"), Functions.col("b")]), subquery)
+
+      assert %Column{
+               expr:
+                 {:subquery, :in, {:sql, "SELECT a, b FROM t", nil},
+                  [in_values: [{:col, "a"}, {:col, "b"}]]}
              } = result
     end
   end
