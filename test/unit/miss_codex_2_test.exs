@@ -223,7 +223,9 @@ defmodule SparkEx.MissCodex2Test do
 
     test "still accepts list ids" do
       result = DataFrame.unpivot(make_df(), ["id1", "id2"], ["v1"], "key", "value")
-      assert %DataFrame{plan: {:unpivot, _, [{:col, "id1"}, {:col, "id2"}], _, "key", "value"}} = result
+
+      assert %DataFrame{plan: {:unpivot, _, [{:col, "id1"}, {:col, "id2"}], _, "key", "value"}} =
+               result
     end
   end
 
@@ -288,18 +290,21 @@ defmodule SparkEx.MissCodex2Test do
   describe "#15 as_of_join string columns" do
     test "accepts string left_as_of" do
       result = DataFrame.as_of_join(make_df(), make_df(), "t1", Functions.col("t2"))
+
       assert %DataFrame{plan: {:as_of_join, _, _, {:col, "t1"}, {:col, "t2"}, _, _, _, _, _, _}} =
                result
     end
 
     test "accepts string right_as_of" do
       result = DataFrame.as_of_join(make_df(), make_df(), Functions.col("t1"), "t2")
+
       assert %DataFrame{plan: {:as_of_join, _, _, {:col, "t1"}, {:col, "t2"}, _, _, _, _, _, _}} =
                result
     end
 
     test "accepts both strings" do
       result = DataFrame.as_of_join(make_df(), make_df(), "t1", "t2")
+
       assert %DataFrame{plan: {:as_of_join, _, _, {:col, "t1"}, {:col, "t2"}, _, _, _, _, _, _}} =
                result
     end
@@ -560,6 +565,7 @@ defmodule SparkEx.MissCodex2Test do
   describe "#30 grouping_sets with cols" do
     test "accepts explicit grouping columns" do
       result = DataFrame.grouping_sets(make_df(), [["a"], ["b"]], ["a", "b", "c"])
+
       assert %SparkEx.GroupedData{
                grouping_exprs: [{:col, "a"}, {:col, "b"}, {:col, "c"}],
                group_type: :grouping_sets
@@ -568,6 +574,7 @@ defmodule SparkEx.MissCodex2Test do
 
     test "still works without explicit cols" do
       result = DataFrame.grouping_sets(make_df(), [["a"], ["b"]])
+
       assert %SparkEx.GroupedData{
                grouping_exprs: [{:col, "a"}, {:col, "b"}],
                group_type: :grouping_sets
@@ -614,12 +621,12 @@ defmodule SparkEx.MissCodex2Test do
   describe "#51/#52 col_regex and metadata_column return Column" do
     test "col_regex returns Column" do
       result = DataFrame.col_regex(make_df(), "^x.*")
-      assert %Column{expr: {:col_regex, "^x.*"}} = result
+      assert %Column{expr: {:col_regex, "^x.*", {:sql, "SELECT 1", nil}}} = result
     end
 
     test "metadata_column returns Column" do
       result = DataFrame.metadata_column(make_df(), "_metadata")
-      assert %Column{expr: {:metadata_col, "_metadata"}} = result
+      assert %Column{expr: {:metadata_col, "_metadata", {:sql, "SELECT 1", nil}}} = result
     end
   end
 

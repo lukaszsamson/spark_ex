@@ -1280,11 +1280,31 @@ defmodule SparkEx.Connect.PlanEncoder do
   @doc """
   Encodes an internal expression representation into a `Spark.Connect.Expression` proto.
   """
+  def encode_expression({:col, name, plan_id}) when is_integer(plan_id) do
+    %Expression{
+      expr_type:
+        {:unresolved_attribute,
+         %Expression.UnresolvedAttribute{unparsed_identifier: name, plan_id: plan_id}}
+    }
+  end
+
   @spec encode_expression(term()) :: Expression.t()
   def encode_expression({:col, name}) do
     %Expression{
       expr_type:
         {:unresolved_attribute, %Expression.UnresolvedAttribute{unparsed_identifier: name}}
+    }
+  end
+
+  def encode_expression({:metadata_col, name, plan_id}) when is_integer(plan_id) do
+    %Expression{
+      expr_type:
+        {:unresolved_attribute,
+         %Expression.UnresolvedAttribute{
+           unparsed_identifier: name,
+           plan_id: plan_id,
+           is_metadata_column: true
+         }}
     }
   end
 
@@ -1303,6 +1323,13 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_expression({:expr, string}) do
     %Expression{
       expr_type: {:expression_string, %Expression.ExpressionString{expression: string}}
+    }
+  end
+
+  def encode_expression({:col_regex, name, plan_id}) when is_integer(plan_id) do
+    %Expression{
+      expr_type:
+        {:unresolved_regex, %Expression.UnresolvedRegex{col_name: name, plan_id: plan_id}}
     }
   end
 
@@ -1488,6 +1515,20 @@ defmodule SparkEx.Connect.PlanEncoder do
            direction: encode_sort_direction(direction),
            null_ordering: encode_null_ordering(null_ordering)
          }}
+    }
+  end
+
+  def encode_expression({:star, nil, plan_id}) when is_integer(plan_id) do
+    %Expression{
+      expr_type: {:unresolved_star, %Expression.UnresolvedStar{plan_id: plan_id}}
+    }
+  end
+
+  def encode_expression({:star, target, plan_id})
+      when is_binary(target) and is_integer(plan_id) do
+    %Expression{
+      expr_type:
+        {:unresolved_star, %Expression.UnresolvedStar{unparsed_target: target, plan_id: plan_id}}
     }
   end
 
@@ -2181,6 +2222,16 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_expr({:col, _} = expr, plan_ids, refs, counter),
     do: {expr, plan_ids, refs, counter}
 
+  defp rewrite_expr({:col, name, plan_id} = expr, plan_ids, refs, counter)
+       when is_binary(name) and is_integer(plan_id),
+       do: {expr, plan_ids, refs, counter}
+
+  defp rewrite_expr({:col, name, referenced_plan}, plan_ids, refs, counter)
+       when is_binary(name) do
+    {plan_ids, refs, plan_id, counter} = ensure_plan_id(referenced_plan, plan_ids, refs, counter)
+    {{:col, name, plan_id}, plan_ids, refs, counter}
+  end
+
   defp rewrite_expr({:lit, _} = expr, plan_ids, refs, counter),
     do: {expr, plan_ids, refs, counter}
 
@@ -2191,6 +2242,36 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp rewrite_expr({:star, _} = expr, plan_ids, refs, counter),
     do: {expr, plan_ids, refs, counter}
+
+  defp rewrite_expr({:star, target, plan_id} = expr, plan_ids, refs, counter)
+       when (is_binary(target) or is_nil(target)) and is_integer(plan_id),
+       do: {expr, plan_ids, refs, counter}
+
+  defp rewrite_expr({:star, target, referenced_plan}, plan_ids, refs, counter)
+       when is_binary(target) or is_nil(target) do
+    {plan_ids, refs, plan_id, counter} = ensure_plan_id(referenced_plan, plan_ids, refs, counter)
+    {{:star, target, plan_id}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:metadata_col, name, plan_id} = expr, plan_ids, refs, counter)
+       when is_binary(name) and is_integer(plan_id),
+       do: {expr, plan_ids, refs, counter}
+
+  defp rewrite_expr({:metadata_col, name, referenced_plan}, plan_ids, refs, counter)
+       when is_binary(name) do
+    {plan_ids, refs, plan_id, counter} = ensure_plan_id(referenced_plan, plan_ids, refs, counter)
+    {{:metadata_col, name, plan_id}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:col_regex, name, plan_id} = expr, plan_ids, refs, counter)
+       when is_binary(name) and is_integer(plan_id),
+       do: {expr, plan_ids, refs, counter}
+
+  defp rewrite_expr({:col_regex, name, referenced_plan}, plan_ids, refs, counter)
+       when is_binary(name) do
+    {plan_ids, refs, plan_id, counter} = ensure_plan_id(referenced_plan, plan_ids, refs, counter)
+    {{:col_regex, name, plan_id}, plan_ids, refs, counter}
+  end
 
   defp rewrite_expr({:fn, name, args, is_distinct}, plan_ids, refs, counter) do
     {args, plan_ids, refs, counter} = rewrite_expr_list(args, plan_ids, refs, counter)
@@ -2369,8 +2450,13 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp encode_sql_argument({:col, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:col, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:lit, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:expr, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:col_regex, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:col_regex, _, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:metadata_col, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:metadata_col, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:fn, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:alias, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:sort_order, _, _, _} = expr), do: encode_expression(expr)
@@ -2378,6 +2464,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_sql_argument({:cast, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:star} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:star, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument({:star, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:window, _, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:unresolved_extract_value, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:lambda, _, _} = expr), do: encode_expression(expr)
@@ -2764,13 +2851,17 @@ defmodule SparkEx.Connect.PlanEncoder do
   # ROW frames use 32-bit integer, RANGE frames use 64-bit long
   defp encode_frame_boundary(n, :rows) when is_integer(n) do
     %Expression.Window.WindowFrame.FrameBoundary{
-      boundary: {:value, %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:integer, n}}}}}
+      boundary:
+        {:value,
+         %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:integer, n}}}}}
     }
   end
 
   defp encode_frame_boundary(n, :range) when is_integer(n) do
     %Expression.Window.WindowFrame.FrameBoundary{
-      boundary: {:value, %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:long, n}}}}}
+      boundary:
+        {:value,
+         %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:long, n}}}}}
     }
   end
 

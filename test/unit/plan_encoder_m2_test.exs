@@ -257,6 +257,12 @@ defmodule SparkEx.Connect.PlanEncoderM2Test do
       assert {:unresolved_star, star} = expr.expr_type
       assert star.unparsed_target == "t"
     end
+
+    test "encodes unresolved star with plan_id" do
+      expr = PlanEncoder.encode_expression({:star, nil, 13})
+      assert {:unresolved_star, star} = expr.expr_type
+      assert star.plan_id == 13
+    end
   end
 
   describe "nested expression encoding" do

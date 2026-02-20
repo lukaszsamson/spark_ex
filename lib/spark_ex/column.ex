@@ -25,8 +25,13 @@ defmodule SparkEx.Column do
 
   @type expr ::
           {:col, String.t()}
+          | {:col, String.t(), term()}
           | {:lit, term()}
           | {:expr, String.t()}
+          | {:col_regex, String.t()}
+          | {:col_regex, String.t(), term()}
+          | {:metadata_col, String.t()}
+          | {:metadata_col, String.t(), term()}
           | {:fn, String.t(), [expr()], boolean()}
           | {:alias, expr(), String.t()}
           | {:sort_order, expr(), :asc | :desc, :nulls_first | :nulls_last | nil}
@@ -34,6 +39,7 @@ defmodule SparkEx.Column do
           | {:cast, expr(), String.t(), :try}
           | {:star}
           | {:star, String.t()}
+          | {:star, String.t() | nil, term()}
           | {:window, expr(), [expr()], [expr()], term()}
           | {:unresolved_extract_value, expr(), expr()}
           | {:update_fields, expr(), String.t(), expr() | nil}

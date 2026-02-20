@@ -155,21 +155,30 @@ defmodule SparkEx.DataFrameTest do
     test "creates project plan from Column structs" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.select(df, [Functions.col("a"), Functions.col("b")])
-      assert %DataFrame{plan: {:project, {:sql, "SELECT * FROM t", nil}, [{:col, "a"}, {:col, "b"}]}} =
+
+      assert %DataFrame{
+               plan: {:project, {:sql, "SELECT * FROM t", nil}, [{:col, "a"}, {:col, "b"}]}
+             } =
                result
     end
 
     test "creates project plan from string column names" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.select(df, ["a", "b"])
-      assert %DataFrame{plan: {:project, {:sql, "SELECT * FROM t", nil}, [{:col, "a"}, {:col, "b"}]}} =
+
+      assert %DataFrame{
+               plan: {:project, {:sql, "SELECT * FROM t", nil}, [{:col, "a"}, {:col, "b"}]}
+             } =
                result
     end
 
     test "creates project plan from atom column names" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.select(df, [:a, :b])
-      assert %DataFrame{plan: {:project, {:sql, "SELECT * FROM t", nil}, [{:col, "a"}, {:col, "b"}]}} =
+
+      assert %DataFrame{
+               plan: {:project, {:sql, "SELECT * FROM t", nil}, [{:col, "a"}, {:col, "b"}]}
+             } =
                result
     end
   end
@@ -179,7 +188,8 @@ defmodule SparkEx.DataFrameTest do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.col_regex(df, "^name_.*")
 
-      assert %SparkEx.Column{expr: {:col_regex, "^name_.*"}} = result
+      assert %SparkEx.Column{expr: {:col_regex, "^name_.*", {:sql, "SELECT * FROM t", nil}}} =
+               result
     end
   end
 
@@ -188,7 +198,17 @@ defmodule SparkEx.DataFrameTest do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.metadata_column(df, "_metadata")
 
-      assert %SparkEx.Column{expr: {:metadata_col, "_metadata"}} = result
+      assert %SparkEx.Column{expr: {:metadata_col, "_metadata", {:sql, "SELECT * FROM t", nil}}} =
+               result
+    end
+  end
+
+  describe "col/2" do
+    test "returns Column with DataFrame-scoped col expression" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.col(df, "id")
+
+      assert %SparkEx.Column{expr: {:col, "id", {:sql, "SELECT * FROM t", nil}}} = result
     end
   end
 
@@ -317,7 +337,9 @@ defmodule SparkEx.DataFrameTest do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.sort(df, ["name"])
 
-      assert %DataFrame{plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, :nulls_first}]}} =
+      assert %DataFrame{
+               plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, :nulls_first}]}
+             } =
                result
     end
   end

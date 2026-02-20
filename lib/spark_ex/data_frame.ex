@@ -73,6 +73,20 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
+  Returns a column reference bound to this DataFrame plan.
+
+  Useful for disambiguating columns across joins/subqueries.
+  """
+  @spec col(t(), String.t() | atom()) :: Column.t()
+  def col(%__MODULE__{} = df, name) when is_binary(name) do
+    %Column{expr: {:col, name, df.plan}}
+  end
+
+  def col(%__MODULE__{} = df, name) when is_atom(name) do
+    col(df, Atom.to_string(name))
+  end
+
+  @doc """
   Selects columns by regex.
 
   ## Examples
@@ -80,8 +94,8 @@ defmodule SparkEx.DataFrame do
       df |> DataFrame.col_regex("^name_.*")
   """
   @spec col_regex(t(), String.t()) :: Column.t()
-  def col_regex(%__MODULE__{} = _df, pattern) when is_binary(pattern) do
-    %Column{expr: {:col_regex, pattern}}
+  def col_regex(%__MODULE__{} = df, pattern) when is_binary(pattern) do
+    %Column{expr: {:col_regex, pattern, df.plan}}
   end
 
   @doc """
@@ -92,8 +106,8 @@ defmodule SparkEx.DataFrame do
       df |> DataFrame.metadata_column("_metadata")
   """
   @spec metadata_column(t(), String.t()) :: Column.t()
-  def metadata_column(%__MODULE__{} = _df, name) when is_binary(name) do
-    %Column{expr: {:metadata_col, name}}
+  def metadata_column(%__MODULE__{} = df, name) when is_binary(name) do
+    %Column{expr: {:metadata_col, name, df.plan}}
   end
 
   @doc """
@@ -720,7 +734,9 @@ defmodule SparkEx.DataFrame do
       df |> DataFrame.repartition(10, [col("key")])
       df |> DataFrame.repartition([col("key")])
   """
-  @spec repartition(t(), pos_integer() | [Column.t() | String.t() | atom()], [Column.t() | String.t() | atom()]) :: t()
+  @spec repartition(t(), pos_integer() | [Column.t() | String.t() | atom()], [
+          Column.t() | String.t() | atom()
+        ]) :: t()
   def repartition(df, num_or_cols, cols \\ [])
 
   def repartition(%__MODULE__{} = df, cols, []) when is_list(cols) and cols != [] do
@@ -784,7 +800,8 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.sort_within_partitions(["key"])
   """
-  @spec sort_within_partitions(t(), [Column.t() | String.t() | atom() | integer()], keyword()) :: t()
+  @spec sort_within_partitions(t(), [Column.t() | String.t() | atom() | integer()], keyword()) ::
+          t()
   def sort_within_partitions(%__MODULE__{} = df, columns, opts \\ []) when is_list(columns) do
     if columns == [] do
       raise ArgumentError, "cols should not be empty for sort_within_partitions"
@@ -1253,7 +1270,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec to_json_rows(t()) :: t()
   def to_json_rows(%__MODULE__{} = df) do
-    to_json_expr = {:fn, "to_json", [{:fn, "struct", [{:star}], false}], false}
+    to_json_expr = {:fn, "to_json", [{:fn, "struct", [{:star, nil, df.plan}], false}], false}
     %__MODULE__{df | plan: {:project, df.plan, [{:alias, to_json_expr, "value"}]}}
   end
 
@@ -1609,7 +1626,8 @@ defmodule SparkEx.DataFrame do
   """
   @spec to(t(), Spark.Connect.DataType.t() | String.t() | SparkEx.Types.struct_type()) :: t()
   def to(%__MODULE__{} = df, schema) do
-    unless is_binary(schema) or is_map(schema) or (is_tuple(schema) and elem(schema, 0) == :struct) do
+    unless is_binary(schema) or is_map(schema) or
+             (is_tuple(schema) and elem(schema, 0) == :struct) do
       raise ArgumentError,
             "expected schema to be a DDL string, Spark DataType, or SparkEx.Types struct, got: #{inspect(schema)}"
     end
@@ -2024,7 +2042,8 @@ defmodule SparkEx.DataFrame do
   end
 
   @spec merge_into(t(), String.t(), Column.t()) :: SparkEx.MergeIntoWriter.t()
-  def merge_into(%__MODULE__{} = df, table_name, %Column{} = condition) when is_binary(table_name) do
+  def merge_into(%__MODULE__{} = df, table_name, %Column{} = condition)
+      when is_binary(table_name) do
     SparkEx.MergeIntoWriter.new(df, table_name) |> SparkEx.MergeIntoWriter.on(condition)
   end
 
@@ -2090,8 +2109,12 @@ defmodule SparkEx.DataFrame do
   defp normalize_column_expr(name) when is_binary(name), do: {:col, name}
   defp normalize_column_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
   defp normalize_column_expr(idx) when is_integer(idx), do: {:col, "_c#{idx}"}
+  defp normalize_column_expr({:col, _, _} = expr), do: expr
+  defp normalize_column_expr({:star, _, _} = expr), do: expr
   defp normalize_column_expr({:col_regex, _} = expr), do: expr
+  defp normalize_column_expr({:col_regex, _, _} = expr), do: expr
   defp normalize_column_expr({:metadata_col, _} = expr), do: expr
+  defp normalize_column_expr({:metadata_col, _, _} = expr), do: expr
 
   defp normalize_dedup_column(%Column{expr: {:col, name}}), do: name
 

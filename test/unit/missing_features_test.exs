@@ -151,7 +151,9 @@ defmodule SparkEx.MissingFeaturesTest do
   describe "from_json/2" do
     test "creates from_json expression without options" do
       result = Functions.from_json(Functions.col("data"), "a INT, b STRING")
-      assert %Column{expr: {:fn, "from_json", [{:col, "data"}, {:lit, "a INT, b STRING"}], false}} = result
+
+      assert %Column{expr: {:fn, "from_json", [{:col, "data"}, {:lit, "a INT, b STRING"}], false}} =
+               result
     end
 
     test "creates from_json expression with options" do
@@ -159,8 +161,8 @@ defmodule SparkEx.MissingFeaturesTest do
 
       assert %Column{
                expr:
-                 {:fn, "from_json",
-                  [{:col, "data"}, {:lit, "a INT"}, {:fn, "map", _, false}], false}
+                 {:fn, "from_json", [{:col, "data"}, {:lit, "a INT"}, {:fn, "map", _, false}],
+                  false}
              } = result
     end
   end
@@ -183,7 +185,10 @@ defmodule SparkEx.MissingFeaturesTest do
   describe "from_csv/2" do
     test "creates from_csv expression" do
       result = Functions.from_csv(Functions.col("csv_str"), "a INT, b STRING")
-      assert %Column{expr: {:fn, "from_csv", [{:col, "csv_str"}, {:lit, "a INT, b STRING"}], false}} = result
+
+      assert %Column{
+               expr: {:fn, "from_csv", [{:col, "csv_str"}, {:lit, "a INT, b STRING"}], false}
+             } = result
     end
   end
 
@@ -197,7 +202,10 @@ defmodule SparkEx.MissingFeaturesTest do
   describe "from_xml/2" do
     test "creates from_xml expression" do
       result = Functions.from_xml(Functions.col("xml_str"), "a INT, b STRING")
-      assert %Column{expr: {:fn, "from_xml", [{:col, "xml_str"}, {:lit, "a INT, b STRING"}], false}} = result
+
+      assert %Column{
+               expr: {:fn, "from_xml", [{:col, "xml_str"}, {:lit, "a INT, b STRING"}], false}
+             } = result
     end
   end
 
@@ -221,8 +229,7 @@ defmodule SparkEx.MissingFeaturesTest do
 
       assert %Column{
                expr:
-                 {:fn, "window",
-                  [{:col, "ts"}, {:lit, "10 minutes"}, {:lit, "5 minutes"}], false}
+                 {:fn, "window", [{:col, "ts"}, {:lit, "10 minutes"}, {:lit, "5 minutes"}], false}
              } = result
     end
 
@@ -248,8 +255,14 @@ defmodule SparkEx.MissingFeaturesTest do
       assert %Column{
                expr:
                  {:fn, "make_timestamp",
-                  [{:col, "y"}, {:col, "m"}, {:col, "d"}, {:col, "h"}, {:col, "min"}, {:col, "sec"}],
-                  false}
+                  [
+                    {:col, "y"},
+                    {:col, "m"},
+                    {:col, "d"},
+                    {:col, "h"},
+                    {:col, "min"},
+                    {:col, "sec"}
+                  ], false}
              } = result
     end
   end
@@ -257,7 +270,9 @@ defmodule SparkEx.MissingFeaturesTest do
   describe "try_make_timestamp/1" do
     test "creates try_make_timestamp" do
       result = Functions.try_make_timestamp([Functions.col("y"), Functions.col("m")])
-      assert %Column{expr: {:fn, "try_make_timestamp", [{:col, "y"}, {:col, "m"}], false}} = result
+
+      assert %Column{expr: {:fn, "try_make_timestamp", [{:col, "y"}, {:col, "m"}], false}} =
+               result
     end
   end
 
@@ -324,7 +339,9 @@ defmodule SparkEx.MissingFeaturesTest do
   describe "make_time/3 (registry)" do
     test "creates make_time expression" do
       result = Functions.make_time(Functions.col("h"), Functions.col("m"), Functions.col("s"))
-      assert %Column{expr: {:fn, "make_time", [{:col, "h"}, {:col, "m"}, {:col, "s"}], false}} = result
+
+      assert %Column{expr: {:fn, "make_time", [{:col, "h"}, {:col, "m"}, {:col, "s"}], false}} =
+               result
     end
   end
 
@@ -411,7 +428,9 @@ defmodule SparkEx.MissingFeaturesTest do
           Functions.col("key")
         )
 
-      assert %Column{expr: {:fn, "parse_url", [{:col, "url"}, {:col, "part"}, {:col, "key"}], false}} =
+      assert %Column{
+               expr: {:fn, "parse_url", [{:col, "url"}, {:col, "part"}, {:col, "key"}], false}
+             } =
                result
     end
 
@@ -522,7 +541,9 @@ defmodule SparkEx.MissingFeaturesTest do
 
     test "kll_sketch_to_string_float/1" do
       result = Functions.kll_sketch_to_string_float(Functions.col("sketch"))
-      assert %Column{expr: {:fn, "kll_sketch_to_string_float", [{:col, "sketch"}], false}} = result
+
+      assert %Column{expr: {:fn, "kll_sketch_to_string_float", [{:col, "sketch"}], false}} =
+               result
     end
 
     test "kll_sketch_get_n_double/1" do
@@ -532,17 +553,27 @@ defmodule SparkEx.MissingFeaturesTest do
 
     test "kll_sketch_merge_bigint/2" do
       result = Functions.kll_sketch_merge_bigint(Functions.col("left"), Functions.col("right"))
-      assert %Column{expr: {:fn, "kll_sketch_merge_bigint", [{:col, "left"}, {:col, "right"}], false}} = result
+
+      assert %Column{
+               expr: {:fn, "kll_sketch_merge_bigint", [{:col, "left"}, {:col, "right"}], false}
+             } = result
     end
 
     test "kll_sketch_get_quantile_float/2" do
       result = Functions.kll_sketch_get_quantile_float(Functions.col("sketch"), 0.5)
-      assert %Column{expr: {:fn, "kll_sketch_get_quantile_float", [{:col, "sketch"}, {:lit, 0.5}], false}} = result
+
+      assert %Column{
+               expr:
+                 {:fn, "kll_sketch_get_quantile_float", [{:col, "sketch"}, {:lit, 0.5}], false}
+             } = result
     end
 
     test "kll_sketch_get_rank_double/2" do
       result = Functions.kll_sketch_get_rank_double(Functions.col("sketch"), 42)
-      assert %Column{expr: {:fn, "kll_sketch_get_rank_double", [{:col, "sketch"}, {:lit, 42}], false}} = result
+
+      assert %Column{
+               expr: {:fn, "kll_sketch_get_rank_double", [{:col, "sketch"}, {:lit, 42}], false}
+             } = result
     end
   end
 
@@ -611,7 +642,12 @@ defmodule SparkEx.MissingFeaturesTest do
       assert %DataFrame{
                plan:
                  {:project, _,
-                  [{:alias, {:fn, "to_json", [{:fn, "struct", [{:star}], false}], false}, "value"}]}
+                  [
+                    {:alias,
+                     {:fn, "to_json",
+                      [{:fn, "struct", [{:star, nil, {:sql, "SELECT 1", nil}}], false}], false},
+                     "value"}
+                  ]}
              } = result
     end
   end
@@ -625,8 +661,8 @@ defmodule SparkEx.MissingFeaturesTest do
 
       assert %DataFrame{
                plan:
-                 {:repartition_by_expression, _,
-                  [{:direct_shuffle_partition_id, {:col, "part"}}], nil}
+                 {:repartition_by_expression, _, [{:direct_shuffle_partition_id, {:col, "part"}}],
+                  nil}
              } = result
     end
   end

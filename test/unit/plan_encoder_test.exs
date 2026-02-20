@@ -57,6 +57,13 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       [expr] = project.expressions
       assert {:unresolved_regex, %Expression.UnresolvedRegex{col_name: "^name"}} = expr.expr_type
     end
+
+    test "encodes unresolved_regex expression with plan_id" do
+      expr = PlanEncoder.encode_expression({:col_regex, "^name", 7})
+
+      assert {:unresolved_regex, %Expression.UnresolvedRegex{col_name: "^name", plan_id: 7}} =
+               expr.expr_type
+    end
   end
 
   describe "metadata_column encoding" do
@@ -75,6 +82,28 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                 unparsed_identifier: "_meta",
                 is_metadata_column: true
               }} =
+               expr.expr_type
+    end
+
+    test "encodes unresolved_attribute with metadata flag and plan_id" do
+      expr = PlanEncoder.encode_expression({:metadata_col, "_meta", 11})
+
+      assert {:unresolved_attribute,
+              %Expression.UnresolvedAttribute{
+                unparsed_identifier: "_meta",
+                plan_id: 11,
+                is_metadata_column: true
+              }} =
+               expr.expr_type
+    end
+  end
+
+  describe "column reference plan_id encoding" do
+    test "encodes unresolved_attribute with plan_id" do
+      expr = PlanEncoder.encode_expression({:col, "id", 9})
+
+      assert {:unresolved_attribute,
+              %Expression.UnresolvedAttribute{unparsed_identifier: "id", plan_id: 9}} =
                expr.expr_type
     end
   end
@@ -388,6 +417,25 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
   end
 
+  describe "plan-scoped expressions" do
+    test "rewrites plan-scoped column references to plan_id and references" do
+      source_plan = {:sql, "SELECT id FROM t", nil}
+      plan = {:project, source_plan, [{:col, "id", source_plan}]}
+
+      {encoded, _} = PlanEncoder.encode(plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
+      assert length(wr.references) == 1
+      assert %Relation{rel_type: {:project, project}} = wr.root
+      [expr] = project.expressions
+
+      assert {:unresolved_attribute, %Expression.UnresolvedAttribute{plan_id: plan_id}} =
+               expr.expr_type
+
+      assert is_integer(plan_id)
+    end
+  end
+
   describe "subquery with_relations" do
     test "adds referenced plans for subquery expressions" do
       subquery_plan = {:sql, "SELECT 1", nil}
@@ -419,9 +467,13 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "encode_expression rejects subquery plans without pre-wired plan_id" do
-      assert_raise ArgumentError, ~r/subquery expression requires an explicit plan_id reference/, fn ->
-        PlanEncoder.encode_expression({:subquery, :scalar, {:sql, "SELECT 1", nil}, []})
-      end
+      assert_raise ArgumentError,
+                   ~r/subquery expression requires an explicit plan_id reference/,
+                   fn ->
+                     PlanEncoder.encode_expression(
+                       {:subquery, :scalar, {:sql, "SELECT 1", nil}, []}
+                     )
+                   end
     end
 
     test "rejects table_arg without options" do
