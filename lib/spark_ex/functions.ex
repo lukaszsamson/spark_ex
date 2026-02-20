@@ -152,9 +152,25 @@ defmodule SparkEx.Functions do
   @spec asc(Column.t()) :: Column.t()
   defdelegate asc(col), to: Column
 
+  @doc "Sort ascending with nulls first"
+  @spec asc_nulls_first(Column.t()) :: Column.t()
+  defdelegate asc_nulls_first(col), to: Column
+
+  @doc "Sort ascending with nulls last"
+  @spec asc_nulls_last(Column.t()) :: Column.t()
+  defdelegate asc_nulls_last(col), to: Column
+
   @doc "Sort descending by the given column"
   @spec desc(Column.t()) :: Column.t()
   defdelegate desc(col), to: Column
+
+  @doc "Sort descending with nulls first"
+  @spec desc_nulls_first(Column.t()) :: Column.t()
+  defdelegate desc_nulls_first(col), to: Column
+
+  @doc "Sort descending with nulls last"
+  @spec desc_nulls_last(Column.t()) :: Column.t()
+  defdelegate desc_nulls_last(col), to: Column
 
   # ── Generated functions from registry ──
 
@@ -526,6 +542,293 @@ defmodule SparkEx.Functions do
     {body, vars} = build_lambda(func, ["x", "y"])
 
     %Column{expr: {:fn, "zip_with", [col1_expr, col2_expr, {:lambda, body, vars}], false}}
+  end
+
+  # ── Windowing functions (hand-written due to complex signatures) ──
+
+  @doc """
+  Generates tumbling or sliding time window column for streaming aggregations.
+
+  ## Examples
+
+      window(col("timestamp"), "10 minutes")
+      window(col("timestamp"), "10 minutes", "5 minutes")
+      window(col("timestamp"), "10 minutes", "5 minutes", "2 minutes")
+  """
+  @spec window(Column.t() | String.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          Column.t()
+  def window(time_col, window_duration, slide_duration \\ nil, start_time \\ nil) do
+    args =
+      cond do
+        slide_duration != nil and start_time != nil ->
+          [to_expr(time_col), {:lit, window_duration}, {:lit, slide_duration}, {:lit, start_time}]
+
+        slide_duration != nil ->
+          [to_expr(time_col), {:lit, window_duration}, {:lit, slide_duration}]
+
+        start_time != nil ->
+          [
+            to_expr(time_col),
+            {:lit, window_duration},
+            {:lit, window_duration},
+            {:lit, start_time}
+          ]
+
+        true ->
+          [to_expr(time_col), {:lit, window_duration}]
+      end
+
+    %Column{expr: {:fn, "window", args, false}}
+  end
+
+  # ── Timestamp construction functions (hand-written due to overloaded signatures) ──
+
+  @doc """
+  Creates a timestamp from individual components or from date+time columns.
+
+  ## Examples
+
+      make_timestamp(col("y"), col("m"), col("d"), col("h"), col("min"), col("sec"))
+      make_timestamp(col("y"), col("m"), col("d"), col("h"), col("min"), col("sec"), col("tz"))
+  """
+  @spec make_timestamp([Column.t() | String.t()]) :: Column.t()
+  def make_timestamp(cols) when is_list(cols) do
+    args = Enum.map(cols, &to_expr/1)
+    %Column{expr: {:fn, "make_timestamp", args, false}}
+  end
+
+  @doc """
+  Try version of `make_timestamp/1` — returns null on invalid input.
+  """
+  @spec try_make_timestamp([Column.t() | String.t()]) :: Column.t()
+  def try_make_timestamp(cols) when is_list(cols) do
+    args = Enum.map(cols, &to_expr/1)
+    %Column{expr: {:fn, "try_make_timestamp", args, false}}
+  end
+
+  @doc """
+  Creates a timestamp with local timezone from components.
+
+  ## Examples
+
+      make_timestamp_ltz([col("y"), col("m"), col("d"), col("h"), col("min"), col("sec")])
+  """
+  @spec make_timestamp_ltz([Column.t() | String.t()]) :: Column.t()
+  def make_timestamp_ltz(cols) when is_list(cols) do
+    args = Enum.map(cols, &to_expr/1)
+    %Column{expr: {:fn, "make_timestamp_ltz", args, false}}
+  end
+
+  @doc """
+  Try version of `make_timestamp_ltz/1` — returns null on invalid input.
+  """
+  @spec try_make_timestamp_ltz([Column.t() | String.t()]) :: Column.t()
+  def try_make_timestamp_ltz(cols) when is_list(cols) do
+    args = Enum.map(cols, &to_expr/1)
+    %Column{expr: {:fn, "try_make_timestamp_ltz", args, false}}
+  end
+
+  @doc """
+  Creates a timestamp without timezone from components.
+
+  ## Examples
+
+      make_timestamp_ntz([col("y"), col("m"), col("d"), col("h"), col("min"), col("sec")])
+  """
+  @spec make_timestamp_ntz([Column.t() | String.t()]) :: Column.t()
+  def make_timestamp_ntz(cols) when is_list(cols) do
+    args = Enum.map(cols, &to_expr/1)
+    %Column{expr: {:fn, "make_timestamp_ntz", args, false}}
+  end
+
+  @doc """
+  Try version of `make_timestamp_ntz/1` — returns null on invalid input.
+  """
+  @spec try_make_timestamp_ntz([Column.t() | String.t()]) :: Column.t()
+  def try_make_timestamp_ntz(cols) when is_list(cols) do
+    args = Enum.map(cols, &to_expr/1)
+    %Column{expr: {:fn, "try_make_timestamp_ntz", args, false}}
+  end
+
+  # ── Interval construction functions ──
+
+  @doc """
+  Creates a day-time interval from optional components.
+
+  ## Options
+
+    * `:days` — days column (default: `lit(0)`)
+    * `:hours` — hours column (default: `lit(0)`)
+    * `:mins` — minutes column (default: `lit(0)`)
+    * `:secs` — seconds column (default: `lit(0)`)
+  """
+  @spec make_dt_interval(keyword()) :: Column.t()
+  def make_dt_interval(opts \\ []) do
+    days = to_expr(Keyword.get(opts, :days, %Column{expr: {:lit, 0}}))
+    hours = to_expr(Keyword.get(opts, :hours, %Column{expr: {:lit, 0}}))
+    mins = to_expr(Keyword.get(opts, :mins, %Column{expr: {:lit, 0}}))
+    secs = to_expr(Keyword.get(opts, :secs, %Column{expr: {:lit, 0}}))
+
+    %Column{expr: {:fn, "make_dt_interval", [days, hours, mins, secs], false}}
+  end
+
+  @doc """
+  Creates an interval from optional components.
+
+  ## Options
+
+    * `:years`, `:months`, `:weeks`, `:days`, `:hours`, `:mins`, `:secs`
+    All default to `lit(0)`.
+  """
+  @spec make_interval(keyword()) :: Column.t()
+  def make_interval(opts \\ []) do
+    fields = [:years, :months, :weeks, :days, :hours, :mins, :secs]
+    args = Enum.map(fields, fn f -> to_expr(Keyword.get(opts, f, %Column{expr: {:lit, 0}})) end)
+    %Column{expr: {:fn, "make_interval", args, false}}
+  end
+
+  @doc """
+  Try version of `make_interval/1` — returns null on invalid input.
+  """
+  @spec try_make_interval(keyword()) :: Column.t()
+  def try_make_interval(opts \\ []) do
+    fields = [:years, :months, :weeks, :days, :hours, :mins, :secs]
+    args = Enum.map(fields, fn f -> to_expr(Keyword.get(opts, f, %Column{expr: {:lit, 0}})) end)
+    %Column{expr: {:fn, "try_make_interval", args, false}}
+  end
+
+  @doc """
+  Creates a year-month interval from optional components.
+
+  ## Options
+
+    * `:years` — years column (default: `lit(0)`)
+    * `:months` — months column (default: `lit(0)`)
+  """
+  @spec make_ym_interval(keyword()) :: Column.t()
+  def make_ym_interval(opts \\ []) do
+    years = to_expr(Keyword.get(opts, :years, %Column{expr: {:lit, 0}}))
+    months = to_expr(Keyword.get(opts, :months, %Column{expr: {:lit, 0}}))
+    %Column{expr: {:fn, "make_ym_interval", [years, months], false}}
+  end
+
+  # ── JSON/CSV/XML parsing functions ──
+
+  @doc """
+  Parses a JSON string column into a struct/array/map column using the given schema.
+
+  ## Examples
+
+      from_json(col("json_str"), "a INT, b STRING")
+      from_json(col("json_str"), "a INT", %{"mode" => "FAILFAST"})
+  """
+  @spec from_json(Column.t() | String.t(), String.t(), map() | nil) :: Column.t()
+  def from_json(col, schema, options \\ nil)
+      when is_binary(schema) and (is_map(options) or is_nil(options)) do
+    args =
+      case options do
+        nil -> [to_expr(col), {:lit, schema}]
+        opts -> [to_expr(col), {:lit, schema}, options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "from_json", args, false}}
+  end
+
+  @doc """
+  Converts a struct/array/map column to a JSON string.
+
+  ## Examples
+
+      to_json(col("struct_col"))
+      to_json(col("struct_col"), %{"pretty" => "true"})
+  """
+  @spec to_json(Column.t() | String.t(), map() | nil) :: Column.t()
+  def to_json(col, options \\ nil) when is_map(options) or is_nil(options) do
+    args =
+      case options do
+        nil -> [to_expr(col)]
+        opts -> [to_expr(col), options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "to_json", args, false}}
+  end
+
+  @doc """
+  Parses a CSV string column into a struct column using the given schema.
+
+  ## Examples
+
+      from_csv(col("csv_str"), "a INT, b STRING")
+      from_csv(col("csv_str"), "a INT, b STRING", %{"sep" => "|"})
+  """
+  @spec from_csv(Column.t() | String.t(), String.t(), map() | nil) :: Column.t()
+  def from_csv(col, schema, options \\ nil)
+      when is_binary(schema) and (is_map(options) or is_nil(options)) do
+    args =
+      case options do
+        nil -> [to_expr(col), {:lit, schema}]
+        opts -> [to_expr(col), {:lit, schema}, options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "from_csv", args, false}}
+  end
+
+  @doc """
+  Converts a struct column to a CSV string.
+
+  ## Examples
+
+      to_csv(col("struct_col"))
+      to_csv(col("struct_col"), %{"sep" => "|"})
+  """
+  @spec to_csv(Column.t() | String.t(), map() | nil) :: Column.t()
+  def to_csv(col, options \\ nil) when is_map(options) or is_nil(options) do
+    args =
+      case options do
+        nil -> [to_expr(col)]
+        opts -> [to_expr(col), options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "to_csv", args, false}}
+  end
+
+  @doc """
+  Parses an XML string column into a struct column using the given schema.
+
+  ## Examples
+
+      from_xml(col("xml_str"), "a INT, b STRING")
+      from_xml(col("xml_str"), "a INT, b STRING", %{"rowTag" => "item"})
+  """
+  @spec from_xml(Column.t() | String.t(), String.t(), map() | nil) :: Column.t()
+  def from_xml(col, schema, options \\ nil)
+      when is_binary(schema) and (is_map(options) or is_nil(options)) do
+    args =
+      case options do
+        nil -> [to_expr(col), {:lit, schema}]
+        opts -> [to_expr(col), {:lit, schema}, options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "from_xml", args, false}}
+  end
+
+  @doc """
+  Converts a struct column to an XML string.
+
+  ## Examples
+
+      to_xml(col("struct_col"))
+      to_xml(col("struct_col"), %{"rowTag" => "item"})
+  """
+  @spec to_xml(Column.t() | String.t(), map() | nil) :: Column.t()
+  def to_xml(col, options \\ nil) when is_map(options) or is_nil(options) do
+    args =
+      case options do
+        nil -> [to_expr(col)]
+        opts -> [to_expr(col), options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "to_xml", args, false}}
   end
 
   # ── Internal helpers (used by generated functions) ──

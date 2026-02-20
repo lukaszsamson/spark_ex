@@ -302,6 +302,18 @@ defmodule SparkEx.Column do
     %__MODULE__{expr: {:alias, col.expr, name}}
   end
 
+  @doc "Alias for `alias_/2`."
+  @spec name(t(), String.t()) :: t()
+  def name(%__MODULE__{} = col, alias_name) when is_binary(alias_name) do
+    alias_(col, alias_name)
+  end
+
+  @doc "Alias for `cast/2`."
+  @spec astype(t(), String.t()) :: t()
+  def astype(%__MODULE__{} = col, type_str) when is_binary(type_str) do
+    cast(col, type_str)
+  end
+
   # ── Private helpers ──
 
   defp binary_fn(name, %__MODULE__{} = left, %__MODULE__{} = right) do

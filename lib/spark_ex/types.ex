@@ -19,7 +19,8 @@ defmodule SparkEx.Types do
   """
 
   @type spark_type ::
-          :boolean
+          :null
+          | :boolean
           | :byte
           | :short
           | :integer
@@ -28,14 +29,21 @@ defmodule SparkEx.Types do
           | :double
           | :string
           | {:string, String.t()}
+          | {:char, non_neg_integer()}
+          | {:varchar, non_neg_integer()}
           | :binary
           | :date
+          | :time
           | :timestamp
           | :timestamp_ntz
+          | :day_time_interval
+          | :year_month_interval
+          | :calendar_interval
           | {:decimal, non_neg_integer(), non_neg_integer()}
           | {:array, spark_type()}
           | {:map, spark_type(), spark_type()}
           | {:struct, [field()]}
+          | :variant
 
   @type field :: %{name: String.t(), type: spark_type(), nullable: boolean()}
   @type struct_type :: {:struct, [field()]}
@@ -142,6 +150,7 @@ defmodule SparkEx.Types do
 
   # --- DDL type conversion ---
 
+  defp type_to_ddl(:null), do: "VOID"
   defp type_to_ddl(:boolean), do: "BOOLEAN"
   defp type_to_ddl(:byte), do: "BYTE"
   defp type_to_ddl(:short), do: "SHORT"
@@ -151,13 +160,20 @@ defmodule SparkEx.Types do
   defp type_to_ddl(:double), do: "DOUBLE"
   defp type_to_ddl(:string), do: "STRING"
   defp type_to_ddl({:string, collation}), do: "STRING COLLATE #{collation}"
+  defp type_to_ddl({:char, length}), do: "CHAR(#{length})"
+  defp type_to_ddl({:varchar, length}), do: "VARCHAR(#{length})"
   defp type_to_ddl(:binary), do: "BINARY"
   defp type_to_ddl(:date), do: "DATE"
+  defp type_to_ddl(:time), do: "TIME"
   defp type_to_ddl(:timestamp), do: "TIMESTAMP"
   defp type_to_ddl(:timestamp_ntz), do: "TIMESTAMP_NTZ"
+  defp type_to_ddl(:day_time_interval), do: "INTERVAL DAY TO SECOND"
+  defp type_to_ddl(:year_month_interval), do: "INTERVAL YEAR TO MONTH"
+  defp type_to_ddl(:calendar_interval), do: "INTERVAL"
   defp type_to_ddl({:decimal, precision, scale}), do: "DECIMAL(#{precision}, #{scale})"
   defp type_to_ddl({:array, element}), do: "ARRAY<#{type_to_ddl(element)}>"
   defp type_to_ddl({:map, key, value}), do: "MAP<#{type_to_ddl(key)}, #{type_to_ddl(value)}>"
+  defp type_to_ddl(:variant), do: "VARIANT"
 
   defp type_to_ddl({:struct, fields}) do
     inner =
@@ -170,6 +186,7 @@ defmodule SparkEx.Types do
 
   # --- JSON type conversion (Spark JSON format) ---
 
+  defp type_to_json(:null), do: "void"
   defp type_to_json(:boolean), do: "boolean"
   defp type_to_json(:byte), do: "byte"
   defp type_to_json(:short), do: "short"
@@ -183,10 +200,16 @@ defmodule SparkEx.Types do
     %{"type" => "string", "collation" => collation}
   end
 
+  defp type_to_json({:char, length}), do: "char(#{length})"
+  defp type_to_json({:varchar, length}), do: "varchar(#{length})"
   defp type_to_json(:binary), do: "binary"
   defp type_to_json(:date), do: "date"
+  defp type_to_json(:time), do: "time"
   defp type_to_json(:timestamp), do: "timestamp"
   defp type_to_json(:timestamp_ntz), do: "timestamp_ntz"
+  defp type_to_json(:day_time_interval), do: "day-time interval"
+  defp type_to_json(:year_month_interval), do: "year-month interval"
+  defp type_to_json(:calendar_interval), do: "interval"
 
   defp type_to_json({:decimal, precision, scale}) do
     "decimal(#{precision},#{scale})"
@@ -195,6 +218,8 @@ defmodule SparkEx.Types do
   defp type_to_json({:array, element}) do
     %{"type" => "array", "elementType" => type_to_json(element), "containsNull" => true}
   end
+
+  defp type_to_json(:variant), do: "variant"
 
   defp type_to_json({:map, key, value}) do
     %{

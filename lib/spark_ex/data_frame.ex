@@ -101,9 +101,13 @@ defmodule SparkEx.DataFrame do
 
       df |> SparkEx.DataFrame.filter(col("age") |> SparkEx.Column.gt(lit(18)))
   """
-  @spec filter(t(), Column.t()) :: t()
+  @spec filter(t(), Column.t() | String.t()) :: t()
   def filter(%__MODULE__{} = df, %Column{} = condition) do
     %__MODULE__{df | plan: {:filter, df.plan, condition.expr}}
+  end
+
+  def filter(%__MODULE__{} = df, condition) when is_binary(condition) do
+    %__MODULE__{df | plan: {:filter, df.plan, {:expr, condition}}}
   end
 
   @doc """
@@ -601,25 +605,34 @@ defmodule SparkEx.DataFrame do
   @doc """
   Repartitions the DataFrame.
 
-  When `cols` is empty, does a hash repartition to `num_partitions`.
-  When `cols` is provided, repartitions by those expressions.
+  When called with an integer, does a hash repartition to `num_partitions`.
+  When called with an integer and columns, repartitions by those expressions.
+  When called with only columns (list), repartitions by those expressions
+  with default partition count.
 
   ## Examples
 
       df |> DataFrame.repartition(10)
       df |> DataFrame.repartition(10, [col("key")])
+      df |> DataFrame.repartition([col("key")])
   """
-  @spec repartition(t(), pos_integer(), [Column.t() | String.t() | atom()]) :: t()
-  def repartition(%__MODULE__{} = df, num_partitions, cols \\ [])
-      when is_integer(num_partitions) do
-    case cols do
-      [] ->
-        %__MODULE__{df | plan: {:repartition, df.plan, num_partitions, true}}
+  @spec repartition(t(), pos_integer() | [Column.t() | String.t() | atom()], [Column.t() | String.t() | atom()]) :: t()
+  def repartition(df, num_or_cols, cols \\ [])
 
-      cols when is_list(cols) ->
-        exprs = Enum.map(cols, &normalize_column_expr/1)
-        %__MODULE__{df | plan: {:repartition_by_expression, df.plan, exprs, num_partitions}}
-    end
+  def repartition(%__MODULE__{} = df, cols, []) when is_list(cols) and cols != [] do
+    exprs = Enum.map(cols, &normalize_column_expr/1)
+    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, exprs, nil}}
+  end
+
+  def repartition(%__MODULE__{} = df, num_partitions, [])
+      when is_integer(num_partitions) do
+    %__MODULE__{df | plan: {:repartition, df.plan, num_partitions, true}}
+  end
+
+  def repartition(%__MODULE__{} = df, num_partitions, cols)
+      when is_integer(num_partitions) and is_list(cols) do
+    exprs = Enum.map(cols, &normalize_column_expr/1)
+    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, exprs, num_partitions}}
   end
 
   @doc """
@@ -973,6 +986,20 @@ defmodule SparkEx.DataFrame do
 
   # ── M10: Convenience Aliases ──
 
+  @doc """
+  Aggregate without grouping.
+
+  Shortcut for `df |> group_by([]) |> GroupedData.agg(exprs)`.
+
+  ## Examples
+
+      df |> DataFrame.agg([Functions.count(Functions.col("id"))])
+  """
+  @spec agg(t(), [Column.t()]) :: t()
+  def agg(%__MODULE__{} = df, exprs) when is_list(exprs) do
+    df |> group_by([]) |> SparkEx.GroupedData.agg(exprs)
+  end
+
   @doc "Alias for `filter/2`."
   @spec where(t(), Column.t()) :: t()
   def where(%__MODULE__{} = df, condition), do: filter(df, condition)
@@ -993,7 +1020,7 @@ defmodule SparkEx.DataFrame do
   @spec unionAll(t(), t()) :: t()
   def unionAll(%__MODULE__{} = left, %__MODULE__{} = right), do: union(left, right)
 
-  @doc "Alias for `except_all/2`."
+  @doc "Alias for `except/2` (EXCEPT DISTINCT, matching PySpark `subtract`)."
   @spec subtract(t(), t()) :: t()
   def subtract(%__MODULE__{} = left, %__MODULE__{} = right), do: except(left, right)
 

@@ -126,7 +126,9 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:shiftleft, "shiftleft", {:col_lit, 1}, group: :bitwise, doc: "Bitwise left shift."},
       {:shiftright, "shiftright", {:col_lit, 1}, group: :bitwise, doc: "Bitwise right shift."},
       {:shiftrightunsigned, "shiftrightunsigned", {:col_lit, 1},
-       group: :bitwise, doc: "Bitwise unsigned right shift."}
+       group: :bitwise, doc: "Bitwise unsigned right shift."},
+      {:bitwise_not_, "~", :one_col,
+       group: :bitwise, doc: "Bitwise NOT (standalone function)."}
     ]
   end
 
@@ -230,7 +232,23 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:try_validate_utf8, "try_validate_utf8", :one_col,
        group: :string, doc: "Validates UTF-8 and returns null on invalid."},
       {:randstr, "randstr", {:col_lit, 1},
-       group: :string, doc: "Generates random string of given length."}
+       group: :string, doc: "Generates random string of given length."},
+      {:parse_url, "parse_url", :three_col,
+       group: :string, doc: "Extracts a part of a URL."},
+      {:try_parse_url, "try_parse_url", :three_col,
+       group: :string, doc: "Try to extract a part of a URL, returns null on failure."},
+      {:quote_, "quote", :one_col,
+       group: :string, doc: "Quotes a string for use in SQL."},
+      {:contains_, "contains", :two_col,
+       group: :string, doc: "Returns true if string contains substring."},
+      {:like_, "like", :two_col,
+       group: :string, doc: "SQL LIKE pattern match."},
+      {:ilike_, "ilike", :two_col,
+       group: :string, doc: "Case-insensitive LIKE."},
+      {:rlike_, "rlike", :two_col,
+       group: :string, doc: "Regex pattern match."},
+      {:substr_, "substr", :three_col,
+       group: :string, doc: "Returns substring from pos for len."}
     ]
   end
 
@@ -330,7 +348,13 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:to_time, "to_time", {:col_opt, [format: nil]},
        group: :datetime, doc: "Converts to time type."},
       {:try_to_time, "try_to_time", {:col_opt, [format: nil]},
-       group: :datetime, doc: "Try to convert to time, returns null on failure."}
+       group: :datetime, doc: "Try to convert to time, returns null on failure."},
+      {:make_time, "make_time", :three_col,
+       group: :datetime, doc: "Creates time from hour, minute, second."},
+      {:window_time, "window_time", :one_col,
+       group: :datetime, doc: "Extracts the time column from a window column."},
+      {:session_window, "session_window", :two_col,
+       group: :datetime, doc: "Generates session window for streaming aggregations."}
     ]
   end
 
@@ -676,7 +700,45 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :misc, doc: "Random value from standard normal distribution."},
       {:grouping, "grouping", :one_col,
        group: :misc, doc: "Indicates whether column is aggregated in grouping set."},
-      {:grouping_id, "grouping_id", :n_col, group: :misc, doc: "Grouping ID for grouping set."}
+      {:grouping_id, "grouping_id", :n_col, group: :misc, doc: "Grouping ID for grouping set."},
+      {:count_min_sketch, "count_min_sketch", {:col_lit, 3},
+       group: :misc, doc: "Creates a count-min sketch of a column with given eps, confidence, and seed."},
+      {:reflect_, "reflect", :n_col,
+       group: :misc, doc: "Calls a JVM method via reflection."},
+      {:java_method, "java_method", :n_col,
+       group: :misc, doc: "Calls a JVM method."},
+      {:try_reflect, "try_reflect", :n_col,
+       group: :misc, doc: "Try to call a JVM method, returns null on failure."}
+    ] ++ hll_functions() ++ bitmap_functions()
+  end
+
+  defp hll_functions do
+    [
+      {:hll_sketch_agg, "hll_sketch_agg", {:col_opt, [lg_config_k: nil]},
+       group: :sketch, doc: "Aggregates values into an HLL sketch."},
+      {:hll_sketch_estimate, "hll_sketch_estimate", :one_col,
+       group: :sketch, doc: "Estimates distinct count from an HLL sketch."},
+      {:hll_union, "hll_union", {:col_opt, [allow_different_lg_config_k: nil]},
+       group: :sketch, doc: "Unions two HLL sketches."},
+      {:hll_union_agg, "hll_union_agg", {:col_opt, [allow_different_lg_config_k: nil]},
+       group: :sketch, doc: "Aggregate union of HLL sketches."}
+    ]
+  end
+
+  defp bitmap_functions do
+    [
+      {:bitmap_bit_position, "bitmap_bit_position", :one_col,
+       group: :bitmap, doc: "Returns bit position within a bitmap bucket."},
+      {:bitmap_bucket_number, "bitmap_bucket_number", :one_col,
+       group: :bitmap, doc: "Returns bitmap bucket number."},
+      {:bitmap_construct_agg, "bitmap_construct_agg", :one_col,
+       group: :bitmap, doc: "Constructs a bitmap from bit positions."},
+      {:bitmap_count, "bitmap_count", :one_col,
+       group: :bitmap, doc: "Counts set bits in a bitmap."},
+      {:bitmap_or_agg, "bitmap_or_agg", :one_col,
+       group: :bitmap, doc: "Aggregate OR of bitmaps."},
+      {:bitmap_and_agg, "bitmap_and_agg", :one_col,
+       group: :bitmap, doc: "Aggregate AND of bitmaps."}
     ]
   end
 end
