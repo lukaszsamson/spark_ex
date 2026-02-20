@@ -3,7 +3,7 @@ defmodule SparkEx.StreamingQueryListenerBus do
   Manages a persistent gRPC stream for receiving streaming query listener events.
 
   This process opens a server-side listener bus connection and dispatches
-  events (progress, terminated, idle) to registered listener callbacks.
+  events (started, progress, terminated, idle) to registered listener callbacks.
 
   ## Listener Behaviour
 
@@ -34,6 +34,7 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   alias Spark.Connect.{ExecutePlanResponse, StreamingQueryListenerEvent}
   require Logger
+  @registry_table :spark_ex_streaming_listener_buses
 
   defstruct [
     :session,
@@ -83,6 +84,29 @@ defmodule SparkEx.StreamingQueryListenerBus do
     GenServer.stop(bus, :normal)
   end
 
+  @doc """
+  Dispatches a QueryStarted-like event JSON to listener buses for the given session.
+  """
+  @spec post_query_started(GenServer.server(), String.t()) :: :ok
+  def post_query_started(session, event_json) when is_binary(event_json) do
+    event = %{
+      type: :started,
+      raw_json: event_json,
+      data:
+        case Jason.decode(event_json) do
+          {:ok, parsed} -> parsed
+          {:error, _} -> event_json
+        end
+    }
+
+    buses_for_session(session)
+    |> Enum.each(fn bus ->
+      GenServer.cast(bus, {:dispatch_event, event})
+    end)
+
+    :ok
+  end
+
   # --- GenServer callbacks ---
 
   @impl true
@@ -91,6 +115,7 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
     case start_event_stream(session) do
       {:ok, stream} ->
+        register_bus(session, self())
         task = start_reader_task(stream)
         {:ok, %{state | stream_task: task}}
 
@@ -117,6 +142,12 @@ defmodule SparkEx.StreamingQueryListenerBus do
   end
 
   @impl true
+  def handle_cast({:dispatch_event, event}, state) do
+    dispatch_event(state.listeners, event)
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info({:listener_event, event}, state) do
     dispatch_event(state.listeners, event)
     {:noreply, state}
@@ -139,6 +170,8 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   @impl true
   def terminate(_reason, state) do
+    unregister_bus(state.session, self())
+
     if state.stream_task do
       Process.exit(state.stream_task, :shutdown)
     end
@@ -226,6 +259,14 @@ defmodule SparkEx.StreamingQueryListenerBus do
     end)
   end
 
+  defp dispatch_event(listeners, %{type: :started} = event) do
+    Enum.each(listeners, fn module ->
+      if function_exported?(module, :on_query_started, 1) do
+        safe_call(module, :on_query_started, [event])
+      end
+    end)
+  end
+
   defp dispatch_event(listeners, %{type: :terminated} = event) do
     Enum.each(listeners, fn module ->
       safe_call(module, :on_query_terminated, [event])
@@ -239,6 +280,27 @@ defmodule SparkEx.StreamingQueryListenerBus do
   end
 
   defp dispatch_event(_listeners, _event), do: :ok
+
+  defp register_bus(session, pid) do
+    :ets.insert(@registry_table, {session, pid})
+  end
+
+  defp unregister_bus(session, pid) do
+    :ets.delete_object(@registry_table, {session, pid})
+  end
+
+  defp buses_for_session(session) do
+    @registry_table
+    |> :ets.lookup(session)
+    |> Enum.reduce([], fn {^session, pid}, acc ->
+      if Process.alive?(pid) do
+        [pid | acc]
+      else
+        :ets.delete_object(@registry_table, {session, pid})
+        acc
+      end
+    end)
+  end
 
   defp safe_call(module, function, args) do
     apply(module, function, args)

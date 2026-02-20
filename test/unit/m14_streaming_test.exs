@@ -22,6 +22,39 @@ defmodule SparkEx.M14.StreamingTest do
       result = %{query_id: %{id: "query-id", run_id: "run-id"}, name: ""}
       {:reply, {:ok, {:write_stream_start, result}}, state}
     end
+
+    @impl true
+    def handle_call({:execute_command_stream, command, _opts}, _from, state) do
+      send(state.parent, {:execute_command_stream, command})
+
+      stream =
+        Stream.resource(
+          fn -> :ok end,
+          fn _ ->
+            Process.sleep(:infinity)
+            {:halt, :ok}
+          end,
+          fn _ -> :ok end
+        )
+
+      {:reply, {:ok, stream}, state}
+    end
+  end
+
+  defmodule StartedListener do
+    @behaviour SparkEx.StreamingQueryListener
+    @pid_key {__MODULE__, :pid}
+
+    def on_query_started(event) do
+      if pid = :persistent_term.get(@pid_key, nil), do: send(pid, {:started, event})
+    end
+
+    def on_query_progress(_event), do: :ok
+    def on_query_terminated(_event), do: :ok
+    def on_query_idle(_event), do: :ok
+
+    def set_pid(pid), do: :persistent_term.put(@pid_key, pid)
+    def clear_pid, do: :persistent_term.erase(@pid_key)
   end
 
   # ── PlanEncoder: Streaming Read Variants ──
@@ -967,9 +1000,30 @@ defmodule SparkEx.M14.StreamingTest do
   describe "StreamingQueryListener behaviour" do
     test "defines the expected callbacks" do
       callbacks = SparkEx.StreamingQueryListener.behaviour_info(:callbacks)
+      assert {:on_query_started, 1} in callbacks
       assert {:on_query_progress, 1} in callbacks
       assert {:on_query_terminated, 1} in callbacks
       assert {:on_query_idle, 1} in callbacks
+    end
+  end
+
+  describe "StreamingQueryListenerBus started event dispatch" do
+    test "posts started event to session listener buses" do
+      StartedListener.set_pid(self())
+      on_exit(fn -> StartedListener.clear_pid() end)
+
+      {:ok, session} = FakeSession.start_link(parent: self())
+      {:ok, bus} = SparkEx.StreamingQueryListenerBus.start_link(session)
+      on_exit(fn ->
+        if Process.alive?(bus) do
+          SparkEx.StreamingQueryListenerBus.stop(bus)
+        end
+      end)
+
+      :ok = SparkEx.StreamingQueryListenerBus.add_listener(bus, StartedListener)
+      :ok = SparkEx.StreamingQueryListenerBus.post_query_started(session, ~s({"id":"q1"}))
+
+      assert_receive {:started, %{type: :started, data: %{"id" => "q1"}}}
     end
   end
 

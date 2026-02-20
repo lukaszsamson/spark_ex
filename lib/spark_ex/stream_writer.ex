@@ -340,6 +340,7 @@ defmodule SparkEx.StreamWriter do
           name: if(result.name == "", do: nil, else: result.name)
         }
 
+        maybe_post_query_started(df.session, result)
         {:ok, query}
 
       {:ok, other} ->
@@ -349,6 +350,19 @@ defmodule SparkEx.StreamWriter do
         error
     end
   end
+
+  defp maybe_post_query_started(session, result) do
+    case extract_started_event_json(result) do
+      json when is_binary(json) and json != "" ->
+        SparkEx.StreamingQueryListenerBus.post_query_started(session, json)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp extract_started_event_json(%{query_started_event_json: json}), do: json
+  defp extract_started_event_json(_), do: nil
 
   defp stringify_options(opts) when is_map(opts) do
     opts

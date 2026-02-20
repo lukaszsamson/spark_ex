@@ -18,16 +18,24 @@ defmodule SparkEx.Integration.StreamingListenerTest do
     @behaviour SparkEx.StreamingQueryListener
     @listener_pid_key {__MODULE__, :listener_pid}
 
+    def on_query_started(event) do
+      if pid = :persistent_term.get(@listener_pid_key, nil),
+        do: send(pid, {:listener_started, event})
+    end
+
     def on_query_progress(event) do
-      if pid = :persistent_term.get(@listener_pid_key, nil), do: send(pid, {:listener_progress, event})
+      if pid = :persistent_term.get(@listener_pid_key, nil),
+        do: send(pid, {:listener_progress, event})
     end
 
     def on_query_terminated(event) do
-      if pid = :persistent_term.get(@listener_pid_key, nil), do: send(pid, {:listener_terminated, event})
+      if pid = :persistent_term.get(@listener_pid_key, nil),
+        do: send(pid, {:listener_terminated, event})
     end
 
     def on_query_idle(event) do
-      if pid = :persistent_term.get(@listener_pid_key, nil), do: send(pid, {:listener_idle, event})
+      if pid = :persistent_term.get(@listener_pid_key, nil),
+        do: send(pid, {:listener_idle, event})
     end
 
     def set_listener_pid(pid) when is_pid(pid) do
@@ -79,6 +87,7 @@ defmodule SparkEx.Integration.StreamingListenerTest do
     on_exit(fn -> TestListener.clear_listener_pid() end)
 
     {:ok, bus} = StreamingQueryListenerBus.start_link(session)
+
     on_exit(fn ->
       if Process.alive?(bus) do
         _ =
@@ -116,6 +125,7 @@ defmodule SparkEx.Integration.StreamingListenerTest do
     {:ok, query} = StreamWriter.start(writer)
     on_exit(fn -> StreamingQuery.stop(query) end)
 
+    assert_receive {:listener_started, %{type: :started}}, 5_000
     assert_query_eventually_active(query, 5_000)
     :ok = StreamingQuery.stop(query)
     assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
