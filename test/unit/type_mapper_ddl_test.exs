@@ -38,8 +38,11 @@ defmodule SparkEx.Unit.TypeMapperDDLTest do
 
     test "maps unknown types to STRING" do
       assert TypeMapper.to_spark_ddl_type(:category) == "STRING"
-      assert TypeMapper.to_spark_ddl_type({:time, :microsecond}) == "STRING"
       assert TypeMapper.to_spark_ddl_type({:duration, :microsecond}) == "STRING"
+    end
+
+    test "maps time type to TIME" do
+      assert TypeMapper.to_spark_ddl_type({:time, :microsecond}) == "TIME"
     end
   end
 

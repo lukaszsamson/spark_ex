@@ -116,9 +116,10 @@ defmodule SparkEx.Connect.CommandEncoder do
       |> Enum.map(&PlanEncoder.encode_expression/1)
 
     overwrite_condition =
-      case Keyword.get(v2_opts, :overwrite_condition, nil) do
-        nil -> nil
-        expr -> PlanEncoder.encode_expression(expr)
+      case {Keyword.get(v2_opts, :mode, :create), Keyword.get(v2_opts, :overwrite_condition, nil)} do
+        {:overwrite, nil} -> nil
+        {:overwrite, expr} -> PlanEncoder.encode_expression(expr)
+        {_other_mode, _} -> nil
       end
 
     write_v2 = %WriteOperationV2{

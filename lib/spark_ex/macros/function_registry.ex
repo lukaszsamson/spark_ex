@@ -185,8 +185,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:length, "length", :one_col, group: :string, doc: "Returns length of string or binary."},
       {:octet_length, "octet_length", :one_col,
        group: :string, doc: "Returns byte length of string."},
-      {:overlay, "overlay", {:col_lit, 3},
-       group: :string, doc: "Overlays string at position for length."},
+      # overlay is hand-written in Functions to accept 3-4 column args with optional len
       # sentences is hand-written in Functions to support language/country parameters
       # {:sentences, ...} — see Functions.sentences/1,3
       # levenshtein is hand-written in Functions to support threshold parameter
@@ -201,8 +200,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:elt, "elt", :n_col, group: :string, doc: "Returns the n-th input string."},
       {:find_in_set, "find_in_set", :two_col,
        group: :string, doc: "Returns position of string in comma-delimited list."},
-      {:left_, "left", {:col_lit, 1}, group: :string, doc: "Returns leftmost n characters."},
-      {:right_, "right", {:col_lit, 1}, group: :string, doc: "Returns rightmost n characters."},
+      {:left_, "left", :two_col, group: :string, doc: "Returns leftmost n characters."},
+      {:right_, "right", :two_col, group: :string, doc: "Returns rightmost n characters."},
       {:endswith, "endsWith", :two_col,
        group: :string, doc: "Returns true if string ends with suffix."},
       {:startswith, "startsWith", :two_col,
@@ -273,7 +272,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:weekday, "weekday", :one_col, group: :datetime, doc: "Day of week (0=Mon, 6=Sun)."},
       {:monthname, "monthname", :one_col, group: :datetime, doc: "Returns month name."},
       {:dayname, "dayname", :one_col, group: :datetime, doc: "Returns day name."},
-      {:extract, "extract", {:lit_then_cols, 1},
+      {:extract, "extract", :two_col,
        group: :datetime, doc: "Extracts date/time field.", aliases: [:date_part, :datepart]},
       {:date_add, "date_add", {:col_lit, 1},
        group: :datetime, doc: "Adds days to date.", aliases: [:dateadd]},

@@ -225,7 +225,8 @@ defmodule SparkEx.Unit.FunctionParityTest do
         "percentile",
         "uuid",
         "uniform",
-        "randstr"
+        "randstr",
+        "overlay"
       ])
 
     all_names = MapSet.union(registry_names, hand_written)

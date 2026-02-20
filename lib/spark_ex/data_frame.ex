@@ -169,13 +169,58 @@ defmodule SparkEx.DataFrame do
       df |> SparkEx.DataFrame.order_by([col("age") |> SparkEx.Column.desc()])
       df |> SparkEx.DataFrame.order_by(["name"])
   """
-  @spec order_by(t(), [Column.t() | String.t() | atom()]) :: t()
-  def order_by(%__MODULE__{} = df, columns) when is_list(columns) do
+  @spec order_by(t(), [Column.t() | String.t() | atom()], keyword()) :: t()
+  def order_by(%__MODULE__{} = df, columns, opts \\ []) when is_list(columns) do
     if columns == [] do
       raise ArgumentError, "cols should not be empty for order_by"
     end
 
-    sort_exprs = Enum.map(columns, &normalize_sort_expr/1)
+    ascending = Keyword.get(opts, :ascending)
+
+    sort_exprs =
+      case ascending do
+        nil ->
+          Enum.map(columns, &normalize_sort_expr/1)
+
+        asc when is_boolean(asc) ->
+          direction = if asc, do: :asc, else: :desc
+          null_order = if asc, do: :nulls_first, else: :nulls_last
+
+          Enum.map(columns, fn col ->
+            expr =
+              case col do
+                %Column{expr: {:sort_order, inner, _, _}} -> inner
+                %Column{expr: e} -> e
+                name when is_binary(name) -> {:col, name}
+                name when is_atom(name) -> {:col, Atom.to_string(name)}
+              end
+
+            {:sort_order, expr, direction, null_order}
+          end)
+
+        asc_list when is_list(asc_list) ->
+          if length(asc_list) != length(columns) do
+            raise ArgumentError,
+                  "ascending list length (#{length(asc_list)}) must match columns length (#{length(columns)})"
+          end
+
+          Enum.zip(columns, asc_list)
+          |> Enum.map(fn {col, asc} ->
+            direction = if asc, do: :asc, else: :desc
+            null_order = if asc, do: :nulls_first, else: :nulls_last
+
+            expr =
+              case col do
+                %Column{expr: {:sort_order, inner, _, _}} -> inner
+                %Column{expr: e} -> e
+                name when is_binary(name) -> {:col, name}
+                name when is_atom(name) -> {:col, Atom.to_string(name)}
+              end
+
+            {:sort_order, expr, direction, null_order}
+          end)
+      end
+
     %__MODULE__{df | plan: {:sort, df.plan, sort_exprs}}
   end
 

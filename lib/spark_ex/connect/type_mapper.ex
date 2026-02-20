@@ -139,7 +139,7 @@ defmodule SparkEx.Connect.TypeMapper do
   def to_spark_ddl_type(:date), do: "DATE"
   def to_spark_ddl_type({:datetime, _}), do: "TIMESTAMP"
   def to_spark_ddl_type({:naive_datetime, _}), do: "TIMESTAMP_NTZ"
-  def to_spark_ddl_type({:time, _}), do: "STRING"
+  def to_spark_ddl_type({:time, _}), do: "TIME"
   def to_spark_ddl_type({:duration, _}), do: "STRING"
   def to_spark_ddl_type(:category), do: "STRING"
   def to_spark_ddl_type(_other), do: "STRING"

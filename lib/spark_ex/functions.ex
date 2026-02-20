@@ -1433,6 +1433,18 @@ defmodule SparkEx.Functions do
 
   # ── Internal helpers (used by generated functions) ──
 
+  @doc """
+  Overlays `replace` over `src` starting at `pos` for `len` characters.
+
+  All arguments accept Column or string column names.
+  `len` defaults to `-1` (replace entire match length).
+  """
+  @spec overlay(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t() | integer()) :: Column.t()
+  def overlay(src, replace, pos, len \\ -1) do
+    args = [to_expr(src), to_expr(replace), to_expr(pos), to_expr_or_lit(len)]
+    %Column{expr: {:fn, "overlay", args, false}}
+  end
+
   @doc false
   def to_expr(%Column{expr: e}), do: e
   def to_expr(name) when is_binary(name), do: {:col, name}

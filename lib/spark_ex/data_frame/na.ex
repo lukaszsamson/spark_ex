@@ -156,6 +156,7 @@ defmodule SparkEx.DataFrame.NA do
   def replace(%DataFrame{} = df, to_replace, _value, opts) when is_map(to_replace) do
     cols = normalize_subset(Keyword.get(opts, :subset, nil))
     replacements = Enum.map(to_replace, fn {old, new} -> {old, new} end)
+    validate_replace_types!(replacements)
     %DataFrame{df | plan: {:na_replace, df.plan, cols, replacements}}
   end
 
@@ -176,11 +177,13 @@ defmodule SparkEx.DataFrame.NA do
       end
 
     replacements = Enum.zip(to_replace, values)
+    validate_replace_types!(replacements)
     %DataFrame{df | plan: {:na_replace, df.plan, cols, replacements}}
   end
 
   def replace(%DataFrame{} = df, to_replace, value, opts) do
     cols = normalize_subset(Keyword.get(opts, :subset, nil))
+    validate_replace_types!([{to_replace, value}])
     %DataFrame{df | plan: {:na_replace, df.plan, cols, [{to_replace, value}]}}
   end
 
@@ -196,4 +199,26 @@ defmodule SparkEx.DataFrame.NA do
       end
     end)
   end
+
+  defp validate_replace_types!(replacements) do
+    all_values =
+      Enum.flat_map(replacements, fn {old, new} ->
+        [old | if(is_nil(new), do: [], else: [new])]
+      end)
+
+    unless all_values == [] do
+      type_family = replace_type_family(hd(all_values))
+
+      unless Enum.all?(all_values, fn v -> replace_type_family(v) == type_family end) do
+        raise ArgumentError,
+              "mixed type replacements are not supported; all values must be the same type family (bool, numeric, or string)"
+      end
+    end
+  end
+
+  defp replace_type_family(v) when is_boolean(v), do: :bool
+  defp replace_type_family(v) when is_number(v), do: :numeric
+  defp replace_type_family(v) when is_binary(v), do: :string
+  defp replace_type_family(nil), do: :nil
+  defp replace_type_family(v), do: raise(ArgumentError, "unsupported replace value type: #{inspect(v)}")
 end

@@ -43,13 +43,18 @@ defmodule SparkEx.Observation do
   @doc """
   Returns the observed metrics map for this observation.
 
-  If no metrics are available yet, returns an empty map.
+  Raises if the observation was never attached via `DataFrame.observe/3`.
   """
   @spec get(t()) :: map()
   def get(%__MODULE__{name: name}) do
     case :ets.lookup(@table, name) do
-      [{^name, metrics}] -> metrics
-      [] -> %{}
+      [{^name, metrics}] ->
+        metrics
+
+      [] ->
+        raise ArgumentError,
+              "[NO_OBSERVE_BEFORE_GET] Observation \"#{name}\" was not attached. " <>
+                "Call DataFrame.observe/3 and execute an action first."
     end
   end
 

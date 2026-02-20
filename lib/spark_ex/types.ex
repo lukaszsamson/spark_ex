@@ -71,18 +71,21 @@ defmodule SparkEx.Types do
   ## Options
 
     * `:nullable` — whether the field can be null (default: `true`)
+    * `:metadata` — metadata map (default: `%{}`)
 
   ## Examples
 
       struct_field("id", :long)
       struct_field("name", :string, nullable: false)
+      struct_field("tags", :string, metadata: %{"comment" => "user tags"})
   """
   @spec struct_field(String.t(), spark_type(), keyword()) :: field()
   def struct_field(name, type, opts \\ []) when is_binary(name) do
     %{
       name: name,
       type: type,
-      nullable: Keyword.get(opts, :nullable, true)
+      nullable: Keyword.get(opts, :nullable, true),
+      metadata: Keyword.get(opts, :metadata, %{})
     }
   end
 
@@ -138,12 +141,12 @@ defmodule SparkEx.Types do
   @spec to_json(struct_type()) :: String.t()
   def to_json({:struct, fields}) do
     json_fields =
-      Enum.map(fields, fn %{name: name, type: type, nullable: nullable} ->
+      Enum.map(fields, fn field ->
         %{
-          "name" => name,
-          "type" => type_to_json(type),
-          "nullable" => nullable,
-          "metadata" => %{}
+          "name" => field.name,
+          "type" => type_to_json(field.type),
+          "nullable" => field.nullable,
+          "metadata" => Map.get(field, :metadata, %{})
         }
       end)
 
@@ -238,12 +241,12 @@ defmodule SparkEx.Types do
 
   defp type_to_json({:struct, fields}) do
     json_fields =
-      Enum.map(fields, fn %{name: name, type: type, nullable: nullable} ->
+      Enum.map(fields, fn field ->
         %{
-          "name" => name,
-          "type" => type_to_json(type),
-          "nullable" => nullable,
-          "metadata" => %{}
+          "name" => field.name,
+          "type" => type_to_json(field.type),
+          "nullable" => field.nullable,
+          "metadata" => Map.get(field, :metadata, %{})
         }
       end)
 

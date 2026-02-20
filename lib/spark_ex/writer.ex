@@ -165,8 +165,15 @@ defmodule SparkEx.Writer do
 
   Executes the write operation on the Spark server.
   """
-  @spec save(t(), String.t(), keyword()) :: :ok | {:error, term()}
-  def save(%__MODULE__{} = writer, path, opts \\ []) when is_binary(path) do
+  @spec save(t(), String.t() | nil, keyword()) :: :ok | {:error, term()}
+  def save(writer, path \\ nil, opts \\ [])
+
+  def save(%__MODULE__{} = writer, nil, opts) do
+    write_opts = build_write_opts(writer, [])
+    execute_write(writer.df, write_opts, opts)
+  end
+
+  def save(%__MODULE__{} = writer, path, opts) when is_binary(path) do
     write_opts = build_write_opts(writer, path: path)
     execute_write(writer.df, write_opts, opts)
   end

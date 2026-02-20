@@ -64,7 +64,7 @@ defmodule SparkEx.WindowSpec do
   """
   @spec rows_between(t(), boundary(), boundary()) :: t()
   def rows_between(%__MODULE__{} = spec, start, end_) do
-    %__MODULE__{spec | frame_spec: {:rows, start, end_}}
+    %__MODULE__{spec | frame_spec: {:rows, clamp_boundary(start), clamp_boundary(end_)}}
   end
 
   @doc """
@@ -79,8 +79,22 @@ defmodule SparkEx.WindowSpec do
   """
   @spec range_between(t(), boundary(), boundary()) :: t()
   def range_between(%__MODULE__{} = spec, start, end_) do
-    %__MODULE__{spec | frame_spec: {:range, start, end_}}
+    %__MODULE__{spec | frame_spec: {:range, clamp_boundary(start), clamp_boundary(end_)}}
   end
+
+  # PySpark clamps extreme boundary values to unbounded.
+  # _PRECEDING_THRESHOLD = -(1 << 31) + 1, _FOLLOWING_THRESHOLD = (1 << 31) - 1
+  import Bitwise, only: [bsl: 2]
+  @preceding_threshold -(bsl(1, 31)) + 1
+  @following_threshold bsl(1, 31) - 1
+
+  defp clamp_boundary(value) when is_integer(value) and value <= @preceding_threshold,
+    do: :unbounded
+
+  defp clamp_boundary(value) when is_integer(value) and value >= @following_threshold,
+    do: :unbounded
+
+  defp clamp_boundary(value), do: value
 
   defp to_expr(%Column{expr: e}), do: e
   defp to_expr(name) when is_binary(name), do: {:col, name}

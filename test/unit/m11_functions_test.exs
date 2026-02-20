@@ -453,7 +453,7 @@ defmodule SparkEx.M11.FunctionsTest do
     end
 
     test "date_part is alias for extract" do
-      result = Functions.date_part("YEAR", [Functions.col("d")])
+      result = Functions.date_part(Functions.lit("YEAR"), Functions.col("d"))
       assert %Column{expr: {:fn, "extract", [{:lit, "YEAR"}, {:col, "d"}], false}} = result
     end
 

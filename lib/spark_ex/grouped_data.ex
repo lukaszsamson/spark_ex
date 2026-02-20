@@ -80,6 +80,23 @@ defmodule SparkEx.GroupedData do
     end
   end
 
+  def agg(%__MODULE__{} = gd, agg_map) when is_map(agg_map) do
+    if map_size(agg_map) == 0 do
+      raise ArgumentError, "expected at least one aggregate expression"
+    end
+
+    agg_cols =
+      Enum.map(agg_map, fn {col_name, func_name} ->
+        %Column{
+          expr:
+            {:alias, {:fn, to_string(func_name), [{:col, to_string(col_name)}], false},
+             "#{func_name}(#{col_name})"}
+        }
+      end)
+
+    agg(gd, agg_cols)
+  end
+
   def agg(%__MODULE__{}, _other) do
     raise ArgumentError, "expected aggregate expressions as a non-empty list of SparkEx.Column"
   end

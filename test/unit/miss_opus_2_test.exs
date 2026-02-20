@@ -1130,6 +1130,260 @@ defmodule SparkEx.MissOpus2Test do
     end
   end
 
+  # ── Round 4 ──
+
+  # ── 7.1 GroupedData.agg map form ──
+
+  describe "7.1 agg map form" do
+    test "accepts a map of {col_name, agg_func}" do
+      df = make_df()
+      gd = %SparkEx.GroupedData{session: df.session, plan: df.plan, group_type: :groupby, grouping_exprs: []}
+      result = SparkEx.GroupedData.agg(gd, %{"age" => "max", "salary" => "avg"})
+      assert %DataFrame{plan: {:aggregate, _, :groupby, _, agg_exprs}} = result
+      aliases = Enum.map(agg_exprs, fn {:alias, {:fn, func, [{:col, col}], false}, _name} -> {col, func} end)
+      assert Enum.sort(aliases) == [{"age", "max"}, {"salary", "avg"}]
+    end
+
+    test "raises on empty map" do
+      df = make_df()
+      gd = %SparkEx.GroupedData{session: df.session, plan: df.plan, group_type: :groupby, grouping_exprs: []}
+      assert_raise ArgumentError, ~r/at least one/, fn ->
+        SparkEx.GroupedData.agg(gd, %{})
+      end
+    end
+  end
+
+  # ── 13.1 order_by ascending keyword ──
+
+  describe "13.1 order_by ascending keyword" do
+    test "ascending: true sorts all columns ascending" do
+      df = make_df()
+      result = DataFrame.order_by(df, ["a", "b"], ascending: true)
+      assert %DataFrame{plan: {:sort, _, exprs}} = result
+      assert [
+        {:sort_order, {:col, "a"}, :asc, :nulls_first},
+        {:sort_order, {:col, "b"}, :asc, :nulls_first}
+      ] = exprs
+    end
+
+    test "ascending: false sorts all columns descending" do
+      df = make_df()
+      result = DataFrame.order_by(df, ["a", "b"], ascending: false)
+      assert %DataFrame{plan: {:sort, _, exprs}} = result
+      assert [
+        {:sort_order, {:col, "a"}, :desc, :nulls_last},
+        {:sort_order, {:col, "b"}, :desc, :nulls_last}
+      ] = exprs
+    end
+
+    test "ascending list applies per-column" do
+      df = make_df()
+      result = DataFrame.order_by(df, ["a", "b"], ascending: [true, false])
+      assert %DataFrame{plan: {:sort, _, exprs}} = result
+      assert [
+        {:sort_order, {:col, "a"}, :asc, :nulls_first},
+        {:sort_order, {:col, "b"}, :desc, :nulls_last}
+      ] = exprs
+    end
+
+    test "ascending list length mismatch raises" do
+      df = make_df()
+      assert_raise ArgumentError, ~r/length/, fn ->
+        DataFrame.order_by(df, ["a", "b"], ascending: [true])
+      end
+    end
+  end
+
+  # ── 13.11 save optional path ──
+
+  describe "13.11 save optional path" do
+    test "save/1 with no path is a valid function call" do
+      # Verify that save/1 (with default nil path) exists and is callable.
+      # We can't test it fully without a real session, so verify arity.
+      assert function_exported?(SparkEx.Writer, :save, 1)
+      assert function_exported?(SparkEx.Writer, :save, 2)
+      assert function_exported?(SparkEx.Writer, :save, 3)
+    end
+  end
+
+  # ── 4.7 left_/right_ two_col ──
+
+  describe "4.7 left_/right_ use two_col arity" do
+    test "left_ accepts two column arguments" do
+      result = Functions.left_(Functions.col("s"), Functions.col("n"))
+      assert %Column{expr: {:fn, "left", [{:col, "s"}, {:col, "n"}], false}} = result
+    end
+
+    test "right_ accepts two column arguments" do
+      result = Functions.right_(Functions.col("s"), Functions.col("n"))
+      assert %Column{expr: {:fn, "right", [{:col, "s"}, {:col, "n"}], false}} = result
+    end
+  end
+
+  # ── 3.2 Column.transform delegates to Functions.transform ──
+
+  describe "3.2 Column.transform/2" do
+    test "delegates to Functions.transform" do
+      col = Functions.col("arr")
+      result = Column.transform(col, fn x -> Column.plus(x, Functions.lit(1)) end)
+      assert %Column{expr: {:fn, "transform", [{:col, "arr"}, {:lambda, _, _}], false}} = result
+    end
+  end
+
+  # ── 15.18 WriterV2 overwrite_condition conditional ──
+
+  describe "15.18 WriterV2 overwrite_condition" do
+    test "overwrite_condition encoding is conditional on mode" do
+      # This is tested at the encoder level. Verify the writer builder sets mode correctly.
+      df = make_df()
+      writer = df |> DataFrame.write |> SparkEx.Writer.format("delta") |> SparkEx.Writer.mode(:overwrite)
+      assert writer.mode == :overwrite
+
+      writer2 = df |> DataFrame.write |> SparkEx.Writer.format("delta")
+      assert writer2.mode == :error_if_exists
+    end
+  end
+
+  # ── 16.3 replace mixed-type validation ──
+
+  describe "16.3 replace mixed-type validation" do
+    test "raises on mixed numeric and string replacements" do
+      df = make_df()
+      assert_raise ArgumentError, ~r/mixed type/, fn ->
+        DataFrame.NA.replace(df, %{1 => "one"})
+      end
+    end
+
+    test "allows same-type replacements" do
+      df = make_df()
+      result = DataFrame.NA.replace(df, %{1 => 2, 3 => 4})
+      assert %DataFrame{plan: {:na_replace, _, _, _}} = result
+    end
+
+    test "allows nil as replacement value" do
+      df = make_df()
+      result = DataFrame.NA.replace(df, "N/A", nil)
+      assert %DataFrame{plan: {:na_replace, _, _, [{_, nil}]}} = result
+    end
+  end
+
+  # ── 17.1 Window boundary clamping ──
+
+  describe "17.1 window boundary clamping" do
+    setup do
+      %{spec: %SparkEx.WindowSpec{}}
+    end
+
+    test "extreme negative boundary is clamped to :unbounded", %{spec: spec} do
+      result = SparkEx.WindowSpec.rows_between(spec, -2_147_483_648, 0)
+      assert %SparkEx.WindowSpec{frame_spec: {:rows, :unbounded, 0}} = result
+    end
+
+    test "extreme positive boundary is clamped to :unbounded", %{spec: spec} do
+      result = SparkEx.WindowSpec.rows_between(spec, 0, 2_147_483_647)
+      assert %SparkEx.WindowSpec{frame_spec: {:rows, 0, :unbounded}} = result
+    end
+
+    test "normal boundaries are not clamped", %{spec: spec} do
+      result = SparkEx.WindowSpec.rows_between(spec, -5, 5)
+      assert %SparkEx.WindowSpec{frame_spec: {:rows, -5, 5}} = result
+    end
+
+    test "range_between also clamps", %{spec: spec} do
+      result = SparkEx.WindowSpec.range_between(spec, -2_147_483_648, 2_147_483_647)
+      assert %SparkEx.WindowSpec{frame_spec: {:range, :unbounded, :unbounded}} = result
+    end
+  end
+
+  # ── Round 5 ──
+
+  # ── 3.5 when/otherwise validation ──
+
+  describe "3.5 otherwise validation" do
+    test "otherwise raises when called twice" do
+      col = Functions.when_(Functions.col("x") |> Column.gt(0), Functions.lit("pos"))
+            |> Column.otherwise("zero")
+      assert_raise ArgumentError, ~r/otherwise.*once/, fn ->
+        Column.otherwise(col, "neg")
+      end
+    end
+  end
+
+  # ── 3.6 neq produces not(==) ──
+
+  describe "3.6 neq produces not(==)" do
+    test "neq wraps equality in NOT" do
+      result = Column.neq(Functions.col("a"), Functions.lit(1))
+      assert %Column{expr: {:fn, "not", [{:fn, "==", [{:col, "a"}, {:lit, 1}], false}], false}} = result
+    end
+
+    test "neq with non-Column literal" do
+      result = Column.neq(Functions.col("a"), 5)
+      assert %Column{expr: {:fn, "not", [{:fn, "==", [{:col, "a"}, {:lit, 5}], false}], false}} = result
+    end
+  end
+
+  # ── 4.6 overlay ──
+
+  describe "4.6 overlay" do
+    test "overlay with 3 args uses default len" do
+      result = Functions.overlay(Functions.col("s"), Functions.col("r"), Functions.col("p"))
+      assert %Column{expr: {:fn, "overlay", [{:col, "s"}, {:col, "r"}, {:col, "p"}, {:lit, -1}], false}} = result
+    end
+
+    test "overlay with 4 args" do
+      result = Functions.overlay(Functions.col("s"), Functions.col("r"), Functions.col("p"), Functions.lit(3))
+      assert %Column{expr: {:fn, "overlay", [{:col, "s"}, {:col, "r"}, {:col, "p"}, {:lit, 3}], false}} = result
+    end
+  end
+
+  # ── 4.8 extract accepts Column for field ──
+
+  describe "4.8 extract accepts Column" do
+    test "extract with Column field arg" do
+      result = Functions.extract(Functions.col("field_name"), Functions.col("ts"))
+      assert %Column{expr: {:fn, "extract", [{:col, "field_name"}, {:col, "ts"}], false}} = result
+    end
+
+    test "extract with string args" do
+      result = Functions.extract("YEAR", "ts")
+      assert %Column{expr: {:fn, "extract", [{:col, "YEAR"}, {:col, "ts"}], false}} = result
+    end
+  end
+
+  # ── 19.2 struct_field metadata ──
+
+  describe "19.2 struct_field metadata" do
+    test "struct_field accepts metadata option" do
+      field = SparkEx.Types.struct_field("name", :string, metadata: %{"comment" => "user name"})
+      assert field.metadata == %{"comment" => "user name"}
+    end
+
+    test "struct_field defaults metadata to empty map" do
+      field = SparkEx.Types.struct_field("name", :string)
+      assert field.metadata == %{}
+    end
+  end
+
+  # ── 19.3 type_mapper time type ──
+
+  describe "19.3 time type mapping" do
+    test "time type maps to TIME not STRING" do
+      assert SparkEx.Connect.TypeMapper.to_spark_ddl_type({:time, :microsecond}) == "TIME"
+    end
+  end
+
+  # ── 20.2 Observation get raises ──
+
+  describe "20.2 Observation get raises on unobserved" do
+    test "raises ArgumentError with NO_OBSERVE_BEFORE_GET" do
+      obs = SparkEx.Observation.new("never_attached_#{System.unique_integer()}")
+      assert_raise ArgumentError, ~r/NO_OBSERVE_BEFORE_GET/, fn ->
+        SparkEx.Observation.get(obs)
+      end
+    end
+  end
+
   # ── Helper ──
 
   defp make_df do

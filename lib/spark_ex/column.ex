@@ -43,7 +43,6 @@ defmodule SparkEx.Column do
 
   @binary_operators [
     {:eq, "==", "Equality: `col == other`."},
-    {:neq, "!=", "Not equal: `col != other`."},
     {:gt, ">", "Greater than: `col > other`."},
     {:gte, ">=", "Greater than or equal: `col >= other`."},
     {:lt, "<", "Less than: `col < other`."},
@@ -77,6 +76,12 @@ defmodule SparkEx.Column do
     def unquote(name)(%__MODULE__{} = left, right) do
       binary_fn(unquote(spark_name), left, %__MODULE__{expr: {:lit, right}})
     end
+  end
+
+  @doc "Not equal: `col != other`. Encodes as `not(==(a, b))` matching PySpark."
+  @spec neq(t(), t() | term()) :: t()
+  def neq(%__MODULE__{} = left, right) do
+    not_(eq(left, right))
   end
 
   # ── Generated unary operators ──
@@ -234,10 +239,18 @@ defmodule SparkEx.Column do
   """
   @spec otherwise(t(), t() | term()) :: t()
   def otherwise(%__MODULE__{expr: {:fn, "when", args, false}} = _when_col, %__MODULE__{} = value) do
+    if rem(length(args), 2) == 1 do
+      raise ArgumentError, "otherwise() can only be called once on a when() expression"
+    end
+
     %__MODULE__{expr: {:fn, "when", args ++ [value.expr], false}}
   end
 
   def otherwise(%__MODULE__{expr: {:fn, "when", args, false}} = _when_col, value) do
+    if rem(length(args), 2) == 1 do
+      raise ArgumentError, "otherwise() can only be called once on a when() expression"
+    end
+
     %__MODULE__{expr: {:fn, "when", args ++ [{:lit, value}], false}}
   end
 
@@ -333,6 +346,21 @@ defmodule SparkEx.Column do
   @spec outer(t()) :: t()
   def outer(%__MODULE__{} = col) do
     %__MODULE__{expr: {:outer, col.expr}}
+  end
+
+  @doc """
+  Applies a transformation function to this column.
+
+  Equivalent to PySpark's `Column.transform(f)` which delegates to
+  the `transform` SQL function.
+
+  ## Examples
+
+      col("arr") |> Column.transform(fn x -> Column.plus(x, lit(1)) end)
+  """
+  @spec transform(t(), (t() -> t())) :: t()
+  def transform(%__MODULE__{} = col, func) when is_function(func, 1) do
+    SparkEx.Functions.transform(col, func)
   end
 
   # ── Private helpers ──
