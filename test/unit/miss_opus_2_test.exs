@@ -1384,6 +1384,156 @@ defmodule SparkEx.MissOpus2Test do
     end
   end
 
+  # ── Round 6 ──
+
+  # ── 10.1 Column binary ops coerce non-Column values ──
+
+  describe "10.1 binary ops coerce datetime/decimal" do
+    test "eq accepts Date on right side" do
+      result = Column.eq(Functions.col("d"), ~D[2024-01-01])
+      assert %Column{expr: {:fn, "==", [{:col, "d"}, {:lit, ~D[2024-01-01]}], false}} = result
+    end
+
+    test "gt accepts string on right side" do
+      result = Column.gt(Functions.col("name"), "Alice")
+      assert %Column{expr: {:fn, ">", [{:col, "name"}, {:lit, "Alice"}], false}} = result
+    end
+
+    test "plus accepts Decimal on right side" do
+      d = Decimal.new("1.5")
+      result = Column.plus(Functions.col("x"), d)
+      assert %Column{expr: {:fn, "+", [{:col, "x"}, {:lit, ^d}], false}} = result
+    end
+  end
+
+  # ── 13.2 Integer ordinal support ──
+
+  describe "13.2 integer ordinal support" do
+    test "order_by accepts integer column indices" do
+      df = make_df()
+      result = DataFrame.order_by(df, [0, 1])
+      assert %DataFrame{plan: {:sort, _, exprs}} = result
+      assert [{:sort_order, {:col, "_c0"}, :asc, :nulls_first},
+              {:sort_order, {:col, "_c1"}, :asc, :nulls_first}] = exprs
+    end
+
+    test "group_by accepts integer column indices" do
+      df = make_df()
+      result = DataFrame.group_by(df, [0])
+      assert %SparkEx.GroupedData{grouping_exprs: [{:col, "_c0"}]} = result
+    end
+  end
+
+  # ── 15.1 Drop relation columns field ──
+
+  describe "15.1 drop with Column expressions" do
+    test "complex Column expressions go to col_exprs" do
+      df = make_df()
+      # A non-simple Column expression (not just {:col, name})
+      complex_col = Column.plus(Functions.col("a"), Functions.col("b"))
+      result = DataFrame.drop(df, [complex_col, "c"])
+      assert %DataFrame{plan: {:drop, _, ["c"], [expr]}} = result
+      assert {:fn, "+", [{:col, "a"}, {:col, "b"}], false} = expr
+    end
+
+    test "simple col references stay as names" do
+      df = make_df()
+      result = DataFrame.drop(df, [Functions.col("x"), "y"])
+      assert %DataFrame{plan: {:drop, _, ["x", "y"], []}} = result
+    end
+  end
+
+  # ── 15.5 ColumnAlias multi-name ──
+
+  describe "15.5 multi-name alias encoding" do
+    test "encodes alias with metadata" do
+      col = Functions.col("x") |> Column.alias_("new_x", metadata: %{"key" => "val"})
+      assert %Column{expr: {:alias, {:col, "x"}, "new_x", _json}} = col
+    end
+  end
+
+  # ── 15.15 Decimal precision/scale defaults ──
+
+  describe "15.15 decimal precision/scale" do
+    test "inferred for plain decimal literal" do
+      expr = {:lit, Decimal.new("123.45")}
+      encoded = SparkEx.Connect.PlanEncoder.encode_expression(expr)
+      assert %{expr_type: {:literal, %{literal_type: {:decimal, decimal}}}} = encoded
+      assert decimal.precision > 0
+      assert decimal.scale > 0
+    end
+  end
+
+  # ── Round 7 ──
+
+  describe "round 7" do
+    test "1.8 substr validates mixed types raise" do
+      c = Functions.col("s")
+      assert_raise ArgumentError, ~r/same type/, fn ->
+        Column.substr(c, 1, Functions.lit(5))
+      end
+    end
+
+    test "1.8 substr accepts both Column args" do
+      c = Functions.col("s")
+      result = Column.substr(c, Functions.lit(1), Functions.lit(5))
+      assert %Column{expr: {:fn, "substr", [_, _, _], false}} = result
+    end
+
+    test "1.8 substr accepts both integer args" do
+      c = Functions.col("s")
+      result = Column.substr(c, 1, 5)
+      assert %Column{expr: {:fn, "substr", [{:col, "s"}, {:lit, 1}, {:lit, 5}], false}} = result
+    end
+
+    test "8.1 streaming query module exports recent_progress and last_progress" do
+      # Verify the module exports these functions (parse_progress_json is private)
+      functions = SparkEx.StreamingQuery.__info__(:functions)
+      assert {:recent_progress, 1} in functions
+      assert {:last_progress, 1} in functions
+    end
+
+    test "13.4 repartition_by_id accepts numPartitions" do
+      df = make_df()
+      result = DataFrame.repartition_by_id(df, 10, "col1")
+      assert %DataFrame{plan: {:repartition_by_expression, _, [_], 10}} = result
+    end
+
+    test "13.4 repartition_by_id defaults numPartitions to nil" do
+      df = make_df()
+      result = DataFrame.repartition_by_id(df, "col1")
+      assert %DataFrame{plan: {:repartition_by_expression, _, [_], nil}} = result
+    end
+
+    test "14.27 schema_of_json accepts options" do
+      c = Functions.schema_of_json(Functions.col("j"), %{"allowNumericLeadingZeros" => "true"})
+      assert %Column{expr: {:fn, "schema_of_json", [_, _], false}} = c
+    end
+
+    test "14.27 schema_of_json works without options" do
+      c = Functions.schema_of_json(Functions.col("j"))
+      assert %Column{expr: {:fn, "schema_of_json", [{:col, "j"}], false}} = c
+    end
+
+    test "14.27 schema_of_csv accepts options" do
+      c = Functions.schema_of_csv(Functions.col("c"), %{"sep" => "|"})
+      assert %Column{expr: {:fn, "schema_of_csv", [_, _], false}} = c
+    end
+
+    test "14.27 schema_of_xml accepts options" do
+      c = Functions.schema_of_xml(Functions.col("x"), %{"rowTag" => "item"})
+      assert %Column{expr: {:fn, "schema_of_xml", [_, _], false}} = c
+    end
+
+    test "15.14 Time literal includes precision field" do
+      time = ~T[12:30:45.123456]
+      expr = {:lit, time}
+      encoded = PlanEncoder.encode_expression(expr)
+      assert %{expr_type: {:literal, %{literal_type: {:time, time_lit}}}} = encoded
+      assert time_lit.precision == 6
+    end
+  end
+
   # ── Helper ──
 
   defp make_df do

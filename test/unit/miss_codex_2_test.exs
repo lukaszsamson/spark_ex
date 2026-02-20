@@ -310,17 +310,17 @@ defmodule SparkEx.MissCodex2Test do
   describe "#17 drop Column support" do
     test "accepts Column in list" do
       result = DataFrame.drop(make_df(), [Functions.col("x")])
-      assert %DataFrame{plan: {:drop, _, ["x"]}} = result
+      assert %DataFrame{plan: {:drop, _, ["x"], []}} = result
     end
 
     test "accepts scalar string" do
       result = DataFrame.drop(make_df(), "x")
-      assert %DataFrame{plan: {:drop, _, ["x"]}} = result
+      assert %DataFrame{plan: {:drop, _, ["x"], []}} = result
     end
 
     test "accepts scalar Column" do
       result = DataFrame.drop(make_df(), Functions.col("x"))
-      assert %DataFrame{plan: {:drop, _, ["x"]}} = result
+      assert %DataFrame{plan: {:drop, _, ["x"], []}} = result
     end
   end
 

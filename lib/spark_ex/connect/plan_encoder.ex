@@ -365,12 +365,19 @@ defmodule SparkEx.Connect.PlanEncoder do
   # --- Milestone 2: Drop ---
 
   def encode_relation({:drop, child_plan, column_names}, counter) do
+    encode_relation({:drop, child_plan, column_names, []}, counter)
+  end
+
+  def encode_relation({:drop, child_plan, column_names, col_exprs}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
+    columns = Enum.map(col_exprs, &encode_expression/1)
+
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
-      rel_type: {:drop, %Spark.Connect.Drop{input: child, column_names: column_names}}
+      rel_type:
+        {:drop, %Spark.Connect.Drop{input: child, column_names: column_names, columns: columns}}
     }
 
     {relation, counter}
@@ -1335,13 +1342,36 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
-  def encode_expression({:alias, expr, name}) do
+  def encode_expression({:alias, expr, name}) when is_binary(name) do
     %Expression{
       expr_type:
         {:alias,
          %Expression.Alias{
            expr: encode_expression(expr),
            name: [name]
+         }}
+    }
+  end
+
+  def encode_expression({:alias, expr, names}) when is_list(names) do
+    %Expression{
+      expr_type:
+        {:alias,
+         %Expression.Alias{
+           expr: encode_expression(expr),
+           name: names
+         }}
+    }
+  end
+
+  def encode_expression({:alias, expr, name, metadata_json}) when is_binary(name) do
+    %Expression{
+      expr_type:
+        {:alias,
+         %Expression.Alias{
+           expr: encode_expression(expr),
+           name: [name],
+           metadata: metadata_json
          }}
     }
   end
@@ -2527,8 +2557,17 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.Literal{literal_type: {:double, v}}
   end
 
+  defp encode_literal(%Decimal{} = d) do
+    encode_literal({:decimal, Decimal.to_string(d)})
+  end
+
   defp encode_literal({:decimal, value}) when is_binary(value) do
-    %Expression.Literal{literal_type: {:decimal, %Expression.Literal.Decimal{value: value}}}
+    {precision, scale} = infer_decimal_precision_scale(value)
+
+    %Expression.Literal{
+      literal_type:
+        {:decimal, %Expression.Literal.Decimal{value: value, precision: precision, scale: scale}}
+    }
   end
 
   defp encode_literal({:decimal, value, precision, scale})
@@ -2610,7 +2649,7 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp encode_literal(%Time{} = time) do
     %Expression.Literal{
-      literal_type: {:time, %Expression.Literal.Time{nano: time_to_nanos(time)}}
+      literal_type: {:time, %Expression.Literal.Time{nano: time_to_nanos(time), precision: 6}}
     }
   end
 
@@ -2712,5 +2751,23 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.Window.WindowFrame.FrameBoundary{
       boundary: {:value, %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:long, n}}}}}
     }
+  end
+
+  # Infers precision and scale from a decimal string value.
+  # Matches PySpark's behavior of computing from the actual value.
+  defp infer_decimal_precision_scale(value) when is_binary(value) do
+    stripped = String.trim_leading(value, "-")
+
+    case String.split(stripped, ".") do
+      [int_part] ->
+        precision = max(String.length(int_part), 1)
+        {precision, 0}
+
+      [int_part, frac_part] ->
+        scale = String.length(frac_part)
+        int_digits = String.length(String.trim_leading(int_part, "0"))
+        precision = max(int_digits + scale, 1)
+        {precision, scale}
+    end
   end
 end

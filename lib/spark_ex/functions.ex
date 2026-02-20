@@ -1259,6 +1259,42 @@ defmodule SparkEx.Functions do
     %Column{expr: {:fn, "to_xml", args, false}}
   end
 
+  @doc "Returns DDL schema string of JSON string. Accepts optional options map."
+  @spec schema_of_json(Column.t() | String.t(), map() | nil) :: Column.t()
+  def schema_of_json(col, options \\ nil) when is_map(options) or is_nil(options) do
+    args =
+      case options do
+        nil -> [to_expr(col)]
+        opts -> [to_expr(col), options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "schema_of_json", args, false}}
+  end
+
+  @doc "Returns DDL schema string of CSV string. Accepts optional options map."
+  @spec schema_of_csv(Column.t() | String.t(), map() | nil) :: Column.t()
+  def schema_of_csv(col, options \\ nil) when is_map(options) or is_nil(options) do
+    args =
+      case options do
+        nil -> [to_expr(col)]
+        opts -> [to_expr(col), options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "schema_of_csv", args, false}}
+  end
+
+  @doc "Returns DDL schema string of XML string. Accepts optional options map."
+  @spec schema_of_xml(Column.t() | String.t(), map() | nil) :: Column.t()
+  def schema_of_xml(col, options \\ nil) when is_map(options) or is_nil(options) do
+    args =
+      case options do
+        nil -> [to_expr(col)]
+        opts -> [to_expr(col), options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "schema_of_xml", args, false}}
+  end
+
   # ── Additional hand-written functions (optional parameters, seed support, etc.) ──
 
   @doc "Converts timestamp to unix seconds. Can be called with no args for current timestamp."

@@ -140,14 +140,14 @@ defmodule SparkEx.DataFrame do
   """
   @spec drop(t(), [Column.t() | String.t() | atom()] | Column.t() | String.t() | atom()) :: t()
   def drop(%__MODULE__{} = df, columns) when is_list(columns) do
-    names =
-      Enum.map(columns, fn
-        %Column{expr: {:col, name}} -> name
-        %Column{} -> raise ArgumentError, "drop only supports simple column references"
-        other -> to_string(other)
+    {names, col_exprs} =
+      Enum.reduce(columns, {[], []}, fn
+        %Column{expr: {:col, name}}, {names, exprs} -> {[name | names], exprs}
+        %Column{} = col, {names, exprs} -> {names, [col.expr | exprs]}
+        other, {names, exprs} -> {[to_string(other) | names], exprs}
       end)
 
-    %__MODULE__{df | plan: {:drop, df.plan, names}}
+    %__MODULE__{df | plan: {:drop, df.plan, Enum.reverse(names), Enum.reverse(col_exprs)}}
   end
 
   def drop(%__MODULE__{} = df, column) do
@@ -1214,11 +1214,11 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.repartition_by_id(col("partition_col"))
   """
-  @spec repartition_by_id(t(), Column.t() | String.t() | atom()) :: t()
-  def repartition_by_id(%__MODULE__{} = df, col) do
+  @spec repartition_by_id(t(), pos_integer() | nil, Column.t() | String.t() | atom()) :: t()
+  def repartition_by_id(%__MODULE__{} = df, num_partitions \\ nil, col) do
     col_expr = normalize_column_expr(col)
     shuffle_expr = {:direct_shuffle_partition_id, col_expr}
-    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, [shuffle_expr], nil}}
+    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, [shuffle_expr], num_partitions}}
   end
 
   @doc "Alias for `filter/2`."
@@ -2034,6 +2034,7 @@ defmodule SparkEx.DataFrame do
   defp normalize_column_expr(%Column{} = col), do: col.expr
   defp normalize_column_expr(name) when is_binary(name), do: {:col, name}
   defp normalize_column_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
+  defp normalize_column_expr(idx) when is_integer(idx), do: {:col, "_c#{idx}"}
   defp normalize_column_expr({:col_regex, _} = expr), do: expr
   defp normalize_column_expr({:metadata_col, _} = expr), do: expr
 
@@ -2058,6 +2059,10 @@ defmodule SparkEx.DataFrame do
 
   defp normalize_sort_expr(name) when is_atom(name) do
     {:sort_order, {:col, Atom.to_string(name)}, :asc, :nulls_first}
+  end
+
+  defp normalize_sort_expr(idx) when is_integer(idx) do
+    {:sort_order, {:col, "_c#{idx}"}, :asc, :nulls_first}
   end
 
   defp ensure_same_session!(%__MODULE__{session: left}, %__MODULE__{session: right}, _op)

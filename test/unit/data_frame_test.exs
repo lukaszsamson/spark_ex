@@ -273,13 +273,13 @@ defmodule SparkEx.DataFrameTest do
     test "creates drop plan from string names" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.drop(df, ["temp", "debug"])
-      assert %DataFrame{plan: {:drop, {:sql, _, _}, ["temp", "debug"]}} = result
+      assert %DataFrame{plan: {:drop, {:sql, _, _}, ["temp", "debug"], []}} = result
     end
 
     test "creates drop plan from atom names" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.drop(df, [:temp, :debug])
-      assert %DataFrame{plan: {:drop, {:sql, _, _}, ["temp", "debug"]}} = result
+      assert %DataFrame{plan: {:drop, {:sql, _, _}, ["temp", "debug"], []}} = result
     end
   end
 

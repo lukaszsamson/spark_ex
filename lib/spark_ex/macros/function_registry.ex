@@ -591,8 +591,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :json, doc: "Returns length of outermost JSON array."},
       {:json_object_keys, "json_object_keys", :one_col,
        group: :json, doc: "Returns keys of outermost JSON object."},
-      {:schema_of_json, "schema_of_json", :one_col,
-       group: :json, doc: "Returns DDL schema string of JSON string."},
+      # schema_of_json: hand-written in functions.ex (needs options parameter)
       {:parse_json, "parse_json", :one_col,
        group: :json, doc: "Parses JSON string to variant type."},
       {:try_parse_json, "try_parse_json", :one_col,
@@ -614,10 +613,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
 
   defp csv_xml_functions do
     [
-      {:schema_of_csv, "schema_of_csv", :one_col,
-       group: :csv_xml, doc: "Returns DDL schema string of CSV string."},
-      {:schema_of_xml, "schema_of_xml", :one_col,
-       group: :csv_xml, doc: "Returns DDL schema string of XML string."},
+      # schema_of_csv: hand-written in functions.ex (needs options parameter)
+      # schema_of_xml: hand-written in functions.ex (needs options parameter)
       {:xpath, "xpath", {:col_lit, 1},
        group: :csv_xml, doc: "Evaluates XPath expression returning array of strings."},
       {:xpath_boolean, "xpath_boolean", {:col_lit, 1},

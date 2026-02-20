@@ -202,10 +202,20 @@ defmodule SparkEx.Column do
 
   @doc "Returns a substring starting at `pos` for `len` characters."
   @spec substr(t(), t() | integer(), t() | integer()) :: t()
-  def substr(%__MODULE__{} = col, pos, len) do
+  def substr(%__MODULE__{} = col, %__MODULE__{} = pos, %__MODULE__{} = len) do
     %__MODULE__{
-      expr: {:fn, "substr", [col.expr, coerce_expr(pos), coerce_expr(len)], false}
+      expr: {:fn, "substr", [col.expr, pos.expr, len.expr], false}
     }
+  end
+
+  def substr(%__MODULE__{} = col, pos, len) when is_integer(pos) and is_integer(len) do
+    %__MODULE__{
+      expr: {:fn, "substr", [col.expr, {:lit, pos}, {:lit, len}], false}
+    }
+  end
+
+  def substr(%__MODULE__{} = _col, _pos, _len) do
+    raise ArgumentError, "startPos and length must be the same type: both Column or both integer"
   end
 
   @doc """
@@ -377,9 +387,12 @@ defmodule SparkEx.Column do
     binary_fn(name, left, %__MODULE__{expr: {:lit, right}})
   end
 
-  defp binary_fn(name, left, right) do
-    raise ArgumentError,
-          "expected Column or numeric literal, got: #{inspect(left)} and #{inspect(right)} for #{name}"
+  defp binary_fn(name, left, %__MODULE__{} = right) do
+    binary_fn(name, %__MODULE__{expr: {:lit, left}}, right)
+  end
+
+  defp binary_fn(name, %__MODULE__{} = left, right) do
+    binary_fn(name, left, %__MODULE__{expr: {:lit, right}})
   end
 
   defp coerce_expr(%__MODULE__{expr: e}), do: e
