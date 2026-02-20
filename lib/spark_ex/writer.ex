@@ -55,6 +55,18 @@ defmodule SparkEx.Writer do
           cluster_by: [String.t()]
         }
 
+  @exec_opt_keys [
+    :timeout,
+    :tags,
+    :reattachable,
+    :allow_arrow_batch_chunking,
+    :preferred_arrow_chunk_size,
+    :reattach_retries,
+    :execute_stream_fun,
+    :reattach_stream_fun,
+    :release_execute_fun
+  ]
+
   @doc """
   Sets the output data source format (e.g. `"parquet"`, `"csv"`, `"json"`, `"orc"`).
   """
@@ -213,14 +225,15 @@ defmodule SparkEx.Writer do
   """
   @spec parquet(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def parquet(df, path, opts \\ []) do
-    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options, :partition_by])
+    {write_opts, option_overrides, exec_opts} =
+      split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
       %__MODULE__{df: df, source: "parquet"}
       |> maybe_set_mode(write_opts)
-      |> maybe_set_options(write_opts)
       |> maybe_set_partition_by(write_opts)
 
+    writer = %{writer | options: Map.merge(writer.options, option_overrides)}
     save(writer, path, exec_opts)
   end
 
@@ -237,7 +250,9 @@ defmodule SparkEx.Writer do
   @spec csv(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def csv(df, path, opts \\ []) do
     {csv_opts, rest} = Keyword.split(opts, [:header, :separator, :sep])
-    {write_opts, exec_opts} = Keyword.split(rest, [:mode, :options, :partition_by])
+
+    {write_opts, option_overrides, exec_opts} =
+      split_convenience_opts(rest, [:mode, :partition_by])
 
     extra_options =
       csv_opts
@@ -250,10 +265,13 @@ defmodule SparkEx.Writer do
     writer =
       %__MODULE__{df: df, source: "csv"}
       |> maybe_set_mode(write_opts)
-      |> maybe_set_options(write_opts)
       |> maybe_set_partition_by(write_opts)
 
-    writer = %{writer | options: Map.merge(extra_options, writer.options)}
+    writer = %{
+      writer
+      | options: extra_options |> Map.merge(option_overrides) |> Map.merge(writer.options)
+    }
+
     save(writer, path, exec_opts)
   end
 
@@ -267,14 +285,15 @@ defmodule SparkEx.Writer do
   """
   @spec json(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def json(df, path, opts \\ []) do
-    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options, :partition_by])
+    {write_opts, option_overrides, exec_opts} =
+      split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
       %__MODULE__{df: df, source: "json"}
       |> maybe_set_mode(write_opts)
-      |> maybe_set_options(write_opts)
       |> maybe_set_partition_by(write_opts)
 
+    writer = %{writer | options: Map.merge(writer.options, option_overrides)}
     save(writer, path, exec_opts)
   end
 
@@ -288,14 +307,15 @@ defmodule SparkEx.Writer do
   """
   @spec orc(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def orc(df, path, opts \\ []) do
-    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options, :partition_by])
+    {write_opts, option_overrides, exec_opts} =
+      split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
       %__MODULE__{df: df, source: "orc"}
       |> maybe_set_mode(write_opts)
-      |> maybe_set_options(write_opts)
       |> maybe_set_partition_by(write_opts)
 
+    writer = %{writer | options: Map.merge(writer.options, option_overrides)}
     save(writer, path, exec_opts)
   end
 
@@ -310,14 +330,15 @@ defmodule SparkEx.Writer do
   """
   @spec avro(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def avro(df, path, opts \\ []) do
-    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options, :partition_by])
+    {write_opts, option_overrides, exec_opts} =
+      split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
       %__MODULE__{df: df, source: "avro"}
       |> maybe_set_mode(write_opts)
-      |> maybe_set_options(write_opts)
       |> maybe_set_partition_by(write_opts)
 
+    writer = %{writer | options: Map.merge(writer.options, option_overrides)}
     save(writer, path, exec_opts)
   end
 
@@ -332,14 +353,15 @@ defmodule SparkEx.Writer do
   """
   @spec xml(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def xml(df, path, opts \\ []) do
-    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options, :partition_by])
+    {write_opts, option_overrides, exec_opts} =
+      split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
       %__MODULE__{df: df, source: "xml"}
       |> maybe_set_mode(write_opts)
-      |> maybe_set_options(write_opts)
       |> maybe_set_partition_by(write_opts)
 
+    writer = %{writer | options: Map.merge(writer.options, option_overrides)}
     save(writer, path, exec_opts)
   end
 
@@ -353,9 +375,8 @@ defmodule SparkEx.Writer do
   """
   @spec jdbc(SparkEx.DataFrame.t(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def jdbc(df, url, table, opts \\ []) when is_binary(url) and is_binary(table) do
-    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options])
-    opts_options = write_opts |> Keyword.get(:options, %{}) |> stringify_options()
-    merged = opts_options |> Map.put("url", url) |> Map.put("dbtable", table)
+    {write_opts, option_overrides, exec_opts} = split_convenience_opts(opts, [:mode])
+    merged = option_overrides |> Map.put("url", url) |> Map.put("dbtable", table)
 
     writer =
       %__MODULE__{df: df, source: "jdbc", options: merged}
@@ -366,12 +387,11 @@ defmodule SparkEx.Writer do
 
   @spec jdbc(SparkEx.DataFrame.t(), keyword()) :: :ok | {:error, term()}
   def jdbc(df, opts) when is_list(opts) do
-    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options])
+    {write_opts, option_overrides, exec_opts} = split_convenience_opts(opts, [:mode])
 
     writer =
-      %__MODULE__{df: df, source: "jdbc"}
+      %__MODULE__{df: df, source: "jdbc", options: option_overrides}
       |> maybe_set_mode(write_opts)
-      |> maybe_set_options(write_opts)
 
     execute_write(writer.df, build_write_opts(writer, []), exec_opts)
   end
@@ -386,13 +406,13 @@ defmodule SparkEx.Writer do
   """
   @spec text(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def text(df, path, opts \\ []) do
-    {write_opts, exec_opts} = Keyword.split(opts, [:mode, :options])
+    {write_opts, option_overrides, exec_opts} = split_convenience_opts(opts, [:mode])
 
     writer =
       %__MODULE__{df: df, source: "text"}
       |> maybe_set_mode(write_opts)
-      |> maybe_set_options(write_opts)
 
+    writer = %{writer | options: Map.merge(writer.options, option_overrides)}
     save(writer, path, exec_opts)
   end
 
@@ -427,13 +447,6 @@ defmodule SparkEx.Writer do
     end
   end
 
-  defp maybe_set_options(writer, opts) do
-    case Keyword.get(opts, :options) do
-      nil -> writer
-      o -> options(writer, o)
-    end
-  end
-
   defp maybe_set_partition_by(writer, opts) do
     case Keyword.get(opts, :partition_by) do
       nil -> writer
@@ -441,8 +454,32 @@ defmodule SparkEx.Writer do
     end
   end
 
+  defp split_convenience_opts(opts, writer_keys) do
+    write_opts = Keyword.take(opts, writer_keys)
+    exec_opts = Keyword.take(opts, @exec_opt_keys)
+    option_overrides = extract_option_overrides(opts, writer_keys)
+    {write_opts, option_overrides, exec_opts}
+  end
+
+  defp extract_option_overrides(opts, reserved_keys) do
+    nested_options = opts |> Keyword.get(:options, %{}) |> stringify_options()
+
+    top_level_options =
+      opts
+      |> Keyword.drop([:options | reserved_keys ++ @exec_opt_keys])
+      |> stringify_options()
+
+    Map.merge(top_level_options, nested_options)
+  end
+
   defp stringify_options(opts) when is_map(opts) do
     Map.new(opts, fn {k, v} -> {to_string(k), normalize_option_value(v)} end)
+  end
+
+  defp stringify_options(opts) when is_list(opts) do
+    opts
+    |> Enum.into(%{})
+    |> stringify_options()
   end
 
   defp normalize_option_value(value) when is_binary(value), do: value

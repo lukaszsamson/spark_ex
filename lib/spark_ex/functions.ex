@@ -347,8 +347,7 @@ defmodule SparkEx.Functions do
           Column.t()
   def replace(src, search, replacement \\ "") do
     %Column{
-      expr:
-        {:fn, "replace", [to_expr(src), to_expr(search), to_expr(replacement)], false}
+      expr: {:fn, "replace", [to_expr(src), to_expr(search), to_expr(replacement)], false}
     }
   end
 
@@ -407,8 +406,7 @@ defmodule SparkEx.Functions do
   @spec months_between(Column.t() | String.t(), Column.t() | String.t(), boolean()) :: Column.t()
   def months_between(date1, date2, round_off \\ true) do
     %Column{
-      expr:
-        {:fn, "months_between", [to_expr(date1), to_expr(date2), lit_expr(round_off)], false}
+      expr: {:fn, "months_between", [to_expr(date1), to_expr(date2), lit_expr(round_off)], false}
     }
   end
 
@@ -855,8 +853,12 @@ defmodule SparkEx.Functions do
     %Column{
       expr:
         {:fn, "aggregate",
-         [col_expr, zero_expr, {:lambda, merge_body, merge_vars}, {:lambda, finish_body, finish_vars}],
-         false}
+         [
+           col_expr,
+           zero_expr,
+           {:lambda, merge_body, merge_vars},
+           {:lambda, finish_body, finish_vars}
+         ], false}
     }
   end
 
@@ -1006,11 +1008,17 @@ defmodule SparkEx.Functions do
 
       make_timestamp(col("y"), col("m"), col("d"), col("h"), col("min"), col("sec"))
       make_timestamp(col("y"), col("m"), col("d"), col("h"), col("min"), col("sec"), col("tz"))
+      make_timestamp(date: col("d"), time: col("t"))
+      make_timestamp(date: col("d"), time: col("t"), timezone: col("tz"))
   """
-  @spec make_timestamp([Column.t() | String.t()]) :: Column.t()
-  def make_timestamp(cols) when is_list(cols) do
-    args = Enum.map(cols, &to_expr/1)
-    %Column{expr: {:fn, "make_timestamp", args, false}}
+  @spec make_timestamp([Column.t() | String.t()] | keyword()) :: Column.t()
+  def make_timestamp(cols_or_opts) when is_list(cols_or_opts) do
+    if Keyword.keyword?(cols_or_opts) do
+      make_timestamp_from_keyword(cols_or_opts)
+    else
+      args = Enum.map(cols_or_opts, &to_expr/1)
+      %Column{expr: {:fn, "make_timestamp", args, false}}
+    end
   end
 
   @doc """
@@ -1064,6 +1072,29 @@ defmodule SparkEx.Functions do
   def try_make_timestamp_ntz(cols) when is_list(cols) do
     args = Enum.map(cols, &to_expr/1)
     %Column{expr: {:fn, "try_make_timestamp_ntz", args, false}}
+  end
+
+  defp make_timestamp_from_keyword(opts) do
+    invalid_keys = Keyword.keys(opts) -- [:date, :time, :timezone]
+
+    if invalid_keys != [] do
+      raise ArgumentError, "unsupported make_timestamp options: #{inspect(invalid_keys)}"
+    end
+
+    if not (Keyword.has_key?(opts, :date) and Keyword.has_key?(opts, :time)) do
+      raise ArgumentError, "make_timestamp keyword form requires :date and :time"
+    end
+
+    args = [to_expr(Keyword.fetch!(opts, :date)), to_expr(Keyword.fetch!(opts, :time))]
+
+    args =
+      if Keyword.has_key?(opts, :timezone) do
+        args ++ [to_expr(Keyword.fetch!(opts, :timezone))]
+      else
+        args
+      end
+
+    %Column{expr: {:fn, "make_timestamp", args, false}}
   end
 
   # ── Interval construction functions ──
@@ -1475,7 +1506,12 @@ defmodule SparkEx.Functions do
   All arguments accept Column or string column names.
   `len` defaults to `-1` (replace entire match length).
   """
-  @spec overlay(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t() | integer()) :: Column.t()
+  @spec overlay(
+          Column.t() | String.t(),
+          Column.t() | String.t(),
+          Column.t() | String.t(),
+          Column.t() | String.t() | integer()
+        ) :: Column.t()
   def overlay(src, replace, pos, len \\ -1) do
     args = [to_expr(src), to_expr(replace), to_expr(pos), to_expr_or_lit(len)]
     %Column{expr: {:fn, "overlay", args, false}}

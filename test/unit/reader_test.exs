@@ -15,6 +15,14 @@ defmodule SparkEx.ReaderTest do
       df = Reader.table(self(), "my_table", options: %{"key" => "val"})
       assert %DataFrame{plan: {:read_named_table, "my_table", %{"key" => "val"}}} = df
     end
+
+    test "merges top-level options with nested options" do
+      df = Reader.table(self(), "my_table", streaming: false, options: %{"key" => "val"})
+
+      assert %DataFrame{
+               plan: {:read_named_table, "my_table", %{"streaming" => "false", "key" => "val"}}
+             } = df
+    end
   end
 
   describe "builder API" do
@@ -107,6 +115,20 @@ defmodule SparkEx.ReaderTest do
     test "creates read_data_source with json format" do
       df = Reader.json(self(), "/data/file.json")
       assert %DataFrame{plan: {:read_data_source, "json", ["/data/file.json"], nil, %{}}} = df
+    end
+
+    test "merges top-level options with nested options" do
+      df =
+        Reader.json(self(), "/data/file.json",
+          multi_line: true,
+          options: %{"mode" => "PERMISSIVE"}
+        )
+
+      assert %DataFrame{
+               plan:
+                 {:read_data_source, "json", ["/data/file.json"], nil,
+                  %{"multi_line" => "true", "mode" => "PERMISSIVE"}}
+             } = df
     end
   end
 end

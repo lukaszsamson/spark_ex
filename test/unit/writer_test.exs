@@ -4,6 +4,25 @@ defmodule SparkEx.Unit.WriterTest do
   alias SparkEx.Writer
   alias SparkEx.DataFrame
 
+  defmodule FakeSession do
+    use GenServer
+
+    def start_link(opts) do
+      GenServer.start_link(__MODULE__, opts)
+    end
+
+    @impl true
+    def init(opts) do
+      {:ok, %{parent: Keyword.fetch!(opts, :parent)}}
+    end
+
+    @impl true
+    def handle_call({:execute_command, command, exec_opts}, _from, state) do
+      send(state.parent, {:execute_command, command, exec_opts})
+      {:reply, :ok, state}
+    end
+  end
+
   setup do
     df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
     writer = %Writer{df: df}
@@ -119,6 +138,46 @@ defmodule SparkEx.Unit.WriterTest do
       assert w.df == df
       assert w.mode == :error_if_exists
       assert w.options == %{}
+    end
+  end
+
+  describe "convenience option handling" do
+    test "parquet merges top-level and nested options into sink options" do
+      {:ok, session} = FakeSession.start_link(parent: self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      assert :ok =
+               Writer.parquet(df, "/tmp/out",
+                 mode: :overwrite,
+                 compression: "gzip",
+                 options: %{"maxRecordsPerFile" => 10},
+                 timeout: 1200
+               )
+
+      assert_receive {:execute_command, {:write_operation, _, write_opts}, exec_opts}
+      assert Keyword.get(write_opts, :mode) == :overwrite
+      assert Keyword.get(write_opts, :options)["compression"] == "gzip"
+      assert Keyword.get(write_opts, :options)["maxRecordsPerFile"] == "10"
+      assert exec_opts == [timeout: 1200]
+    end
+
+    test "csv keeps csv-specific options and includes extra top-level options" do
+      {:ok, session} = FakeSession.start_link(parent: self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      assert :ok =
+               Writer.csv(df, "/tmp/out",
+                 header: true,
+                 separator: "|",
+                 quote_all: true,
+                 options: %{"escape" => "\\"}
+               )
+
+      assert_receive {:execute_command, {:write_operation, _, write_opts}, _exec_opts}
+      assert Keyword.get(write_opts, :options)["header"] == "true"
+      assert Keyword.get(write_opts, :options)["sep"] == "|"
+      assert Keyword.get(write_opts, :options)["quote_all"] == "true"
+      assert Keyword.get(write_opts, :options)["escape"] == "\\"
     end
   end
 end

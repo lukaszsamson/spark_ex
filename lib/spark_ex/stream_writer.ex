@@ -43,6 +43,18 @@ defmodule SparkEx.StreamWriter do
           cluster_by: [String.t()]
         }
 
+  @exec_opt_keys [
+    :timeout,
+    :tags,
+    :reattachable,
+    :allow_arrow_batch_chunking,
+    :preferred_arrow_chunk_size,
+    :reattach_retries,
+    :execute_stream_fun,
+    :reattach_stream_fun,
+    :release_execute_fun
+  ]
+
   @spec output_mode(t(), String.t()) :: t()
   def output_mode(%__MODULE__{} = writer, mode) when mode in ["append", "complete", "update"] do
     %{writer | output_mode: mode}
@@ -192,8 +204,9 @@ defmodule SparkEx.StreamWriter do
   """
   @spec start(t(), keyword()) :: {:ok, SparkEx.StreamingQuery.t()} | {:error, term()}
   def start(%__MODULE__{} = writer, opts \\ []) do
+    {writer, exec_opts} = apply_call_time_options(writer, opts)
     write_opts = build_write_opts(writer)
-    execute_stream_start(writer.df, write_opts, opts)
+    execute_stream_start(writer.df, write_opts, exec_opts)
   end
 
   @doc """
@@ -214,9 +227,10 @@ defmodule SparkEx.StreamWriter do
   @spec to_table(t(), String.t(), keyword()) ::
           {:ok, SparkEx.StreamingQuery.t()} | {:error, term()}
   def to_table(%__MODULE__{} = writer, table_name, opts \\ []) when is_binary(table_name) do
+    {writer, exec_opts} = apply_call_time_options(writer, opts)
     writer = %{writer | table_name: table_name, path: nil}
     write_opts = build_write_opts(writer)
-    execute_stream_start(writer.df, write_opts, opts)
+    execute_stream_start(writer.df, write_opts, exec_opts)
   end
 
   # --- Private ---
@@ -235,6 +249,81 @@ defmodule SparkEx.StreamWriter do
       foreach_writer: writer.foreach_writer,
       foreach_batch: writer.foreach_batch
     ]
+  end
+
+  defp apply_call_time_options(writer, opts) do
+    writer =
+      writer
+      |> maybe_override_writer_option(:format, Keyword.get(opts, :format))
+      |> maybe_override_writer_option(
+        :output_mode,
+        Keyword.get(opts, :output_mode) || Keyword.get(opts, :outputMode)
+      )
+      |> maybe_override_writer_option(
+        :partition_by,
+        Keyword.get(opts, :partition_by) || Keyword.get(opts, :partitionBy)
+      )
+      |> maybe_override_writer_option(
+        :cluster_by,
+        Keyword.get(opts, :cluster_by) || Keyword.get(opts, :clusterBy)
+      )
+      |> maybe_override_writer_option(
+        :query_name,
+        Keyword.get(opts, :query_name) || Keyword.get(opts, :queryName)
+      )
+      |> maybe_override_writer_option(:trigger, Keyword.get(opts, :trigger))
+      |> maybe_override_writer_option(:path, Keyword.get(opts, :path))
+
+    sink_option_overrides = extract_sink_option_overrides(opts)
+    writer = %{writer | options: Map.merge(writer.options, sink_option_overrides)}
+
+    exec_opts = Keyword.take(opts, @exec_opt_keys)
+    {writer, exec_opts}
+  end
+
+  defp maybe_override_writer_option(writer, _key, nil), do: writer
+  defp maybe_override_writer_option(writer, :format, value), do: format(writer, value)
+  defp maybe_override_writer_option(writer, :output_mode, value), do: output_mode(writer, value)
+
+  defp maybe_override_writer_option(writer, :partition_by, value),
+    do: partition_by(writer, normalize_columns(value))
+
+  defp maybe_override_writer_option(writer, :cluster_by, value),
+    do: cluster_by(writer, normalize_columns(value))
+
+  defp maybe_override_writer_option(writer, :query_name, value), do: query_name(writer, value)
+  defp maybe_override_writer_option(writer, :path, value), do: path(writer, value)
+
+  defp maybe_override_writer_option(writer, :trigger, value) when is_list(value),
+    do: trigger(writer, value)
+
+  defp maybe_override_writer_option(_writer, :trigger, value) do
+    raise ArgumentError, "trigger option must be a keyword list, got: #{inspect(value)}"
+  end
+
+  defp extract_sink_option_overrides(opts) do
+    nested_options = opts |> Keyword.get(:options, %{}) |> stringify_options()
+
+    top_level_options =
+      opts
+      |> Keyword.drop([
+        :format,
+        :output_mode,
+        :outputMode,
+        :partition_by,
+        :partitionBy,
+        :cluster_by,
+        :clusterBy,
+        :query_name,
+        :queryName,
+        :trigger,
+        :path,
+        :options
+        | @exec_opt_keys
+      ])
+      |> stringify_options()
+
+    Map.merge(top_level_options, nested_options)
   end
 
   defp execute_stream_start(df, write_opts, exec_opts) do
@@ -265,6 +354,19 @@ defmodule SparkEx.StreamWriter do
     opts
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new(fn {k, v} -> {to_string(k), normalize_option_value(v)} end)
+  end
+
+  defp stringify_options(opts) when is_list(opts) do
+    opts
+    |> Enum.into(%{})
+    |> stringify_options()
+  end
+
+  defp normalize_columns(value) when is_binary(value), do: [value]
+  defp normalize_columns(value) when is_list(value), do: value
+
+  defp normalize_columns(value) do
+    raise ArgumentError, "expected column name or list of column names, got: #{inspect(value)}"
   end
 
   defp normalize_option_value(value) when is_binary(value), do: value

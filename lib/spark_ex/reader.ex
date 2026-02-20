@@ -162,7 +162,7 @@ defmodule SparkEx.Reader do
   """
   @spec table(GenServer.server(), String.t(), keyword()) :: DataFrame.t()
   def table(session, table_name, opts \\ []) when is_binary(table_name) do
-    options = opts |> Keyword.get(:options, %{}) |> normalize_options()
+    options = merge_source_options(opts, [])
     %DataFrame{session: session, plan: {:read_named_table, table_name, options}}
   end
 
@@ -350,7 +350,7 @@ defmodule SparkEx.Reader do
   defp data_source(session, format, paths, opts) do
     paths = List.wrap(paths)
     schema = Keyword.get(opts, :schema, nil)
-    options = opts |> Keyword.get(:options, %{}) |> normalize_options()
+    options = merge_source_options(opts, [:schema, :predicates])
     predicates = opts |> Keyword.get(:predicates) |> normalize_predicates()
 
     plan =
@@ -360,6 +360,17 @@ defmodule SparkEx.Reader do
       end
 
     %DataFrame{session: session, plan: plan}
+  end
+
+  defp merge_source_options(opts, reserved_keys) do
+    nested_options = opts |> Keyword.get(:options, %{}) |> normalize_options()
+
+    top_level_options =
+      opts
+      |> Keyword.drop([:options | reserved_keys])
+      |> normalize_options()
+
+    Map.merge(top_level_options, nested_options)
   end
 
   defp normalize_options(opts) when is_list(opts) do

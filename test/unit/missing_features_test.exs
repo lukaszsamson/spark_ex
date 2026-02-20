@@ -265,6 +265,25 @@ defmodule SparkEx.MissingFeaturesTest do
                   ], false}
              } = result
     end
+
+    test "creates make_timestamp with keyword date/time form" do
+      result = Functions.make_timestamp(date: Functions.col("d"), time: Functions.col("t"))
+
+      assert %Column{expr: {:fn, "make_timestamp", [{:col, "d"}, {:col, "t"}], false}} = result
+    end
+
+    test "creates make_timestamp with keyword date/time/timezone form" do
+      result =
+        Functions.make_timestamp(
+          date: Functions.col("d"),
+          time: Functions.col("t"),
+          timezone: Functions.col("tz")
+        )
+
+      assert %Column{
+               expr: {:fn, "make_timestamp", [{:col, "d"}, {:col, "t"}, {:col, "tz"}], false}
+             } = result
+    end
   end
 
   describe "try_make_timestamp/1" do

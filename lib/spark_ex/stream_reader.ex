@@ -170,14 +170,39 @@ defmodule SparkEx.StreamReader do
   # --- Private ---
 
   defp streaming_data_source(session, format, path, opts) do
-    paths = List.wrap(path)
+    paths = normalize_stream_paths!(path)
     schema = Keyword.get(opts, :schema, nil)
-    options = opts |> Keyword.get(:options, %{}) |> normalize_options()
+    options = merge_source_options(opts, [:schema])
 
     %DataFrame{
       session: session,
       plan: {:read_data_source_streaming, format, paths, schema, options}
     }
+  end
+
+  defp normalize_stream_paths!(path) when is_binary(path) do
+    validate_path!(path)
+    [path]
+  end
+
+  defp normalize_stream_paths!(paths) when is_list(paths) do
+    Enum.each(paths, &validate_path!/1)
+    paths
+  end
+
+  defp normalize_stream_paths!(_path) do
+    raise ArgumentError, "path must be a non-empty string or list of non-empty strings"
+  end
+
+  defp merge_source_options(opts, reserved_keys) do
+    nested_options = opts |> Keyword.get(:options, %{}) |> normalize_options()
+
+    top_level_options =
+      opts
+      |> Keyword.drop([:options | reserved_keys])
+      |> normalize_options()
+
+    Map.merge(top_level_options, nested_options)
   end
 
   defp normalize_options(opts) when is_list(opts) do
@@ -204,5 +229,9 @@ defmodule SparkEx.StreamReader do
     if String.trim(path) == "" do
       raise ArgumentError, "path must not be empty or blank"
     end
+  end
+
+  defp validate_path!(_path) do
+    raise ArgumentError, "path must be a non-empty string"
   end
 end

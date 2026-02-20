@@ -290,7 +290,8 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
   describe "last_progress" do
     test "returns latest progress entry", %{session: session} do
-      {:ok, query} = start_rate_query(session, query_name: unique_query_name("last_progress_test"))
+      {:ok, query} =
+        start_rate_query(session, query_name: unique_query_name("last_progress_test"))
 
       on_exit(fn -> stop_query(query) end)
 
@@ -387,6 +388,30 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       assert %StreamingQuery{} = query
       assert_query_eventually_active(query, 5000)
 
+      :ok = StreamingQuery.stop(query)
+    end
+  end
+
+  describe "start call-time kwargs" do
+    test "start applies format/queryName/outputMode and sink options from kwargs", %{
+      session: session
+    } do
+      query_name = unique_query_name("start_kwargs")
+      checkpoint = unique_checkpoint()
+      df = StreamReader.rate(session, rows_per_second: 10)
+      writer = DataFrame.write_stream(df)
+
+      {:ok, query} =
+        StreamWriter.start(writer,
+          format: "memory",
+          outputMode: "append",
+          queryName: query_name,
+          checkpointLocation: checkpoint
+        )
+
+      on_exit(fn -> stop_query(query) end)
+
+      assert_query_eventually_active(query, 5000)
       :ok = StreamingQuery.stop(query)
     end
   end

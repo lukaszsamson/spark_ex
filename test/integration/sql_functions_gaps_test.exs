@@ -201,6 +201,25 @@ defmodule SparkEx.Integration.SqlFunctionsGapsTest do
     end
   end
 
+  describe "make_timestamp keyword form" do
+    test "plans make_timestamp(date,time) from keyword args", %{session: session} do
+      df = SparkEx.sql(session, "SELECT DATE '2024-06-15' AS d, TIME '10:30:45' AS t")
+
+      projected =
+        df
+        |> DataFrame.select([
+          Column.alias_(
+            Functions.make_timestamp(date: Functions.col("d"), time: Functions.col("t")),
+            "from_kw"
+          ),
+          Column.alias_(Functions.expr("make_timestamp(d, t)"), "from_sql")
+        ])
+
+      assert {:ok, explain_str} = DataFrame.explain(projected, :extended)
+      assert explain_str =~ "make_timestamp"
+    end
+  end
+
   # ── octet_length / bit_length ──
 
   describe "octet_length and bit_length" do

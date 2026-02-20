@@ -4,6 +4,26 @@ defmodule SparkEx.M14.StreamingTest do
   alias SparkEx.Connect.CommandEncoder
   alias SparkEx.Connect.PlanEncoder
 
+  defmodule FakeSession do
+    use GenServer
+
+    def start_link(opts) do
+      GenServer.start_link(__MODULE__, opts)
+    end
+
+    @impl true
+    def init(opts) do
+      {:ok, %{parent: Keyword.fetch!(opts, :parent)}}
+    end
+
+    @impl true
+    def handle_call({:execute_command_with_result, command, exec_opts}, _from, state) do
+      send(state.parent, {:execute_command_with_result, command, exec_opts})
+      result = %{query_id: %{id: "query-id", run_id: "run-id"}, name: ""}
+      {:reply, {:ok, {:write_stream_start, result}}, state}
+    end
+  end
+
   # ── PlanEncoder: Streaming Read Variants ──
 
   describe "encode_relation for read_data_source_streaming" do
@@ -623,6 +643,18 @@ defmodule SparkEx.M14.StreamingTest do
       assert opts["rowsPerSecond"] == "10"
     end
 
+    test "convenience methods merge top-level options with nested options" do
+      df =
+        SparkEx.StreamReader.json(:s, "/data/stream",
+          multi_line: true,
+          options: %{"mode" => "PERMISSIVE"}
+        )
+
+      assert {:read_data_source_streaming, "json", ["/data/stream"], nil, opts} = df.plan
+      assert opts["multi_line"] == "true"
+      assert opts["mode"] == "PERMISSIVE"
+    end
+
     test "option with nil value is skipped" do
       reader =
         SparkEx.StreamReader.new(:s)
@@ -661,6 +693,18 @@ defmodule SparkEx.M14.StreamingTest do
 
       assert_raise ArgumentError, ~r/must not be empty/, fn ->
         SparkEx.StreamReader.load(reader, ["/valid", "  "])
+      end
+    end
+
+    test "convenience methods raise on nil path" do
+      assert_raise ArgumentError, ~r/non-empty string/, fn ->
+        SparkEx.StreamReader.json(:s, nil)
+      end
+    end
+
+    test "convenience methods raise on blank path" do
+      assert_raise ArgumentError, ~r/must not be empty/, fn ->
+        SparkEx.StreamReader.json(:s, "   ")
       end
     end
   end
@@ -777,6 +821,60 @@ defmodule SparkEx.M14.StreamingTest do
       assert writer.path == "/data/output"
     end
 
+    test "start applies call-time writer kwargs and sink options" do
+      {:ok, session} = FakeSession.start_link(parent: self())
+      df = %SparkEx.DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      writer =
+        %SparkEx.StreamWriter{df: df}
+        |> SparkEx.StreamWriter.option("base", "1")
+
+      assert {:ok, %SparkEx.StreamingQuery{query_id: "query-id", run_id: "run-id"}} =
+               SparkEx.StreamWriter.start(writer,
+                 format: "memory",
+                 outputMode: "complete",
+                 partitionBy: "part_col",
+                 queryName: "q_name",
+                 truncate: false,
+                 options: %{"numRows" => 5},
+                 timeout: 1234
+               )
+
+      assert_receive {:execute_command_with_result,
+                      {:write_stream_operation_start, _, write_opts}, exec_opts}
+
+      assert Keyword.get(write_opts, :format) == "memory"
+      assert Keyword.get(write_opts, :output_mode) == "complete"
+      assert Keyword.get(write_opts, :partition_by) == ["part_col"]
+      assert Keyword.get(write_opts, :query_name) == "q_name"
+      assert Keyword.get(write_opts, :options)["base"] == "1"
+      assert Keyword.get(write_opts, :options)["truncate"] == "false"
+      assert Keyword.get(write_opts, :options)["numRows"] == "5"
+      assert exec_opts == [timeout: 1234]
+    end
+
+    test "to_table applies call-time sink options and preserves table destination" do
+      {:ok, session} = FakeSession.start_link(parent: self())
+      df = %SparkEx.DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      writer = %SparkEx.StreamWriter{df: df, path: "/tmp/old_path"}
+
+      assert {:ok, %SparkEx.StreamingQuery{query_id: "query-id", run_id: "run-id"}} =
+               SparkEx.StreamWriter.to_table(writer, "my_table",
+                 checkpointLocation: "/tmp/ckpt",
+                 options: %{"mergeSchema" => true},
+                 timeout: 2222
+               )
+
+      assert_receive {:execute_command_with_result,
+                      {:write_stream_operation_start, _, write_opts}, exec_opts}
+
+      assert Keyword.get(write_opts, :table_name) == "my_table"
+      assert Keyword.get(write_opts, :path) == nil
+      assert Keyword.get(write_opts, :options)["checkpointLocation"] == "/tmp/ckpt"
+      assert Keyword.get(write_opts, :options)["mergeSchema"] == "true"
+      assert exec_opts == [timeout: 2222]
+    end
 
     test "foreach_writer sets foreach function" do
       func = %Spark.Connect.StreamingForeachFunction{
