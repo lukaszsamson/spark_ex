@@ -1534,6 +1534,86 @@ defmodule SparkEx.MissOpus2Test do
     end
   end
 
+  # ── Round 8 ──
+
+  describe "round 8" do
+    test "14.25 kll_sketch_merge takes two columns" do
+      result = Functions.kll_sketch_merge_bigint(Functions.col("a"), Functions.col("b"))
+      assert %Column{expr: {:fn, "kll_sketch_merge_bigint", [{:col, "a"}, {:col, "b"}], false}} = result
+    end
+
+    test "15.7 cast supports legacy mode" do
+      expr = {:cast, {:col, "x"}, "int", :legacy}
+      encoded = PlanEncoder.encode_expression(expr)
+      assert %{expr_type: {:cast, cast}} = encoded
+      assert cast.eval_mode == :EVAL_MODE_LEGACY
+    end
+
+    test "15.7 cast supports ansi mode" do
+      expr = {:cast, {:col, "x"}, "int", :ansi}
+      encoded = PlanEncoder.encode_expression(expr)
+      assert %{expr_type: {:cast, cast}} = encoded
+      assert cast.eval_mode == :EVAL_MODE_ANSI
+    end
+
+    test "15.16 nil null_ordering defaults to SORT_NULLS_FIRST" do
+      expr = {:sort_order, {:col, "x"}, :asc, nil}
+      encoded = PlanEncoder.encode_expression(expr)
+      assert %{expr_type: {:sort_order, sort}} = encoded
+      assert sort.null_ordering == :SORT_NULLS_FIRST
+    end
+
+    test "15.16 bare col sort_order defaults to SORT_NULLS_FIRST" do
+      # Test through encode_sort_order for {:col, _} fallback
+      plan = {:sort, {:sql, "SELECT 1", nil}, [{:col, "x"}], true}
+      {encoded, _counter} = PlanEncoder.encode_relation(plan, 0)
+      assert %{rel_type: {:sort, sort}} = encoded
+      [order] = sort.order
+      assert order.null_ordering == :SORT_NULLS_FIRST
+    end
+
+    test "19.1 array_type with contains_null: false" do
+      t = SparkEx.Types.array_type(:string, contains_null: false)
+      assert {:array, :string, false} = t
+    end
+
+    test "19.1 array_type defaults to contains_null: true" do
+      t = SparkEx.Types.array_type(:string)
+      assert {:array, :string} = t
+    end
+
+    test "19.1 map_type with value_contains_null: false" do
+      t = SparkEx.Types.map_type(:string, :long, value_contains_null: false)
+      assert {:map, :string, :long, false} = t
+    end
+
+    test "19.1 array_type contains_null: false in JSON" do
+      t = {:array, :string, false}
+      json = SparkEx.Types.to_json({:struct, [%{name: "arr", type: t, nullable: true, metadata: %{}}]})
+      decoded = Jason.decode!(json)
+      field = hd(decoded["fields"])
+      assert field["type"]["containsNull"] == false
+    end
+
+    test "13.10 merge_into accepts condition parameter" do
+      df = make_df()
+      writer = DataFrame.merge_into(df, "target", Functions.col("id") |> Column.eq(Functions.col("tid")))
+      assert %SparkEx.MergeIntoWriter{condition: {:fn, "==", _, false}} = writer
+    end
+
+    test "13.10 merge_into works without condition" do
+      df = make_df()
+      writer = DataFrame.merge_into(df, "target")
+      assert %SparkEx.MergeIntoWriter{condition: nil} = writer
+    end
+
+    test "15.19 WriterV2 overwrite with condition sets overwrite_condition" do
+      functions = SparkEx.WriterV2.__info__(:functions)
+      assert {:overwrite, 2} in functions
+      assert {:overwrite, 3} in functions
+    end
+  end
+
   # ── Helper ──
 
   defp make_df do

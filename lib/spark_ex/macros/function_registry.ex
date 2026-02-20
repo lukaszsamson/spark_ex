@@ -745,7 +745,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
          group: :sketch, doc: "Converts a KLL sketch (#{type}) to a string."},
         {:"kll_sketch_get_n_#{type}", "kll_sketch_get_n_#{type}", :one_col,
          group: :sketch, doc: "Returns n (number of items) from a KLL sketch (#{type})."},
-        {:"kll_sketch_merge_#{type}", "kll_sketch_merge_#{type}", {:col_opt, [k: nil]},
+        {:"kll_sketch_merge_#{type}", "kll_sketch_merge_#{type}", :two_col,
          group: :sketch, doc: "Merges KLL sketches (#{type})."},
         {:"kll_sketch_get_quantile_#{type}", "kll_sketch_get_quantile_#{type}", {:col_lit, 1},
          group: :sketch, doc: "Gets quantile from a KLL sketch (#{type})."},

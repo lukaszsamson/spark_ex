@@ -1387,14 +1387,22 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
-  def encode_expression({:cast, expr, type_str, :try}) do
+  def encode_expression({:cast, expr, type_str, mode})
+      when mode in [:try, :legacy, :ansi] do
+    eval_mode =
+      case mode do
+        :try -> :EVAL_MODE_TRY
+        :legacy -> :EVAL_MODE_LEGACY
+        :ansi -> :EVAL_MODE_ANSI
+      end
+
     %Expression{
       expr_type:
         {:cast,
          %Expression.Cast{
            expr: encode_expression(expr),
            cast_to_type: {:type_str, type_str},
-           eval_mode: :EVAL_MODE_TRY
+           eval_mode: eval_mode
          }}
     }
   end
@@ -2186,9 +2194,9 @@ defmodule SparkEx.Connect.PlanEncoder do
     {{:cast, expr, type_str}, plan_ids, refs, counter}
   end
 
-  defp rewrite_expr({:cast, expr, type_str, :try}, plan_ids, refs, counter) do
+  defp rewrite_expr({:cast, expr, type_str, mode}, plan_ids, refs, counter) do
     {expr, plan_ids, refs, counter} = rewrite_expr(expr, plan_ids, refs, counter)
-    {{:cast, expr, type_str, :try}, plan_ids, refs, counter}
+    {{:cast, expr, type_str, mode}, plan_ids, refs, counter}
   end
 
   defp rewrite_expr(
@@ -2668,7 +2676,7 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.SortOrder{
       child: encode_expression(col_expr),
       direction: :SORT_DIRECTION_ASCENDING,
-      null_ordering: :SORT_NULLS_UNSPECIFIED
+      null_ordering: :SORT_NULLS_FIRST
     }
   end
 
@@ -2683,7 +2691,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_sort_direction(:asc), do: :SORT_DIRECTION_ASCENDING
   defp encode_sort_direction(:desc), do: :SORT_DIRECTION_DESCENDING
 
-  defp encode_null_ordering(nil), do: :SORT_NULLS_UNSPECIFIED
+  defp encode_null_ordering(nil), do: :SORT_NULLS_FIRST
   defp encode_null_ordering(:nulls_first), do: :SORT_NULLS_FIRST
   defp encode_null_ordering(:nulls_last), do: :SORT_NULLS_LAST
 

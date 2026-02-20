@@ -530,9 +530,9 @@ defmodule SparkEx.MissingFeaturesTest do
       assert %Column{expr: {:fn, "kll_sketch_get_n_double", [{:col, "sketch"}], false}} = result
     end
 
-    test "kll_sketch_merge_bigint/1" do
-      result = Functions.kll_sketch_merge_bigint(Functions.col("sketch"))
-      assert %Column{expr: {:fn, "kll_sketch_merge_bigint", [{:col, "sketch"}], false}} = result
+    test "kll_sketch_merge_bigint/2" do
+      result = Functions.kll_sketch_merge_bigint(Functions.col("left"), Functions.col("right"))
+      assert %Column{expr: {:fn, "kll_sketch_merge_bigint", [{:col, "left"}, {:col, "right"}], false}} = result
     end
 
     test "kll_sketch_get_quantile_float/2" do

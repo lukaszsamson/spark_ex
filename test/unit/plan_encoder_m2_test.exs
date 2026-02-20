@@ -106,7 +106,7 @@ defmodule SparkEx.Connect.PlanEncoderM2Test do
       [order1, order2] = sort.order
       assert %Expression.SortOrder{} = order1
       assert order1.direction == :SORT_DIRECTION_ASCENDING
-      assert order1.null_ordering == :SORT_NULLS_UNSPECIFIED
+      assert order1.null_ordering == :SORT_NULLS_FIRST
 
       assert %Expression.SortOrder{} = order2
       assert order2.direction == :SORT_DIRECTION_DESCENDING

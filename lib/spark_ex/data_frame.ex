@@ -1973,6 +1973,11 @@ defmodule SparkEx.DataFrame do
     SparkEx.MergeIntoWriter.new(df, table_name)
   end
 
+  @spec merge_into(t(), String.t(), Column.t()) :: SparkEx.MergeIntoWriter.t()
+  def merge_into(%__MODULE__{} = df, table_name, %Column{} = condition) when is_binary(table_name) do
+    SparkEx.MergeIntoWriter.new(df, table_name) |> SparkEx.MergeIntoWriter.on(condition)
+  end
+
   @doc """
   Creates a DataFrame from a table-valued function (TVF) call.
 

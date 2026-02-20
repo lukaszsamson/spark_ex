@@ -97,8 +97,13 @@ defmodule SparkEx.Types do
       array_type(:string)
       array_type({:struct, fields})
   """
-  @spec array_type(spark_type()) :: {:array, spark_type()}
-  def array_type(element_type), do: {:array, element_type}
+  @spec array_type(spark_type(), keyword()) :: {:array, spark_type()} | {:array, spark_type(), boolean()}
+  def array_type(element_type, opts \\ []) do
+    case Keyword.get(opts, :contains_null, true) do
+      true -> {:array, element_type}
+      false -> {:array, element_type, false}
+    end
+  end
 
   @doc """
   Creates a map type.
@@ -107,8 +112,13 @@ defmodule SparkEx.Types do
 
       map_type(:string, :long)
   """
-  @spec map_type(spark_type(), spark_type()) :: {:map, spark_type(), spark_type()}
-  def map_type(key_type, value_type), do: {:map, key_type, value_type}
+  @spec map_type(spark_type(), spark_type(), keyword()) :: {:map, spark_type(), spark_type()} | {:map, spark_type(), spark_type(), boolean()}
+  def map_type(key_type, value_type, opts \\ []) do
+    case Keyword.get(opts, :value_contains_null, true) do
+      true -> {:map, key_type, value_type}
+      false -> {:map, key_type, value_type, false}
+    end
+  end
 
   @doc """
   Converts a struct type to a DDL schema string.
@@ -177,7 +187,9 @@ defmodule SparkEx.Types do
   defp type_to_ddl(:calendar_interval), do: "INTERVAL"
   defp type_to_ddl({:decimal, precision, scale}), do: "DECIMAL(#{precision}, #{scale})"
   defp type_to_ddl({:array, element}), do: "ARRAY<#{type_to_ddl(element)}>"
+  defp type_to_ddl({:array, element, _contains_null}), do: "ARRAY<#{type_to_ddl(element)}>"
   defp type_to_ddl({:map, key, value}), do: "MAP<#{type_to_ddl(key)}, #{type_to_ddl(value)}>"
+  defp type_to_ddl({:map, key, value, _vcn}), do: "MAP<#{type_to_ddl(key)}, #{type_to_ddl(value)}>"
   defp type_to_ddl(:variant), do: "VARIANT"
   defp type_to_ddl(:geometry), do: "GEOMETRY"
   defp type_to_ddl(:geography), do: "GEOGRAPHY"
@@ -226,6 +238,10 @@ defmodule SparkEx.Types do
     %{"type" => "array", "elementType" => type_to_json(element), "containsNull" => true}
   end
 
+  defp type_to_json({:array, element, contains_null}) do
+    %{"type" => "array", "elementType" => type_to_json(element), "containsNull" => contains_null}
+  end
+
   defp type_to_json(:variant), do: "variant"
   defp type_to_json(:geometry), do: "geometry"
   defp type_to_json(:geography), do: "geography"
@@ -236,6 +252,15 @@ defmodule SparkEx.Types do
       "keyType" => type_to_json(key),
       "valueType" => type_to_json(value),
       "valueContainsNull" => true
+    }
+  end
+
+  defp type_to_json({:map, key, value, value_contains_null}) do
+    %{
+      "type" => "map",
+      "keyType" => type_to_json(key),
+      "valueType" => type_to_json(value),
+      "valueContainsNull" => value_contains_null
     }
   end
 
