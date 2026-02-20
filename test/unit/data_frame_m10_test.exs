@@ -9,6 +9,22 @@ defmodule SparkEx.Unit.DataFrameM10Test do
 
   defp df(plan \\ @base_plan), do: %DataFrame{session: self(), plan: plan}
 
+  defmodule SchemaSession do
+    use GenServer
+
+    def start_link(schema) do
+      GenServer.start_link(__MODULE__, schema, [])
+    end
+
+    @impl true
+    def init(schema), do: {:ok, schema}
+
+    @impl true
+    def handle_call({:analyze_schema, _plan}, _from, schema) do
+      {:reply, {:ok, schema}, schema}
+    end
+  end
+
   # ── Projection/Rename ──
 
   describe "select_expr/2" do
@@ -56,6 +72,23 @@ defmodule SparkEx.Unit.DataFrameM10Test do
 
       assert %DataFrame{plan: {:with_columns_renamed, @base_plan, renames}} = result
       assert Enum.sort(renames) == [{"a", "x"}, {"b", "y"}]
+    end
+
+    test "supports function form using schema round-trip" do
+      schema = %Spark.Connect.DataType.Struct{
+        fields: [
+          %Spark.Connect.DataType.StructField{name: "id"},
+          %Spark.Connect.DataType.StructField{name: "name"}
+        ]
+      }
+
+      {:ok, session} = SchemaSession.start_link(schema)
+      source_df = %DataFrame{session: session, plan: @base_plan}
+
+      result = DataFrame.with_columns_renamed(source_df, &"renamed_#{&1}")
+
+      assert %DataFrame{plan: {:with_columns_renamed, @base_plan, renames}} = result
+      assert renames == [{"id", "renamed_id"}, {"name", "renamed_name"}]
     end
   end
 
@@ -152,7 +185,8 @@ defmodule SparkEx.Unit.DataFrameM10Test do
       result = DataFrame.sort_within_partitions(df(), ["name"])
 
       assert %DataFrame{
-               plan: {:sort, @base_plan, [{:sort_order, {:col, "name"}, :asc, :nulls_first}], false}
+               plan:
+                 {:sort, @base_plan, [{:sort_order, {:col, "name"}, :asc, :nulls_first}], false}
              } = result
     end
 
@@ -161,7 +195,8 @@ defmodule SparkEx.Unit.DataFrameM10Test do
         DataFrame.sort_within_partitions(df(), [Column.desc(Functions.col("age"))])
 
       assert %DataFrame{
-               plan: {:sort, @base_plan, [{:sort_order, {:col, "age"}, :desc, :nulls_last}], false}
+               plan:
+                 {:sort, @base_plan, [{:sort_order, {:col, "age"}, :desc, :nulls_last}], false}
              } = result
     end
   end

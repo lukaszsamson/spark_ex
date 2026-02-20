@@ -7,6 +7,7 @@ defmodule SparkEx.Integration.ObservationCollectionGapsTest do
   alias SparkEx.DataFrame
   alias SparkEx.Functions
   alias SparkEx.Observation
+  alias SparkEx.StreamReader
 
   @spark_remote System.get_env("SPARK_REMOTE", "sc://localhost:15002")
 
@@ -39,6 +40,18 @@ defmodule SparkEx.Integration.ObservationCollectionGapsTest do
       metrics = Observation.get(obs)
       assert metrics["row_count"] == 10
       assert metrics["max_id"] == 9
+    end
+  end
+
+  describe "observe streaming guard" do
+    test "raises when observing a streaming dataframe", %{session: session} do
+      streaming_df = StreamReader.rate(session, rows_per_second: 1)
+
+      assert_raise ArgumentError, ~r/Streaming DataFrame with Observation is not supported/, fn ->
+        DataFrame.observe(streaming_df, "stream_obs", [
+          Column.alias_(Functions.count(Functions.lit(1)), "n")
+        ])
+      end
     end
   end
 

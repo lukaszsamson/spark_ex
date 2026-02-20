@@ -65,6 +65,16 @@ defmodule SparkEx.Integration.DataFrameM10Test do
     assert {:ok, [%{"id2" => 1, "name2" => "ALICE"}]} = DataFrame.collect(df)
   end
 
+  test "with_columns_renamed supports function form", %{session: session} do
+    df =
+      SparkEx.sql(session, "SELECT 1 AS id, 'Alice' AS name")
+      |> DataFrame.with_columns_renamed(&"renamed_#{&1}")
+
+    assert {:ok, explain_str} = DataFrame.explain(df, :extended)
+    assert explain_str =~ "renamed_id"
+    assert explain_str =~ "renamed_name"
+  end
+
   test "sample and random_split execute", %{session: session} do
     df = SparkEx.range(session, 100)
 

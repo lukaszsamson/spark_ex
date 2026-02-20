@@ -73,6 +73,22 @@ defmodule SparkEx.DataFrameTest do
     end
   end
 
+  defmodule ObserveSession do
+    use GenServer
+
+    def start_link(is_streaming) do
+      GenServer.start_link(__MODULE__, is_streaming, [])
+    end
+
+    @impl true
+    def init(is_streaming), do: {:ok, is_streaming}
+
+    @impl true
+    def handle_call({:analyze_is_streaming, _plan}, _from, is_streaming) do
+      {:reply, {:ok, is_streaming}, is_streaming}
+    end
+  end
+
   describe "columns/1" do
     test "returns column names from schema" do
       schema = %Spark.Connect.DataType.Struct{
@@ -346,12 +362,22 @@ defmodule SparkEx.DataFrameTest do
 
   describe "observe/3" do
     test "creates collect_metrics plan" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      {:ok, session} = ObserveSession.start_link(false)
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
       obs = SparkEx.Observation.new("obs")
 
       result = DataFrame.observe(df, obs, [Functions.col("value")])
 
       assert %DataFrame{plan: {:collect_metrics, {:sql, _, _}, "obs", [{:col, "value"}]}} = result
+    end
+
+    test "raises for streaming dataframe" do
+      {:ok, session} = ObserveSession.start_link(true)
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert_raise ArgumentError, ~r/Streaming DataFrame with Observation is not supported/, fn ->
+        DataFrame.observe(df, "obs", [Functions.col("value")])
+      end
     end
   end
 

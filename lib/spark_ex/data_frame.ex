@@ -665,10 +665,34 @@ defmodule SparkEx.DataFrame do
   ## Examples
 
       df |> DataFrame.with_columns_renamed(%{"old1" => "new1", "old2" => "new2"})
+      df |> DataFrame.with_columns_renamed(&String.upcase/1)
   """
-  @spec with_columns_renamed(t(), %{String.t() => String.t()}) :: t()
+  @spec with_columns_renamed(t(), %{String.t() => String.t()} | (String.t() -> String.t())) :: t()
   def with_columns_renamed(%__MODULE__{} = df, rename_map) when is_map(rename_map) do
     %__MODULE__{df | plan: {:with_columns_renamed, df.plan, Map.to_list(rename_map)}}
+  end
+
+  def with_columns_renamed(%__MODULE__{} = df, rename_fun) when is_function(rename_fun, 1) do
+    case columns(df) do
+      {:ok, column_names} ->
+        renames =
+          Enum.map(column_names, fn existing ->
+            new_name = rename_fun.(existing)
+
+            if is_binary(new_name) do
+              {existing, new_name}
+            else
+              raise ArgumentError,
+                    "with_columns_renamed function must return a string, got: #{inspect(new_name)}"
+            end
+          end)
+
+        %__MODULE__{df | plan: {:with_columns_renamed, df.plan, renames}}
+
+      {:error, reason} ->
+        raise ArgumentError,
+              "with_columns_renamed function requires schema round-trip, failed to fetch columns: #{inspect(reason)}"
+    end
   end
 
   # ── M10: Extended Set Operations ──
@@ -986,6 +1010,7 @@ defmodule SparkEx.DataFrame do
       raise ArgumentError, "exprs should not be empty"
     end
 
+    ensure_observe_supported!(df)
     metric_exprs = Enum.map(exprs, &normalize_column_expr/1)
     %__MODULE__{df | plan: {:collect_metrics, df.plan, name, metric_exprs}}
   end
@@ -1812,6 +1837,20 @@ defmodule SparkEx.DataFrame do
       {:ok, %Spark.Connect.DataType.Struct{} = struct} -> {:ok, struct}
       {:ok, other} -> {:error, {:unexpected_schema, other}}
       {:error, _} = error -> error
+    end
+  end
+
+  defp ensure_observe_supported!(%__MODULE__{} = df) do
+    case is_streaming(df) do
+      {:ok, false} ->
+        :ok
+
+      {:ok, true} ->
+        raise ArgumentError, "Streaming DataFrame with Observation is not supported"
+
+      {:error, reason} ->
+        raise ArgumentError,
+              "failed to determine if DataFrame is streaming for observe/3: #{inspect(reason)}"
     end
   end
 
