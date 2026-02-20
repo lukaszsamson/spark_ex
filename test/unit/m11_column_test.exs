@@ -79,7 +79,7 @@ defmodule SparkEx.M11.ColumnTest do
   describe "string binary operators" do
     test "ends_with/2" do
       result = Column.ends_with(Functions.col("name"), Functions.lit(".csv"))
-      assert %Column{expr: {:fn, "endswith", [{:col, "name"}, {:lit, ".csv"}], false}} = result
+      assert %Column{expr: {:fn, "endsWith", [{:col, "name"}, {:lit, ".csv"}], false}} = result
     end
 
     test "rlike/2" do
@@ -98,7 +98,7 @@ defmodule SparkEx.M11.ColumnTest do
   describe "new unary operators" do
     test "is_nan/1" do
       result = Column.is_nan(Functions.col("x"))
-      assert %Column{expr: {:fn, "isnan", [{:col, "x"}], false}} = result
+      assert %Column{expr: {:fn, "isNaN", [{:col, "x"}], false}} = result
     end
 
     test "negate/1" do
@@ -236,7 +236,7 @@ defmodule SparkEx.M11.ColumnTest do
       assert %Column{
                expr:
                  {:window, {:col, "salary"}, [{:col, "dept"}],
-                  [{:sort_order, {:col, "salary"}, :asc, nil}], nil}
+                  [{:sort_order, {:col, "salary"}, :asc, :nulls_first}], nil}
              } = result
     end
 

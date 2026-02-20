@@ -889,7 +889,7 @@ defmodule SparkEx.Connect.PlanEncoder do
     as_of_join =
       if join_type == nil,
         do: as_of_join,
-        else: %{as_of_join | join_type: join_type}
+        else: %{as_of_join | join_type: to_string(join_type)}
 
     as_of_join =
       if tolerance == {:lit, nil},
@@ -919,16 +919,27 @@ defmodule SparkEx.Connect.PlanEncoder do
     {left, counter} = encode_relation(left_plan, counter)
     {right, counter} = encode_relation(right_plan, counter)
 
+    lateral_join =
+      case join_condition do
+        nil ->
+          %Spark.Connect.LateralJoin{
+            left: left,
+            right: right,
+            join_type: encode_join_type(join_type)
+          }
+
+        _ ->
+          %Spark.Connect.LateralJoin{
+            left: left,
+            right: right,
+            join_condition: encode_expression(join_condition),
+            join_type: encode_join_type(join_type)
+          }
+      end
+
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
-      rel_type:
-        {:lateral_join,
-         %Spark.Connect.LateralJoin{
-           left: left,
-           right: right,
-           join_condition: encode_expression(join_condition),
-           join_type: encode_join_type(join_type)
-         }}
+      rel_type: {:lateral_join, lateral_join}
     }
 
     {relation, counter}
@@ -997,8 +1008,8 @@ defmodule SparkEx.Connect.PlanEncoder do
     encoded_replacements =
       Enum.map(replacements, fn {old_val, new_val} ->
         %Spark.Connect.NAReplace.Replacement{
-          old_value: encode_literal(old_val),
-          new_value: encode_literal(new_val)
+          old_value: encode_na_replace_literal(old_val),
+          new_value: encode_na_replace_literal(new_val)
         }
       end)
 
@@ -1285,6 +1296,12 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   def encode_expression({:col_regex, name}) do
     %Expression{expr_type: {:unresolved_regex, %Expression.UnresolvedRegex{col_name: name}}}
+  end
+
+  # PySpark special-cases count(col("*")) to count(lit(1)) because
+  # Spark Connect does not support UnresolvedStar inside count
+  def encode_expression({:fn, "count", [{:star}], false}) do
+    encode_expression({:fn, "count", [{:lit, 1}], false})
   end
 
   def encode_expression({:fn, name, args, is_distinct}) do
@@ -2470,6 +2487,25 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_na_literal(v) when is_float(v), do: %Expression.Literal{literal_type: {:double, v}}
   defp encode_na_literal(v) when is_binary(v), do: %Expression.Literal{literal_type: {:string, v}}
 
+  # PySpark's NAReplace._convert_int_to_float converts all integer keys/values to float
+  defp encode_na_replace_literal(nil),
+    do: %Expression.Literal{
+      literal_type:
+        {:null, %Spark.Connect.DataType{kind: {:null, %Spark.Connect.DataType.NULL{}}}}
+    }
+
+  defp encode_na_replace_literal(true), do: %Expression.Literal{literal_type: {:boolean, true}}
+  defp encode_na_replace_literal(false), do: %Expression.Literal{literal_type: {:boolean, false}}
+
+  defp encode_na_replace_literal(v) when is_integer(v),
+    do: %Expression.Literal{literal_type: {:double, v / 1}}
+
+  defp encode_na_replace_literal(v) when is_float(v),
+    do: %Expression.Literal{literal_type: {:double, v}}
+
+  defp encode_na_replace_literal(v) when is_binary(v),
+    do: %Expression.Literal{literal_type: {:string, v}}
+
   defp encode_literal(nil),
     do: %Expression.Literal{
       literal_type:
@@ -2649,25 +2685,32 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_window_frame({frame_type, lower, upper}) do
     %Expression.Window.WindowFrame{
       frame_type: encode_frame_type(frame_type),
-      lower: encode_frame_boundary(lower, :lower),
-      upper: encode_frame_boundary(upper, :upper)
+      lower: encode_frame_boundary(lower, frame_type),
+      upper: encode_frame_boundary(upper, frame_type)
     }
   end
 
   defp encode_frame_type(:rows), do: :FRAME_TYPE_ROW
   defp encode_frame_type(:range), do: :FRAME_TYPE_RANGE
 
-  defp encode_frame_boundary(:current_row, _position) do
+  defp encode_frame_boundary(:current_row, _frame_type) do
     %Expression.Window.WindowFrame.FrameBoundary{boundary: {:current_row, true}}
   end
 
-  defp encode_frame_boundary(:unbounded, _position) do
+  defp encode_frame_boundary(:unbounded, _frame_type) do
     %Expression.Window.WindowFrame.FrameBoundary{boundary: {:unbounded, true}}
   end
 
-  defp encode_frame_boundary(n, _position) when is_integer(n) do
+  # ROW frames use 32-bit integer, RANGE frames use 64-bit long
+  defp encode_frame_boundary(n, :rows) when is_integer(n) do
     %Expression.Window.WindowFrame.FrameBoundary{
-      boundary: {:value, encode_literal_expression(n)}
+      boundary: {:value, %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:integer, n}}}}}
+    }
+  end
+
+  defp encode_frame_boundary(n, :range) when is_integer(n) do
+    %Expression.Window.WindowFrame.FrameBoundary{
+      boundary: {:value, %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:long, n}}}}}
     }
   end
 end

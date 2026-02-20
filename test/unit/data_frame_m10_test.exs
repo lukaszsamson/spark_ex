@@ -152,7 +152,7 @@ defmodule SparkEx.Unit.DataFrameM10Test do
       result = DataFrame.sort_within_partitions(df(), ["name"])
 
       assert %DataFrame{
-               plan: {:sort, @base_plan, [{:sort_order, {:col, "name"}, :asc, nil}], false}
+               plan: {:sort, @base_plan, [{:sort_order, {:col, "name"}, :asc, :nulls_first}], false}
              } = result
     end
 
@@ -161,7 +161,7 @@ defmodule SparkEx.Unit.DataFrameM10Test do
         DataFrame.sort_within_partitions(df(), [Column.desc(Functions.col("age"))])
 
       assert %DataFrame{
-               plan: {:sort, @base_plan, [{:sort_order, {:col, "age"}, :desc, nil}], false}
+               plan: {:sort, @base_plan, [{:sort_order, {:col, "age"}, :desc, :nulls_last}], false}
              } = result
     end
   end
@@ -172,8 +172,9 @@ defmodule SparkEx.Unit.DataFrameM10Test do
     test "creates sample plan with defaults" do
       result = DataFrame.sample(df(), 0.1)
 
-      assert %DataFrame{plan: {:sample, @base_plan, lower, 0.1, false, nil, false}} = result
+      assert %DataFrame{plan: {:sample, @base_plan, lower, 0.1, false, seed, false}} = result
       assert lower == +0.0
+      assert is_integer(seed)
     end
 
     test "accepts with_replacement and seed" do

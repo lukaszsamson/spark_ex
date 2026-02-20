@@ -66,11 +66,11 @@ defmodule SparkEx.TableArg do
   end
 
   defp normalize_sort_expr(%Column{expr: {:sort_order, _, _, _} = expr}), do: expr
-  defp normalize_sort_expr(%Column{} = c), do: {:sort_order, c.expr, :asc, nil}
-  defp normalize_sort_expr(name) when is_binary(name), do: {:sort_order, {:col, name}, :asc, nil}
+  defp normalize_sort_expr(%Column{} = c), do: {:sort_order, c.expr, :asc, :nulls_first}
+  defp normalize_sort_expr(name) when is_binary(name), do: {:sort_order, {:col, name}, :asc, :nulls_first}
 
   defp normalize_sort_expr(name) when is_atom(name),
-    do: {:sort_order, {:col, Atom.to_string(name)}, :asc, nil}
+    do: {:sort_order, {:col, Atom.to_string(name)}, :asc, :nulls_first}
 
   defp ensure_not_partitioned!(%__MODULE__{state: :init}, _op), do: :ok
 

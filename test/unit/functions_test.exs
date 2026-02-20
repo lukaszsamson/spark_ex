@@ -61,12 +61,12 @@ defmodule SparkEx.FunctionsTest do
   describe "sort helpers" do
     test "asc/1 delegates to Column" do
       result = Functions.asc(Functions.col("x"))
-      assert %Column{expr: {:sort_order, {:col, "x"}, :asc, nil}} = result
+      assert %Column{expr: {:sort_order, {:col, "x"}, :asc, :nulls_first}} = result
     end
 
     test "desc/1 delegates to Column" do
       result = Functions.desc(Functions.col("x"))
-      assert %Column{expr: {:sort_order, {:col, "x"}, :desc, nil}} = result
+      assert %Column{expr: {:sort_order, {:col, "x"}, :desc, :nulls_last}} = result
     end
   end
 

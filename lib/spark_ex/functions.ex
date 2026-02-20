@@ -33,6 +33,8 @@ defmodule SparkEx.Functions do
       col("users.name")
   """
   @spec col(String.t()) :: Column.t()
+  def col("*"), do: %Column{expr: {:star}}
+
   def col(name) when is_binary(name) do
     %Column{expr: {:col, name}}
   end
@@ -49,6 +51,8 @@ defmodule SparkEx.Functions do
       lit(true)
   """
   @spec lit(term()) :: Column.t()
+  def lit(%Column{} = col), do: col
+
   def lit(value) do
     %Column{expr: {:lit, value}}
   end
@@ -218,6 +222,374 @@ defmodule SparkEx.Functions do
   end
 
   @doc """
+  Computes logarithm with the specified base.
+
+  `log(col)` is defined in the registry as natural log (`ln`).
+  `log(base, col)` computes `log_base(col)`.
+
+  ## Examples
+
+      log(2, col("x"))
+      log(10, col("x"))
+  """
+  @spec log(number(), Column.t() | String.t()) :: Column.t()
+  def log(base, col) when is_number(base) do
+    %Column{expr: {:fn, "log", [lit_expr(base), to_expr(col)], false}}
+  end
+
+  @doc """
+  Returns a DataFrame with a broadcast hint for join optimization.
+
+  ## Examples
+
+      broadcast(df)
+  """
+  @spec broadcast(SparkEx.DataFrame.t()) :: SparkEx.DataFrame.t()
+  def broadcast(%SparkEx.DataFrame{} = df) do
+    SparkEx.DataFrame.hint(df, "broadcast")
+  end
+
+  @doc """
+  Computes atan2(y, x). Both arguments can be columns or numeric values.
+  """
+  @spec atan2(Column.t() | String.t() | number(), Column.t() | String.t() | number()) ::
+          Column.t()
+  def atan2(col1, col2) do
+    %Column{expr: {:fn, "atan2", [to_col_or_lit(col1), to_col_or_lit(col2)], false}}
+  end
+
+  @doc """
+  Computes x raised to the power of y. Both arguments can be columns or numeric values.
+  """
+  @spec pow(Column.t() | String.t() | number(), Column.t() | String.t() | number()) :: Column.t()
+  def pow(col1, col2) do
+    %Column{expr: {:fn, "power", [to_col_or_lit(col1), to_col_or_lit(col2)], false}}
+  end
+
+  @doc "Alias for `pow/2`."
+  @spec power(Column.t() | String.t() | number(), Column.t() | String.t() | number()) ::
+          Column.t()
+  def power(col1, col2), do: pow(col1, col2)
+
+  @doc """
+  Returns any value from the group. Optionally ignores null values.
+  """
+  @spec any_value(Column.t() | String.t(), boolean()) :: Column.t()
+  def any_value(col, ignore_nulls \\ false) do
+    args = [to_expr(col), {:lit, ignore_nulls}]
+    %Column{expr: {:fn, "any_value", args, false}}
+  end
+
+  @doc """
+  Returns the nth value in a window frame. Optionally ignores null values.
+  """
+  @spec nth_value(Column.t() | String.t(), integer(), boolean()) :: Column.t()
+  def nth_value(col, offset, ignore_nulls \\ false) do
+    args = [to_expr(col), {:lit, offset}, {:lit, ignore_nulls}]
+    %Column{expr: {:fn, "nth_value", args, false}}
+  end
+
+  @doc """
+  Random value in [0, 1). Always generates a seed when none given.
+  """
+  @spec rand(integer() | nil) :: Column.t()
+  def rand(seed \\ nil) do
+    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
+    %Column{expr: {:fn, "rand", [{:lit, seed}], false}}
+  end
+
+  @doc """
+  Random value from standard normal distribution. Always generates a seed when none given.
+  """
+  @spec randn(integer() | nil) :: Column.t()
+  def randn(seed \\ nil) do
+    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
+    %Column{expr: {:fn, "randn", [{:lit, seed}], false}}
+  end
+
+  @doc """
+  Locates position of substring in a string column. Optional `pos` start position (default 1).
+  """
+  @spec locate(String.t(), Column.t() | String.t(), integer()) :: Column.t()
+  def locate(substr, col, pos \\ 1) do
+    %Column{expr: {:fn, "locate", [{:lit, substr}, to_expr(col), {:lit, pos}], false}}
+  end
+
+  @doc """
+  Most frequent value in group. Optional `deterministic` flag (default false).
+  """
+  @spec mode(Column.t() | String.t(), boolean()) :: Column.t()
+  def mode(col, deterministic \\ false) do
+    %Column{expr: {:fn, "mode", [to_expr(col), {:lit, deterministic}], false}}
+  end
+
+  @doc """
+  Returns randomly shuffled array. Optional `seed` parameter.
+  """
+  @spec shuffle(Column.t() | String.t(), integer() | nil) :: Column.t()
+  def shuffle(col, seed \\ nil) do
+    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
+    %Column{expr: {:fn, "shuffle", [to_expr(col), {:lit, seed}], false}}
+  end
+
+  @doc """
+  Converts unix timestamp to string. Always sends format (default "yyyy-MM-dd HH:mm:ss").
+  """
+  @spec from_unixtime(Column.t() | String.t(), String.t()) :: Column.t()
+  def from_unixtime(col, format \\ "yyyy-MM-dd HH:mm:ss") do
+    %Column{expr: {:fn, "from_unixtime", [to_expr(col), {:lit, format}], false}}
+  end
+
+  @doc """
+  Replaces occurrences of search string. When `replacement` is omitted, uses empty string.
+  """
+  @spec replace(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t()) ::
+          Column.t()
+  def replace(src, search, replacement \\ "") do
+    %Column{
+      expr:
+        {:fn, "replace", [to_expr(src), to_expr(search), to_expr(replacement)], false}
+    }
+  end
+
+  defp to_col_or_lit(%Column{expr: e}), do: e
+  defp to_col_or_lit(name) when is_binary(name), do: {:col, name}
+  defp to_col_or_lit(value) when is_number(value), do: {:lit, value}
+
+  @doc """
+  Splits string by regex pattern.
+
+  ## Examples
+
+      split(col("s"), "\\\\.")
+      split(col("s"), "\\\\.", 3)
+  """
+  @spec split(Column.t() | String.t(), String.t(), integer() | nil) :: Column.t()
+  def split(col, pattern, limit \\ nil) do
+    args =
+      case limit do
+        nil -> [to_expr(col), lit_expr(pattern)]
+        n -> [to_expr(col), lit_expr(pattern), lit_expr(n)]
+      end
+
+    %Column{expr: {:fn, "split", args, false}}
+  end
+
+  @doc """
+  Counts distinct non-null values.
+
+  Accepts a single column or a list of columns for multi-column distinct count.
+
+  ## Examples
+
+      count_distinct(col("x"))
+      count_distinct(["x", "y", "z"])
+  """
+  @spec count_distinct(Column.t() | String.t() | [Column.t() | String.t()]) :: Column.t()
+  def count_distinct(cols) when is_list(cols) do
+    %Column{expr: {:fn, "count", Enum.map(cols, &to_expr/1), true}}
+  end
+
+  def count_distinct(col) do
+    %Column{expr: {:fn, "count", [to_expr(col)], true}}
+  end
+
+  @doc """
+  Returns the number of months between two dates.
+
+  Always sends 3 arguments with `roundOff` defaulting to `true`.
+
+  ## Examples
+
+      months_between(col("d1"), col("d2"))
+      months_between(col("d1"), col("d2"), false)
+  """
+  @spec months_between(Column.t() | String.t(), Column.t() | String.t(), boolean()) :: Column.t()
+  def months_between(date1, date2, round_off \\ true) do
+    %Column{
+      expr:
+        {:fn, "months_between", [to_expr(date1), to_expr(date2), lit_expr(round_off)], false}
+    }
+  end
+
+  @doc """
+  Approximate count of distinct values.
+
+  Optionally accepts a relative standard deviation parameter.
+
+  ## Examples
+
+      approx_count_distinct(col("x"))
+      approx_count_distinct(col("x"), 0.05)
+  """
+  @spec approx_count_distinct(Column.t() | String.t(), float() | nil) :: Column.t()
+  def approx_count_distinct(col, rsd \\ nil) do
+    args =
+      case rsd do
+        nil -> [to_expr(col)]
+        r -> [to_expr(col), lit_expr(r)]
+      end
+
+    %Column{expr: {:fn, "approx_count_distinct", args, false}}
+  end
+
+  @doc "Left-trims whitespace or specified characters."
+  @spec ltrim(Column.t() | String.t(), String.t() | nil) :: Column.t()
+  def ltrim(col, trim_string \\ nil) do
+    args =
+      case trim_string do
+        nil -> [to_expr(col)]
+        s -> [to_expr(col), lit_expr(s)]
+      end
+
+    %Column{expr: {:fn, "ltrim", args, false}}
+  end
+
+  @doc "Right-trims whitespace or specified characters."
+  @spec rtrim(Column.t() | String.t(), String.t() | nil) :: Column.t()
+  def rtrim(col, trim_string \\ nil) do
+    args =
+      case trim_string do
+        nil -> [to_expr(col)]
+        s -> [to_expr(col), lit_expr(s)]
+      end
+
+    %Column{expr: {:fn, "rtrim", args, false}}
+  end
+
+  @doc "Trims whitespace or specified characters from both ends."
+  @spec trim(Column.t() | String.t(), String.t() | nil) :: Column.t()
+  def trim(col, trim_string \\ nil) do
+    args =
+      case trim_string do
+        nil -> [to_expr(col)]
+        s -> [to_expr(col), lit_expr(s)]
+      end
+
+    %Column{expr: {:fn, "trim", args, false}}
+  end
+
+  @doc """
+  Splits text into array of sentences.
+
+  Optionally accepts language and country parameters.
+
+  ## Examples
+
+      sentences(col("text"))
+      sentences(col("text"), "en", "US")
+  """
+  @spec sentences(Column.t() | String.t(), String.t() | nil, String.t() | nil) :: Column.t()
+  def sentences(col, language \\ nil, country \\ nil) do
+    args =
+      case {language, country} do
+        {nil, nil} -> [to_expr(col)]
+        {l, c} -> [to_expr(col), lit_expr(l), lit_expr(c)]
+      end
+
+    %Column{expr: {:fn, "sentences", args, false}}
+  end
+
+  @doc """
+  Levenshtein edit distance between strings.
+
+  Optionally accepts a threshold parameter.
+
+  ## Examples
+
+      levenshtein(col("s1"), col("s2"))
+      levenshtein(col("s1"), col("s2"), 5)
+  """
+  @spec levenshtein(Column.t() | String.t(), Column.t() | String.t(), integer() | nil) ::
+          Column.t()
+  def levenshtein(left, right, threshold \\ nil) do
+    args =
+      case threshold do
+        nil -> [to_expr(left), to_expr(right)]
+        t -> [to_expr(left), to_expr(right), lit_expr(t)]
+      end
+
+    %Column{expr: {:fn, "levenshtein", args, false}}
+  end
+
+  @doc """
+  Joins array elements with delimiter.
+
+  Optionally accepts a null_replacement string.
+
+  ## Examples
+
+      array_join(col("arr"), ",")
+      array_join(col("arr"), ",", "NULL")
+  """
+  @spec array_join(Column.t() | String.t(), String.t(), String.t() | nil) :: Column.t()
+  def array_join(col, delimiter, null_replacement \\ nil) do
+    args =
+      case null_replacement do
+        nil -> [to_expr(col), lit_expr(delimiter)]
+        nr -> [to_expr(col), lit_expr(delimiter), lit_expr(nr)]
+      end
+
+    %Column{expr: {:fn, "array_join", args, false}}
+  end
+
+  @doc """
+  Creates array of values from start to stop with optional step.
+
+  ## Examples
+
+      sequence(col("start"), col("stop"))
+      sequence(col("start"), col("stop"), col("step"))
+  """
+  @spec sequence(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t() | nil) ::
+          Column.t()
+  def sequence(start, stop, step \\ nil) do
+    args =
+      case step do
+        nil -> [to_expr(start), to_expr(stop)]
+        s -> [to_expr(start), to_expr(stop), to_expr(s)]
+      end
+
+    %Column{expr: {:fn, "sequence", args, false}}
+  end
+
+  @doc """
+  Raises error if condition is false.
+
+  Optionally accepts an error message.
+
+  ## Examples
+
+      assert_true(col("cond"))
+      assert_true(col("cond"), "Assertion failed!")
+  """
+  @spec assert_true(Column.t() | String.t(), String.t() | Column.t() | nil) :: Column.t()
+  def assert_true(col, err_msg \\ nil) do
+    args =
+      case err_msg do
+        nil -> [to_expr(col)]
+        msg -> [to_expr(col), lit_expr(msg)]
+      end
+
+    %Column{expr: {:fn, "assert_true", args, false}}
+  end
+
+  @doc """
+  Extracts fields from a JSON string column.
+
+  First argument is the JSON column, remaining arguments are field name strings.
+
+  ## Examples
+
+      json_tuple(col("json_str"), ["name", "age"])
+  """
+  @spec json_tuple(Column.t() | String.t(), [String.t()]) :: Column.t()
+  def json_tuple(col, fields) when is_list(fields) do
+    args = [to_expr(col) | Enum.map(fields, &lit_expr/1)]
+    %Column{expr: {:fn, "json_tuple", args, false}}
+  end
+
+  @doc """
   Calls a registered UDF by name with the given column arguments.
 
   Equivalent to PySpark's `call_udf`.
@@ -374,10 +746,20 @@ defmodule SparkEx.Functions do
 
       transform(col("arr"), fn x -> Column.plus(x, lit(1)) end)
   """
-  @spec transform(Column.t() | String.t(), (Column.t() -> Column.t())) :: Column.t()
+  @spec transform(
+          Column.t() | String.t(),
+          (Column.t() -> Column.t()) | (Column.t(), Column.t() -> Column.t())
+        ) :: Column.t()
   def transform(col, func) when is_function(func, 1) do
     col_expr = to_expr(col)
     {body, vars} = build_lambda(func, ["x"])
+
+    %Column{expr: {:fn, "transform", [col_expr, {:lambda, body, vars}], false}}
+  end
+
+  def transform(col, func) when is_function(func, 2) do
+    col_expr = to_expr(col)
+    {body, vars} = build_lambda(func, ["x", "i"])
 
     %Column{expr: {:fn, "transform", [col_expr, {:lambda, body, vars}], false}}
   end
@@ -389,10 +771,20 @@ defmodule SparkEx.Functions do
 
       filter(col("arr"), fn x -> Column.gt(x, lit(0)) end)
   """
-  @spec filter(Column.t() | String.t(), (Column.t() -> Column.t())) :: Column.t()
+  @spec filter(
+          Column.t() | String.t(),
+          (Column.t() -> Column.t()) | (Column.t(), Column.t() -> Column.t())
+        ) :: Column.t()
   def filter(col, func) when is_function(func, 1) do
     col_expr = to_expr(col)
     {body, vars} = build_lambda(func, ["x"])
+
+    %Column{expr: {:fn, "filter", [col_expr, {:lambda, body, vars}], false}}
+  end
+
+  def filter(col, func) when is_function(func, 2) do
+    col_expr = to_expr(col)
+    {body, vars} = build_lambda(func, ["x", "i"])
 
     %Column{expr: {:fn, "filter", [col_expr, {:lambda, body, vars}], false}}
   end
@@ -431,15 +823,22 @@ defmodule SparkEx.Functions do
   Aggregates elements in an array column using an initial value and a merge function.
 
   The merge function receives two lambda variables: accumulator and element.
+  An optional finish function can be applied to the final accumulator value.
 
   ## Examples
 
       aggregate(col("arr"), lit(0), fn acc, x -> Column.plus(acc, x) end)
+      aggregate(col("arr"), lit(0), fn acc, x -> Column.plus(acc, x) end, fn acc -> Column.cast(acc, "string") end)
   """
-  @spec aggregate(Column.t() | String.t(), Column.t() | term(), (Column.t(), Column.t() ->
-                                                                   Column.t())) ::
-          Column.t()
-  def aggregate(col, zero, func) when is_function(func, 2) do
+  @spec aggregate(
+          Column.t() | String.t(),
+          Column.t() | term(),
+          (Column.t(), Column.t() -> Column.t()),
+          (Column.t() -> Column.t()) | nil
+        ) :: Column.t()
+  def aggregate(col, zero, func, finish \\ nil)
+
+  def aggregate(col, zero, func, nil) when is_function(func, 2) do
     col_expr = to_expr(col)
     zero_expr = to_expr_or_lit(zero)
     {body, vars} = build_lambda(func, ["acc", "x"])
@@ -447,13 +846,30 @@ defmodule SparkEx.Functions do
     %Column{expr: {:fn, "aggregate", [col_expr, zero_expr, {:lambda, body, vars}], false}}
   end
 
+  def aggregate(col, zero, func, finish) when is_function(func, 2) and is_function(finish, 1) do
+    col_expr = to_expr(col)
+    zero_expr = to_expr_or_lit(zero)
+    {merge_body, merge_vars} = build_lambda(func, ["acc", "x"])
+    {finish_body, finish_vars} = build_lambda(finish, ["acc"])
+
+    %Column{
+      expr:
+        {:fn, "aggregate",
+         [col_expr, zero_expr, {:lambda, merge_body, merge_vars}, {:lambda, finish_body, finish_vars}],
+         false}
+    }
+  end
+
   @doc """
   Alias for `aggregate/3`.
   """
-  @spec reduce(Column.t() | String.t(), Column.t() | term(), (Column.t(), Column.t() ->
-                                                                Column.t())) ::
-          Column.t()
-  def reduce(col, zero, func), do: aggregate(col, zero, func)
+  @spec reduce(
+          Column.t() | String.t(),
+          Column.t() | term(),
+          (Column.t(), Column.t() -> Column.t()),
+          (Column.t() -> Column.t()) | nil
+        ) :: Column.t()
+  def reduce(col, zero, func, finish \\ nil), do: aggregate(col, zero, func, finish)
 
   @doc """
   Filters entries in a map column using a predicate on key and value.
@@ -667,7 +1083,7 @@ defmodule SparkEx.Functions do
     days = to_expr(Keyword.get(opts, :days, %Column{expr: {:lit, 0}}))
     hours = to_expr(Keyword.get(opts, :hours, %Column{expr: {:lit, 0}}))
     mins = to_expr(Keyword.get(opts, :mins, %Column{expr: {:lit, 0}}))
-    secs = to_expr(Keyword.get(opts, :secs, %Column{expr: {:lit, 0}}))
+    secs = to_expr(Keyword.get(opts, :secs, %Column{expr: {:lit, Decimal.new(0)}}))
 
     %Column{expr: {:fn, "make_dt_interval", [days, hours, mins, secs], false}}
   end
@@ -682,9 +1098,15 @@ defmodule SparkEx.Functions do
   """
   @spec make_interval(keyword()) :: Column.t()
   def make_interval(opts \\ []) do
-    fields = [:years, :months, :weeks, :days, :hours, :mins, :secs]
-    args = Enum.map(fields, fn f -> to_expr(Keyword.get(opts, f, %Column{expr: {:lit, 0}})) end)
-    %Column{expr: {:fn, "make_interval", args, false}}
+    int_fields = [:years, :months, :weeks, :days, :hours, :mins]
+
+    int_args =
+      Enum.map(int_fields, fn f ->
+        to_expr(Keyword.get(opts, f, %Column{expr: {:lit, 0}}))
+      end)
+
+    secs = to_expr(Keyword.get(opts, :secs, %Column{expr: {:lit, Decimal.new(0)}}))
+    %Column{expr: {:fn, "make_interval", int_args ++ [secs], false}}
   end
 
   @doc """
@@ -692,9 +1114,15 @@ defmodule SparkEx.Functions do
   """
   @spec try_make_interval(keyword()) :: Column.t()
   def try_make_interval(opts \\ []) do
-    fields = [:years, :months, :weeks, :days, :hours, :mins, :secs]
-    args = Enum.map(fields, fn f -> to_expr(Keyword.get(opts, f, %Column{expr: {:lit, 0}})) end)
-    %Column{expr: {:fn, "try_make_interval", args, false}}
+    int_fields = [:years, :months, :weeks, :days, :hours, :mins]
+
+    int_args =
+      Enum.map(int_fields, fn f ->
+        to_expr(Keyword.get(opts, f, %Column{expr: {:lit, 0}}))
+      end)
+
+    secs = to_expr(Keyword.get(opts, :secs, %Column{expr: {:lit, Decimal.new(0)}}))
+    %Column{expr: {:fn, "try_make_interval", int_args ++ [secs], false}}
   end
 
   @doc """

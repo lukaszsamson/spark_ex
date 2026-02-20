@@ -625,7 +625,7 @@ defmodule SparkEx.DataFrame do
   end
 
   def repartition(%__MODULE__{} = df, num_partitions, [])
-      when is_integer(num_partitions) do
+      when is_integer(num_partitions) and num_partitions > 0 do
     %__MODULE__{df | plan: {:repartition, df.plan, num_partitions, true}}
   end
 
@@ -664,7 +664,8 @@ defmodule SparkEx.DataFrame do
       df |> DataFrame.coalesce(1)
   """
   @spec coalesce(t(), pos_integer()) :: t()
-  def coalesce(%__MODULE__{} = df, num_partitions) when is_integer(num_partitions) do
+  def coalesce(%__MODULE__{} = df, num_partitions)
+      when is_integer(num_partitions) and num_partitions > 0 do
     %__MODULE__{df | plan: {:repartition, df.plan, num_partitions, false}}
   end
 
@@ -699,7 +700,7 @@ defmodule SparkEx.DataFrame do
   @spec sample(t(), float(), keyword()) :: t()
   def sample(%__MODULE__{} = df, fraction, opts \\ []) when is_float(fraction) do
     with_replacement = Keyword.get(opts, :with_replacement, false)
-    seed = Keyword.get(opts, :seed, nil)
+    seed = Keyword.get(opts, :seed, :rand.uniform(9_223_372_036_854_775_807))
 
     %__MODULE__{
       df
@@ -784,6 +785,10 @@ defmodule SparkEx.DataFrame do
   end
 
   def observe(%__MODULE__{} = df, name, exprs) when is_binary(name) and is_list(exprs) do
+    if exprs == [] do
+      raise ArgumentError, "exprs should not be empty"
+    end
+
     metric_exprs = Enum.map(exprs, &normalize_column_expr/1)
     %__MODULE__{df | plan: {:collect_metrics, df.plan, name, metric_exprs}}
   end
@@ -951,6 +956,18 @@ defmodule SparkEx.DataFrame do
       df
       | plan: {:unpivot, df.plan, id_exprs, value_exprs, variable_column_name, value_column_name}
     }
+  end
+
+  @doc "Alias for `unpivot/5`."
+  @spec melt(
+          t(),
+          [Column.t() | String.t() | atom()],
+          [Column.t() | String.t() | atom()] | nil,
+          String.t(),
+          String.t()
+        ) :: t()
+  def melt(df, ids, values, variable_column_name, value_column_name) do
+    unpivot(df, ids, values, variable_column_name, value_column_name)
   end
 
   @doc """
@@ -1576,8 +1593,16 @@ defmodule SparkEx.DataFrame do
 
   Modes: `:simple`, `:extended`, `:codegen`, `:cost`, `:formatted`
   """
-  @spec explain(t(), atom()) :: {:ok, String.t()} | {:error, term()}
-  def explain(%__MODULE__{} = df, mode \\ :simple) do
+  @spec explain(t(), atom() | boolean() | String.t()) :: {:ok, String.t()} | {:error, term()}
+  def explain(df, mode \\ :simple)
+  def explain(%__MODULE__{} = df, true), do: explain(df, :extended)
+  def explain(%__MODULE__{} = df, false), do: explain(df, :simple)
+
+  def explain(%__MODULE__{} = df, mode) when is_binary(mode) do
+    explain(df, String.to_existing_atom(mode))
+  end
+
+  def explain(%__MODULE__{} = df, mode) when is_atom(mode) do
     SparkEx.Session.analyze_explain(df.session, df.plan, mode)
   end
 
@@ -1593,7 +1618,14 @@ defmodule SparkEx.DataFrame do
   @spec show(t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def show(%__MODULE__{} = df, opts \\ []) do
     num_rows = Keyword.get(opts, :num_rows, 20)
-    truncate = Keyword.get(opts, :truncate, 20)
+
+    truncate =
+      case Keyword.get(opts, :truncate, 20) do
+        true -> 20
+        false -> 0
+        n when is_integer(n) -> n
+      end
+
     vertical = Keyword.get(opts, :vertical, false)
 
     show_plan = {:show_string, df.plan, num_rows, truncate, vertical}
@@ -1855,15 +1887,15 @@ defmodule SparkEx.DataFrame do
   defp normalize_sort_expr(%Column{expr: {:sort_order, _, _, _}} = col), do: col.expr
 
   defp normalize_sort_expr(%Column{} = col) do
-    {:sort_order, col.expr, :asc, nil}
+    {:sort_order, col.expr, :asc, :nulls_first}
   end
 
   defp normalize_sort_expr(name) when is_binary(name) do
-    {:sort_order, {:col, name}, :asc, nil}
+    {:sort_order, {:col, name}, :asc, :nulls_first}
   end
 
   defp normalize_sort_expr(name) when is_atom(name) do
-    {:sort_order, {:col, Atom.to_string(name)}, :asc, nil}
+    {:sort_order, {:col, Atom.to_string(name)}, :asc, :nulls_first}
   end
 
   defp ensure_same_session!(%__MODULE__{session: left}, %__MODULE__{session: right}, _op)

@@ -13,8 +13,8 @@ defmodule SparkEx.TableArgTest do
       |> TableArg.order_by(["name"])
 
     assert table_arg.order_spec == [
-             {:sort_order, {:col, "age"}, :asc, nil},
-             {:sort_order, {:col, "name"}, :asc, nil}
+             {:sort_order, {:col, "age"}, :asc, :nulls_first},
+             {:sort_order, {:col, "name"}, :asc, :nulls_first}
            ]
   end
 end

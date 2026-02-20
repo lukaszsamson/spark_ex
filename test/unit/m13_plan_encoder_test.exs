@@ -86,8 +86,8 @@ defmodule SparkEx.M13.PlanEncoderTest do
       assert {:replace, na_replace} = relation.rel_type
       assert na_replace.cols == []
       assert [replacement] = na_replace.replacements
-      assert %{literal_type: {:integer, 0}} = replacement.old_value
-      assert %{literal_type: {:integer, 100}} = replacement.new_value
+      assert %{literal_type: {:double, +0.0}} = replacement.old_value
+      assert %{literal_type: {:double, 100.0}} = replacement.new_value
     end
 
     test "encodes na_replace with multiple replacements" do

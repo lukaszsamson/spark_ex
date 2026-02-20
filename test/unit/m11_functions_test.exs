@@ -381,7 +381,7 @@ defmodule SparkEx.M11.FunctionsTest do
 
       assert %Column{
                expr:
-                 {:fn, "timestamp_diff", [{:lit, "HOUR"}, {:col, "ts1"}, {:col, "ts2"}], false}
+                 {:fn, "timestampdiff", [{:lit, "HOUR"}, {:col, "ts1"}, {:col, "ts2"}], false}
              } = result
     end
 

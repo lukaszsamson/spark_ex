@@ -71,7 +71,21 @@ defmodule SparkEx.Writer do
   - `:error_if_exists` — error if data already exists (default)
   - `:ignore` — silently ignore if data already exists
   """
-  @spec mode(t(), atom()) :: t()
+  @spec mode(t(), atom() | String.t()) :: t()
+  def mode(%__MODULE__{} = writer, save_mode) when is_binary(save_mode) do
+    atom_mode =
+      case String.downcase(save_mode) do
+        "append" -> :append
+        "overwrite" -> :overwrite
+        "error" -> :error_if_exists
+        "errorifexists" -> :error_if_exists
+        "ignore" -> :ignore
+        other -> raise ArgumentError, "unknown save mode: #{inspect(other)}"
+      end
+
+    %{writer | mode: atom_mode}
+  end
+
   def mode(%__MODULE__{} = writer, save_mode)
       when save_mode in [:append, :overwrite, :error_if_exists, :ignore] do
     %{writer | mode: save_mode}

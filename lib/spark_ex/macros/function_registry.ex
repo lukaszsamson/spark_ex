@@ -50,7 +50,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:asin, "asin", :one_col, group: :math, doc: "Computes inverse sine."},
       {:asinh, "asinh", :one_col, group: :math, doc: "Computes inverse hyperbolic sine."},
       {:atan, "atan", :one_col, group: :math, doc: "Computes inverse tangent."},
-      {:atan2, "atan2", :two_col, group: :math, doc: "Computes atan2(y, x)."},
+      # atan2 hand-written in functions.ex to accept numeric literals
       {:atanh, "atanh", :one_col, group: :math, doc: "Computes inverse hyperbolic tangent."},
       {:bin, "bin", :one_col, group: :math, doc: "Binary string representation of integer."},
       {:bround, "bround", {:col_opt, [scale: 0]},
@@ -79,7 +79,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:pi, "pi", :zero, group: :math, doc: "Returns pi."},
       {:pmod, "pmod", :two_col, group: :math, doc: "Positive modulo."},
       {:positive, "positive", :one_col, group: :math, doc: "Returns positive value."},
-      {:pow, "power", :two_col, group: :math, doc: "Computes x raised to y.", aliases: [:power]},
+      # pow hand-written in functions.ex to accept numeric literals
       {:radians, "radians", :one_col,
        group: :math, doc: "Converts degrees to radians.", aliases: [:to_radians]},
       {:rint, "rint", :one_col, group: :math, doc: "Rounds to nearest integer."},
@@ -145,9 +145,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :string, doc: "Converts to lowercase.", aliases: [:lcase]},
       {:upper, "upper", :one_col,
        group: :string, doc: "Converts to uppercase.", aliases: [:ucase]},
-      {:ltrim, "ltrim", :one_col, group: :string, doc: "Left-trims whitespace."},
-      {:rtrim, "rtrim", :one_col, group: :string, doc: "Right-trims whitespace."},
-      {:trim, "trim", :one_col, group: :string, doc: "Trims whitespace from both ends."},
+      # ltrim/rtrim/trim are hand-written in Functions to support optional trim character
+      # See Functions.ltrim/1,2, Functions.rtrim/1,2, Functions.trim/1,2
       {:btrim, "btrim", {:col_opt, [trim_string: nil]},
        group: :string, doc: "Trims characters from both sides."},
       {:lpad, "lpad", {:col_lit, 2},
@@ -188,12 +187,13 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :string, doc: "Returns byte length of string."},
       {:overlay, "overlay", {:col_lit, 3},
        group: :string, doc: "Overlays string at position for length."},
-      {:sentences, "sentences", :one_col,
-       group: :string, doc: "Splits text into array of sentences."},
-      {:levenshtein, "levenshtein", :two_col,
-       group: :string, doc: "Levenshtein edit distance between strings."},
-      {:locate, "locate", {:col_lit, 1}, group: :string, doc: "Locates position of substring."},
-      {:split, "split", {:col_lit, 1}, group: :string, doc: "Splits string by regex pattern."},
+      # sentences is hand-written in Functions to support language/country parameters
+      # {:sentences, ...} — see Functions.sentences/1,3
+      # levenshtein is hand-written in Functions to support threshold parameter
+      # {:levenshtein, ...} — see Functions.levenshtein/2,3
+      # locate hand-written in functions.ex to support optional pos parameter
+      # split is hand-written in Functions to support optional limit parameter
+      # {:split, "split", ...} — see Functions.split/2 and split/3
       {:split_part, "split_part", {:col_lit, 2},
        group: :string, doc: "Splits string and returns the field at index."},
       {:char_, "char", {:lit, 1},
@@ -203,14 +203,13 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :string, doc: "Returns position of string in comma-delimited list."},
       {:left_, "left", {:col_lit, 1}, group: :string, doc: "Returns leftmost n characters."},
       {:right_, "right", {:col_lit, 1}, group: :string, doc: "Returns rightmost n characters."},
-      {:endswith, "endswith", :two_col,
+      {:endswith, "endsWith", :two_col,
        group: :string, doc: "Returns true if string ends with suffix."},
-      {:startswith, "startswith", :two_col,
+      {:startswith, "startsWith", :two_col,
        group: :string, doc: "Returns true if string starts with prefix."},
       {:position, "position", {:col_lit, 1},
        group: :string, doc: "Returns position of substring."},
-      {:replace, "replace", :three_col,
-       group: :string, doc: "Replaces occurrences of search with replace."},
+      # replace hand-written in functions.ex to support optional replace parameter
       {:url_encode, "url_encode", :one_col, group: :string, doc: "URL-encodes string."},
       {:url_decode, "url_decode", :one_col, group: :string, doc: "URL-decodes string."},
       {:try_url_decode, "try_url_decode", :one_col,
@@ -290,8 +289,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:trunc, "trunc", {:col_lit, 1},
        group: :datetime, doc: "Truncates date to specified format."},
       {:add_months, "add_months", {:col_lit, 1}, group: :datetime, doc: "Adds months to date."},
-      {:months_between, "months_between", :two_col,
-       group: :datetime, doc: "Months between two dates."},
+      # months_between is hand-written in Functions to support roundOff parameter
+      # {:months_between, ...} — see Functions.months_between/2,3
       {:next_day, "next_day", {:col_lit, 1},
        group: :datetime, doc: "Next day of week after date."},
       {:last_day, "last_day", :one_col, group: :datetime, doc: "Last day of month for date."},
@@ -307,8 +306,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :datetime, doc: "Converts to timestamp with local timezone."},
       {:to_timestamp_ntz, "to_timestamp_ntz", {:col_opt, [format: nil]},
        group: :datetime, doc: "Converts to timestamp without timezone."},
-      {:from_unixtime, "from_unixtime", {:col_opt, [format: nil]},
-       group: :datetime, doc: "Converts unix timestamp to string."},
+      # from_unixtime hand-written in functions.ex to always send default format
       {:unix_timestamp, "unix_timestamp", {:col_opt, [format: nil]},
        group: :datetime, doc: "Converts timestamp to unix seconds."},
       {:to_unix_timestamp, "to_unix_timestamp", {:col_opt, [format: nil]},
@@ -333,9 +331,9 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :datetime, doc: "Creates timestamp from milliseconds."},
       {:timestamp_micros, "timestamp_micros", :one_col,
        group: :datetime, doc: "Creates timestamp from microseconds."},
-      {:timestamp_diff, "timestamp_diff", {:lit_then_cols, 1},
+      {:timestamp_diff, "timestampdiff", {:lit_then_cols, 1},
        group: :datetime, doc: "Returns difference between timestamps in given unit."},
-      {:timestamp_add, "timestamp_add", {:lit_then_cols, 1},
+      {:timestamp_add, "timestampadd", {:lit_then_cols, 1},
        group: :datetime, doc: "Adds interval to timestamp."},
       {:time_diff, "time_diff", {:lit_then_cols, 1},
        group: :datetime, doc: "Returns difference between times in given unit."},
@@ -402,8 +400,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :collection, doc: "Returns true if arrays have common elements."},
       {:arrays_zip, "arrays_zip", :n_col,
        group: :collection, doc: "Zips arrays into array of structs."},
-      {:array_join, "array_join", {:col_lit, 1},
-       group: :collection, doc: "Joins array elements with delimiter."},
+      # array_join is hand-written in Functions to support null_replacement parameter
+      # {:array_join, ...} — see Functions.array_join/2,3
       {:element_at, "element_at", :two_col,
        group: :collection, doc: "Returns element at index/key."},
       {:try_element_at, "try_element_at", :two_col,
@@ -440,10 +438,9 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :collection, doc: "Returns slice of array from start for length."},
       {:sort_array, "sort_array", {:col_opt, [asc: true]},
        group: :collection, doc: "Sorts array."},
-      {:sequence, "sequence", :three_col,
-       group: :collection, doc: "Creates array of values from start to stop with step."},
-      {:shuffle, "shuffle", :one_col,
-       group: :collection, doc: "Returns randomly shuffled array."},
+      # sequence is hand-written in Functions to make step optional
+      # {:sequence, ...} — see Functions.sequence/2,3
+      # shuffle hand-written in functions.ex to support seed parameter
       {:stack, "stack", :n_col, group: :collection, doc: "Separates column into n rows."}
     ]
   end
@@ -451,8 +448,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
   defp aggregate_functions do
     [
       {:count, "count", :one_col, group: :aggregate, doc: "Counts non-null values."},
-      {:count_distinct, "count", :one_col,
-       group: :aggregate, doc: "Counts distinct non-null values.", is_distinct: true},
+      # count_distinct is hand-written in Functions to support variadic columns
+      # {:count_distinct, "count", ...} — see Functions.count_distinct/1
       {:sum, "sum", :one_col, group: :aggregate, doc: "Computes sum."},
       {:avg, "avg", :one_col, group: :aggregate, doc: "Computes average.", aliases: [:mean]},
       {:min, "min", :one_col, group: :aggregate, doc: "Computes minimum."},
@@ -467,8 +464,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :aggregate, doc: "Collects distinct values into set."},
       {:sum_distinct, "sum", :one_col,
        group: :aggregate, doc: "Computes sum of distinct values.", is_distinct: true},
-      {:approx_count_distinct, "approx_count_distinct", :one_col,
-       group: :aggregate, doc: "Approximate count of distinct values."},
+      # approx_count_distinct is hand-written in Functions to support rsd parameter
+      # {:approx_count_distinct, ...} — see Functions.approx_count_distinct/1,2
       {:approx_percentile, "approx_percentile", {:col_lit, 2},
        group: :aggregate, doc: "Approximate percentile with accuracy parameter."},
       {:percentile, "percentile", {:col_lit, 1}, group: :aggregate, doc: "Exact percentile."},
@@ -486,9 +483,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:kurtosis, "kurtosis", :one_col, group: :aggregate, doc: "Kurtosis."},
       {:percentile_approx, "percentile_approx", {:col_lit, 2},
        group: :aggregate, doc: "Approximate percentile."},
-      {:mode, "mode", :one_col, group: :aggregate, doc: "Most frequent value."},
-      {:any_value, "any_value", :one_col,
-       group: :aggregate, doc: "Returns any value from group."},
+      # mode hand-written in functions.ex to support deterministic parameter
+      # any_value hand-written in functions.ex to support ignoreNulls
       {:count_if, "count_if", :one_col,
        group: :aggregate, doc: "Counts rows where condition is true."},
       {:max_by, "max_by", :two_col,
@@ -505,9 +501,10 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:median, "median", :one_col, group: :aggregate, doc: "Median value."},
       {:listagg, "listagg", {:col_opt, [delimiter: nil]},
        group: :aggregate, doc: "Concatenates values as string.", aliases: [:string_agg]},
-      {:listagg_distinct, "listagg_distinct", {:col_opt, [delimiter: nil]},
+      {:listagg_distinct, "listagg", {:col_opt, [delimiter: nil]},
        group: :aggregate,
        doc: "Concatenates distinct values as string.",
+       is_distinct: true,
        aliases: [:string_agg_distinct]},
       {:regr_avgx, "regr_avgx", :two_col,
        group: :aggregate, doc: "Average of independent variable."},
@@ -542,8 +539,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :window, doc: "Value at offset rows before current."},
       {:lead, "lead", {:col_opt, [offset: 1, default: nil]},
        group: :window, doc: "Value at offset rows after current."},
-      {:nth_value, "nth_value", {:col_lit, 1},
-       group: :window, doc: "Returns nth value in window frame."}
+      # nth_value hand-written in functions.ex to support ignoreNulls
     ]
   end
 
@@ -563,14 +559,14 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :conditional, doc: "Returns second if first is not null, else third."},
       {:nanvl, "nanvl", :two_col,
        group: :conditional, doc: "Returns second value if first is NaN."},
-      {:isnan, "isnan", :one_col, group: :conditional, doc: "True if NaN."},
-      {:isnull, "isnull", :one_col, group: :conditional, doc: "True if null."},
-      {:isnotnull, "isnotnull", :one_col, group: :conditional, doc: "True if not null."},
+      {:isnan, "isNaN", :one_col, group: :conditional, doc: "True if NaN."},
+      {:isnull, "isNull", :one_col, group: :conditional, doc: "True if null."},
+      {:isnotnull, "isNotNull", :one_col, group: :conditional, doc: "True if not null."},
       {:equal_null, "equal_null", :two_col, group: :conditional, doc: "Null-safe equality."},
       {:zeroifnull, "zeroifnull", :one_col,
        group: :conditional, doc: "Returns zero if value is null."},
-      {:assert_true, "assert_true", :one_col,
-       group: :conditional, doc: "Raises error if condition is false."},
+      # assert_true is hand-written in Functions to support errMsg parameter
+      # {:assert_true, ...} — see Functions.assert_true/1,2
       {:raise_error, "raise_error", :one_col,
        group: :conditional, doc: "Raises a user-specified error message."}
     ]
@@ -591,8 +587,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
     [
       {:get_json_object, "get_json_object", {:col_lit, 1},
        group: :json, doc: "Extracts JSON object from path expression."},
-      {:json_tuple, "json_tuple", {:lit_then_cols, 1},
-       group: :json, doc: "Creates columns from JSON fields."},
+      # json_tuple is hand-written in Functions because first arg is column, rest are string literals
+      # {:json_tuple, "json_tuple", ...} — see Functions.json_tuple/2
       {:json_array_length, "json_array_length", :one_col,
        group: :json, doc: "Returns length of outermost JSON array."},
       {:json_object_keys, "json_object_keys", :one_col,
@@ -695,9 +691,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :misc, doc: "Length of current file block."},
       {:input_file_block_start, "input_file_block_start", :zero,
        group: :misc, doc: "Start offset of current file block."},
-      {:rand, "rand", {:lit_opt, [seed: nil]}, group: :misc, doc: "Random value in [0, 1)."},
-      {:randn, "randn", {:lit_opt, [seed: nil]},
-       group: :misc, doc: "Random value from standard normal distribution."},
+      # rand/randn hand-written in functions.ex to generate random seed when none given
       {:grouping, "grouping", :one_col,
        group: :misc, doc: "Indicates whether column is aggregated in grouping set."},
       {:grouping_id, "grouping_id", :n_col, group: :misc, doc: "Grouping ID for grouping set."},

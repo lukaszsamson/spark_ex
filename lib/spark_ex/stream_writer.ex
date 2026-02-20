@@ -97,6 +97,22 @@ defmodule SparkEx.StreamWriter do
   """
   @spec trigger(t(), keyword()) :: t()
   def trigger(%__MODULE__{} = writer, opts) when is_list(opts) do
+    trigger_keys = [:processing_time, :available_now, :once, :continuous]
+    set_keys = Enum.filter(trigger_keys, &Keyword.has_key?(opts, &1))
+
+    case set_keys do
+      [] ->
+        raise ArgumentError,
+              "expected one of :processing_time, :available_now, :once, :continuous"
+
+      [_single] ->
+        :ok
+
+      multiple ->
+        raise ArgumentError,
+              "only one trigger type should be set, got: #{inspect(multiple)}"
+    end
+
     trigger_value =
       cond do
         Keyword.has_key?(opts, :processing_time) ->
@@ -110,10 +126,6 @@ defmodule SparkEx.StreamWriter do
 
         Keyword.has_key?(opts, :continuous) ->
           {:continuous, Keyword.fetch!(opts, :continuous)}
-
-        true ->
-          raise ArgumentError,
-                "expected one of :processing_time, :available_now, :once, :continuous"
       end
 
     %{writer | trigger: trigger_value}

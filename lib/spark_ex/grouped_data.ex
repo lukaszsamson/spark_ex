@@ -205,6 +205,14 @@ defmodule SparkEx.GroupedData do
   """
   @spec pivot(t(), Column.t() | String.t(), [term()] | nil) :: t()
   def pivot(%__MODULE__{} = gd, pivot_col, values \\ nil) do
+    if gd.group_type != :groupby do
+      raise ArgumentError,
+            "pivot is only supported after group_by, not after #{gd.group_type}"
+    end
+
+    if gd.pivot_col != nil do
+      raise ArgumentError, "repeated pivot is not supported"
+    end
     col_expr =
       case pivot_col do
         %Column{expr: e} -> e

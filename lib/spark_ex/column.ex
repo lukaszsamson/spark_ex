@@ -60,8 +60,8 @@ defmodule SparkEx.Column do
     {:bitwise_or, "|", "Bitwise OR."},
     {:bitwise_xor, "^", "Bitwise XOR."},
     {:contains, "contains", "String contains."},
-    {:starts_with, "startswith", "String starts with."},
-    {:ends_with, "endswith", "String ends with."},
+    {:starts_with, "startsWith", "String starts with."},
+    {:ends_with, "endsWith", "String ends with."},
     {:like, "like", "SQL LIKE pattern match."},
     {:rlike, "rlike", "Regex pattern match."},
     {:ilike, "ilike", "Case-insensitive LIKE."}
@@ -82,9 +82,9 @@ defmodule SparkEx.Column do
   # ── Generated unary operators ──
 
   @unary_operators [
-    {:is_null, "isnull", "Returns true if the column is null."},
-    {:is_not_null, "isnotnull", "Returns true if the column is not null."},
-    {:is_nan, "isnan", "Returns true if the column is NaN."},
+    {:is_null, "isNull", "Returns true if the column is null."},
+    {:is_not_null, "isNotNull", "Returns true if the column is not null."},
+    {:is_nan, "isNaN", "Returns true if the column is NaN."},
     {:not_, "not", "Logical NOT."},
     {:bitwise_not, "~", "Bitwise NOT."},
     {:negate, "negative", "Unary negation."}
@@ -261,13 +261,13 @@ defmodule SparkEx.Column do
   @doc "Sort ascending (nulls first by default)"
   @spec asc(t()) :: t()
   def asc(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:sort_order, col.expr, :asc, nil}}
+    %__MODULE__{expr: {:sort_order, col.expr, :asc, :nulls_first}}
   end
 
   @doc "Sort descending (nulls last by default)"
   @spec desc(t()) :: t()
   def desc(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:sort_order, col.expr, :desc, nil}}
+    %__MODULE__{expr: {:sort_order, col.expr, :desc, :nulls_last}}
   end
 
   @doc "Sort ascending with nulls first"

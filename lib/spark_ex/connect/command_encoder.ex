@@ -455,7 +455,9 @@ defmodule SparkEx.Connect.CommandEncoder do
     do: raise(ArgumentError, "invalid V2 write mode: #{inspect(other)}")
 
   defp stringify_options(opts) when is_map(opts) do
-    Map.new(opts, fn {k, v} -> {to_string(k), to_string(v)} end)
+    opts
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new(fn {k, v} -> {to_string(k), to_string(v)} end)
   end
 
   # --- Streaming helpers ---
@@ -509,6 +511,10 @@ defmodule SparkEx.Connect.CommandEncoder do
 
   defp encode_sq_command({:explain, extended}) do
     {:explain, %StreamingQueryCommand.ExplainCommand{extended: extended}}
+  end
+
+  defp encode_sq_command({:await_termination, nil}) do
+    {:await_termination, %StreamingQueryCommand.AwaitTerminationCommand{}}
   end
 
   defp encode_sq_command({:await_termination, timeout_ms}) do

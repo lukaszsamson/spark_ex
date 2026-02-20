@@ -31,6 +31,10 @@ defmodule SparkEx.DataFrame.NA do
   def fill(df, value, opts \\ [])
 
   def fill(%DataFrame{} = df, value, _opts) when is_map(value) do
+    if map_size(value) == 0 do
+      raise ArgumentError, "value should not be empty"
+    end
+
     cols = Map.keys(value)
     values = Map.values(value)
 
@@ -50,6 +54,9 @@ defmodule SparkEx.DataFrame.NA do
       case subset do
         nil ->
           []
+
+        col when is_binary(col) ->
+          [col]
 
         cols when is_list(cols) ->
           unless Enum.all?(cols, &is_binary/1) do
@@ -93,6 +100,7 @@ defmodule SparkEx.DataFrame.NA do
     cols =
       case subset do
         nil -> []
+        col when is_binary(col) -> [col]
         cols when is_list(cols) -> cols
       end
 

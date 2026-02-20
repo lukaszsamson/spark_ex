@@ -289,7 +289,7 @@ defmodule SparkEx.DataFrameTest do
       result = DataFrame.order_by(df, [Column.desc(Functions.col("age"))])
 
       assert %DataFrame{
-               plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "age"}, :desc, nil}]}
+               plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "age"}, :desc, :nulls_last}]}
              } = result
     end
 
@@ -298,7 +298,7 @@ defmodule SparkEx.DataFrameTest do
       result = DataFrame.order_by(df, ["name"])
 
       assert %DataFrame{
-               plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, nil}]}
+               plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, :nulls_first}]}
              } = result
     end
 
@@ -307,7 +307,7 @@ defmodule SparkEx.DataFrameTest do
       result = DataFrame.order_by(df, [Functions.col("name")])
 
       assert %DataFrame{
-               plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, nil}]}
+               plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, :nulls_first}]}
              } = result
     end
   end
@@ -317,7 +317,7 @@ defmodule SparkEx.DataFrameTest do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.sort(df, ["name"])
 
-      assert %DataFrame{plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, nil}]}} =
+      assert %DataFrame{plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, :nulls_first}]}} =
                result
     end
   end
@@ -392,7 +392,7 @@ defmodule SparkEx.DataFrameTest do
       assert %DataFrame{
                plan:
                  {:repartition_by_expression, {:sql, _, _},
-                  [{:sort_order, {:col, "id"}, :asc, nil}], nil}
+                  [{:sort_order, {:col, "id"}, :asc, :nulls_first}], nil}
              } = result
     end
   end
@@ -405,7 +405,7 @@ defmodule SparkEx.DataFrameTest do
       assert %DataFrame{
                plan:
                  {:repartition_by_expression, {:sql, _, _},
-                  [{:sort_order, {:col, "id"}, :asc, nil}], 10}
+                  [{:sort_order, {:col, "id"}, :asc, :nulls_first}], 10}
              } = result
     end
   end

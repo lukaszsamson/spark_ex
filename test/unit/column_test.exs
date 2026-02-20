@@ -66,12 +66,12 @@ defmodule SparkEx.ColumnTest do
   describe "null checks" do
     test "is_null/1" do
       result = Column.is_null(Functions.col("x"))
-      assert %Column{expr: {:fn, "isnull", [{:col, "x"}], false}} = result
+      assert %Column{expr: {:fn, "isNull", [{:col, "x"}], false}} = result
     end
 
     test "is_not_null/1" do
       result = Column.is_not_null(Functions.col("x"))
-      assert %Column{expr: {:fn, "isnotnull", [{:col, "x"}], false}} = result
+      assert %Column{expr: {:fn, "isNotNull", [{:col, "x"}], false}} = result
     end
   end
 
@@ -117,12 +117,12 @@ defmodule SparkEx.ColumnTest do
   describe "sort ordering" do
     test "asc/1" do
       result = Column.asc(Functions.col("x"))
-      assert %Column{expr: {:sort_order, {:col, "x"}, :asc, nil}} = result
+      assert %Column{expr: {:sort_order, {:col, "x"}, :asc, :nulls_first}} = result
     end
 
     test "desc/1" do
       result = Column.desc(Functions.col("x"))
-      assert %Column{expr: {:sort_order, {:col, "x"}, :desc, nil}} = result
+      assert %Column{expr: {:sort_order, {:col, "x"}, :desc, :nulls_last}} = result
     end
 
     test "asc_nulls_first/1" do
@@ -151,7 +151,7 @@ defmodule SparkEx.ColumnTest do
 
     test "starts_with/2" do
       result = Column.starts_with(Functions.col("name"), Functions.lit("pre"))
-      assert %Column{expr: {:fn, "startswith", [{:col, "name"}, {:lit, "pre"}], false}} = result
+      assert %Column{expr: {:fn, "startsWith", [{:col, "name"}, {:lit, "pre"}], false}} = result
     end
 
     test "like/2" do

@@ -46,7 +46,7 @@ defmodule SparkEx.WindowSpec do
     order_exprs =
       Enum.map(cols, fn
         %Column{expr: {:sort_order, _, _, _}} = c -> c.expr
-        other -> {:sort_order, to_expr(other), :asc, nil}
+        other -> {:sort_order, to_expr(other), :asc, :nulls_first}
       end)
 
     %__MODULE__{spec | order_spec: order_exprs}

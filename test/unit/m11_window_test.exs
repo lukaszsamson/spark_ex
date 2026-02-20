@@ -22,7 +22,7 @@ defmodule SparkEx.M11.WindowTest do
       spec = Window.order_by(["salary"])
 
       assert %WindowSpec{
-               order_spec: [{:sort_order, {:col, "salary"}, :asc, nil}],
+               order_spec: [{:sort_order, {:col, "salary"}, :asc, :nulls_first}],
                partition_spec: []
              } = spec
     end
@@ -31,7 +31,7 @@ defmodule SparkEx.M11.WindowTest do
       spec = Window.order_by([SparkEx.Column.desc(Functions.col("salary"))])
 
       assert %WindowSpec{
-               order_spec: [{:sort_order, {:col, "salary"}, :desc, nil}]
+               order_spec: [{:sort_order, {:col, "salary"}, :desc, :nulls_last}]
              } = spec
     end
 
@@ -60,7 +60,7 @@ defmodule SparkEx.M11.WindowTest do
 
       assert %WindowSpec{
                partition_spec: [{:col, "dept"}],
-               order_spec: [{:sort_order, {:col, "salary"}, :asc, nil}]
+               order_spec: [{:sort_order, {:col, "salary"}, :asc, :nulls_first}]
              } = spec
     end
 
@@ -72,7 +72,7 @@ defmodule SparkEx.M11.WindowTest do
 
       assert %WindowSpec{
                partition_spec: [{:col, "dept"}],
-               order_spec: [{:sort_order, {:col, "salary"}, :asc, nil}],
+               order_spec: [{:sort_order, {:col, "salary"}, :asc, :nulls_first}],
                frame_spec: {:rows, -2, 2}
              } = spec
     end
@@ -102,10 +102,10 @@ defmodule SparkEx.M11.WindowTest do
   describe "WindowSpec.order_by/2 replaces order columns" do
     test "replaces existing order spec" do
       spec =
-        %WindowSpec{order_spec: [{:sort_order, {:col, "old"}, :asc, nil}]}
+        %WindowSpec{order_spec: [{:sort_order, {:col, "old"}, :asc, :nulls_first}]}
         |> WindowSpec.order_by(["new"])
 
-      assert spec.order_spec == [{:sort_order, {:col, "new"}, :asc, nil}]
+      assert spec.order_spec == [{:sort_order, {:col, "new"}, :asc, :nulls_first}]
     end
   end
 

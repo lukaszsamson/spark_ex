@@ -162,7 +162,7 @@ defmodule SparkEx.Unit.FunctionGenTest do
     end
 
     test "nth_value/2" do
-      assert %Column{expr: {:fn, "nth_value", [{:col, "v"}, {:lit, 3}], false}} =
+      assert %Column{expr: {:fn, "nth_value", [{:col, "v"}, {:lit, 3}, {:lit, false}], false}} =
                Functions.nth_value("v", 3)
     end
   end
@@ -274,13 +274,13 @@ defmodule SparkEx.Unit.FunctionGenTest do
                Functions.lead("v")
     end
 
-    test "rand/0 with nil seed trimmed" do
-      assert %Column{expr: {:fn, "rand", [], false}} = Functions.rand()
+    test "rand/0 generates random seed" do
+      assert %Column{expr: {:fn, "rand", [{:lit, seed}], false}} = Functions.rand()
+      assert is_integer(seed)
     end
 
     test "rand/1 with explicit seed" do
-      assert %Column{expr: {:fn, "rand", [{:lit, 42}], false}} =
-               Functions.rand(seed: 42)
+      assert %Column{expr: {:fn, "rand", [{:lit, 42}], false}} = Functions.rand(42)
     end
 
     test "sort_array/1 with default asc=true" do
