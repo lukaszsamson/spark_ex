@@ -84,6 +84,27 @@ defmodule SparkEx.ReaderTest do
                plan: {:read_data_source, "parquet", _, "id INT, name STRING", %{}}
              } = df
     end
+
+    test "accepts SparkEx.Types struct schema option as JSON" do
+      schema =
+        SparkEx.Types.struct_type([
+          SparkEx.Types.struct_field("id", :integer,
+            nullable: false,
+            metadata: %{"comment" => "pk"}
+          )
+        ])
+
+      df = Reader.parquet(self(), "/data/file.parquet", schema: schema)
+
+      assert %DataFrame{
+               plan: {:read_data_source, "parquet", _, encoded_schema, %{}}
+             } = df
+
+      decoded = Jason.decode!(encoded_schema)
+      assert decoded["type"] == "struct"
+      assert Enum.at(decoded["fields"], 0)["nullable"] == false
+      assert Enum.at(decoded["fields"], 0)["metadata"]["comment"] == "pk"
+    end
   end
 
   describe "csv/2" do

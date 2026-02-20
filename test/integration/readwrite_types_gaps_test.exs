@@ -43,7 +43,8 @@ defmodule SparkEx.Integration.ReadWriteTypesGapsTest do
     test "write and read text file", %{session: session} do
       path = "/tmp/spark_ex_text_test_#{System.unique_integer([:positive])}"
 
-      df = SparkEx.sql(session, "SELECT * FROM VALUES ('line1'), ('line2'), ('line3') AS t(value)")
+      df =
+        SparkEx.sql(session, "SELECT * FROM VALUES ('line1'), ('line2'), ('line3') AS t(value)")
 
       assert :ok = Writer.text(df, path, mode: :overwrite)
 
@@ -343,6 +344,38 @@ defmodule SparkEx.Integration.ReadWriteTypesGapsTest do
 
       assert {:ok, rows} = DataFrame.collect(df)
       assert length(rows) == 2
+    end
+  end
+
+  describe "Reader struct schema fidelity" do
+    test "preserves nullability and metadata when schema is SparkEx.Types struct", %{
+      session: session
+    } do
+      path = "/tmp/spark_ex_reader_schema_json_#{System.unique_integer([:positive])}.csv"
+      File.write!(path, "id,name\n1,Alice\n")
+      on_exit(fn -> File.rm(path) end)
+
+      schema =
+        SparkEx.Types.struct_type([
+          SparkEx.Types.struct_field("id", :integer,
+            nullable: false,
+            metadata: %{"comment" => "primary_key"}
+          ),
+          SparkEx.Types.struct_field("name", :string, metadata: %{"tag" => "user_name"})
+        ])
+
+      df = Reader.csv(session, path, header: true, schema: schema)
+      assert {:ok, analyzed_schema} = DataFrame.schema(df)
+      {:struct, struct} = analyzed_schema.kind
+
+      id_field = Enum.find(struct.fields, &(&1.name == "id"))
+      name_field = Enum.find(struct.fields, &(&1.name == "name"))
+
+      assert id_field != nil
+      assert name_field != nil
+      assert id_field.nullable
+      assert Jason.decode!(id_field.metadata)["comment"] == "primary_key"
+      assert Jason.decode!(name_field.metadata)["tag"] == "user_name"
     end
   end
 

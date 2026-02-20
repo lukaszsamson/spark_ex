@@ -333,7 +333,10 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "encodes ToSchema with Struct type" do
-      schema = SparkEx.Types.struct_type([SparkEx.Types.struct_field("id", :long)])
+      schema =
+        SparkEx.Types.struct_type([
+          SparkEx.Types.struct_field("id", :long, nullable: false, metadata: %{"comment" => "pk"})
+        ])
 
       {plan, _counter} =
         PlanEncoder.encode(
@@ -348,7 +351,12 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                with_relations
 
       assert %Spark.Connect.ToSchema{} = to_schema
-      assert %Spark.Connect.DataType{kind: {:unparsed, _}} = to_schema.schema
+      assert %Spark.Connect.DataType{kind: {:struct, struct_schema}} = to_schema.schema
+      assert [%Spark.Connect.DataType.StructField{} = field] = struct_schema.fields
+      assert field.name == "id"
+      assert field.nullable == false
+      assert %Spark.Connect.DataType{kind: {:long, _}} = field.data_type
+      assert Jason.decode!(field.metadata)["comment"] == "pk"
     end
 
     test "encodes ToSchema with DataType" do

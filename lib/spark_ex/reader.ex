@@ -61,7 +61,7 @@ defmodule SparkEx.Reader do
   end
 
   def schema(%__MODULE__{} = reader, {:struct, _} = struct_type) do
-    %{reader | schema: SparkEx.Types.schema_to_string(struct_type)}
+    %{reader | schema: SparkEx.Types.to_json(struct_type)}
   end
 
   @doc """
@@ -336,7 +336,7 @@ defmodule SparkEx.Reader do
 
   defp load_from_builder(reader, paths, opts) do
     format = Keyword.get(opts, :format, reader.format)
-    schema = Keyword.get(opts, :schema, reader.schema)
+    schema = opts |> Keyword.get(:schema, reader.schema) |> normalize_schema()
 
     opts_options = Keyword.get(opts, :options, %{})
     merged_options = Map.merge(reader.options, normalize_options(opts_options))
@@ -349,7 +349,7 @@ defmodule SparkEx.Reader do
 
   defp data_source(session, format, paths, opts) do
     paths = List.wrap(paths)
-    schema = Keyword.get(opts, :schema, nil)
+    schema = opts |> Keyword.get(:schema, nil) |> normalize_schema()
     options = merge_source_options(opts, [:schema, :predicates])
     predicates = opts |> Keyword.get(:predicates) |> normalize_predicates()
 
@@ -372,6 +372,11 @@ defmodule SparkEx.Reader do
 
     Map.merge(top_level_options, nested_options)
   end
+
+  defp normalize_schema(nil), do: nil
+  defp normalize_schema(schema) when is_binary(schema), do: schema
+  defp normalize_schema({:struct, _} = schema), do: SparkEx.Types.to_json(schema)
+  defp normalize_schema(schema), do: schema
 
   defp normalize_options(opts) when is_list(opts) do
     opts |> Enum.into(%{}) |> normalize_options()

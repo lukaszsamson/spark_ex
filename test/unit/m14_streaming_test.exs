@@ -655,6 +655,24 @@ defmodule SparkEx.M14.StreamingTest do
       assert opts["mode"] == "PERMISSIVE"
     end
 
+    test "convenience methods accept SparkEx.Types struct schema as JSON" do
+      schema =
+        SparkEx.Types.struct_type([
+          SparkEx.Types.struct_field("id", :long,
+            nullable: false,
+            metadata: %{"comment" => "stream_id"}
+          )
+        ])
+
+      df = SparkEx.StreamReader.csv(:s, "/data/stream", schema: schema)
+      assert {:read_data_source_streaming, "csv", ["/data/stream"], encoded_schema, _} = df.plan
+
+      decoded = Jason.decode!(encoded_schema)
+      assert decoded["type"] == "struct"
+      assert Enum.at(decoded["fields"], 0)["nullable"] == false
+      assert Enum.at(decoded["fields"], 0)["metadata"]["comment"] == "stream_id"
+    end
+
     test "option with nil value is skipped" do
       reader =
         SparkEx.StreamReader.new(:s)
@@ -1025,16 +1043,32 @@ defmodule SparkEx.M14.StreamingTest do
       assert schema_to_string(schema) == "id LONG"
     end
 
-    test "Reader.schema accepts struct type" do
-      schema = struct_type([struct_field("id", :long), struct_field("name", :string)])
+    test "Reader.schema accepts struct type as JSON schema" do
+      schema =
+        struct_type([
+          struct_field("id", :long, nullable: false, metadata: %{"comment" => "primary"}),
+          struct_field("name", :string)
+        ])
+
       reader = SparkEx.Reader.new(:s) |> SparkEx.Reader.schema(schema)
-      assert reader.schema == "id LONG, name STRING"
+      decoded = Jason.decode!(reader.schema)
+      assert decoded["type"] == "struct"
+      assert Enum.at(decoded["fields"], 0)["nullable"] == false
+      assert Enum.at(decoded["fields"], 0)["metadata"]["comment"] == "primary"
     end
 
-    test "StreamReader.schema accepts struct type" do
-      schema = struct_type([struct_field("id", :long), struct_field("name", :string)])
+    test "StreamReader.schema accepts struct type as JSON schema" do
+      schema =
+        struct_type([
+          struct_field("id", :long),
+          struct_field("name", :string, nullable: false, metadata: %{"tag" => "required"})
+        ])
+
       reader = SparkEx.StreamReader.new(:s) |> SparkEx.StreamReader.schema(schema)
-      assert reader.schema == "id LONG, name STRING"
+      decoded = Jason.decode!(reader.schema)
+      assert decoded["type"] == "struct"
+      assert Enum.at(decoded["fields"], 1)["nullable"] == false
+      assert Enum.at(decoded["fields"], 1)["metadata"]["tag"] == "required"
     end
   end
 end

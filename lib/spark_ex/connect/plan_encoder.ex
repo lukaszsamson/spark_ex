@@ -2479,7 +2479,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp encode_schema({:struct, _} = schema) do
-    encode_schema(SparkEx.Types.schema_to_string(schema))
+    SparkEx.Types.to_proto(schema)
   end
 
   defp validate_subquery_opts!(:table_arg, opts) when is_list(opts) do

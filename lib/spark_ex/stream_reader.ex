@@ -56,7 +56,7 @@ defmodule SparkEx.StreamReader do
   end
 
   def schema(%__MODULE__{} = reader, {:struct, _} = struct_type) do
-    %{reader | schema: SparkEx.Types.schema_to_string(struct_type)}
+    %{reader | schema: SparkEx.Types.to_json(struct_type)}
   end
 
   @spec option(t(), String.t(), term()) :: t()
@@ -171,7 +171,7 @@ defmodule SparkEx.StreamReader do
 
   defp streaming_data_source(session, format, path, opts) do
     paths = normalize_stream_paths!(path)
-    schema = Keyword.get(opts, :schema, nil)
+    schema = opts |> Keyword.get(:schema, nil) |> normalize_schema()
     options = merge_source_options(opts, [:schema])
 
     %DataFrame{
@@ -204,6 +204,11 @@ defmodule SparkEx.StreamReader do
 
     Map.merge(top_level_options, nested_options)
   end
+
+  defp normalize_schema(nil), do: nil
+  defp normalize_schema(schema) when is_binary(schema), do: schema
+  defp normalize_schema({:struct, _} = schema), do: SparkEx.Types.to_json(schema)
+  defp normalize_schema(schema), do: schema
 
   defp normalize_options(opts) when is_list(opts) do
     opts |> Enum.into(%{}) |> normalize_options()

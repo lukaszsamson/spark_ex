@@ -59,4 +59,23 @@ defmodule SparkEx.Integration.DataFrameCheckpointTest do
     assert {:ok, rows} = DataFrame.collect(df)
     assert Enum.all?(rows, fn row -> is_binary(row["id"]) end)
   end
+
+  test "to/2 with SparkEx.Types struct preserves metadata and nullability", %{session: session} do
+    schema =
+      SparkEx.Types.struct_type([
+        SparkEx.Types.struct_field("id", :long,
+          nullable: false,
+          metadata: %{"comment" => "range_id"}
+        )
+      ])
+
+    df = SparkEx.range(session, 3) |> DataFrame.to(schema)
+
+    assert {:ok, analyzed_schema} = DataFrame.schema(df)
+    {:struct, struct} = analyzed_schema.kind
+    [field] = struct.fields
+    assert field.name == "id"
+    refute field.nullable
+    assert Jason.decode!(field.metadata)["comment"] == "range_id"
+  end
 end

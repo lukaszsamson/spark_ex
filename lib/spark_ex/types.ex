@@ -97,7 +97,8 @@ defmodule SparkEx.Types do
       array_type(:string)
       array_type({:struct, fields})
   """
-  @spec array_type(spark_type(), keyword()) :: {:array, spark_type()} | {:array, spark_type(), boolean()}
+  @spec array_type(spark_type(), keyword()) ::
+          {:array, spark_type()} | {:array, spark_type(), boolean()}
   def array_type(element_type, opts \\ []) do
     case Keyword.get(opts, :contains_null, true) do
       true -> {:array, element_type}
@@ -112,7 +113,8 @@ defmodule SparkEx.Types do
 
       map_type(:string, :long)
   """
-  @spec map_type(spark_type(), spark_type(), keyword()) :: {:map, spark_type(), spark_type()} | {:map, spark_type(), spark_type(), boolean()}
+  @spec map_type(spark_type(), spark_type(), keyword()) ::
+          {:map, spark_type(), spark_type()} | {:map, spark_type(), spark_type(), boolean()}
   def map_type(key_type, value_type, opts \\ []) do
     case Keyword.get(opts, :value_contains_null, true) do
       true -> {:map, key_type, value_type}
@@ -163,6 +165,14 @@ defmodule SparkEx.Types do
     Jason.encode!(%{"type" => "struct", "fields" => json_fields})
   end
 
+  @doc """
+  Converts a struct type to Spark Connect `DataType` protobuf.
+
+  Preserves JSON-level fidelity (field nullability and metadata) for nested types.
+  """
+  @spec to_proto(struct_type()) :: Spark.Connect.DataType.t()
+  def to_proto({:struct, _} = schema), do: type_to_proto(schema)
+
   # --- DDL type conversion ---
 
   defp type_to_ddl(:null), do: "VOID"
@@ -189,7 +199,10 @@ defmodule SparkEx.Types do
   defp type_to_ddl({:array, element}), do: "ARRAY<#{type_to_ddl(element)}>"
   defp type_to_ddl({:array, element, _contains_null}), do: "ARRAY<#{type_to_ddl(element)}>"
   defp type_to_ddl({:map, key, value}), do: "MAP<#{type_to_ddl(key)}, #{type_to_ddl(value)}>"
-  defp type_to_ddl({:map, key, value, _vcn}), do: "MAP<#{type_to_ddl(key)}, #{type_to_ddl(value)}>"
+
+  defp type_to_ddl({:map, key, value, _vcn}),
+    do: "MAP<#{type_to_ddl(key)}, #{type_to_ddl(value)}>"
+
   defp type_to_ddl(:variant), do: "VARIANT"
   defp type_to_ddl(:geometry), do: "GEOMETRY"
   defp type_to_ddl(:geography), do: "GEOGRAPHY"
@@ -277,6 +290,162 @@ defmodule SparkEx.Types do
 
     %{"type" => "struct", "fields" => json_fields}
   end
+
+  # --- Spark Connect DataType protobuf conversion ---
+
+  defp type_to_proto(:null),
+    do: %Spark.Connect.DataType{kind: {:null, %Spark.Connect.DataType.NULL{}}}
+
+  defp type_to_proto(:boolean),
+    do: %Spark.Connect.DataType{kind: {:boolean, %Spark.Connect.DataType.Boolean{}}}
+
+  defp type_to_proto(:byte),
+    do: %Spark.Connect.DataType{kind: {:byte, %Spark.Connect.DataType.Byte{}}}
+
+  defp type_to_proto(:short),
+    do: %Spark.Connect.DataType{kind: {:short, %Spark.Connect.DataType.Short{}}}
+
+  defp type_to_proto(:integer),
+    do: %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}}
+
+  defp type_to_proto(:long),
+    do: %Spark.Connect.DataType{kind: {:long, %Spark.Connect.DataType.Long{}}}
+
+  defp type_to_proto(:float),
+    do: %Spark.Connect.DataType{kind: {:float, %Spark.Connect.DataType.Float{}}}
+
+  defp type_to_proto(:double),
+    do: %Spark.Connect.DataType{kind: {:double, %Spark.Connect.DataType.Double{}}}
+
+  defp type_to_proto(:string),
+    do: %Spark.Connect.DataType{kind: {:string, %Spark.Connect.DataType.String{}}}
+
+  defp type_to_proto({:string, collation}) do
+    %Spark.Connect.DataType{
+      kind: {:string, %Spark.Connect.DataType.String{collation: collation}}
+    }
+  end
+
+  defp type_to_proto({:char, length}) do
+    %Spark.Connect.DataType{kind: {:char, %Spark.Connect.DataType.Char{length: length}}}
+  end
+
+  defp type_to_proto({:varchar, length}) do
+    %Spark.Connect.DataType{kind: {:var_char, %Spark.Connect.DataType.VarChar{length: length}}}
+  end
+
+  defp type_to_proto(:binary),
+    do: %Spark.Connect.DataType{kind: {:binary, %Spark.Connect.DataType.Binary{}}}
+
+  defp type_to_proto(:date),
+    do: %Spark.Connect.DataType{kind: {:date, %Spark.Connect.DataType.Date{}}}
+
+  defp type_to_proto(:time),
+    do: %Spark.Connect.DataType{kind: {:time, %Spark.Connect.DataType.Time{}}}
+
+  defp type_to_proto(:timestamp) do
+    %Spark.Connect.DataType{kind: {:timestamp, %Spark.Connect.DataType.Timestamp{}}}
+  end
+
+  defp type_to_proto(:timestamp_ntz) do
+    %Spark.Connect.DataType{kind: {:timestamp_ntz, %Spark.Connect.DataType.TimestampNTZ{}}}
+  end
+
+  defp type_to_proto(:day_time_interval) do
+    %Spark.Connect.DataType{
+      kind: {:day_time_interval, %Spark.Connect.DataType.DayTimeInterval{}}
+    }
+  end
+
+  defp type_to_proto(:year_month_interval) do
+    %Spark.Connect.DataType{
+      kind: {:year_month_interval, %Spark.Connect.DataType.YearMonthInterval{}}
+    }
+  end
+
+  defp type_to_proto(:calendar_interval) do
+    %Spark.Connect.DataType{
+      kind: {:calendar_interval, %Spark.Connect.DataType.CalendarInterval{}}
+    }
+  end
+
+  defp type_to_proto({:decimal, precision, scale}) do
+    %Spark.Connect.DataType{
+      kind: {:decimal, %Spark.Connect.DataType.Decimal{precision: precision, scale: scale}}
+    }
+  end
+
+  defp type_to_proto({:array, element}) do
+    %Spark.Connect.DataType{
+      kind:
+        {:array,
+         %Spark.Connect.DataType.Array{element_type: type_to_proto(element), contains_null: true}}
+    }
+  end
+
+  defp type_to_proto({:array, element, contains_null}) do
+    %Spark.Connect.DataType{
+      kind:
+        {:array,
+         %Spark.Connect.DataType.Array{
+           element_type: type_to_proto(element),
+           contains_null: contains_null
+         }}
+    }
+  end
+
+  defp type_to_proto({:map, key, value}) do
+    %Spark.Connect.DataType{
+      kind:
+        {:map,
+         %Spark.Connect.DataType.Map{
+           key_type: type_to_proto(key),
+           value_type: type_to_proto(value),
+           value_contains_null: true
+         }}
+    }
+  end
+
+  defp type_to_proto({:map, key, value, value_contains_null}) do
+    %Spark.Connect.DataType{
+      kind:
+        {:map,
+         %Spark.Connect.DataType.Map{
+           key_type: type_to_proto(key),
+           value_type: type_to_proto(value),
+           value_contains_null: value_contains_null
+         }}
+    }
+  end
+
+  defp type_to_proto(:variant),
+    do: %Spark.Connect.DataType{kind: {:variant, %Spark.Connect.DataType.Variant{}}}
+
+  defp type_to_proto(:geometry),
+    do: %Spark.Connect.DataType{kind: {:geometry, %Spark.Connect.DataType.Geometry{}}}
+
+  defp type_to_proto(:geography),
+    do: %Spark.Connect.DataType{kind: {:geography, %Spark.Connect.DataType.Geography{}}}
+
+  defp type_to_proto({:struct, fields}) do
+    proto_fields =
+      Enum.map(fields, fn field ->
+        %Spark.Connect.DataType.StructField{
+          name: field.name,
+          data_type: type_to_proto(field.type),
+          nullable: field.nullable,
+          metadata: encode_field_metadata(Map.get(field, :metadata, %{}))
+        }
+      end)
+
+    %Spark.Connect.DataType{
+      kind: {:struct, %Spark.Connect.DataType.Struct{fields: proto_fields}}
+    }
+  end
+
+  defp encode_field_metadata(metadata) when is_binary(metadata), do: metadata
+  defp encode_field_metadata(metadata) when is_map(metadata), do: Jason.encode!(metadata)
+  defp encode_field_metadata(metadata), do: Jason.encode!(metadata)
 
   @doc false
   @spec schema_to_string(struct_type() | String.t()) :: String.t()
