@@ -82,6 +82,10 @@ defmodule SparkEx.StreamWriter do
 
   @spec query_name(t(), String.t()) :: t()
   def query_name(%__MODULE__{} = writer, name) when is_binary(name) do
+    if String.trim(name) == "" do
+      raise ArgumentError, "query name should not be empty or blank"
+    end
+
     %{writer | query_name: name}
   end
 

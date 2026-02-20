@@ -99,9 +99,18 @@ defmodule SparkEx.DataFrame.NA do
 
     cols =
       case subset do
-        nil -> []
-        col when is_binary(col) -> [col]
-        cols when is_list(cols) -> cols
+        nil ->
+          []
+
+        col when is_binary(col) ->
+          [col]
+
+        cols when is_list(cols) ->
+          unless Enum.all?(cols, &is_binary/1) do
+            raise ArgumentError, "expected subset to be a list of column name strings"
+          end
+
+          cols
       end
 
     min_non_nulls =
@@ -145,15 +154,13 @@ defmodule SparkEx.DataFrame.NA do
   def replace(df, to_replace, value \\ nil, opts \\ [])
 
   def replace(%DataFrame{} = df, to_replace, _value, opts) when is_map(to_replace) do
-    subset = Keyword.get(opts, :subset, nil)
-    cols = if subset, do: subset, else: []
+    cols = normalize_subset(Keyword.get(opts, :subset, nil))
     replacements = Enum.map(to_replace, fn {old, new} -> {old, new} end)
     %DataFrame{df | plan: {:na_replace, df.plan, cols, replacements}}
   end
 
   def replace(%DataFrame{} = df, to_replace, value, opts) when is_list(to_replace) do
-    subset = Keyword.get(opts, :subset, nil)
-    cols = if subset, do: subset, else: []
+    cols = normalize_subset(Keyword.get(opts, :subset, nil))
 
     values =
       cond do
@@ -173,10 +180,13 @@ defmodule SparkEx.DataFrame.NA do
   end
 
   def replace(%DataFrame{} = df, to_replace, value, opts) do
-    subset = Keyword.get(opts, :subset, nil)
-    cols = if subset, do: subset, else: []
+    cols = normalize_subset(Keyword.get(opts, :subset, nil))
     %DataFrame{df | plan: {:na_replace, df.plan, cols, [{to_replace, value}]}}
   end
+
+  defp normalize_subset(nil), do: []
+  defp normalize_subset(col) when is_binary(col), do: [col]
+  defp normalize_subset(cols) when is_list(cols), do: cols
 
   defp validate_fill_values!(values) do
     Enum.each(values, fn v ->

@@ -128,6 +128,10 @@ defmodule SparkEx.Writer do
   """
   @spec sort_by(t(), [String.t()]) :: t()
   def sort_by(%__MODULE__{} = writer, columns) when is_list(columns) do
+    if columns == [] do
+      raise ArgumentError, "sort_by columns should not be empty"
+    end
+
     %{writer | sort_by: Enum.map(columns, &to_string/1)}
   end
 
@@ -137,6 +141,10 @@ defmodule SparkEx.Writer do
   @spec bucket_by(t(), pos_integer(), [String.t()]) :: t()
   def bucket_by(%__MODULE__{} = writer, num_buckets, columns)
       when is_integer(num_buckets) and num_buckets > 0 and is_list(columns) do
+    if columns == [] do
+      raise ArgumentError, "bucket_by columns should not be empty"
+    end
+
     %{writer | bucket_by: {num_buckets, Enum.map(columns, &to_string/1)}}
   end
 
@@ -145,6 +153,10 @@ defmodule SparkEx.Writer do
   """
   @spec cluster_by(t(), [String.t()]) :: t()
   def cluster_by(%__MODULE__{} = writer, columns) when is_list(columns) do
+    if columns == [] do
+      raise ArgumentError, "cluster_by columns should not be empty"
+    end
+
     %{writer | cluster_by: Enum.map(columns, &to_string/1)}
   end
 

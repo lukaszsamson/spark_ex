@@ -116,6 +116,10 @@ defmodule SparkEx.WriterV2 do
   """
   @spec partitioned_by(t(), [term()]) :: t()
   def partitioned_by(%__MODULE__{} = writer, exprs) when is_list(exprs) do
+    if exprs == [] do
+      raise ArgumentError, "partitioned_by columns should not be empty"
+    end
+
     normalized = Enum.map(exprs, &normalize_partition_expr/1)
     %{writer | partitioned_by: normalized}
   end
@@ -125,6 +129,10 @@ defmodule SparkEx.WriterV2 do
   """
   @spec cluster_by(t(), [String.t()]) :: t()
   def cluster_by(%__MODULE__{} = writer, columns) when is_list(columns) do
+    if columns == [] do
+      raise ArgumentError, "cluster_by columns should not be empty"
+    end
+
     %{writer | cluster_by: Enum.map(columns, &to_string/1)}
   end
 

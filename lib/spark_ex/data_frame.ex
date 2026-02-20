@@ -62,10 +62,14 @@ defmodule SparkEx.DataFrame do
       df |> SparkEx.DataFrame.select(["name", "age"])
       df |> SparkEx.DataFrame.select([:name, :age])
   """
-  @spec select(t(), [Column.t() | String.t() | atom()]) :: t()
+  @spec select(t(), Column.t() | String.t() | atom() | [Column.t() | String.t() | atom()]) :: t()
   def select(%__MODULE__{} = df, columns) when is_list(columns) do
     exprs = Enum.map(columns, &normalize_column_expr/1)
     %__MODULE__{df | plan: {:project, df.plan, exprs}}
+  end
+
+  def select(%__MODULE__{} = df, column) do
+    select(df, [column])
   end
 
   @doc """
@@ -134,10 +138,20 @@ defmodule SparkEx.DataFrame do
       df |> SparkEx.DataFrame.drop(["temp_col", "debug_col"])
       df |> SparkEx.DataFrame.drop([:temp_col])
   """
-  @spec drop(t(), [String.t() | atom()]) :: t()
+  @spec drop(t(), [Column.t() | String.t() | atom()] | Column.t() | String.t() | atom()) :: t()
   def drop(%__MODULE__{} = df, columns) when is_list(columns) do
-    names = Enum.map(columns, &to_string/1)
+    names =
+      Enum.map(columns, fn
+        %Column{expr: {:col, name}} -> name
+        %Column{} -> raise ArgumentError, "drop only supports simple column references"
+        other -> to_string(other)
+      end)
+
     %__MODULE__{df | plan: {:drop, df.plan, names}}
+  end
+
+  def drop(%__MODULE__{} = df, column) do
+    drop(df, [column])
   end
 
   @doc """
@@ -157,6 +171,10 @@ defmodule SparkEx.DataFrame do
   """
   @spec order_by(t(), [Column.t() | String.t() | atom()]) :: t()
   def order_by(%__MODULE__{} = df, columns) when is_list(columns) do
+    if columns == [] do
+      raise ArgumentError, "cols should not be empty for order_by"
+    end
+
     sort_exprs = Enum.map(columns, &normalize_sort_expr/1)
     %__MODULE__{df | plan: {:sort, df.plan, sort_exprs}}
   end
@@ -188,7 +206,8 @@ defmodule SparkEx.DataFrame do
       |> DataFrame.group_by(["department"])
       |> SparkEx.GroupedData.agg([sum(col("salary"))])
   """
-  @spec group_by(t(), [Column.t() | String.t() | atom()]) :: SparkEx.GroupedData.t()
+  @spec group_by(t(), Column.t() | String.t() | atom() | [Column.t() | String.t() | atom()]) ::
+          SparkEx.GroupedData.t()
   def group_by(%__MODULE__{} = df, columns) when is_list(columns) do
     grouping_exprs = Enum.map(columns, &normalize_column_expr/1)
 
@@ -201,10 +220,15 @@ defmodule SparkEx.DataFrame do
     }
   end
 
+  def group_by(%__MODULE__{} = df, column) do
+    group_by(df, [column])
+  end
+
   @doc """
   Groups by rollup of the specified columns.
   """
-  @spec rollup(t(), [Column.t() | String.t() | atom()]) :: SparkEx.GroupedData.t()
+  @spec rollup(t(), Column.t() | String.t() | atom() | [Column.t() | String.t() | atom()]) ::
+          SparkEx.GroupedData.t()
   def rollup(%__MODULE__{} = df, columns) when is_list(columns) do
     grouping_exprs = Enum.map(columns, &normalize_column_expr/1)
 
@@ -217,10 +241,15 @@ defmodule SparkEx.DataFrame do
     }
   end
 
+  def rollup(%__MODULE__{} = df, column) do
+    rollup(df, [column])
+  end
+
   @doc """
   Groups by cube of the specified columns.
   """
-  @spec cube(t(), [Column.t() | String.t() | atom()]) :: SparkEx.GroupedData.t()
+  @spec cube(t(), Column.t() | String.t() | atom() | [Column.t() | String.t() | atom()]) ::
+          SparkEx.GroupedData.t()
   def cube(%__MODULE__{} = df, columns) when is_list(columns) do
     grouping_exprs = Enum.map(columns, &normalize_column_expr/1)
 
@@ -231,6 +260,10 @@ defmodule SparkEx.DataFrame do
       group_type: :cube,
       grouping_sets: nil
     }
+  end
+
+  def cube(%__MODULE__{} = df, column) do
+    cube(df, [column])
   end
 
   @doc """
@@ -318,17 +351,19 @@ defmodule SparkEx.DataFrame do
   @spec as_of_join(
           t(),
           t(),
-          Column.t(),
-          Column.t(),
+          Column.t() | String.t(),
+          Column.t() | String.t(),
           keyword()
         ) :: t()
   def as_of_join(
         %__MODULE__{} = left,
         %__MODULE__{} = right,
-        %Column{} = left_as_of,
-        %Column{} = right_as_of,
+        left_as_of,
+        right_as_of,
         opts \\ []
       ) do
+    left_as_of = normalize_to_column(left_as_of)
+    right_as_of = normalize_to_column(right_as_of)
     ensure_same_session!(left, right, :as_of_join)
 
     {join_expr, using_columns} = normalize_join_on(Keyword.get(opts, :on, []))
@@ -474,10 +509,14 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.select_expr(["name", "age + 1 AS age_plus"])
   """
-  @spec select_expr(t(), [String.t()]) :: t()
+  @spec select_expr(t(), String.t() | [String.t()]) :: t()
   def select_expr(%__MODULE__{} = df, exprs) when is_list(exprs) do
     expr_nodes = Enum.map(exprs, fn e -> {:expr, e} end)
     %__MODULE__{df | plan: {:project, df.plan, expr_nodes}}
+  end
+
+  def select_expr(%__MODULE__{} = df, expr) when is_binary(expr) do
+    select_expr(df, [expr])
   end
 
   @doc """
@@ -525,6 +564,10 @@ defmodule SparkEx.DataFrame do
   """
   @spec to_df(t(), [String.t()]) :: t()
   def to_df(%__MODULE__{} = df, column_names) when is_list(column_names) do
+    unless Enum.all?(column_names, &is_binary/1) do
+      raise ArgumentError, "column_names must all be strings"
+    end
+
     %__MODULE__{df | plan: {:to_df, df.plan, column_names}}
   end
 
@@ -630,7 +673,7 @@ defmodule SparkEx.DataFrame do
   end
 
   def repartition(%__MODULE__{} = df, num_partitions, cols)
-      when is_integer(num_partitions) and is_list(cols) do
+      when is_integer(num_partitions) and num_partitions > 0 and is_list(cols) do
     exprs = Enum.map(cols, &normalize_column_expr/1)
     %__MODULE__{df | plan: {:repartition_by_expression, df.plan, exprs, num_partitions}}
   end
@@ -652,6 +695,10 @@ defmodule SparkEx.DataFrame do
   """
   @spec repartition_by_range(t(), [Column.t() | String.t() | atom()]) :: t()
   def repartition_by_range(%__MODULE__{} = df, cols) when is_list(cols) do
+    if cols == [] do
+      raise ArgumentError, "cols should not be empty for repartition_by_range"
+    end
+
     sort_exprs = Enum.map(cols, &normalize_sort_expr/1)
     %__MODULE__{df | plan: {:repartition_by_expression, df.plan, sort_exprs, nil}}
   end
@@ -678,6 +725,10 @@ defmodule SparkEx.DataFrame do
   """
   @spec sort_within_partitions(t(), [Column.t() | String.t() | atom()]) :: t()
   def sort_within_partitions(%__MODULE__{} = df, columns) when is_list(columns) do
+    if columns == [] do
+      raise ArgumentError, "cols should not be empty for sort_within_partitions"
+    end
+
     sort_exprs = Enum.map(columns, &normalize_sort_expr/1)
     %__MODULE__{df | plan: {:sort, df.plan, sort_exprs, false}}
   end
@@ -881,6 +932,14 @@ defmodule SparkEx.DataFrame do
   @spec with_watermark(t(), String.t(), String.t()) :: t()
   def with_watermark(%__MODULE__{} = df, event_time, delay_threshold)
       when is_binary(event_time) and is_binary(delay_threshold) do
+    if String.trim(event_time) == "" do
+      raise ArgumentError, "event_time should not be empty or blank"
+    end
+
+    if String.trim(delay_threshold) == "" do
+      raise ArgumentError, "delay_threshold should not be empty or blank"
+    end
+
     %__MODULE__{df | plan: {:with_watermark, df.plan, event_time, delay_threshold}}
   end
 
@@ -944,12 +1003,14 @@ defmodule SparkEx.DataFrame do
           String.t()
         ) :: t()
   def unpivot(%__MODULE__{} = df, ids, values, variable_column_name, value_column_name) do
+    ids = if is_list(ids), do: ids, else: [ids]
     id_exprs = Enum.map(ids, &normalize_column_expr/1)
 
     value_exprs =
       case values do
         nil -> nil
-        vals -> Enum.map(vals, &normalize_column_expr/1)
+        vals when is_list(vals) -> Enum.map(vals, &normalize_column_expr/1)
+        val -> [normalize_column_expr(val)]
       end
 
     %__MODULE__{
@@ -977,11 +1038,22 @@ defmodule SparkEx.DataFrame do
 
   - `:index_column` — column(s) to use as index (default: nil)
   """
-  @spec transpose(t(), keyword()) :: t()
-  def transpose(%__MODULE__{} = df, opts \\ []) do
+  @spec transpose(t(), keyword() | Column.t() | String.t()) :: t()
+  def transpose(df, opts \\ [])
+
+  def transpose(%__MODULE__{} = df, %Column{} = col) do
+    %__MODULE__{df | plan: {:transpose, df.plan, [col.expr]}}
+  end
+
+  def transpose(%__MODULE__{} = df, index_col) when is_binary(index_col) do
+    %__MODULE__{df | plan: {:transpose, df.plan, [{:col, index_col}]}}
+  end
+
+  def transpose(%__MODULE__{} = df, opts) when is_list(opts) do
     index_columns =
       case Keyword.get(opts, :index_column) do
         nil -> []
+        %Column{expr: e} -> [e]
         col when is_binary(col) -> [{:col, col}]
         cols when is_list(cols) -> Enum.map(cols, &normalize_column_expr/1)
       end
@@ -1757,12 +1829,12 @@ defmodule SparkEx.DataFrame do
     do: SparkEx.DataFrame.NA.replace(df, to_replace, value, opts)
 
   @doc "Describes basic statistics. Delegates to `SparkEx.DataFrame.Stat.describe/2`."
-  @spec describe(t(), [String.t()]) :: t()
+  @spec describe(t(), String.t() | [String.t()]) :: t()
   def describe(%__MODULE__{} = df, cols \\ []),
     do: SparkEx.DataFrame.Stat.describe(df, cols)
 
   @doc "Computes summary statistics. Delegates to `SparkEx.DataFrame.Stat.summary/2`."
-  @spec summary(t(), [String.t()]) :: t()
+  @spec summary(t(), String.t() | [String.t()]) :: t()
   def summary(%__MODULE__{} = df, statistics \\ []),
     do: SparkEx.DataFrame.Stat.summary(df, statistics)
 
@@ -1868,6 +1940,9 @@ defmodule SparkEx.DataFrame do
   defp valid_hint_param?(v), do: primitive_hint?(v)
 
   defp primitive_hint?(v), do: is_binary(v) or is_integer(v) or is_float(v)
+
+  defp normalize_to_column(%Column{} = col), do: col
+  defp normalize_to_column(name) when is_binary(name), do: %Column{expr: {:col, name}}
 
   defp normalize_column_expr(%Column{} = col), do: col.expr
   defp normalize_column_expr(name) when is_binary(name), do: {:col, name}

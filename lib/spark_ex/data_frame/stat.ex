@@ -23,9 +23,15 @@ defmodule SparkEx.DataFrame.Stat do
       DataFrame.Stat.describe(df)
       DataFrame.Stat.describe(df, ["age", "salary"])
   """
-  @spec describe(DataFrame.t(), [String.t()]) :: DataFrame.t()
-  def describe(%DataFrame{} = df, cols \\ []) when is_list(cols) do
+  @spec describe(DataFrame.t(), String.t() | [String.t()]) :: DataFrame.t()
+  def describe(df, cols \\ [])
+
+  def describe(%DataFrame{} = df, cols) when is_list(cols) do
     %DataFrame{df | plan: {:stat_describe, df.plan, cols}}
+  end
+
+  def describe(%DataFrame{} = df, col) when is_binary(col) do
+    describe(df, [col])
   end
 
   @doc """
@@ -39,9 +45,15 @@ defmodule SparkEx.DataFrame.Stat do
       DataFrame.Stat.summary(df)
       DataFrame.Stat.summary(df, ["count", "min", "max"])
   """
-  @spec summary(DataFrame.t(), [String.t()]) :: DataFrame.t()
-  def summary(%DataFrame{} = df, statistics \\ []) when is_list(statistics) do
+  @spec summary(DataFrame.t(), String.t() | [String.t()]) :: DataFrame.t()
+  def summary(df, statistics \\ [])
+
+  def summary(%DataFrame{} = df, statistics) when is_list(statistics) do
     %DataFrame{df | plan: {:stat_summary, df.plan, statistics}}
+  end
+
+  def summary(%DataFrame{} = df, stat) when is_binary(stat) do
+    summary(df, [stat])
   end
 
   @doc """
