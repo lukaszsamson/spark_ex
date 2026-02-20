@@ -165,8 +165,13 @@ defmodule SparkEx.MergeIntoWriter do
   defp normalize_condition(%Column{expr: e}), do: e
 
   defp normalize_assignments(assignments) when is_map(assignments) do
-    Enum.map(assignments, fn {col_name, %Column{expr: value_expr}} ->
-      {{:col, col_name}, value_expr}
+    Enum.map(assignments, fn
+      {col_name, %Column{expr: value_expr}} when is_binary(col_name) ->
+        {{:col, col_name}, value_expr}
+
+      {col_name, _} when not is_binary(col_name) ->
+        raise ArgumentError,
+              "merge assignment keys must be strings, got: #{inspect(col_name)}"
     end)
   end
 end

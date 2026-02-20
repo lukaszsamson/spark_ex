@@ -638,6 +638,134 @@ defmodule SparkEx.MissCodex2Test do
     end
   end
 
+  # ── #22 DataFrame.agg map shorthand ──
+
+  describe "#22 DataFrame.agg map shorthand" do
+    test "accepts map of column => function" do
+      result = DataFrame.agg(make_df(), %{"age" => "max"})
+      assert %DataFrame{plan: {:aggregate, _, :groupby, [], _}} = result
+    end
+
+    test "GroupedData.agg also accepts map" do
+      gd = DataFrame.group_by(make_df(), ["dept"])
+      result = SparkEx.GroupedData.agg(gd, %{"salary" => "sum"})
+      assert %DataFrame{plan: {:aggregate, _, :groupby, [{:col, "dept"}], _}} = result
+    end
+  end
+
+  # ── #28 drop_duplicates nil vs [] semantics ──
+
+  describe "#28 drop_duplicates nil vs empty list semantics" do
+    test "nil subset sets all_columns_as_keys=true" do
+      result = DataFrame.drop_duplicates(make_df(), nil)
+      assert %DataFrame{plan: {:deduplicate, _, [], true}} = result
+    end
+
+    test "default (no subset) sets all_columns_as_keys=true" do
+      result = DataFrame.drop_duplicates(make_df())
+      assert %DataFrame{plan: {:deduplicate, _, [], true}} = result
+    end
+
+    test "explicit empty list sets all_columns_as_keys=false" do
+      result = DataFrame.drop_duplicates(make_df(), [])
+      assert %DataFrame{plan: {:deduplicate, _, [], false}} = result
+    end
+
+    test "non-empty subset sets all_columns_as_keys=false" do
+      result = DataFrame.drop_duplicates(make_df(), ["a", "b"])
+      assert %DataFrame{plan: {:deduplicate, _, ["a", "b"], false}} = result
+    end
+  end
+
+  # ── #40 sort_within_partitions ascending/ordinal support ──
+
+  describe "#40 sort_within_partitions ascending keyword and ordinals" do
+    test "accepts integer ordinal columns" do
+      result = DataFrame.sort_within_partitions(make_df(), [0, 1])
+      assert %DataFrame{plan: {:sort, _, sort_exprs, false}} = result
+      assert length(sort_exprs) == 2
+      [{:sort_order, {:col, "_c0"}, _, _}, {:sort_order, {:col, "_c1"}, _, _}] = sort_exprs
+    end
+
+    test "ascending: false reverses all columns" do
+      result = DataFrame.sort_within_partitions(make_df(), ["a", "b"], ascending: false)
+      assert %DataFrame{plan: {:sort, _, sort_exprs, false}} = result
+
+      Enum.each(sort_exprs, fn {:sort_order, _, dir, _} ->
+        assert dir == :desc
+      end)
+    end
+
+    test "ascending: list sets per-column direction" do
+      result =
+        DataFrame.sort_within_partitions(make_df(), ["a", "b"], ascending: [true, false])
+
+      assert %DataFrame{plan: {:sort, _, [order_a, order_b], false}} = result
+      assert {:sort_order, _, :asc, _} = order_a
+      assert {:sort_order, _, :desc, _} = order_b
+    end
+
+    test "ascending list length mismatch raises" do
+      assert_raise ArgumentError, ~r/ascending list length/, fn ->
+        DataFrame.sort_within_partitions(make_df(), ["a", "b"], ascending: [true])
+      end
+    end
+  end
+
+  # ── #59 MERGE assignment key validation ──
+
+  describe "#59 MERGE assignment key string validation" do
+    test "rejects non-string keys" do
+      writer = %SparkEx.MergeIntoWriter{
+        source_df: make_df(),
+        target_table: "t",
+        condition: {:col, "id"},
+        match_actions: [],
+        not_matched_actions: [],
+        not_matched_by_source_actions: []
+      }
+
+      assert_raise ArgumentError, ~r/must be strings/, fn ->
+        SparkEx.MergeIntoWriter.when_matched_update(writer, %{1 => Functions.col("x")})
+      end
+    end
+
+    test "accepts string keys" do
+      writer = %SparkEx.MergeIntoWriter{
+        source_df: make_df(),
+        target_table: "t",
+        condition: {:col, "id"},
+        match_actions: [],
+        not_matched_actions: [],
+        not_matched_by_source_actions: []
+      }
+
+      result =
+        SparkEx.MergeIntoWriter.when_matched_update(writer, %{"col1" => Functions.col("x")})
+
+      assert length(result.match_actions) == 1
+    end
+  end
+
+  # ── #61 transpose single index only ──
+
+  describe "#61 transpose single index column only" do
+    test "accepts single index via keyword" do
+      result = DataFrame.transpose(make_df(), index_column: "id")
+      assert %DataFrame{plan: {:transpose, _, [{:col, "id"}]}} = result
+    end
+
+    test "no index column produces empty list" do
+      result = DataFrame.transpose(make_df())
+      assert %DataFrame{plan: {:transpose, _, []}} = result
+    end
+
+    test "accepts Column via keyword" do
+      result = DataFrame.transpose(make_df(), index_column: Functions.col("id"))
+      assert %DataFrame{plan: {:transpose, _, [{:col, "id"}]}} = result
+    end
+  end
+
   # ── Helper ──
 
   defp make_df do

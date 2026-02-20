@@ -784,13 +784,60 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.sort_within_partitions(["key"])
   """
-  @spec sort_within_partitions(t(), [Column.t() | String.t() | atom()]) :: t()
-  def sort_within_partitions(%__MODULE__{} = df, columns) when is_list(columns) do
+  @spec sort_within_partitions(t(), [Column.t() | String.t() | atom() | integer()], keyword()) :: t()
+  def sort_within_partitions(%__MODULE__{} = df, columns, opts \\ []) when is_list(columns) do
     if columns == [] do
       raise ArgumentError, "cols should not be empty for sort_within_partitions"
     end
 
-    sort_exprs = Enum.map(columns, &normalize_sort_expr/1)
+    ascending = Keyword.get(opts, :ascending)
+
+    sort_exprs =
+      case ascending do
+        nil ->
+          Enum.map(columns, &normalize_sort_expr/1)
+
+        asc when is_boolean(asc) ->
+          direction = if asc, do: :asc, else: :desc
+          null_order = if asc, do: :nulls_first, else: :nulls_last
+
+          Enum.map(columns, fn col ->
+            expr =
+              case col do
+                %Column{expr: {:sort_order, inner, _, _}} -> inner
+                %Column{expr: e} -> e
+                name when is_binary(name) -> {:col, name}
+                name when is_atom(name) -> {:col, Atom.to_string(name)}
+                idx when is_integer(idx) -> {:col, "_c#{idx}"}
+              end
+
+            {:sort_order, expr, direction, null_order}
+          end)
+
+        asc_list when is_list(asc_list) ->
+          if length(asc_list) != length(columns) do
+            raise ArgumentError,
+                  "ascending list length (#{length(asc_list)}) must match columns length (#{length(columns)})"
+          end
+
+          Enum.zip(columns, asc_list)
+          |> Enum.map(fn {col, asc} ->
+            direction = if asc, do: :asc, else: :desc
+            null_order = if asc, do: :nulls_first, else: :nulls_last
+
+            expr =
+              case col do
+                %Column{expr: {:sort_order, inner, _, _}} -> inner
+                %Column{expr: e} -> e
+                name when is_binary(name) -> {:col, name}
+                name when is_atom(name) -> {:col, Atom.to_string(name)}
+                idx when is_integer(idx) -> {:col, "_c#{idx}"}
+              end
+
+            {:sort_order, expr, direction, null_order}
+          end)
+      end
+
     %__MODULE__{df | plan: {:sort, df.plan, sort_exprs, false}}
   end
 
@@ -1034,16 +1081,16 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.drop_duplicates(["id", "name"])
   """
-  @spec drop_duplicates(t(), [Column.t() | String.t() | atom()]) :: t()
-  def drop_duplicates(%__MODULE__{} = df, subset \\ []) when is_list(subset) do
-    case subset do
-      [] ->
-        distinct(df)
+  @spec drop_duplicates(t(), [Column.t() | String.t() | atom()] | nil) :: t()
+  def drop_duplicates(df, subset \\ nil)
 
-      cols ->
-        names = Enum.map(cols, &normalize_dedup_column/1)
-        %__MODULE__{df | plan: {:deduplicate, df.plan, names, false}}
-    end
+  def drop_duplicates(%__MODULE__{} = df, nil) do
+    %__MODULE__{df | plan: {:deduplicate, df.plan, [], true}}
+  end
+
+  def drop_duplicates(%__MODULE__{} = df, subset) when is_list(subset) do
+    names = Enum.map(subset, &normalize_dedup_column/1)
+    %__MODULE__{df | plan: {:deduplicate, df.plan, names, false}}
   end
 
   @doc """
@@ -1137,7 +1184,6 @@ defmodule SparkEx.DataFrame do
         nil -> []
         %Column{expr: e} -> [e]
         col when is_binary(col) -> [{:col, col}]
-        cols when is_list(cols) -> Enum.map(cols, &normalize_column_expr/1)
       end
 
     %__MODULE__{df | plan: {:transpose, df.plan, index_columns}}
@@ -1166,8 +1212,12 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.agg([Functions.count(Functions.col("id"))])
   """
-  @spec agg(t(), [Column.t()]) :: t()
+  @spec agg(t(), [Column.t()] | map()) :: t()
   def agg(%__MODULE__{} = df, exprs) when is_list(exprs) do
+    df |> group_by([]) |> SparkEx.GroupedData.agg(exprs)
+  end
+
+  def agg(%__MODULE__{} = df, exprs) when is_map(exprs) do
     df |> group_by([]) |> SparkEx.GroupedData.agg(exprs)
   end
 
