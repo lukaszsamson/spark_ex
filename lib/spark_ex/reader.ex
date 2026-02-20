@@ -312,12 +312,19 @@ defmodule SparkEx.Reader do
   ## Options
 
   - `:options` — map of JDBC reader options (e.g. `url`, `dbtable`)
+  - `:predicates` — list of SQL predicate strings for JDBC predicate pushdown
   """
   @spec jdbc(GenServer.server(), String.t(), String.t(), keyword()) :: DataFrame.t()
   def jdbc(session, url, table, opts \\ []) when is_binary(url) and is_binary(table) do
     opts_options = opts |> Keyword.get(:options, %{}) |> normalize_options()
     merged = opts_options |> Map.put("url", url) |> Map.put("dbtable", table)
-    data_source(session, "jdbc", [], Keyword.put(opts, :options, merged))
+
+    data_source(
+      session,
+      "jdbc",
+      [],
+      Keyword.put(opts, :options, merged)
+    )
   end
 
   @spec jdbc(GenServer.server(), keyword()) :: DataFrame.t()
@@ -344,7 +351,15 @@ defmodule SparkEx.Reader do
     paths = List.wrap(paths)
     schema = Keyword.get(opts, :schema, nil)
     options = opts |> Keyword.get(:options, %{}) |> normalize_options()
-    %DataFrame{session: session, plan: {:read_data_source, format, paths, schema, options}}
+    predicates = opts |> Keyword.get(:predicates) |> normalize_predicates()
+
+    plan =
+      case predicates do
+        [] -> {:read_data_source, format, paths, schema, options}
+        _ -> {:read_data_source, format, paths, schema, options, predicates}
+      end
+
+    %DataFrame{session: session, plan: plan}
   end
 
   defp normalize_options(opts) when is_list(opts) do
@@ -363,5 +378,21 @@ defmodule SparkEx.Reader do
   defp normalize_option_value(value) do
     raise ArgumentError,
           "reader option value must be a primitive (string, integer, float, boolean), got: #{inspect(value)}"
+  end
+
+  defp normalize_predicates(nil), do: []
+
+  defp normalize_predicates(predicates) when is_list(predicates) do
+    if Enum.all?(predicates, &is_binary/1) do
+      predicates
+    else
+      raise ArgumentError,
+            "reader predicates must be a list of strings, got: #{inspect(predicates)}"
+    end
+  end
+
+  defp normalize_predicates(predicates) do
+    raise ArgumentError,
+          "reader predicates must be a list of strings, got: #{inspect(predicates)}"
   end
 end

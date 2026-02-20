@@ -55,6 +55,19 @@ defmodule SparkEx.Connect.PlanEncoderM2Test do
       assert ds.schema == "id INT"
       assert ds.options == %{"header" => "true"}
     end
+
+    test "encodes data source predicates" do
+      {plan, _} =
+        PlanEncoder.encode(
+          {:read_data_source, "jdbc", [], nil,
+           %{"url" => "jdbc:sqlite:/tmp/db", "dbtable" => "t"}, ["id = 1", "id = 3"]},
+          0
+        )
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:read, read}}}} = plan
+      {:data_source, ds} = read.read_type
+      assert ds.predicates == ["id = 1", "id = 3"]
+    end
   end
 
   describe "encode_relation/2 — project" do
@@ -63,7 +76,10 @@ defmodule SparkEx.Connect.PlanEncoderM2Test do
       {plan, counter} = PlanEncoder.encode(plan_tuple, 0)
 
       assert %Plan{op_type: {:root, %Relation{rel_type: {:project, proj}}}} = plan
-      assert %Relation{rel_type: {:sql, %Spark.Connect.SQL{query: "SELECT * FROM t"}}} = proj.input
+
+      assert %Relation{rel_type: {:sql, %Spark.Connect.SQL{query: "SELECT * FROM t"}}} =
+               proj.input
+
       assert length(proj.expressions) == 2
 
       [expr_a, expr_b] = proj.expressions
@@ -80,7 +96,10 @@ defmodule SparkEx.Connect.PlanEncoderM2Test do
       {plan, counter} = PlanEncoder.encode(plan_tuple, 0)
 
       assert %Plan{op_type: {:root, %Relation{rel_type: {:filter, filt}}}} = plan
-      assert %Relation{rel_type: {:sql, %Spark.Connect.SQL{query: "SELECT * FROM t"}}} = filt.input
+
+      assert %Relation{rel_type: {:sql, %Spark.Connect.SQL{query: "SELECT * FROM t"}}} =
+               filt.input
+
       assert {:unresolved_function, func} = filt.condition.expr_type
       assert func.function_name == ">"
       assert length(func.arguments) == 2
@@ -99,7 +118,10 @@ defmodule SparkEx.Connect.PlanEncoderM2Test do
       {plan, counter} = PlanEncoder.encode(plan_tuple, 0)
 
       assert %Plan{op_type: {:root, %Relation{rel_type: {:sort, sort}}}} = plan
-      assert %Relation{rel_type: {:sql, %Spark.Connect.SQL{query: "SELECT * FROM t"}}} = sort.input
+
+      assert %Relation{rel_type: {:sql, %Spark.Connect.SQL{query: "SELECT * FROM t"}}} =
+               sort.input
+
       assert sort.is_global == true
       assert length(sort.order) == 2
 

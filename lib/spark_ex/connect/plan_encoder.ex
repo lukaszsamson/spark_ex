@@ -215,6 +215,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   def encode_relation({:read_data_source, format, paths, schema, options}, counter) do
+    encode_relation({:read_data_source, format, paths, schema, options, []}, counter)
+  end
+
+  def encode_relation({:read_data_source, format, paths, schema, options, predicates}, counter) do
     {plan_id, counter} = next_id(counter)
 
     read = %Spark.Connect.Read{
@@ -225,7 +229,8 @@ defmodule SparkEx.Connect.PlanEncoder do
            format: format,
            schema: schema,
            paths: paths,
-           options: options
+           options: options,
+           predicates: predicates
          }}
     }
 
@@ -1655,6 +1660,14 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp rewrite_plan(
          {:read_data_source, _format, _paths, _schema, _options} = plan,
+         plan_ids,
+         refs,
+         counter
+       ),
+       do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan(
+         {:read_data_source, _format, _paths, _schema, _options, _predicates} = plan,
          plan_ids,
          refs,
          counter

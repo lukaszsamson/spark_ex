@@ -77,6 +77,24 @@ defmodule SparkEx.Unit.ReaderExtendedTest do
                   }}
              } = df
     end
+
+    test "passes predicates for JDBC pushdown" do
+      df =
+        Reader.jdbc(@session, "jdbc:postgresql://host/db", "public.users",
+          options: %{"user" => "alice"},
+          predicates: ["id >= 10", "id < 20"]
+        )
+
+      assert %DataFrame{
+               plan:
+                 {:read_data_source, "jdbc", [], nil,
+                  %{
+                    "url" => "jdbc:postgresql://host/db",
+                    "dbtable" => "public.users",
+                    "user" => "alice"
+                  }, ["id >= 10", "id < 20"]}
+             } = df
+    end
   end
 
   describe "load/4" do
