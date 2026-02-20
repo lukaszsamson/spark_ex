@@ -198,7 +198,7 @@ defmodule SparkEx.StreamWriter do
   @spec to_table(t(), String.t(), keyword()) ::
           {:ok, SparkEx.StreamingQuery.t()} | {:error, term()}
   def to_table(%__MODULE__{} = writer, table_name, opts \\ []) when is_binary(table_name) do
-    writer = %{writer | table_name: table_name}
+    writer = %{writer | table_name: table_name, path: nil}
     write_opts = build_write_opts(writer)
     execute_stream_start(writer.df, write_opts, opts)
   end

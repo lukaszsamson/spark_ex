@@ -164,8 +164,8 @@ defmodule SparkEx.DataFrame do
 
       df |> SparkEx.DataFrame.limit(100)
   """
-  @spec limit(t(), pos_integer()) :: t()
-  def limit(%__MODULE__{} = df, n) when is_integer(n) and n > 0 do
+  @spec limit(t(), non_neg_integer()) :: t()
+  def limit(%__MODULE__{} = df, n) when is_integer(n) and n >= 0 do
     %__MODULE__{df | plan: {:limit, df.plan, n}}
   end
 
@@ -995,10 +995,10 @@ defmodule SparkEx.DataFrame do
 
   @doc "Alias for `except_all/2`."
   @spec subtract(t(), t()) :: t()
-  def subtract(%__MODULE__{} = left, %__MODULE__{} = right), do: except_all(left, right)
+  def subtract(%__MODULE__{} = left, %__MODULE__{} = right), do: except(left, right)
 
   @doc "Alias for `persist/2` with default storage level (PySpark `cache`)."
-  @spec cache(t()) :: :ok | {:error, term()}
+  @spec cache(t()) :: t() | {:error, term()}
   def cache(%__MODULE__{} = df), do: persist(df)
 
   @doc "Alias for `create_or_replace_temp_view/3` (PySpark `registerTempTable`)."
@@ -1233,11 +1233,11 @@ defmodule SparkEx.DataFrame do
 
   ## Options
 
-  - `:eager` — whether to checkpoint eagerly (default: false)
+  - `:eager` — whether to checkpoint eagerly (default: true)
   """
   @spec checkpoint(t(), keyword()) :: t() | {:error, term()}
   def checkpoint(%__MODULE__{} = df, opts) do
-    eager = Keyword.get(opts, :eager, false)
+    eager = Keyword.get(opts, :eager, true)
 
     case SparkEx.Session.execute_command_with_result(
            df.session,
@@ -1270,12 +1270,12 @@ defmodule SparkEx.DataFrame do
 
   ## Options
 
-  - `:eager` — whether to checkpoint eagerly (default: false)
+  - `:eager` — whether to checkpoint eagerly (default: true)
   - `:storage_level` — optional `Spark.Connect.StorageLevel` struct
   """
   @spec local_checkpoint(t(), keyword()) :: t() | {:error, term()}
   def local_checkpoint(%__MODULE__{} = df, opts) do
-    eager = Keyword.get(opts, :eager, false)
+    eager = Keyword.get(opts, :eager, true)
     storage_level = Keyword.get(opts, :storage_level, nil)
 
     case SparkEx.Session.execute_command_with_result(
@@ -1446,8 +1446,8 @@ defmodule SparkEx.DataFrame do
   @doc """
   Returns up to `n` rows from the DataFrame as a list of maps.
   """
-  @spec take(t(), pos_integer(), keyword()) :: {:ok, [map()]} | {:error, term()}
-  def take(%__MODULE__{} = df, n, opts \\ []) when is_integer(n) and n > 0 do
+  @spec take(t(), non_neg_integer(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  def take(%__MODULE__{} = df, n, opts \\ []) when is_integer(n) and n >= 0 do
     limit_plan = {:limit, df.plan, n}
     SparkEx.Session.execute_collect(df.session, limit_plan, merge_tags(df, opts))
   end
@@ -1583,9 +1583,12 @@ defmodule SparkEx.DataFrame do
 
   - `:storage_level` — a `Spark.Connect.StorageLevel` struct
   """
-  @spec persist(t(), keyword()) :: :ok | {:error, term()}
+  @spec persist(t(), keyword()) :: t() | {:error, term()}
   def persist(%__MODULE__{} = df, opts \\ []) do
-    SparkEx.Session.analyze_persist(df.session, df.plan, opts)
+    case SparkEx.Session.analyze_persist(df.session, df.plan, opts) do
+      :ok -> df
+      {:error, _} = error -> error
+    end
   end
 
   @doc """
@@ -1595,9 +1598,12 @@ defmodule SparkEx.DataFrame do
 
   - `:blocking` — whether to block until unpersisted (default: false)
   """
-  @spec unpersist(t(), keyword()) :: :ok | {:error, term()}
+  @spec unpersist(t(), keyword()) :: t() | {:error, term()}
   def unpersist(%__MODULE__{} = df, opts \\ []) do
-    SparkEx.Session.analyze_unpersist(df.session, df.plan, opts)
+    case SparkEx.Session.analyze_unpersist(df.session, df.plan, opts) do
+      :ok -> df
+      {:error, _} = error -> error
+    end
   end
 
   @doc """

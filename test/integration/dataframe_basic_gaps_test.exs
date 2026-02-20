@@ -30,8 +30,8 @@ defmodule SparkEx.Integration.DataframeBasicGapsTest do
 
   test "cache/unpersist roundtrip succeeds", %{session: session} do
     df = SparkEx.range(session, 5)
-    assert :ok = DataFrame.cache(df)
-    assert :ok = DataFrame.unpersist(df)
+    assert %DataFrame{} = DataFrame.cache(df)
+    assert %DataFrame{} = DataFrame.unpersist(df)
   end
 
   test "self join returns expected results", %{session: session} do

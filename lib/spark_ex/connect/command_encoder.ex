@@ -436,8 +436,8 @@ defmodule SparkEx.Connect.CommandEncoder do
     table_name = Keyword.get(opts, :table_name, nil)
 
     cond do
-      path != nil -> %{proto | sink_destination: {:path, path}}
       table_name != nil -> %{proto | sink_destination: {:table_name, table_name}}
+      path != nil -> %{proto | sink_destination: {:path, path}}
       true -> proto
     end
   end

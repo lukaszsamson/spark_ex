@@ -30,7 +30,9 @@ defmodule SparkEx.TableArg do
           t()
   def order_by(%__MODULE__{} = arg, cols) do
     ensure_partitioned!(arg, :order_by)
-    %{arg | order_spec: Enum.map(List.wrap(cols), &normalize_sort_expr/1), state: :ordered}
+
+    new_order_spec = Enum.map(List.wrap(cols), &normalize_sort_expr/1)
+    %{arg | order_spec: arg.order_spec ++ new_order_spec, state: :ordered}
   end
 
   @spec with_single_partition(t()) :: t()

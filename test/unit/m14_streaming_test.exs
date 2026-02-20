@@ -230,6 +230,28 @@ defmodule SparkEx.M14.StreamingTest do
       assert proto.sink_destination == {:table_name, "my_table"}
     end
 
+    test "prefers table_name when both path and table_name are provided" do
+      df_plan = {:sql, "SELECT 1", nil}
+
+      write_opts = [
+        format: "parquet",
+        output_mode: "append",
+        options: %{},
+        query_name: nil,
+        trigger: nil,
+        path: "/data/output",
+        table_name: "my_table",
+        partition_by: [],
+        cluster_by: []
+      ]
+
+      {command, _counter} =
+        CommandEncoder.encode_command({:write_stream_operation_start, df_plan, write_opts}, 0)
+
+      assert {:write_stream_operation_start, proto} = command.command_type
+      assert proto.sink_destination == {:table_name, "my_table"}
+    end
+
     test "encodes with query_name, partitioning, and clustering" do
       df_plan = {:sql, "SELECT 1", nil}
 
@@ -754,6 +776,7 @@ defmodule SparkEx.M14.StreamingTest do
       assert writer.source == "xml"
       assert writer.path == "/data/output"
     end
+
 
     test "foreach_writer sets foreach function" do
       func = %Spark.Connect.StreamingForeachFunction{

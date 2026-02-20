@@ -376,6 +376,12 @@ defmodule SparkEx.DataFrameTest do
       result = DataFrame.limit(df, 10)
       assert %DataFrame{plan: {:limit, {:sql, _, _}, 10}} = result
     end
+
+    test "allows limit(0)" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.limit(df, 0)
+      assert %DataFrame{plan: {:limit, {:sql, _, _}, 0}} = result
+    end
   end
 
   describe "repartition_by_range/2" do
@@ -674,12 +680,12 @@ defmodule SparkEx.DataFrameTest do
   end
 
   describe "subtract/2" do
-    test "aliases except_all" do
+    test "aliases except distinct" do
       df1 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM a", nil}}
       df2 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM b", nil}}
       result = DataFrame.subtract(df1, df2)
 
-      assert %DataFrame{plan: {:set_operation, _, _, :except, true}} = result
+      assert %DataFrame{plan: {:set_operation, _, _, :except, false}} = result
     end
   end
 
@@ -775,7 +781,7 @@ defmodule SparkEx.DataFrameTest do
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
       assert %DataFrame{plan: {:cached_remote_relation, "rel-1"}} = DataFrame.checkpoint(df)
-      assert_receive {:checkpoint_args, false, false, nil}
+      assert_receive {:checkpoint_args, false, true, nil}
     end
 
     test "checkpoint/1 aliases checkpoint/2" do
@@ -783,7 +789,7 @@ defmodule SparkEx.DataFrameTest do
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
       assert %DataFrame{plan: {:cached_remote_relation, "rel-1"}} = DataFrame.checkpoint(df)
-      assert_receive {:checkpoint_args, false, false, nil}
+      assert_receive {:checkpoint_args, false, true, nil}
     end
   end
 
@@ -832,7 +838,7 @@ defmodule SparkEx.DataFrameTest do
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
       assert %DataFrame{plan: {:cached_remote_relation, "rel-2"}} = DataFrame.localCheckpoint(df)
-      assert_receive {:local_checkpoint_args, true, false, nil}
+      assert_receive {:local_checkpoint_args, true, true, nil}
     end
   end
 
@@ -910,13 +916,59 @@ defmodule SparkEx.DataFrameTest do
       def handle_call({:analyze_persist, _plan, _opts}, _from, state) do
         {:reply, :ok, state}
       end
+
+      @impl true
+      def handle_call({:analyze_unpersist, _plan, _opts}, _from, state) do
+        {:reply, :ok, state}
+      end
     end
 
     test "delegates to persist with defaults" do
       {:ok, session} = PersistSession.start_link()
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
-      assert :ok = DataFrame.cache(df)
+      assert ^df = DataFrame.cache(df)
+    end
+
+    test "persist returns dataframe for chaining" do
+      {:ok, session} = PersistSession.start_link()
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert ^df = DataFrame.persist(df)
+    end
+
+    test "unpersist returns dataframe for chaining" do
+      {:ok, session} = PersistSession.start_link()
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert ^df = DataFrame.unpersist(df)
+    end
+  end
+
+  describe "take/3" do
+    defmodule TakeSession do
+      use GenServer
+
+      def start_link(test_pid) do
+        GenServer.start_link(__MODULE__, test_pid, [])
+      end
+
+      @impl true
+      def init(test_pid), do: {:ok, test_pid}
+
+      @impl true
+      def handle_call({:execute_collect, {:limit, _plan, n}, _opts}, _from, test_pid) do
+        send(test_pid, {:take_limit, n})
+        {:reply, {:ok, []}, test_pid}
+      end
+    end
+
+    test "allows take(0)" do
+      {:ok, session} = TakeSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, []} = DataFrame.take(df, 0)
+      assert_receive {:take_limit, 0}
     end
   end
 

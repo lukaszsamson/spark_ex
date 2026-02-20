@@ -134,8 +134,8 @@ defmodule SparkEx.Integration.AnalyzePlanTest do
   describe "persist/unpersist/storage_level" do
     test "persist and unpersist a DataFrame", %{session: session} do
       df = SparkEx.range(session, 10)
-      assert :ok = DataFrame.persist(df)
-      assert :ok = DataFrame.unpersist(df)
+      assert %DataFrame{} = DataFrame.persist(df)
+      assert %DataFrame{} = DataFrame.unpersist(df)
     end
 
     test "persist with custom storage level", %{session: session} do
@@ -148,22 +148,22 @@ defmodule SparkEx.Integration.AnalyzePlanTest do
         replication: 1
       }
 
-      assert :ok = DataFrame.persist(df, storage_level: storage_level)
+      assert %DataFrame{} = DataFrame.persist(df, storage_level: storage_level)
       assert {:ok, sl} = DataFrame.storage_level(df)
       assert sl.use_disk == true
       assert sl.use_memory == true
-      assert :ok = DataFrame.unpersist(df)
+      assert %DataFrame{} = DataFrame.unpersist(df)
     end
 
     test "get storage level of persisted DataFrame", %{session: session} do
       df = SparkEx.range(session, 10)
-      assert :ok = DataFrame.persist(df)
+      assert %DataFrame{} = DataFrame.persist(df)
 
       assert {:ok, sl} = DataFrame.storage_level(df)
       assert %Spark.Connect.StorageLevel{} = sl
       assert sl.use_memory == true
 
-      assert :ok = DataFrame.unpersist(df)
+      assert %DataFrame{} = DataFrame.unpersist(df)
     end
   end
 end
