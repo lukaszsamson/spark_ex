@@ -163,7 +163,30 @@ defmodule SparkEx.MissingFeaturesTest do
                expr:
                  {:fn, "from_json", [{:col, "data"}, {:lit, "a INT"}, {:fn, "map", _, false}],
                   false}
-             } = result
+              } = result
+    end
+
+    test "accepts Spark.Connect.DataType schema" do
+      schema = %Spark.Connect.DataType{
+        kind:
+          {:struct,
+           %Spark.Connect.DataType.Struct{
+             fields: [
+               %Spark.Connect.DataType.StructField{
+                 name: "a",
+                 data_type: %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}},
+                 nullable: true,
+                 metadata: "{}"
+               }
+             ]
+           }}
+      }
+
+      result = Functions.from_json(Functions.col("data"), schema)
+      assert %Column{expr: {:fn, "from_json", [{:col, "data"}, {:lit, schema_json}], false}} = result
+      decoded = Jason.decode!(schema_json)
+      assert decoded["type"] == "struct"
+      assert Enum.at(decoded["fields"], 0)["name"] == "a"
     end
   end
 

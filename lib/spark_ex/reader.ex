@@ -45,7 +45,8 @@ defmodule SparkEx.Reader do
   @doc """
   Sets the schema for a reader builder.
 
-  Accepts either a DDL string or a struct type from `SparkEx.Types`.
+  Accepts either a DDL string, a struct type from `SparkEx.Types`,
+  or `%Spark.Connect.DataType{}`.
 
   ## Examples
 
@@ -55,13 +56,17 @@ defmodule SparkEx.Reader do
         SparkEx.Types.struct_field("name", :string)
       ]))
   """
-  @spec schema(t(), String.t() | SparkEx.Types.struct_type()) :: t()
+  @spec schema(t(), String.t() | SparkEx.Types.struct_type() | Spark.Connect.DataType.t()) :: t()
   def schema(%__MODULE__{} = reader, schema_ddl) when is_binary(schema_ddl) do
     %{reader | schema: schema_ddl}
   end
 
   def schema(%__MODULE__{} = reader, {:struct, _} = struct_type) do
     %{reader | schema: SparkEx.Types.to_json(struct_type)}
+  end
+
+  def schema(%__MODULE__{} = reader, %Spark.Connect.DataType{} = schema) do
+    %{reader | schema: SparkEx.Types.data_type_to_json(schema)}
   end
 
   @doc """
@@ -376,6 +381,7 @@ defmodule SparkEx.Reader do
   defp normalize_schema(nil), do: nil
   defp normalize_schema(schema) when is_binary(schema), do: schema
   defp normalize_schema({:struct, _} = schema), do: SparkEx.Types.to_json(schema)
+  defp normalize_schema(%Spark.Connect.DataType{} = schema), do: SparkEx.Types.data_type_to_json(schema)
   defp normalize_schema(schema), do: schema
 
   defp normalize_options(opts) when is_list(opts) do

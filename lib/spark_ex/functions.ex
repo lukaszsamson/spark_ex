@@ -1176,14 +1176,18 @@ defmodule SparkEx.Functions do
   @doc """
   Parses a JSON string column into a struct/array/map column using the given schema.
 
+  The schema can be a DDL string or `%Spark.Connect.DataType{}`.
+
   ## Examples
 
       from_json(col("json_str"), "a INT, b STRING")
       from_json(col("json_str"), "a INT", %{"mode" => "FAILFAST"})
   """
-  @spec from_json(Column.t() | String.t(), String.t(), map() | nil) :: Column.t()
+  @spec from_json(Column.t() | String.t(), String.t() | Spark.Connect.DataType.t(), map() | nil) ::
+          Column.t()
   def from_json(col, schema, options \\ nil)
-      when is_binary(schema) and (is_map(options) or is_nil(options)) do
+
+  def from_json(col, schema, options) when is_binary(schema) and (is_map(options) or is_nil(options)) do
     args =
       case options do
         nil -> [to_expr(col), {:lit, schema}]
@@ -1191,6 +1195,11 @@ defmodule SparkEx.Functions do
       end
 
     %Column{expr: {:fn, "from_json", args, false}}
+  end
+
+  def from_json(col, %Spark.Connect.DataType{} = schema, options)
+      when is_map(options) or is_nil(options) do
+    from_json(col, SparkEx.Types.data_type_to_json(schema), options)
   end
 
   @doc """

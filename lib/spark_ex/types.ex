@@ -166,6 +166,18 @@ defmodule SparkEx.Types do
   end
 
   @doc """
+  Converts a Spark Connect `DataType` protobuf value to Spark JSON schema string.
+
+  This mirrors PySpark's `DataType.json()` output.
+  """
+  @spec data_type_to_json(Spark.Connect.DataType.t()) :: String.t()
+  def data_type_to_json(%Spark.Connect.DataType{} = data_type) do
+    data_type
+    |> proto_type_to_json()
+    |> Jason.encode!()
+  end
+
+  @doc """
   Converts a struct type to Spark Connect `DataType` protobuf.
 
   Preserves JSON-level fidelity (field nullability and metadata) for nested types.
@@ -289,6 +301,88 @@ defmodule SparkEx.Types do
       end)
 
     %{"type" => "struct", "fields" => json_fields}
+  end
+
+  defp proto_type_to_json(%Spark.Connect.DataType{kind: {kind, value}}) do
+    case kind do
+      :null -> "void"
+      :boolean -> "boolean"
+      :byte -> "byte"
+      :short -> "short"
+      :integer -> "integer"
+      :long -> "long"
+      :float -> "float"
+      :double -> "double"
+      :string -> string_proto_to_json(value)
+      :char -> "char(#{value.length})"
+      :var_char -> "varchar(#{value.length})"
+      :binary -> "binary"
+      :date -> "date"
+      :time -> "time"
+      :timestamp -> "timestamp"
+      :timestamp_ntz -> "timestamp_ntz"
+      :day_time_interval -> "day-time interval"
+      :year_month_interval -> "year-month interval"
+      :calendar_interval -> "interval"
+      :decimal -> "decimal(#{value.precision},#{value.scale})"
+      :array -> array_proto_to_json(value)
+      :map -> map_proto_to_json(value)
+      :struct -> struct_proto_to_json(value)
+      :variant -> "variant"
+      :geometry -> "geometry"
+      :geography -> "geography"
+      :unparsed -> value.data_type_string
+      _ -> raise ArgumentError, "unsupported Spark.Connect.DataType kind: #{inspect(kind)}"
+    end
+  end
+
+  defp string_proto_to_json(%Spark.Connect.DataType.String{collation: ""}), do: "string"
+
+  defp string_proto_to_json(%Spark.Connect.DataType.String{collation: collation}) do
+    %{"type" => "string", "collation" => collation}
+  end
+
+  defp array_proto_to_json(%Spark.Connect.DataType.Array{} = array) do
+    %{
+      "type" => "array",
+      "elementType" => proto_type_to_json(array.element_type),
+      "containsNull" => array.contains_null
+    }
+  end
+
+  defp map_proto_to_json(%Spark.Connect.DataType.Map{} = map) do
+    %{
+      "type" => "map",
+      "keyType" => proto_type_to_json(map.key_type),
+      "valueType" => proto_type_to_json(map.value_type),
+      "valueContainsNull" => map.value_contains_null
+    }
+  end
+
+  defp struct_proto_to_json(%Spark.Connect.DataType.Struct{} = struct) do
+    %{
+      "type" => "struct",
+      "fields" => Enum.map(struct.fields, &struct_field_proto_to_json/1)
+    }
+  end
+
+  defp struct_field_proto_to_json(%Spark.Connect.DataType.StructField{} = field) do
+    %{
+      "name" => field.name,
+      "type" => proto_type_to_json(field.data_type),
+      "nullable" => field.nullable,
+      "metadata" => decode_field_metadata(field.metadata)
+    }
+  end
+
+  defp decode_field_metadata(nil), do: %{}
+  defp decode_field_metadata(""), do: %{}
+
+  defp decode_field_metadata(metadata) when is_binary(metadata) do
+    case Jason.decode(metadata) do
+      {:ok, decoded} when is_map(decoded) -> decoded
+      _ -> %{}
+    end
   end
 
   # --- Spark Connect DataType protobuf conversion ---

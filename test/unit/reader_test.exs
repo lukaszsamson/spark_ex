@@ -58,7 +58,29 @@ defmodule SparkEx.ReaderTest do
 
       assert %DataFrame{
                plan: {:read_named_table, "my_db.my_table", %{"streaming" => "false"}}
-             } = df
+              } = df
+    end
+
+    test "Reader.schema/2 accepts Spark.Connect.DataType" do
+      schema = %Spark.Connect.DataType{
+        kind:
+          {:struct,
+           %Spark.Connect.DataType.Struct{
+             fields: [
+               %Spark.Connect.DataType.StructField{
+                 name: "id",
+                 data_type: %Spark.Connect.DataType{kind: {:long, %Spark.Connect.DataType.Long{}}},
+                 nullable: false,
+                 metadata: ~s({"comment":"pk"})
+               }
+             ]
+           }}
+      }
+
+      reader = self() |> SparkEx.read() |> Reader.schema(schema)
+      decoded = Jason.decode!(reader.schema)
+      assert decoded["type"] == "struct"
+      assert Enum.at(decoded["fields"], 0)["metadata"]["comment"] == "pk"
     end
   end
 

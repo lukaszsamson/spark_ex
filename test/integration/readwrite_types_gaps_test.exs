@@ -22,6 +22,46 @@ defmodule SparkEx.Integration.ReadWriteTypesGapsTest do
 
   # ── ORC format roundtrip ──
 
+  describe "Reader.schema with DataType" do
+    test "reads JSON with protobuf DataType schema", %{session: session} do
+      path = "/tmp/spark_ex_reader_schema_dt_#{System.unique_integer([:positive])}"
+
+      assert :ok =
+               SparkEx.sql(session, "SELECT 1 AS id, 'alice' AS name")
+               |> Writer.json(path, mode: :overwrite)
+
+      schema = %Spark.Connect.DataType{
+        kind:
+          {:struct,
+           %Spark.Connect.DataType.Struct{
+             fields: [
+               %Spark.Connect.DataType.StructField{
+                 name: "id",
+                 data_type: %Spark.Connect.DataType{kind: {:long, %Spark.Connect.DataType.Long{}}},
+                 nullable: true,
+                 metadata: "{}"
+               },
+               %Spark.Connect.DataType.StructField{
+                 name: "name",
+                 data_type: %Spark.Connect.DataType{kind: {:string, %Spark.Connect.DataType.String{}}},
+                 nullable: true,
+                 metadata: "{}"
+               }
+             ]
+           }}
+      }
+
+      df =
+        session
+        |> SparkEx.read()
+        |> Reader.format("json")
+        |> Reader.schema(schema)
+        |> Reader.load(path)
+
+      assert {:ok, [%{"id" => 1, "name" => "alice"}]} = DataFrame.collect(df)
+    end
+  end
+
   describe "ORC format roundtrip" do
     test "write and read ORC file", %{session: session} do
       path = "/tmp/spark_ex_orc_test_#{System.unique_integer([:positive])}"

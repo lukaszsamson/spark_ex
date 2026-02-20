@@ -1016,12 +1016,32 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
+  Returns the first row as a map, or `nil` if empty.
+
+  Equivalent to PySpark's `head()` behavior.
+  """
+  @spec head(t()) :: {:ok, map() | nil} | {:error, term()}
+  def head(%__MODULE__{} = df) do
+    head(df, [])
+  end
+
+  @spec head(t(), keyword()) :: {:ok, map() | nil} | {:error, term()}
+  def head(%__MODULE__{} = df, opts) when is_list(opts) do
+    first(df, opts)
+  end
+
+  @doc """
   Returns the first `n` rows as a list of maps.
 
-  Equivalent to `take/3` but follows PySpark naming.
+  Equivalent to `take/3` but follows PySpark naming for `head(n)`.
   """
-  @spec head(t(), pos_integer(), keyword()) :: {:ok, [map()]} | {:error, term()}
-  def head(%__MODULE__{} = df, n \\ 1, opts \\ []) when is_integer(n) and n > 0 do
+  @spec head(t(), non_neg_integer()) :: {:ok, [map()]} | {:error, term()}
+  def head(%__MODULE__{} = df, n) when is_integer(n) and n >= 0 do
+    take(df, n)
+  end
+
+  @spec head(t(), non_neg_integer(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  def head(%__MODULE__{} = df, n, opts) when is_integer(n) and n >= 0 do
     take(df, n, opts)
   end
 

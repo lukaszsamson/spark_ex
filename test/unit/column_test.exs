@@ -112,6 +112,12 @@ defmodule SparkEx.ColumnTest do
       result = Column.cast(Functions.col("x"), "int")
       assert %Column{expr: {:cast, {:col, "x"}, "int"}} = result
     end
+
+    test "cast/2 accepts Spark.Connect.DataType" do
+      type = %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}}
+      result = Column.cast(Functions.col("x"), type)
+      assert %Column{expr: {:cast, {:col, "x"}, ^type}} = result
+    end
   end
 
   describe "sort ordering" do

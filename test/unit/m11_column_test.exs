@@ -115,6 +115,12 @@ defmodule SparkEx.M11.ColumnTest do
       result = Column.try_cast(Functions.col("x"), "int")
       assert %Column{expr: {:cast, {:col, "x"}, "int", :try}} = result
     end
+
+    test "accepts Spark.Connect.DataType" do
+      type = %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}}
+      result = Column.try_cast(Functions.col("x"), type)
+      assert %Column{expr: {:cast, {:col, "x"}, ^type, :try}} = result
+    end
   end
 
   # ── isin ──

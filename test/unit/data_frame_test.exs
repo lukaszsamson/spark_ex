@@ -1058,7 +1058,8 @@ defmodule SparkEx.DataFrameTest do
       @impl true
       def handle_call({:execute_collect, {:limit, _plan, n}, _opts}, _from, test_pid) do
         send(test_pid, {:take_limit, n})
-        {:reply, {:ok, []}, test_pid}
+        rows = if n > 0, do: [%{"id" => 1}], else: []
+        {:reply, {:ok, rows}, test_pid}
       end
     end
 
@@ -1068,6 +1069,25 @@ defmodule SparkEx.DataFrameTest do
 
       assert {:ok, []} = DataFrame.take(df, 0)
       assert_receive {:take_limit, 0}
+    end
+
+    test "head/1 returns a single row or nil semantics" do
+      {:ok, session} = TakeSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, %{"id" => 1}} = DataFrame.head(df)
+      assert_receive {:take_limit, 1}
+    end
+
+    test "head/2 accepts zero and returns list semantics" do
+      {:ok, session} = TakeSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, []} = DataFrame.head(df, 0)
+      assert_receive {:take_limit, 0}
+
+      assert {:ok, [%{"id" => 1}]} = DataFrame.head(df, 1)
+      assert_receive {:take_limit, 1}
     end
   end
 

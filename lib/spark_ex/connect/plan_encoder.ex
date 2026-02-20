@@ -1413,9 +1413,9 @@ defmodule SparkEx.Connect.PlanEncoder do
       expr_type:
         {:cast,
          %Expression.Cast{
-           expr: encode_expression(expr),
-           cast_to_type: {:type_str, type_str}
-         }}
+            expr: encode_expression(expr),
+            cast_to_type: encode_cast_to_type(type_str)
+          }}
     }
   end
 
@@ -1432,12 +1432,15 @@ defmodule SparkEx.Connect.PlanEncoder do
       expr_type:
         {:cast,
          %Expression.Cast{
-           expr: encode_expression(expr),
-           cast_to_type: {:type_str, type_str},
-           eval_mode: eval_mode
-         }}
+            expr: encode_expression(expr),
+            cast_to_type: encode_cast_to_type(type_str),
+            eval_mode: eval_mode
+          }}
     }
   end
+
+  defp encode_cast_to_type(type) when is_binary(type), do: {:type_str, type}
+  defp encode_cast_to_type(%DataType{} = type), do: {:type, type}
 
   # --- Window expression ---
 
@@ -2653,6 +2656,20 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_literal(true), do: %Expression.Literal{literal_type: {:boolean, true}}
   defp encode_literal(false), do: %Expression.Literal{literal_type: {:boolean, false}}
 
+  defp encode_literal({:byte, value})
+       when is_integer(value) and value >= -128 and value <= 127 do
+    %Expression.Literal{literal_type: {:byte, value}}
+  end
+
+  defp encode_literal({:short, value})
+       when is_integer(value) and value >= -32_768 and value <= 32_767 do
+    %Expression.Literal{literal_type: {:short, value}}
+  end
+
+  defp encode_literal({:float, value}) when is_number(value) do
+    %Expression.Literal{literal_type: {:float, value * 1.0}}
+  end
+
   defp encode_literal(v) when is_integer(v) and v >= -2_147_483_648 and v <= 2_147_483_647 do
     %Expression.Literal{literal_type: {:integer, v}}
   end
@@ -2908,6 +2925,9 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp infer_literal_data_type(nil), do: null_data_type()
   defp infer_literal_data_type(true), do: %DataType{kind: {:boolean, %DataType.Boolean{}}}
   defp infer_literal_data_type(false), do: %DataType{kind: {:boolean, %DataType.Boolean{}}}
+  defp infer_literal_data_type({:byte, _v}), do: %DataType{kind: {:byte, %DataType.Byte{}}}
+  defp infer_literal_data_type({:short, _v}), do: %DataType{kind: {:short, %DataType.Short{}}}
+  defp infer_literal_data_type({:float, _v}), do: %DataType{kind: {:float, %DataType.Float{}}}
 
   defp infer_literal_data_type(v)
        when is_integer(v) and v >= -2_147_483_648 and v <= 2_147_483_647 do

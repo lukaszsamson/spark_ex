@@ -246,7 +246,21 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                expr_type:
                  {:literal, %Expression.Literal{literal_type: {:day_time_interval, 1_000}}}
              } =
-               PlanEncoder.encode_expression({:lit, {:day_time_interval, 1_000}})
+                PlanEncoder.encode_expression({:lit, {:day_time_interval, 1_000}})
+    end
+
+    test "encodes explicit byte/short/float literals" do
+      assert %Expression{
+               expr_type: {:literal, %Expression.Literal{literal_type: {:byte, 7}}}
+             } = PlanEncoder.encode_expression({:lit, {:byte, 7}})
+
+      assert %Expression{
+               expr_type: {:literal, %Expression.Literal{literal_type: {:short, 1024}}}
+             } = PlanEncoder.encode_expression({:lit, {:short, 1024}})
+
+      assert %Expression{
+               expr_type: {:literal, %Expression.Literal{literal_type: {:float, 3.5}}}
+             } = PlanEncoder.encode_expression({:lit, {:float, 3.5}})
     end
   end
 

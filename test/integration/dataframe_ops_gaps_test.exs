@@ -227,6 +227,20 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
   # ── head / first ──
 
   describe "head/3 and first/2" do
+    test "head() returns single row and head(0) returns empty list", %{session: session} do
+      df = SparkEx.range(session, 10) |> DataFrame.order_by(["id"])
+
+      assert {:ok, row} = DataFrame.head(df)
+      assert row["id"] == 0
+
+      assert {:ok, []} = DataFrame.head(df, 0)
+    end
+
+    test "head() returns nil for empty DataFrame", %{session: session} do
+      df = SparkEx.sql(session, "SELECT 1 AS id WHERE 1 = 0")
+      assert {:ok, nil} = DataFrame.head(df)
+    end
+
     test "head returns first N rows", %{session: session} do
       df = SparkEx.range(session, 10) |> DataFrame.order_by(["id"])
 
@@ -240,6 +254,46 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
 
       assert {:ok, row} = DataFrame.first(df)
       assert row["id"] == 0
+    end
+  end
+
+  describe "DataType object inputs" do
+    test "Column.cast accepts Spark.Connect.DataType", %{session: session} do
+      dtype = %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}}
+
+      df =
+        SparkEx.sql(session, "SELECT '42' AS s")
+        |> DataFrame.select([
+          Column.alias_(Column.cast(Functions.col("s"), dtype), "i")
+        ])
+
+      assert {:ok, [%{"i" => 42}]} = DataFrame.collect(df)
+    end
+
+    test "Functions.from_json accepts Spark.Connect.DataType schema", %{session: session} do
+      schema = %Spark.Connect.DataType{
+        kind:
+          {:struct,
+           %Spark.Connect.DataType.Struct{
+             fields: [
+               %Spark.Connect.DataType.StructField{
+                 name: "a",
+                 data_type: %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}},
+                 nullable: true,
+                 metadata: "{}"
+               }
+             ]
+           }}
+      }
+
+      df =
+        SparkEx.sql(session, "SELECT '{\"a\": 1}' AS js")
+        |> DataFrame.select([
+          Column.alias_(Functions.from_json(Functions.col("js"), schema), "parsed")
+        ])
+
+      assert {:ok, [row]} = DataFrame.collect(df)
+      assert row["parsed"]["a"] == 1
     end
   end
 

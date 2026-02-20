@@ -24,6 +24,14 @@ defmodule SparkEx.M11.PlanEncoderTest do
       # default eval_mode
       refute cast.eval_mode == :EVAL_MODE_TRY
     end
+
+    test "encodes cast with DataType object" do
+      dtype = %Spark.Connect.DataType{kind: {:long, %Spark.Connect.DataType.Long{}}}
+      expr = PlanEncoder.encode_expression({:cast, {:col, "x"}, dtype})
+
+      assert %Expression{expr_type: {:cast, cast}} = expr
+      assert {:type, ^dtype} = cast.cast_to_type
+    end
   end
 
   # ── Window expression ──
