@@ -152,9 +152,9 @@ defmodule SparkEx.MergeIntoWriter do
 
   def merge(%__MODULE__{} = m) do
     command =
-      {:merge_into_table, m.source_df.plan, m.target_table, m.condition, Enum.reverse(m.match_actions),
-       Enum.reverse(m.not_matched_actions), Enum.reverse(m.not_matched_by_source_actions),
-       m.schema_evolution}
+      {:merge_into_table, m.source_df.plan, m.target_table, m.condition,
+       Enum.reverse(m.match_actions), Enum.reverse(m.not_matched_actions),
+       Enum.reverse(m.not_matched_by_source_actions), m.schema_evolution}
 
     SparkEx.Session.execute_command(m.source_df.session, command)
   end

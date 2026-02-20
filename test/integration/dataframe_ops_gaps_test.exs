@@ -278,7 +278,9 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
              fields: [
                %Spark.Connect.DataType.StructField{
                  name: "a",
-                 data_type: %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}},
+                 data_type: %Spark.Connect.DataType{
+                   kind: {:integer, %Spark.Connect.DataType.Integer{}}
+                 },
                  nullable: true,
                  metadata: "{}"
                }

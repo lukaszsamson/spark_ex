@@ -81,5 +81,4 @@ defmodule SparkEx.UserContextExtensions do
     |> :ets.tab2list()
     |> Map.new(fn {id, extension} -> {id, extension} end)
   end
-
 end

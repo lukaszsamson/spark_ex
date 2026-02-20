@@ -12,7 +12,9 @@ defmodule SparkEx.ColumnTest do
 
     test "neq/2" do
       result = Column.neq(Functions.col("a"), Functions.lit(1))
-      assert %Column{expr: {:fn, "not", [{:fn, "==", [{:col, "a"}, {:lit, 1}], false}], false}} = result
+
+      assert %Column{expr: {:fn, "not", [{:fn, "==", [{:col, "a"}, {:lit, 1}], false}], false}} =
+               result
     end
 
     test "gt/2" do

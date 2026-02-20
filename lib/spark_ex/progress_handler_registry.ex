@@ -71,5 +71,4 @@ defmodule SparkEx.ProgressHandlerRegistry do
       entry -> {:ok, entry}
     end
   end
-
 end

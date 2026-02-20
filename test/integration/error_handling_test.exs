@@ -27,8 +27,10 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
       assert error.sql_state == "42703"
       assert is_map(error.message_parameters)
       assert Map.has_key?(error.message_parameters, "objectName")
+
       assert Map.has_key?(error.message_parameters, "objectType") or
                Map.has_key?(error.message_parameters, "proposal")
+
       assert is_list(error.query_contexts)
 
       if error.query_contexts != [] do
@@ -78,8 +80,10 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
              ]
 
       assert is_map(error.message_parameters)
+
       assert Map.has_key?(error.message_parameters, "objectName") or
                Map.has_key?(error.message_parameters, "targetString")
+
       assert Map.has_key?(error.message_parameters, "objectType") or
                Map.has_key?(error.message_parameters, "columns")
 
@@ -100,6 +104,7 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
       assert {:error, %SparkEx.Error.Remote{} = error} = DataFrame.collect(df)
       assert is_map(error.message_parameters)
       assert Map.has_key?(error.message_parameters, "objectName")
+
       assert Map.has_key?(error.message_parameters, "objectType") or
                Map.has_key?(error.message_parameters, "proposal")
     end
@@ -114,6 +119,7 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
       assert {:error, %SparkEx.Error.Remote{} = error} = DataFrame.collect(df)
       assert is_map(error.message_parameters)
       assert Map.has_key?(error.message_parameters, "objectName")
+
       assert Map.has_key?(error.message_parameters, "objectType") or
                Map.has_key?(error.message_parameters, "proposal")
     end

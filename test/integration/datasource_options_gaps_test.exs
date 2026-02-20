@@ -45,9 +45,7 @@ defmodule SparkEx.Integration.DatasourceOptionsGapsTest do
 
       # Read with header=true should use first row as column names
       read_df =
-        Reader.csv(session, path,
-          options: %{"header" => "true", "inferSchema" => "true"}
-        )
+        Reader.csv(session, path, options: %{"header" => "true", "inferSchema" => "true"})
 
       assert {:ok, rows} = DataFrame.collect(read_df)
       assert length(rows) == 2
@@ -95,9 +93,7 @@ defmodule SparkEx.Integration.DatasourceOptionsGapsTest do
       assert :ok = Writer.csv(df, path, mode: :overwrite)
 
       read_df =
-        Reader.csv(session, path,
-          options: %{"inferSchema" => "true", "samplingRatio" => "0.5"}
-        )
+        Reader.csv(session, path, options: %{"inferSchema" => "true", "samplingRatio" => "0.5"})
 
       assert {:ok, rows} = DataFrame.collect(read_df)
       assert length(rows) == 100
@@ -143,7 +139,9 @@ defmodule SparkEx.Integration.DatasourceOptionsGapsTest do
       path = "/tmp/spark_ex_json_datefmt_#{System.unique_integer([:positive])}"
 
       df = SparkEx.sql(session, "SELECT DATE '2024-06-15' AS dt, 1 AS id")
-      assert :ok = Writer.json(df, path, mode: :overwrite, options: %{"dateFormat" => "yyyy-MM-dd"})
+
+      assert :ok =
+               Writer.json(df, path, mode: :overwrite, options: %{"dateFormat" => "yyyy-MM-dd"})
 
       read_df =
         Reader.json(session, path,
@@ -164,7 +162,9 @@ defmodule SparkEx.Integration.DatasourceOptionsGapsTest do
         path = "/tmp/spark_ex_pq_#{codec}_#{System.unique_integer([:positive])}"
 
         df = SparkEx.sql(session, "SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)")
-        assert :ok = Writer.parquet(df, path, mode: :overwrite, options: %{"compression" => codec})
+
+        assert :ok =
+                 Writer.parquet(df, path, mode: :overwrite, options: %{"compression" => codec})
 
         read_df = Reader.parquet(session, path)
         assert {:ok, rows} = DataFrame.collect(read_df)
@@ -219,9 +219,7 @@ defmodule SparkEx.Integration.DatasourceOptionsGapsTest do
       assert :ok = Writer.csv(df2, path2, mode: :overwrite)
 
       read_df =
-        Reader.csv(session, [path1, path2],
-          schema: "id INT, name STRING"
-        )
+        Reader.csv(session, [path1, path2], schema: "id INT, name STRING")
 
       assert {:ok, rows} = DataFrame.collect(read_df)
       assert length(rows) == 4
@@ -240,9 +238,7 @@ defmodule SparkEx.Integration.DatasourceOptionsGapsTest do
       assert :ok = Writer.json(df2, path2, mode: :overwrite)
 
       read_df =
-        Reader.json(session, [path1, path2],
-          schema: "id INT"
-        )
+        Reader.json(session, [path1, path2], schema: "id INT")
 
       assert {:ok, rows} = DataFrame.collect(read_df)
       assert length(rows) == 2
@@ -290,7 +286,9 @@ defmodule SparkEx.Integration.DatasourceOptionsGapsTest do
 
       # Second write should fail
       result = Writer.parquet(df, path, mode: :error_if_exists)
-      assert result == {:error, :path_already_exists} or match?({:error, _}, result) or result == :ok
+
+      assert result == {:error, :path_already_exists} or match?({:error, _}, result) or
+               result == :ok
     end
 
     test "ignore mode skips write if data exists", %{session: session} do

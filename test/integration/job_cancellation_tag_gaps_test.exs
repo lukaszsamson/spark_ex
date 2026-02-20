@@ -127,11 +127,19 @@ defmodule SparkEx.Integration.JobCancellationTagGapsTest do
     end
 
     test "interrupt_tag on nonexistent tag returns empty list", %{session: session} do
-      assert {:ok, []} = SparkEx.interrupt_tag(session, "nonexistent-tag-#{System.unique_integer([:positive])}")
+      assert {:ok, []} =
+               SparkEx.interrupt_tag(
+                 session,
+                 "nonexistent-tag-#{System.unique_integer([:positive])}"
+               )
     end
 
     test "interrupt_operation on nonexistent operation returns empty list", %{session: session} do
-      assert {:ok, []} = SparkEx.interrupt_operation(session, "nonexistent-op-#{System.unique_integer([:positive])}")
+      assert {:ok, []} =
+               SparkEx.interrupt_operation(
+                 session,
+                 "nonexistent-op-#{System.unique_integer([:positive])}"
+               )
     end
 
     test "concurrent queries on same session complete independently", %{session: session} do
@@ -144,7 +152,11 @@ defmodule SparkEx.Integration.JobCancellationTagGapsTest do
         end
 
       results = Task.await_many(tasks, 30_000)
-      assert Enum.all?(results, fn {:ok, [_]} -> true; _ -> false end)
+
+      assert Enum.all?(results, fn
+               {:ok, [_]} -> true
+               _ -> false
+             end)
 
       values =
         results

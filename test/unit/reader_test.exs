@@ -58,7 +58,7 @@ defmodule SparkEx.ReaderTest do
 
       assert %DataFrame{
                plan: {:read_named_table, "my_db.my_table", %{"streaming" => "false"}}
-              } = df
+             } = df
     end
 
     test "Reader.schema/2 accepts Spark.Connect.DataType" do

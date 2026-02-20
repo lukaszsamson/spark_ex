@@ -20,6 +20,7 @@ defmodule SparkEx.Integration.ConnectRobustnessTest do
 
   test "connection fails fast on unreachable host" do
     started_at = System.monotonic_time(:millisecond)
+
     task =
       Task.Supervisor.async_nolink(SparkEx.TaskSupervisor, fn ->
         SparkEx.connect(url: "sc://localhost:1", connect_timeout: 500)

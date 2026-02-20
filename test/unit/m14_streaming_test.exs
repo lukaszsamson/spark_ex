@@ -1014,6 +1014,7 @@ defmodule SparkEx.M14.StreamingTest do
 
       {:ok, session} = FakeSession.start_link(parent: self())
       {:ok, bus} = SparkEx.StreamingQueryListenerBus.start_link(session)
+
       on_exit(fn ->
         if Process.alive?(bus) do
           SparkEx.StreamingQueryListenerBus.stop(bus)

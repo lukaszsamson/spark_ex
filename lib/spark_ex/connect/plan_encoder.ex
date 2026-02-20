@@ -1413,9 +1413,9 @@ defmodule SparkEx.Connect.PlanEncoder do
       expr_type:
         {:cast,
          %Expression.Cast{
-            expr: encode_expression(expr),
-            cast_to_type: encode_cast_to_type(type_str)
-          }}
+           expr: encode_expression(expr),
+           cast_to_type: encode_cast_to_type(type_str)
+         }}
     }
   end
 
@@ -1432,10 +1432,10 @@ defmodule SparkEx.Connect.PlanEncoder do
       expr_type:
         {:cast,
          %Expression.Cast{
-            expr: encode_expression(expr),
-            cast_to_type: encode_cast_to_type(type_str),
-            eval_mode: eval_mode
-          }}
+           expr: encode_expression(expr),
+           cast_to_type: encode_cast_to_type(type_str),
+           eval_mode: eval_mode
+         }}
     }
   end
 

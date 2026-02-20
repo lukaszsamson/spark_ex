@@ -381,7 +381,10 @@ defmodule SparkEx.Reader do
   defp normalize_schema(nil), do: nil
   defp normalize_schema(schema) when is_binary(schema), do: schema
   defp normalize_schema({:struct, _} = schema), do: SparkEx.Types.to_json(schema)
-  defp normalize_schema(%Spark.Connect.DataType{} = schema), do: SparkEx.Types.data_type_to_json(schema)
+
+  defp normalize_schema(%Spark.Connect.DataType{} = schema),
+    do: SparkEx.Types.data_type_to_json(schema)
+
   defp normalize_schema(schema), do: schema
 
   defp normalize_options(opts) when is_list(opts) do

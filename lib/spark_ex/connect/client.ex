@@ -1398,6 +1398,7 @@ defmodule SparkEx.Connect.Client do
 
   defp build_chunked_requests(session, name, data, chunk_size) do
     chunks = chunk_binary(data, chunk_size)
+
     [first_chunk | rest] =
       case chunks do
         [] -> [<<>>]

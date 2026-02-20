@@ -6,7 +6,6 @@ defmodule SparkEx.Integration.StreamingStatGapsTest do
   alias SparkEx.{Column, DataFrame, Functions, StreamReader, StreamWriter, StreamingQuery}
   alias SparkEx.DataFrame.{NA, Stat}
 
-
   @spark_remote System.get_env("SPARK_REMOTE", "sc://localhost:15002")
 
   setup do
@@ -209,7 +208,10 @@ defmodule SparkEx.Integration.StreamingStatGapsTest do
   describe "error handling gaps" do
     test "error includes JVM stack trace information", %{session: session} do
       result =
-        SparkEx.sql(session, "SELECT * FROM nonexistent_table_xyz_#{System.unique_integer([:positive])}")
+        SparkEx.sql(
+          session,
+          "SELECT * FROM nonexistent_table_xyz_#{System.unique_integer([:positive])}"
+        )
         |> DataFrame.collect()
 
       assert {:error, error} = result
@@ -227,7 +229,11 @@ defmodule SparkEx.Integration.StreamingStatGapsTest do
         end
 
       results = Task.await_many(tasks, 10_000)
-      assert Enum.all?(results, fn {:ok, [_row]} -> true; _ -> false end)
+
+      assert Enum.all?(results, fn
+               {:ok, [_row]} -> true
+               _ -> false
+             end)
 
       values =
         results

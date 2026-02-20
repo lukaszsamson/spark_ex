@@ -219,6 +219,8 @@ defmodule SparkEx.DataFrame.NA do
   defp replace_type_family(v) when is_boolean(v), do: :bool
   defp replace_type_family(v) when is_number(v), do: :numeric
   defp replace_type_family(v) when is_binary(v), do: :string
-  defp replace_type_family(nil), do: :nil
-  defp replace_type_family(v), do: raise(ArgumentError, "unsupported replace value type: #{inspect(v)}")
+  defp replace_type_family(nil), do: nil
+
+  defp replace_type_family(v),
+    do: raise(ArgumentError, "unsupported replace value type: #{inspect(v)}")
 end

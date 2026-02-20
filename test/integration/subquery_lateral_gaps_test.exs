@@ -45,10 +45,11 @@ defmodule SparkEx.Integration.SubqueryLateralGapsTest do
       {:ok, local_df} =
         SparkEx.create_dataframe(session, [%{"x" => 5}, %{"x" => 15}], schema: "x INT")
 
-      subquery = DataFrame.scalar(
-        local_df
-        |> DataFrame.select([Functions.max(Functions.col("x"))])
-      )
+      subquery =
+        DataFrame.scalar(
+          local_df
+          |> DataFrame.select([Functions.max(Functions.col("x"))])
+        )
 
       df =
         SparkEx.range(session, 1)
@@ -264,6 +265,7 @@ defmodule SparkEx.Integration.SubqueryLateralGapsTest do
         """)
 
       assert {:ok, rows} = DataFrame.collect(df)
+
       assert Enum.map(rows, &{&1["id"], &1["doubled"], &1["quadrupled"]}) == [
                {1, 2, 4},
                {2, 4, 8}

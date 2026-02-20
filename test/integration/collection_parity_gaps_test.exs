@@ -37,9 +37,14 @@ defmodule SparkEx.Integration.CollectionParityGapsTest do
       result = DataFrame.first(df)
 
       case result do
-        {:ok, nil} -> assert true
-        {:error, _} -> assert true
-        {:ok, row} when is_map(row) -> flunk("expected nil or error for empty DF, got: #{inspect(row)}")
+        {:ok, nil} ->
+          assert true
+
+        {:error, _} ->
+          assert true
+
+        {:ok, row} when is_map(row) ->
+          flunk("expected nil or error for empty DF, got: #{inspect(row)}")
       end
     end
 

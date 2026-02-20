@@ -230,6 +230,7 @@ defmodule SparkEx.GroupedData do
     if gd.pivot_col != nil do
       raise ArgumentError, "repeated pivot is not supported"
     end
+
     if values != nil do
       Enum.each(values, fn v ->
         unless is_boolean(v) or is_number(v) or is_binary(v) do

@@ -1199,7 +1199,8 @@ defmodule SparkEx.Functions do
           Column.t()
   def from_json(col, schema, options \\ nil)
 
-  def from_json(col, schema, options) when is_binary(schema) and (is_map(options) or is_nil(options)) do
+  def from_json(col, schema, options)
+      when is_binary(schema) and (is_map(options) or is_nil(options)) do
     args =
       case options do
         nil -> [to_expr(col), {:lit, schema}]

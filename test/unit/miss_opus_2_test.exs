@@ -147,7 +147,9 @@ defmodule SparkEx.MissOpus2Test do
                     function_name: "count",
                     arguments: [
                       %Spark.Connect.Expression{
-                        expr_type: {:literal, %Spark.Connect.Expression.Literal{literal_type: {:integer, 1}}}
+                        expr_type:
+                          {:literal,
+                           %Spark.Connect.Expression.Literal{literal_type: {:integer, 1}}}
                       }
                     ]
                   }}
@@ -200,7 +202,10 @@ defmodule SparkEx.MissOpus2Test do
   describe "15.6 RANGE frame boundaries use long literal" do
     test "ROW frame boundary uses integer (32-bit)" do
       frame = {:rows, 5, 10}
-      window_expr = {:window, {:col, "x"}, [], [{:sort_order, {:col, "y"}, :asc, :nulls_first}], frame}
+
+      window_expr =
+        {:window, {:col, "x"}, [], [{:sort_order, {:col, "y"}, :asc, :nulls_first}], frame}
+
       encoded = PlanEncoder.encode_expression(window_expr)
       window = encoded.expr_type |> elem(1)
       lower = window.frame_spec.lower
@@ -209,7 +214,10 @@ defmodule SparkEx.MissOpus2Test do
 
     test "RANGE frame boundary uses long (64-bit)" do
       frame = {:range, 5, 10}
-      window_expr = {:window, {:col, "x"}, [], [{:sort_order, {:col, "y"}, :asc, :nulls_first}], frame}
+
+      window_expr =
+        {:window, {:col, "x"}, [], [{:sort_order, {:col, "y"}, :asc, :nulls_first}], frame}
+
       encoded = PlanEncoder.encode_expression(window_expr)
       window = encoded.expr_type |> elem(1)
       lower = window.frame_spec.lower
@@ -284,7 +292,9 @@ defmodule SparkEx.MissOpus2Test do
 
     test "split/3 splits with limit" do
       result = Functions.split("col", "\\.", 3)
-      assert %Column{expr: {:fn, "split", [{:col, "col"}, {:lit, "\\."}, {:lit, 3}], false}} = result
+
+      assert %Column{expr: {:fn, "split", [{:col, "col"}, {:lit, "\\."}, {:lit, 3}], false}} =
+               result
     end
   end
 
@@ -312,9 +322,14 @@ defmodule SparkEx.MissOpus2Test do
 
     test "aggregate/4 with finish function" do
       result =
-        Functions.aggregate("arr", Functions.lit(0), fn acc, x -> Column.plus(acc, x) end, fn acc ->
-          Column.cast(acc, "string")
-        end)
+        Functions.aggregate(
+          "arr",
+          Functions.lit(0),
+          fn acc, x -> Column.plus(acc, x) end,
+          fn acc ->
+            Column.cast(acc, "string")
+          end
+        )
 
       assert %Column{
                expr: {:fn, "aggregate", [_, _, {:lambda, _, _}, {:lambda, _, _}], false}
@@ -384,7 +399,9 @@ defmodule SparkEx.MissOpus2Test do
 
     test "approx_count_distinct/2 with rsd" do
       result = Functions.approx_count_distinct("x", 0.05)
-      assert %Column{expr: {:fn, "approx_count_distinct", [{:col, "x"}, {:lit, 0.05}], false}} = result
+
+      assert %Column{expr: {:fn, "approx_count_distinct", [{:col, "x"}, {:lit, 0.05}], false}} =
+               result
     end
   end
 
@@ -439,7 +456,9 @@ defmodule SparkEx.MissOpus2Test do
 
     test "sentences/3 with language and country" do
       result = Functions.sentences("s", "en", "US")
-      assert %Column{expr: {:fn, "sentences", [{:col, "s"}, {:lit, "en"}, {:lit, "US"}], false}} = result
+
+      assert %Column{expr: {:fn, "sentences", [{:col, "s"}, {:lit, "en"}, {:lit, "US"}], false}} =
+               result
     end
   end
 
@@ -453,7 +472,9 @@ defmodule SparkEx.MissOpus2Test do
 
     test "levenshtein/3 with threshold" do
       result = Functions.levenshtein("s1", "s2", 5)
-      assert %Column{expr: {:fn, "levenshtein", [{:col, "s1"}, {:col, "s2"}, {:lit, 5}], false}} = result
+
+      assert %Column{expr: {:fn, "levenshtein", [{:col, "s1"}, {:col, "s2"}, {:lit, 5}], false}} =
+               result
     end
   end
 
@@ -467,7 +488,10 @@ defmodule SparkEx.MissOpus2Test do
 
     test "array_join/3 with null_replacement" do
       result = Functions.array_join("arr", ",", "NULL")
-      assert %Column{expr: {:fn, "array_join", [{:col, "arr"}, {:lit, ","}, {:lit, "NULL"}], false}} = result
+
+      assert %Column{
+               expr: {:fn, "array_join", [{:col, "arr"}, {:lit, ","}, {:lit, "NULL"}], false}
+             } = result
     end
   end
 
@@ -481,7 +505,10 @@ defmodule SparkEx.MissOpus2Test do
 
     test "sequence/3 with step" do
       result = Functions.sequence("start", "stop", "step")
-      assert %Column{expr: {:fn, "sequence", [{:col, "start"}, {:col, "stop"}, {:col, "step"}], false}} = result
+
+      assert %Column{
+               expr: {:fn, "sequence", [{:col, "start"}, {:col, "stop"}, {:col, "step"}], false}
+             } = result
     end
   end
 
@@ -495,7 +522,9 @@ defmodule SparkEx.MissOpus2Test do
 
     test "assert_true/2 with error message" do
       result = Functions.assert_true("cond", "failed!")
-      assert %Column{expr: {:fn, "assert_true", [{:col, "cond"}, {:lit, "failed!"}], false}} = result
+
+      assert %Column{expr: {:fn, "assert_true", [{:col, "cond"}, {:lit, "failed!"}], false}} =
+               result
     end
   end
 
@@ -627,7 +656,11 @@ defmodule SparkEx.MissOpus2Test do
       obs = SparkEx.Observation.new()
       assert is_binary(obs.name)
       assert String.length(obs.name) == 36
-      assert String.match?(obs.name, ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+
+      assert String.match?(
+               obs.name,
+               ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+             )
     end
 
     test "new/0 generates unique names" do
@@ -702,12 +735,16 @@ defmodule SparkEx.MissOpus2Test do
   describe "4.3 nth_value ignoreNulls" do
     test "nth_value defaults ignoreNulls to false" do
       result = Functions.nth_value(Functions.col("x"), 2)
-      assert %Column{expr: {:fn, "nth_value", [{:col, "x"}, {:lit, 2}, {:lit, false}], false}} = result
+
+      assert %Column{expr: {:fn, "nth_value", [{:col, "x"}, {:lit, 2}, {:lit, false}], false}} =
+               result
     end
 
     test "nth_value with ignoreNulls true" do
       result = Functions.nth_value(Functions.col("x"), 2, true)
-      assert %Column{expr: {:fn, "nth_value", [{:col, "x"}, {:lit, 2}, {:lit, true}], false}} = result
+
+      assert %Column{expr: {:fn, "nth_value", [{:col, "x"}, {:lit, 2}, {:lit, true}], false}} =
+               result
     end
   end
 
@@ -773,12 +810,16 @@ defmodule SparkEx.MissOpus2Test do
   describe "14.12 locate with pos parameter" do
     test "locate/2 defaults pos to 1" do
       result = Functions.locate("abc", Functions.col("s"))
-      assert %Column{expr: {:fn, "locate", [{:lit, "abc"}, {:col, "s"}, {:lit, 1}], false}} = result
+
+      assert %Column{expr: {:fn, "locate", [{:lit, "abc"}, {:col, "s"}, {:lit, 1}], false}} =
+               result
     end
 
     test "locate/3 with explicit pos" do
       result = Functions.locate("abc", Functions.col("s"), 5)
-      assert %Column{expr: {:fn, "locate", [{:lit, "abc"}, {:col, "s"}, {:lit, 5}], false}} = result
+
+      assert %Column{expr: {:fn, "locate", [{:lit, "abc"}, {:col, "s"}, {:lit, 5}], false}} =
+               result
     end
   end
 
@@ -836,12 +877,18 @@ defmodule SparkEx.MissOpus2Test do
   describe "14.21 replace optional third arg" do
     test "replace/2 uses empty string as default replacement" do
       result = Functions.replace(Functions.col("s"), Functions.col("search"))
-      assert %Column{expr: {:fn, "replace", [{:col, "s"}, {:col, "search"}, {:col, ""}], false}} = result
+
+      assert %Column{expr: {:fn, "replace", [{:col, "s"}, {:col, "search"}, {:col, ""}], false}} =
+               result
     end
 
     test "replace/3 with explicit replacement" do
-      result = Functions.replace(Functions.col("s"), Functions.col("search"), Functions.col("repl"))
-      assert %Column{expr: {:fn, "replace", [{:col, "s"}, {:col, "search"}, {:col, "repl"}], false}} = result
+      result =
+        Functions.replace(Functions.col("s"), Functions.col("search"), Functions.col("repl"))
+
+      assert %Column{
+               expr: {:fn, "replace", [{:col, "s"}, {:col, "search"}, {:col, "repl"}], false}
+             } = result
     end
   end
 
@@ -943,8 +990,8 @@ defmodule SparkEx.MissOpus2Test do
 
       assert %Column{
                expr:
-                 {:fn, "convert_timezone",
-                  [{:col, "UTC"}, {:col, "US/Pacific"}, {:col, "ts"}], false}
+                 {:fn, "convert_timezone", [{:col, "UTC"}, {:col, "US/Pacific"}, {:col, "ts"}],
+                  false}
              } = result
     end
   end
@@ -962,8 +1009,7 @@ defmodule SparkEx.MissOpus2Test do
         Functions.parse_url(Functions.col("url"), Functions.col("part"), Functions.col("key"))
 
       assert %Column{
-               expr:
-                 {:fn, "parse_url", [{:col, "url"}, {:col, "part"}, {:col, "key"}], false}
+               expr: {:fn, "parse_url", [{:col, "url"}, {:col, "part"}, {:col, "key"}], false}
              } = result
     end
 
@@ -1137,16 +1183,35 @@ defmodule SparkEx.MissOpus2Test do
   describe "7.1 agg map form" do
     test "accepts a map of {col_name, agg_func}" do
       df = make_df()
-      gd = %SparkEx.GroupedData{session: df.session, plan: df.plan, group_type: :groupby, grouping_exprs: []}
+
+      gd = %SparkEx.GroupedData{
+        session: df.session,
+        plan: df.plan,
+        group_type: :groupby,
+        grouping_exprs: []
+      }
+
       result = SparkEx.GroupedData.agg(gd, %{"age" => "max", "salary" => "avg"})
       assert %DataFrame{plan: {:aggregate, _, :groupby, _, agg_exprs}} = result
-      aliases = Enum.map(agg_exprs, fn {:alias, {:fn, func, [{:col, col}], false}, _name} -> {col, func} end)
+
+      aliases =
+        Enum.map(agg_exprs, fn {:alias, {:fn, func, [{:col, col}], false}, _name} ->
+          {col, func}
+        end)
+
       assert Enum.sort(aliases) == [{"age", "max"}, {"salary", "avg"}]
     end
 
     test "raises on empty map" do
       df = make_df()
-      gd = %SparkEx.GroupedData{session: df.session, plan: df.plan, group_type: :groupby, grouping_exprs: []}
+
+      gd = %SparkEx.GroupedData{
+        session: df.session,
+        plan: df.plan,
+        group_type: :groupby,
+        grouping_exprs: []
+      }
+
       assert_raise ArgumentError, ~r/at least one/, fn ->
         SparkEx.GroupedData.agg(gd, %{})
       end
@@ -1160,34 +1225,38 @@ defmodule SparkEx.MissOpus2Test do
       df = make_df()
       result = DataFrame.order_by(df, ["a", "b"], ascending: true)
       assert %DataFrame{plan: {:sort, _, exprs}} = result
+
       assert [
-        {:sort_order, {:col, "a"}, :asc, :nulls_first},
-        {:sort_order, {:col, "b"}, :asc, :nulls_first}
-      ] = exprs
+               {:sort_order, {:col, "a"}, :asc, :nulls_first},
+               {:sort_order, {:col, "b"}, :asc, :nulls_first}
+             ] = exprs
     end
 
     test "ascending: false sorts all columns descending" do
       df = make_df()
       result = DataFrame.order_by(df, ["a", "b"], ascending: false)
       assert %DataFrame{plan: {:sort, _, exprs}} = result
+
       assert [
-        {:sort_order, {:col, "a"}, :desc, :nulls_last},
-        {:sort_order, {:col, "b"}, :desc, :nulls_last}
-      ] = exprs
+               {:sort_order, {:col, "a"}, :desc, :nulls_last},
+               {:sort_order, {:col, "b"}, :desc, :nulls_last}
+             ] = exprs
     end
 
     test "ascending list applies per-column" do
       df = make_df()
       result = DataFrame.order_by(df, ["a", "b"], ascending: [true, false])
       assert %DataFrame{plan: {:sort, _, exprs}} = result
+
       assert [
-        {:sort_order, {:col, "a"}, :asc, :nulls_first},
-        {:sort_order, {:col, "b"}, :desc, :nulls_last}
-      ] = exprs
+               {:sort_order, {:col, "a"}, :asc, :nulls_first},
+               {:sort_order, {:col, "b"}, :desc, :nulls_last}
+             ] = exprs
     end
 
     test "ascending list length mismatch raises" do
       df = make_df()
+
       assert_raise ArgumentError, ~r/length/, fn ->
         DataFrame.order_by(df, ["a", "b"], ascending: [true])
       end
@@ -1236,10 +1305,16 @@ defmodule SparkEx.MissOpus2Test do
     test "overwrite_condition encoding is conditional on mode" do
       # This is tested at the encoder level. Verify the writer builder sets mode correctly.
       df = make_df()
-      writer = df |> DataFrame.write |> SparkEx.Writer.format("delta") |> SparkEx.Writer.mode(:overwrite)
+
+      writer =
+        df
+        |> DataFrame.write()
+        |> SparkEx.Writer.format("delta")
+        |> SparkEx.Writer.mode(:overwrite)
+
       assert writer.mode == :overwrite
 
-      writer2 = df |> DataFrame.write |> SparkEx.Writer.format("delta")
+      writer2 = df |> DataFrame.write() |> SparkEx.Writer.format("delta")
       assert writer2.mode == :error_if_exists
     end
   end
@@ -1249,6 +1324,7 @@ defmodule SparkEx.MissOpus2Test do
   describe "16.3 replace mixed-type validation" do
     test "raises on mixed numeric and string replacements" do
       df = make_df()
+
       assert_raise ArgumentError, ~r/mixed type/, fn ->
         DataFrame.NA.replace(df, %{1 => "one"})
       end
@@ -1301,8 +1377,10 @@ defmodule SparkEx.MissOpus2Test do
 
   describe "3.5 otherwise validation" do
     test "otherwise raises when called twice" do
-      col = Functions.when_(Functions.col("x") |> Column.gt(0), Functions.lit("pos"))
-            |> Column.otherwise("zero")
+      col =
+        Functions.when_(Functions.col("x") |> Column.gt(0), Functions.lit("pos"))
+        |> Column.otherwise("zero")
+
       assert_raise ArgumentError, ~r/otherwise.*once/, fn ->
         Column.otherwise(col, "neg")
       end
@@ -1314,12 +1392,16 @@ defmodule SparkEx.MissOpus2Test do
   describe "3.6 neq produces not(==)" do
     test "neq wraps equality in NOT" do
       result = Column.neq(Functions.col("a"), Functions.lit(1))
-      assert %Column{expr: {:fn, "not", [{:fn, "==", [{:col, "a"}, {:lit, 1}], false}], false}} = result
+
+      assert %Column{expr: {:fn, "not", [{:fn, "==", [{:col, "a"}, {:lit, 1}], false}], false}} =
+               result
     end
 
     test "neq with non-Column literal" do
       result = Column.neq(Functions.col("a"), 5)
-      assert %Column{expr: {:fn, "not", [{:fn, "==", [{:col, "a"}, {:lit, 5}], false}], false}} = result
+
+      assert %Column{expr: {:fn, "not", [{:fn, "==", [{:col, "a"}, {:lit, 5}], false}], false}} =
+               result
     end
   end
 
@@ -1328,12 +1410,24 @@ defmodule SparkEx.MissOpus2Test do
   describe "4.6 overlay" do
     test "overlay with 3 args uses default len" do
       result = Functions.overlay(Functions.col("s"), Functions.col("r"), Functions.col("p"))
-      assert %Column{expr: {:fn, "overlay", [{:col, "s"}, {:col, "r"}, {:col, "p"}, {:lit, -1}], false}} = result
+
+      assert %Column{
+               expr: {:fn, "overlay", [{:col, "s"}, {:col, "r"}, {:col, "p"}, {:lit, -1}], false}
+             } = result
     end
 
     test "overlay with 4 args" do
-      result = Functions.overlay(Functions.col("s"), Functions.col("r"), Functions.col("p"), Functions.lit(3))
-      assert %Column{expr: {:fn, "overlay", [{:col, "s"}, {:col, "r"}, {:col, "p"}, {:lit, 3}], false}} = result
+      result =
+        Functions.overlay(
+          Functions.col("s"),
+          Functions.col("r"),
+          Functions.col("p"),
+          Functions.lit(3)
+        )
+
+      assert %Column{
+               expr: {:fn, "overlay", [{:col, "s"}, {:col, "r"}, {:col, "p"}, {:lit, 3}], false}
+             } = result
     end
   end
 
@@ -1378,6 +1472,7 @@ defmodule SparkEx.MissOpus2Test do
   describe "20.2 Observation get raises on unobserved" do
     test "raises ArgumentError with NO_OBSERVE_BEFORE_GET" do
       obs = SparkEx.Observation.new("never_attached_#{System.unique_integer()}")
+
       assert_raise ArgumentError, ~r/NO_OBSERVE_BEFORE_GET/, fn ->
         SparkEx.Observation.get(obs)
       end
@@ -1413,8 +1508,11 @@ defmodule SparkEx.MissOpus2Test do
       df = make_df()
       result = DataFrame.order_by(df, [0, 1])
       assert %DataFrame{plan: {:sort, _, exprs}} = result
-      assert [{:sort_order, {:col, "_c0"}, :asc, :nulls_first},
-              {:sort_order, {:col, "_c1"}, :asc, :nulls_first}] = exprs
+
+      assert [
+               {:sort_order, {:col, "_c0"}, :asc, :nulls_first},
+               {:sort_order, {:col, "_c1"}, :asc, :nulls_first}
+             ] = exprs
     end
 
     test "group_by accepts integer column indices" do
@@ -1469,6 +1567,7 @@ defmodule SparkEx.MissOpus2Test do
   describe "round 7" do
     test "1.8 substr validates mixed types raise" do
       c = Functions.col("s")
+
       assert_raise ArgumentError, ~r/same type/, fn ->
         Column.substr(c, 1, Functions.lit(5))
       end
@@ -1539,7 +1638,9 @@ defmodule SparkEx.MissOpus2Test do
   describe "round 8" do
     test "14.25 kll_sketch_merge takes two columns" do
       result = Functions.kll_sketch_merge_bigint(Functions.col("a"), Functions.col("b"))
-      assert %Column{expr: {:fn, "kll_sketch_merge_bigint", [{:col, "a"}, {:col, "b"}], false}} = result
+
+      assert %Column{expr: {:fn, "kll_sketch_merge_bigint", [{:col, "a"}, {:col, "b"}], false}} =
+               result
     end
 
     test "15.7 cast supports legacy mode" do
@@ -1589,7 +1690,10 @@ defmodule SparkEx.MissOpus2Test do
 
     test "19.1 array_type contains_null: false in JSON" do
       t = {:array, :string, false}
-      json = SparkEx.Types.to_json({:struct, [%{name: "arr", type: t, nullable: true, metadata: %{}}]})
+
+      json =
+        SparkEx.Types.to_json({:struct, [%{name: "arr", type: t, nullable: true, metadata: %{}}]})
+
       decoded = Jason.decode!(json)
       field = hd(decoded["fields"])
       assert field["type"]["containsNull"] == false
@@ -1597,7 +1701,10 @@ defmodule SparkEx.MissOpus2Test do
 
     test "13.10 merge_into accepts condition parameter" do
       df = make_df()
-      writer = DataFrame.merge_into(df, "target", Functions.col("id") |> Column.eq(Functions.col("tid")))
+
+      writer =
+        DataFrame.merge_into(df, "target", Functions.col("id") |> Column.eq(Functions.col("tid")))
+
       assert %SparkEx.MergeIntoWriter{condition: {:fn, "==", _, false}} = writer
     end
 

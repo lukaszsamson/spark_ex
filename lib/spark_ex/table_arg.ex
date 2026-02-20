@@ -67,7 +67,9 @@ defmodule SparkEx.TableArg do
 
   defp normalize_sort_expr(%Column{expr: {:sort_order, _, _, _} = expr}), do: expr
   defp normalize_sort_expr(%Column{} = c), do: {:sort_order, c.expr, :asc, :nulls_first}
-  defp normalize_sort_expr(name) when is_binary(name), do: {:sort_order, {:col, name}, :asc, :nulls_first}
+
+  defp normalize_sort_expr(name) when is_binary(name),
+    do: {:sort_order, {:col, name}, :asc, :nulls_first}
 
   defp normalize_sort_expr(name) when is_atom(name),
     do: {:sort_order, {:col, Atom.to_string(name)}, :asc, :nulls_first}

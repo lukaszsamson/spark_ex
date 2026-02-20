@@ -43,7 +43,9 @@ defmodule SparkEx.Integration.ReadWriteTypesGapsTest do
                },
                %Spark.Connect.DataType.StructField{
                  name: "name",
-                 data_type: %Spark.Connect.DataType{kind: {:string, %Spark.Connect.DataType.String{}}},
+                 data_type: %Spark.Connect.DataType{
+                   kind: {:string, %Spark.Connect.DataType.String{}}
+                 },
                  nullable: true,
                  metadata: "{}"
                }

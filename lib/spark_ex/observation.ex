@@ -32,10 +32,13 @@ defmodule SparkEx.Observation do
 
   defp generate_uuid do
     <<a::48, _::4, b::12, _::2, c::62>> = :crypto.strong_rand_bytes(16)
+
     <<a::48, 4::4, b::12, 2::2, c::62>>
     |> Base.encode16(case: :lower)
     |> then(fn hex ->
-      <<a::binary-size(8), b::binary-size(4), c::binary-size(4), d::binary-size(4), e::binary-size(12)>> = hex
+      <<a::binary-size(8), b::binary-size(4), c::binary-size(4), d::binary-size(4),
+        e::binary-size(12)>> = hex
+
       "#{a}-#{b}-#{c}-#{d}-#{e}"
     end)
   end
@@ -120,5 +123,4 @@ defmodule SparkEx.Observation do
   end
 
   def decode_literal(other), do: other
-
 end

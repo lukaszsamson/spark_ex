@@ -108,7 +108,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:try_sum, "try_sum", :one_col, group: :math, doc: "Try sum, returns null on overflow."},
       {:try_avg, "try_avg", :one_col,
        group: :math, doc: "Try average, returns null on overflow."},
-      {:product, "product", :one_col, group: :math, doc: "Computes product of all values."},
+      {:product, "product", :one_col, group: :math, doc: "Computes product of all values."}
       # uniform hand-written in functions.ex to support seed parameter
       # {:uniform, ...} — see Functions.uniform/2,3
     ]
@@ -127,8 +127,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:shiftright, "shiftright", {:col_lit, 1}, group: :bitwise, doc: "Bitwise right shift."},
       {:shiftrightunsigned, "shiftrightunsigned", {:col_lit, 1},
        group: :bitwise, doc: "Bitwise unsigned right shift."},
-      {:bitwise_not_, "~", :one_col,
-       group: :bitwise, doc: "Bitwise NOT (standalone function)."}
+      {:bitwise_not_, "~", :one_col, group: :bitwise, doc: "Bitwise NOT (standalone function)."}
     ]
   end
 
@@ -234,15 +233,13 @@ defmodule SparkEx.Macros.FunctionRegistry do
       # parse_url/try_parse_url hand-written in functions.ex to support optional key parameter
       # {:parse_url, ...} — see Functions.parse_url/2,3
       # {:try_parse_url, ...} — see Functions.try_parse_url/2,3
-      {:quote_, "quote", :one_col,
-       group: :string, doc: "Quotes a string for use in SQL."},
+      {:quote_, "quote", :one_col, group: :string, doc: "Quotes a string for use in SQL."},
       {:contains_, "contains", :two_col,
        group: :string, doc: "Returns true if string contains substring."},
       # like_/ilike_ hand-written in functions.ex to support escape character parameter
       # {:like_, ...} — see Functions.like_/2,3
       # {:ilike_, ...} — see Functions.ilike_/2,3
-      {:rlike_, "rlike", :two_col,
-       group: :string, doc: "Regex pattern match."},
+      {:rlike_, "rlike", :two_col, group: :string, doc: "Regex pattern match."}
       # substr_ hand-written in functions.ex to support optional len parameter
       # {:substr_, ...} — see Functions.substr_/2,3
     ]
@@ -536,7 +533,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:lag, "lag", {:col_opt, [offset: 1, default: nil]},
        group: :window, doc: "Value at offset rows before current."},
       {:lead, "lead", {:col_opt, [offset: 1, default: nil]},
-       group: :window, doc: "Value at offset rows after current."},
+       group: :window, doc: "Value at offset rows after current."}
       # nth_value hand-written in functions.ex to support ignoreNulls
     ]
   end
@@ -692,14 +689,16 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :misc, doc: "Indicates whether column is aggregated in grouping set."},
       {:grouping_id, "grouping_id", :n_col, group: :misc, doc: "Grouping ID for grouping set."},
       {:count_min_sketch, "count_min_sketch", {:col_lit, 3},
-       group: :misc, doc: "Creates a count-min sketch of a column with given eps, confidence, and seed."},
-      {:reflect_, "reflect", :n_col,
-       group: :misc, doc: "Calls a JVM method via reflection."},
-      {:java_method, "java_method", :n_col,
-       group: :misc, doc: "Calls a JVM method."},
+       group: :misc,
+       doc: "Creates a count-min sketch of a column with given eps, confidence, and seed."},
+      {:reflect_, "reflect", :n_col, group: :misc, doc: "Calls a JVM method via reflection."},
+      {:java_method, "java_method", :n_col, group: :misc, doc: "Calls a JVM method."},
       {:try_reflect, "try_reflect", :n_col,
        group: :misc, doc: "Try to call a JVM method, returns null on failure."}
-    ] ++ hll_functions() ++ theta_sketch_functions() ++ kll_sketch_functions() ++ bitmap_functions() ++ geospatial_functions()
+    ] ++
+      hll_functions() ++
+      theta_sketch_functions() ++
+      kll_sketch_functions() ++ bitmap_functions() ++ geospatial_functions()
   end
 
   defp hll_functions do
@@ -765,8 +764,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :geospatial, doc: "Creates geometry from WKB binary."},
       {:st_setsrid, "ST_SetSRID", {:col_lit, 1},
        group: :geospatial, doc: "Sets the SRID of a geometry."},
-      {:st_srid, "ST_SRID", :one_col,
-       group: :geospatial, doc: "Returns the SRID of a geometry."}
+      {:st_srid, "ST_SRID", :one_col, group: :geospatial, doc: "Returns the SRID of a geometry."}
     ]
   end
 

@@ -85,7 +85,7 @@ defmodule SparkEx.WindowSpec do
   # PySpark clamps extreme boundary values to unbounded.
   # _PRECEDING_THRESHOLD = -(1 << 31) + 1, _FOLLOWING_THRESHOLD = (1 << 31) - 1
   import Bitwise, only: [bsl: 2]
-  @preceding_threshold -(bsl(1, 31)) + 1
+  @preceding_threshold -bsl(1, 31) + 1
   @following_threshold bsl(1, 31) - 1
 
   defp clamp_boundary(value) when is_integer(value) and value <= @preceding_threshold,

@@ -125,5 +125,4 @@ defmodule SparkEx.RetryPolicyRegistry do
   defp default_jitter(capped) do
     :rand.uniform(capped + 1) - 1
   end
-
 end

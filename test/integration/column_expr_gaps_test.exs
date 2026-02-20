@@ -29,7 +29,10 @@ defmodule SparkEx.Integration.ColumnExprGapsTest do
         |> DataFrame.select([
           Column.alias_(Functions.date_add(Functions.col("dt"), 10), "plus10"),
           Column.alias_(Functions.date_sub(Functions.col("dt"), 5), "minus5"),
-          Column.alias_(Functions.datediff(Functions.lit(~D[2024-02-01]), Functions.col("dt")), "diff")
+          Column.alias_(
+            Functions.datediff(Functions.lit(~D[2024-02-01]), Functions.col("dt")),
+            "diff"
+          )
         ])
 
       assert {:ok, [row]} = DataFrame.collect(df)
