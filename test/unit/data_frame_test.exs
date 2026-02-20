@@ -4,25 +4,74 @@ defmodule SparkEx.DataFrameTest do
   alias SparkEx.DataFrame
   alias SparkEx.Column
   alias SparkEx.Functions
+  alias Spark.Connect.ExecutePlanResponse
 
   defmodule ArrowSession do
     use GenServer
 
-    def start_link() do
-      GenServer.start_link(__MODULE__, :ok, [])
+    def start_link(test_pid \\ nil) do
+      GenServer.start_link(__MODULE__, test_pid, [])
     end
 
     @impl true
-    def init(:ok), do: {:ok, :ok}
+    def init(test_pid), do: {:ok, test_pid}
 
     @impl true
-    def handle_call({:execute_arrow, _plan, _opts}, _from, state) do
-      {:reply, {:ok, :arrow_data}, state}
+    def handle_call({:execute_arrow, _plan, _opts}, _from, test_pid) do
+      {:reply, {:ok, :arrow_data}, test_pid}
     end
 
     @impl true
-    def handle_call({:execute_collect, _plan, _opts}, _from, state) do
-      {:reply, {:ok, [%{"id" => 1}]}, state}
+    def handle_call(:get_state, _from, test_pid) do
+      {:reply, :mock_session, test_pid}
+    end
+
+    @impl true
+    def handle_call({:execute_collect, _plan, _opts}, _from, test_pid) do
+      if test_pid, do: send(test_pid, :execute_collect_called)
+      {:reply, {:ok, [%{"id" => 1}]}, test_pid}
+    end
+
+    @impl true
+    def handle_call({:execute_plan_stream, _plan, _opts}, _from, test_pid) do
+      if test_pid, do: send(test_pid, :execute_plan_stream_called)
+
+      stream =
+        case SparkEx.DataFrameTest.build_test_ipc_data() do
+          <<>> ->
+            [
+              {:ok,
+               %ExecutePlanResponse{
+                 response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+               }}
+            ]
+
+          ipc_data ->
+            batch = %ExecutePlanResponse.ArrowBatch{data: ipc_data, row_count: 1, start_offset: 0}
+
+            [
+              {:ok, %ExecutePlanResponse{response_type: {:arrow_batch, batch}}},
+              {:ok,
+               %ExecutePlanResponse{
+                 response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+               }}
+            ]
+        end
+
+      {:reply, {:ok, stream}, test_pid}
+    end
+  end
+
+  def build_test_ipc_data do
+    if Code.ensure_loaded?(Explorer.DataFrame) do
+      df = Explorer.DataFrame.new(%{"id" => [1]})
+
+      case Explorer.DataFrame.dump_ipc_stream(df) do
+        {:ok, data} -> data
+        _ -> <<>>
+      end
+    else
+      <<>>
     end
   end
 
@@ -382,12 +431,14 @@ defmodule SparkEx.DataFrameTest do
   end
 
   describe "to_local_iterator/2" do
-    test "returns rows enumerable" do
-      {:ok, session} = ArrowSession.start_link()
+    test "returns lazy rows enumerable from streaming execution" do
+      {:ok, session} = ArrowSession.start_link(self())
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
       assert {:ok, rows} = DataFrame.to_local_iterator(df)
-      assert is_list(rows)
+      assert Enum.to_list(rows) == [%{"id" => 1}]
+      assert_receive :execute_plan_stream_called
+      refute_receive :execute_collect_called
     end
   end
 

@@ -330,4 +330,80 @@ defmodule SparkEx.Connect.ResultDecoderTest do
       assert result.execution_metrics == %{}
     end
   end
+
+  describe "rows_stream/2" do
+    test "decodes rows lazily from execute plan stream" do
+      ipc_data = build_multi_row_ipc_data(3)
+      assert ipc_data != <<>>
+
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{data: ipc_data, row_count: 3, start_offset: 0}}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      row_stream = ResultDecoder.rows_stream(stream)
+      assert Enum.take(row_stream, 2) == [%{"id" => 1}, %{"id" => 2}]
+    end
+
+    test "reassembles chunked arrow batches while streaming rows" do
+      ipc_data = build_multi_row_ipc_data(2)
+      assert ipc_data != <<>>
+      split = div(byte_size(ipc_data), 2)
+      {first, second} = :erlang.split_binary(ipc_data, split)
+
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                data: first,
+                row_count: 2,
+                start_offset: 0,
+                chunk_index: 0,
+                num_chunks_in_batch: 2
+              }}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                data: second,
+                row_count: 2,
+                start_offset: 0,
+                chunk_index: 1,
+                num_chunks_in_batch: 2
+              }}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      assert Enum.to_list(ResultDecoder.rows_stream(stream)) == [%{"id" => 1}, %{"id" => 2}]
+    end
+  end
+
+  defp build_multi_row_ipc_data(n) do
+    if Code.ensure_loaded?(Explorer.DataFrame) do
+      df = Explorer.DataFrame.new(%{"id" => Enum.to_list(1..n)})
+
+      case Explorer.DataFrame.dump_ipc_stream(df) do
+        {:ok, data} -> data
+        _ -> <<>>
+      end
+    else
+      <<>>
+    end
+  end
 end

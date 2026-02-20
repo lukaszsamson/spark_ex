@@ -192,6 +192,55 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   @doc """
+  Returns a lazy row stream decoded from ExecutePlan responses.
+
+  Rows are emitted batch-by-batch as Arrow batches arrive.
+  """
+  @spec rows_stream(Enumerable.t(), SparkEx.Session.t() | nil) :: Enumerable.t()
+  def rows_stream(stream, session \\ nil) do
+    Stream.transform(
+      stream,
+      fn -> %{current_chunked_batch: nil, num_records: 0} end,
+      fn
+        {:ok, %ExecutePlanResponse{} = resp}, state ->
+          case resp.response_type do
+            {:arrow_batch, %ExecutePlanResponse.ArrowBatch{} = batch} ->
+              case handle_arrow_batch_rows_stream(state, batch) do
+                {:ok, rows, next_state} ->
+                  {rows, next_state}
+
+                {:error, reason} ->
+                  raise RuntimeError, "failed to decode local iterator stream: #{inspect(reason)}"
+              end
+
+            {:result_complete, _} ->
+              {:halt, state}
+
+            _ ->
+              {[], state}
+          end
+
+        {:error, %GRPC.RPCError{} = error}, _state ->
+          err = if session, do: Errors.from_grpc_error(error, session), else: error
+          raise err
+
+        {:error, reason}, _state ->
+          raise RuntimeError, "local iterator stream error: #{inspect(reason)}"
+      end,
+      fn state ->
+        case state.current_chunked_batch do
+          nil ->
+            :ok
+
+          current ->
+            raise RuntimeError,
+                  "incomplete local iterator arrow batch: #{inspect(%{expected_chunks: current.expected_chunks, received_chunks: length(current.parts)})}"
+        end
+      end
+    )
+  end
+
+  @doc """
   Consumes an ExecutePlan response stream and returns an `Explorer.DataFrame`.
 
   Decodes each Arrow IPC batch to an Explorer DataFrame and concatenates them.
@@ -438,6 +487,68 @@ defmodule SparkEx.Connect.ResultDecoder do
             {:ok, %{state | current_chunked_batch: updated}}
           end
         end
+    end
+  end
+
+  defp handle_arrow_batch_rows_stream(state, %ExecutePlanResponse.ArrowBatch{} = batch) do
+    chunk_index = batch.chunk_index || 0
+    num_chunks = batch.num_chunks_in_batch || 0
+
+    case state.current_chunked_batch do
+      nil ->
+        with :ok <- validate_batch_start_offset(state, batch),
+             :ok <- validate_new_batch_chunk_index(chunk_index) do
+          if num_chunks > 1 do
+            {:ok, [],
+             %{
+               state
+               | current_chunked_batch: %{
+                   expected_chunks: num_chunks,
+                   next_chunk_index: 1,
+                   row_count: batch.row_count,
+                   start_offset: batch.start_offset,
+                   parts: [batch.data]
+                 }
+             }}
+          else
+            decode_batch_for_rows_stream(state, batch.data, batch.row_count)
+          end
+        end
+
+      current ->
+        with :ok <- validate_continuation_chunk_index(current, chunk_index),
+             :ok <- validate_continuation_num_chunks(current, num_chunks),
+             :ok <- validate_continuation_row_count(current, batch.row_count),
+             :ok <- validate_continuation_start_offset(current, batch.start_offset) do
+          updated = %{
+            current
+            | next_chunk_index: current.next_chunk_index + 1,
+              parts: [batch.data | current.parts]
+          }
+
+          if updated.next_chunk_index == updated.expected_chunks do
+            assembled = updated.parts |> Enum.reverse() |> IO.iodata_to_binary()
+            state = %{state | current_chunked_batch: nil}
+            decode_batch_for_rows_stream(state, assembled, updated.row_count)
+          else
+            {:ok, [], %{state | current_chunked_batch: updated}}
+          end
+        end
+    end
+  end
+
+  defp decode_batch_for_rows_stream(state, ipc_data, expected_row_count) do
+    with {:ok, rows} <- decode_single_batch(ipc_data),
+         :ok <- validate_row_count(rows, expected_row_count) do
+      num_rows = length(rows)
+
+      :telemetry.execute(
+        [:spark_ex, :result, :batch],
+        %{row_count: num_rows, bytes: byte_size(ipc_data)},
+        %{batch_index: state.num_records}
+      )
+
+      {:ok, rows, %{state | num_records: state.num_records + num_rows}}
     end
   end
 

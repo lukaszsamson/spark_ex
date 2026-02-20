@@ -203,6 +203,27 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Executes a plan and returns the raw gRPC response stream.
+
+  Used by APIs that need incremental row consumption.
+  """
+  @spec execute_plan_stream(GenServer.server(), term(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def execute_plan_stream(session, plan, opts \\ []) do
+    timeout = call_timeout(opts)
+
+    case safe_get_state(session, timeout) do
+      {:ok, %__MODULE__{} = state} ->
+        {proto_plan, _counter} = PlanEncoder.encode(plan, 0)
+        opts = merge_session_tags(opts, state.tags)
+        Client.execute_plan_raw_stream(state, proto_plan, opts)
+
+      _ ->
+        GenServer.call(session, {:execute_plan_stream, plan, opts}, timeout)
+    end
+  end
+
+  @doc """
   Executes a plan and returns an `Explorer.DataFrame`.
 
   Pushes a LIMIT into the plan unless `unsafe: true`. Enforces row/byte bounds.
@@ -788,6 +809,21 @@ defmodule SparkEx.Session do
     end
   end
 
+  def handle_call({:execute_plan_stream, plan, opts}, _from, state) do
+    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
+    state = %{state | plan_id_counter: counter}
+
+    opts = merge_session_tags(opts, state.tags)
+
+    case Client.execute_plan_raw_stream(state, proto_plan, opts) do
+      {:ok, stream} ->
+        {:reply, {:ok, stream}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
   def handle_call({:execute_explorer, plan, opts}, _from, state) do
     max_rows = Keyword.get(opts, :max_rows, 10_000)
     unsafe = Keyword.get(opts, :unsafe, false)
@@ -1340,6 +1376,12 @@ defmodule SparkEx.Session do
 
   defp call_timeout(opts) do
     Keyword.get(opts, :timeout, 60_000) + 5_000
+  end
+
+  defp safe_get_state(session, timeout) do
+    {:ok, GenServer.call(session, :get_state, timeout)}
+  catch
+    :exit, _ -> :error
   end
 
   # --- Local data preparation ---

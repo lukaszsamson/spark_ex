@@ -175,8 +175,13 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
 
   describe "same_semantics/2 and semantic_hash/1" do
     test "same plan yields same semantics", %{session: session} do
-      df1 = SparkEx.range(session, 10) |> DataFrame.filter(Column.gt(Functions.col("id"), Functions.lit(5)))
-      df2 = SparkEx.range(session, 10) |> DataFrame.filter(Column.gt(Functions.col("id"), Functions.lit(5)))
+      df1 =
+        SparkEx.range(session, 10)
+        |> DataFrame.filter(Column.gt(Functions.col("id"), Functions.lit(5)))
+
+      df2 =
+        SparkEx.range(session, 10)
+        |> DataFrame.filter(Column.gt(Functions.col("id"), Functions.lit(5)))
 
       assert {:ok, true} = DataFrame.same_semantics(df1, df2)
     end
@@ -254,6 +259,7 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
         |> DataFrame.order_by(["g1", "g2"])
 
       assert {:ok, rows} = DataFrame.collect(df)
+
       # Rollup produces subtotals + grand total: (a,x), (a,y), (a,null), (b,x), (b,null), (null,null)
       assert length(rows) >= 4
       # Grand total row should exist
@@ -316,13 +322,29 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
 
   describe "to_local_iterator/2" do
     test "returns a lazy stream of rows", %{session: session} do
-      df = SparkEx.range(session, 5) |> DataFrame.order_by(["id"])
+      {:ok, local_df} =
+        SparkEx.create_dataframe(session, [
+          %{"id" => 0},
+          %{"id" => 1},
+          %{"id" => 2},
+          %{"id" => 3},
+          %{"id" => 4}
+        ])
 
-      assert {:ok, stream} = DataFrame.to_local_iterator(df)
+      assert {:ok, stream} = DataFrame.to_local_iterator(local_df)
       rows = Enum.to_list(stream)
       assert length(rows) == 5
-      ids = Enum.map(rows, & &1["id"])
+      ids = rows |> Enum.map(& &1["id"]) |> Enum.sort()
       assert ids == [0, 1, 2, 3, 4]
+    end
+
+    test "supports incremental consumption with Stream.take", %{session: session} do
+      {:ok, local_df} = SparkEx.create_dataframe(session, Enum.map(0..20, &%{"id" => &1}))
+
+      assert {:ok, stream} = DataFrame.to_local_iterator(local_df)
+      ids = stream |> Stream.take(3) |> Enum.map(& &1["id"])
+      assert length(ids) == 3
+      assert Enum.all?(ids, &is_integer/1)
     end
   end
 end

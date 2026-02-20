@@ -1768,16 +1768,27 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
-  Returns an enumerable of rows, fetched in batches.
-
-  This is a convenience wrapper over `collect/2` and currently fetches
-  all rows before returning an enumerable.
+  Returns a lazy enumerable of rows, fetched from the gRPC stream in Arrow batches.
   """
   @spec to_local_iterator(t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
   def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
-    case collect(df, opts) do
-      {:ok, rows} -> {:ok, rows}
-      {:error, _} = error -> error
+    case SparkEx.Session.execute_plan_stream(df.session, df.plan, merge_tags(df, opts)) do
+      {:ok, stream} ->
+        tracked_stream =
+          Stream.map(stream, fn
+            {:ok, %Spark.Connect.ExecutePlanResponse{server_side_session_id: id} = resp}
+            when is_binary(id) and id != "" ->
+              SparkEx.Session.update_server_side_session_id(df.session, id)
+              {:ok, resp}
+
+            other ->
+              other
+          end)
+
+        {:ok, SparkEx.Connect.ResultDecoder.rows_stream(tracked_stream)}
+
+      {:error, _} = error ->
+        error
     end
   end
 
