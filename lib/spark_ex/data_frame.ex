@@ -79,21 +79,21 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.col_regex("^name_.*")
   """
-  @spec col_regex(t(), String.t()) :: t()
-  def col_regex(%__MODULE__{} = df, pattern) when is_binary(pattern) do
-    %__MODULE__{df | plan: {:project, df.plan, [{:col_regex, pattern}]}}
+  @spec col_regex(t(), String.t()) :: Column.t()
+  def col_regex(%__MODULE__{} = _df, pattern) when is_binary(pattern) do
+    %Column{expr: {:col_regex, pattern}}
   end
 
   @doc """
-  Selects a metadata column by name.
+  Returns a metadata column expression by name.
 
   ## Examples
 
       df |> DataFrame.metadata_column("_metadata")
   """
-  @spec metadata_column(t(), String.t()) :: t()
-  def metadata_column(%__MODULE__{} = df, name) when is_binary(name) do
-    %__MODULE__{df | plan: {:project, df.plan, [{:metadata_col, name}]}}
+  @spec metadata_column(t(), String.t()) :: Column.t()
+  def metadata_column(%__MODULE__{} = _df, name) when is_binary(name) do
+    %Column{expr: {:metadata_col, name}}
   end
 
   @doc """
@@ -269,16 +269,26 @@ defmodule SparkEx.DataFrame do
   @doc """
   Groups by grouping sets.
 
-  Accepts a list of column lists.
+  Accepts a list of column lists, and an optional list of explicit grouping columns.
+  When grouping columns are provided, they are used as the grouping expressions
+  instead of being derived from the sets.
   """
-  @spec grouping_sets(t(), [[Column.t() | String.t() | atom()]]) :: SparkEx.GroupedData.t()
-  def grouping_sets(%__MODULE__{} = df, sets) when is_list(sets) do
+  @spec grouping_sets(
+          t(),
+          [[Column.t() | String.t() | atom()]],
+          [Column.t() | String.t() | atom()]
+        ) :: SparkEx.GroupedData.t()
+  def grouping_sets(%__MODULE__{} = df, sets, cols \\ []) when is_list(sets) do
     grouping_sets =
       Enum.map(sets, fn set ->
         Enum.map(set, &normalize_column_expr/1)
       end)
 
-    grouping_exprs = Enum.uniq(List.flatten(grouping_sets))
+    grouping_exprs =
+      case cols do
+        [] -> Enum.uniq(List.flatten(grouping_sets))
+        cols when is_list(cols) -> Enum.map(cols, &normalize_column_expr/1)
+      end
 
     %SparkEx.GroupedData{
       session: df.session,
@@ -398,19 +408,25 @@ defmodule SparkEx.DataFrame do
 
   The right plan is expected to reference columns from the left plan where supported.
   """
-  @spec lateral_join(t(), t(), Column.t(), atom() | String.t()) :: t()
+  @spec lateral_join(t(), t(), Column.t() | nil, atom() | String.t()) :: t()
   def lateral_join(
         %__MODULE__{} = left,
         %__MODULE__{} = right,
-        %Column{} = condition,
+        condition \\ nil,
         join_type \\ :inner
       ) do
     ensure_same_session!(left, right, :lateral_join)
     canonical = normalize_join_type(join_type)
 
+    cond_expr =
+      case condition do
+        nil -> nil
+        %Column{expr: e} -> e
+      end
+
     %__MODULE__{
       left
-      | plan: {:lateral_join, left.plan, right.plan, condition.expr, canonical}
+      | plan: {:lateral_join, left.plan, right.plan, cond_expr, canonical}
     }
   end
 
@@ -748,8 +764,29 @@ defmodule SparkEx.DataFrame do
       df |> DataFrame.sample(0.1)
       df |> DataFrame.sample(0.5, with_replacement: true, seed: 42)
   """
-  @spec sample(t(), float(), keyword()) :: t()
-  def sample(%__MODULE__{} = df, fraction, opts \\ []) when is_float(fraction) do
+  @spec sample(t(), boolean() | float(), float() | keyword(), integer() | keyword()) :: t()
+  def sample(df, with_replacement_or_fraction, fraction_or_opts \\ [], seed_or_opts \\ [])
+
+  def sample(%__MODULE__{} = df, with_replacement, fraction, seed)
+      when is_boolean(with_replacement) and is_float(fraction) and is_integer(seed) do
+    %__MODULE__{
+      df
+      | plan: {:sample, df.plan, 0.0, fraction, with_replacement, seed, false}
+    }
+  end
+
+  def sample(%__MODULE__{} = df, with_replacement, fraction, opts)
+      when is_boolean(with_replacement) and is_float(fraction) and is_list(opts) do
+    seed = Keyword.get(opts, :seed, :rand.uniform(9_223_372_036_854_775_807))
+
+    %__MODULE__{
+      df
+      | plan: {:sample, df.plan, 0.0, fraction, with_replacement, seed, false}
+    }
+  end
+
+  def sample(%__MODULE__{} = df, fraction, opts, _ignored)
+      when is_float(fraction) and is_list(opts) do
     with_replacement = Keyword.get(opts, :with_replacement, false)
     seed = Keyword.get(opts, :seed, :rand.uniform(9_223_372_036_854_775_807))
 
@@ -820,8 +857,8 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.tail(5)
   """
-  @spec tail(t(), pos_integer()) :: t()
-  def tail(%__MODULE__{} = df, n) when is_integer(n) and n > 0 do
+  @spec tail(t(), non_neg_integer()) :: t()
+  def tail(%__MODULE__{} = df, n) when is_integer(n) and n >= 0 do
     %__MODULE__{df | plan: {:tail, df.plan, n}}
   end
 
@@ -1477,6 +1514,11 @@ defmodule SparkEx.DataFrame do
   """
   @spec to(t(), Spark.Connect.DataType.t() | String.t() | SparkEx.Types.struct_type()) :: t()
   def to(%__MODULE__{} = df, schema) do
+    unless is_binary(schema) or is_map(schema) or (is_tuple(schema) and elem(schema, 0) == :struct) do
+      raise ArgumentError,
+            "expected schema to be a DDL string, Spark DataType, or SparkEx.Types struct, got: #{inspect(schema)}"
+    end
+
     %__MODULE__{df | plan: {:to_schema, df.plan, schema}}
   end
 
@@ -1980,6 +2022,8 @@ defmodule SparkEx.DataFrame do
   defp ensure_same_session!(%__MODULE__{}, %__MODULE__{}, op) do
     raise ArgumentError, "cannot #{op} DataFrames from different sessions"
   end
+
+  defp normalize_join_on(nil), do: {nil, []}
 
   defp normalize_join_on(%Column{} = col), do: {col.expr, []}
 

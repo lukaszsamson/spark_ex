@@ -166,7 +166,12 @@ defmodule SparkEx.DataFrame.Stat do
       case col do
         c when is_binary(c) -> {[c], true}
         cs when is_list(cs) -> {cs, false}
+        cs when is_tuple(cs) -> {Tuple.to_list(cs), false}
       end
+
+    unless Enum.all?(cols, &is_binary/1) do
+      raise ArgumentError, "column names must all be strings"
+    end
 
     validate_probabilities!(probabilities)
 
@@ -238,7 +243,12 @@ defmodule SparkEx.DataFrame.Stat do
   end
 
   defp validate_fractions!(fractions) do
-    Enum.each(fractions, fn {_key, v} ->
+    Enum.each(fractions, fn {key, v} ->
+      unless is_number(key) or is_binary(key) or is_boolean(key) do
+        raise ArgumentError,
+              "fraction keys must be numbers, strings, or booleans, got: #{inspect(key)}"
+      end
+
       unless is_number(v) and v >= 0.0 do
         raise ArgumentError,
               "each fraction must be a non-negative number, got: #{inspect(v)}"

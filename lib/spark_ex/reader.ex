@@ -201,7 +201,7 @@ defmodule SparkEx.Reader do
   """
   @spec csv(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
   def csv(session, paths, opts \\ []) do
-    {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator])
+    {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator, :sep])
     extra_options = Keyword.get(rest, :options, %{})
 
     options =
@@ -210,6 +210,7 @@ defmodule SparkEx.Reader do
         {:header, v}, acc -> Map.put(acc, "header", to_string(v))
         {:infer_schema, v}, acc -> Map.put(acc, "inferSchema", to_string(v))
         {:separator, v}, acc -> Map.put(acc, "sep", v)
+        {:sep, v}, acc -> Map.put(acc, "sep", v)
       end)
 
     data_source(session, "csv", paths, Keyword.put(rest, :options, options))

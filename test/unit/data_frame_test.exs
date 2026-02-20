@@ -175,20 +175,20 @@ defmodule SparkEx.DataFrameTest do
   end
 
   describe "col_regex/2" do
-    test "creates project plan with col regex" do
+    test "returns Column with col_regex expression" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.col_regex(df, "^name_.*")
 
-      assert %DataFrame{plan: {:project, {:sql, _, _}, [{:col_regex, "^name_.*"}]}} = result
+      assert %SparkEx.Column{expr: {:col_regex, "^name_.*"}} = result
     end
   end
 
   describe "metadata_column/2" do
-    test "creates project plan with metadata column" do
+    test "returns Column with metadata_col expression" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
       result = DataFrame.metadata_column(df, "_metadata")
 
-      assert %DataFrame{plan: {:project, {:sql, _, _}, [{:metadata_col, "_metadata"}]}} = result
+      assert %SparkEx.Column{expr: {:metadata_col, "_metadata"}} = result
     end
   end
 

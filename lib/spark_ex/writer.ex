@@ -229,7 +229,7 @@ defmodule SparkEx.Writer do
   """
   @spec csv(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def csv(df, path, opts \\ []) do
-    {csv_opts, rest} = Keyword.split(opts, [:header, :separator])
+    {csv_opts, rest} = Keyword.split(opts, [:header, :separator, :sep])
     {write_opts, exec_opts} = Keyword.split(rest, [:mode, :options, :partition_by])
 
     extra_options =
@@ -237,6 +237,7 @@ defmodule SparkEx.Writer do
       |> Enum.reduce(%{}, fn
         {:header, v}, acc -> Map.put(acc, "header", to_string(v))
         {:separator, v}, acc -> Map.put(acc, "sep", v)
+        {:sep, v}, acc -> Map.put(acc, "sep", v)
       end)
 
     writer =
