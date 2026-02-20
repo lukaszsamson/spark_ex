@@ -44,7 +44,7 @@ defmodule SparkEx.GroupedData do
       |> DataFrame.group_by(["department"])
       |> SparkEx.GroupedData.agg([sum(col("salary")), avg(col("age"))])
   """
-  @spec agg(t(), [Column.t()]) :: DataFrame.t()
+  @spec agg(t(), [Column.t()] | map()) :: DataFrame.t()
   def agg(%__MODULE__{} = gd, agg_columns) when is_list(agg_columns) do
     if agg_columns == [] do
       raise ArgumentError, "expected at least one aggregate column"

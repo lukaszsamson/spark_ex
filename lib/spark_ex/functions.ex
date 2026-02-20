@@ -82,7 +82,7 @@ defmodule SparkEx.Functions do
   @doc """
   Builds a named argument expression.
   """
-  @spec named_arg(String.t(), Column.t() | term()) :: Column.t()
+  @spec named_arg(String.t(), term()) :: Column.t()
   def named_arg(key, %Column{expr: expr}) when is_binary(key) do
     %Column{expr: {:named_arg, key, expr}}
   end
@@ -94,7 +94,7 @@ defmodule SparkEx.Functions do
   @doc """
   Calls a function with positional and named arguments.
   """
-  @spec call_function(String.t(), [Column.t() | term()], keyword()) :: Column.t()
+  @spec call_function(String.t(), list(), list()) :: Column.t()
   def call_function(name, args \\ [], named_args \\ [])
       when is_binary(name) and is_list(args) and is_list(named_args) do
     arg_exprs = Enum.map(args, &normalize_expr_arg/1)

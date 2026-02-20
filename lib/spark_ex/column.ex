@@ -34,17 +34,21 @@ defmodule SparkEx.Column do
           | {:metadata_col, String.t(), term()}
           | {:fn, String.t(), [expr()], boolean()}
           | {:alias, expr(), String.t()}
+          | {:alias, expr(), String.t(), String.t()}
           | {:sort_order, expr(), :asc | :desc, :nulls_first | :nulls_last | nil}
           | {:cast, expr(), String.t() | Spark.Connect.DataType.t()}
           | {:cast, expr(), String.t() | Spark.Connect.DataType.t(), :try}
           | {:star}
           | {:star, String.t()}
           | {:star, String.t() | nil, term()}
+          | {:outer, expr()}
           | {:window, expr(), [expr()], [expr()], term()}
           | {:unresolved_extract_value, expr(), expr()}
           | {:update_fields, expr(), String.t(), expr() | nil}
           | {:lambda, expr(), [{:lambda_var, String.t()}]}
           | {:lambda_var, String.t()}
+          | {:named_arg, String.t(), expr()}
+          | {:call_function, String.t(), [expr()]}
           | {:subquery, atom(), term(), keyword()}
 
   # ── Generated binary operators ──
@@ -404,22 +408,6 @@ defmodule SparkEx.Column do
 
   defp binary_fn(name, %__MODULE__{} = left, %__MODULE__{} = right) do
     %__MODULE__{expr: {:fn, name, [left.expr, right.expr], false}}
-  end
-
-  defp binary_fn(name, left, right) when is_number(left) do
-    binary_fn(name, %__MODULE__{expr: {:lit, left}}, right)
-  end
-
-  defp binary_fn(name, left, right) when is_number(right) do
-    binary_fn(name, left, %__MODULE__{expr: {:lit, right}})
-  end
-
-  defp binary_fn(name, left, %__MODULE__{} = right) do
-    binary_fn(name, %__MODULE__{expr: {:lit, left}}, right)
-  end
-
-  defp binary_fn(name, %__MODULE__{} = left, right) do
-    binary_fn(name, left, %__MODULE__{expr: {:lit, right}})
   end
 
   defp coerce_expr(%__MODULE__{expr: e}), do: e

@@ -19,7 +19,7 @@ defmodule SparkEx.Observation do
   @doc """
   Creates a named observation. When called with no arguments, generates a UUID name.
   """
-  @spec new(String.t()) :: t()
+  @spec new(String.t() | nil) :: t()
   def new(name \\ nil)
 
   def new(nil) do

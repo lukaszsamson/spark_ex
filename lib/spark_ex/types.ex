@@ -47,7 +47,12 @@ defmodule SparkEx.Types do
           | :geometry
           | :geography
 
-  @type field :: %{name: String.t(), type: spark_type(), nullable: boolean()}
+  @type field :: %{
+          name: String.t(),
+          type: term(),
+          nullable: boolean(),
+          metadata: term()
+        }
   @type struct_type :: {:struct, [field()]}
 
   @doc """
@@ -79,7 +84,7 @@ defmodule SparkEx.Types do
       struct_field("name", :string, nullable: false)
       struct_field("tags", :string, metadata: %{"comment" => "user tags"})
   """
-  @spec struct_field(String.t(), spark_type(), keyword()) :: field()
+  @spec struct_field(String.t(), term(), keyword()) :: field()
   def struct_field(name, type, opts \\ []) when is_binary(name) do
     %{
       name: name,

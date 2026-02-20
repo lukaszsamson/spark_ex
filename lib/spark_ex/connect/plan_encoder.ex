@@ -1439,9 +1439,6 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
-  defp encode_cast_to_type(type) when is_binary(type), do: {:type_str, type}
-  defp encode_cast_to_type(%DataType{} = type), do: {:type, type}
-
   # --- Window expression ---
 
   def encode_expression({:window, fn_expr, partition_spec, order_spec, frame_spec}) do
@@ -2447,6 +2444,9 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_literal_expression(value) do
     %Expression{expr_type: {:literal, encode_literal(value)}}
   end
+
+  defp encode_cast_to_type(type) when is_binary(type), do: {:type_str, type}
+  defp encode_cast_to_type(%DataType{} = type), do: {:type, type}
 
   defp encode_sql_argument(%Column{expr: expr}) do
     encode_expression(expr)
