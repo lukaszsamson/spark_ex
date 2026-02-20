@@ -709,7 +709,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :misc, doc: "Calls a JVM method."},
       {:try_reflect, "try_reflect", :n_col,
        group: :misc, doc: "Try to call a JVM method, returns null on failure."}
-    ] ++ hll_functions() ++ bitmap_functions()
+    ] ++ hll_functions() ++ theta_sketch_functions() ++ kll_sketch_functions() ++ bitmap_functions() ++ geospatial_functions()
   end
 
   defp hll_functions do
@@ -722,6 +722,61 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :sketch, doc: "Unions two HLL sketches."},
       {:hll_union_agg, "hll_union_agg", {:col_opt, [allow_different_lg_config_k: nil]},
        group: :sketch, doc: "Aggregate union of HLL sketches."}
+    ]
+  end
+
+  defp theta_sketch_functions do
+    [
+      {:theta_sketch_agg, "theta_sketch_agg", {:col_opt, [lg_k: nil, seed: nil]},
+       group: :sketch, doc: "Aggregates values into a theta sketch."},
+      {:theta_sketch_estimate, "theta_sketch_estimate", :one_col,
+       group: :sketch, doc: "Estimates distinct count from a theta sketch."},
+      {:theta_union, "theta_union", {:col_opt, [lg_k: nil, seed: nil]},
+       group: :sketch, doc: "Unions two theta sketches."},
+      {:theta_union_agg, "theta_union_agg", {:col_opt, [lg_k: nil, seed: nil]},
+       group: :sketch, doc: "Aggregate union of theta sketches."},
+      {:theta_intersection_agg, "theta_intersection_agg", {:col_opt, [seed: nil]},
+       group: :sketch, doc: "Aggregate intersection of theta sketches."},
+      {:theta_intersection, "theta_intersection", {:col_opt, [seed: nil]},
+       group: :sketch, doc: "Intersects two theta sketches."},
+      {:theta_difference, "theta_difference", {:col_opt, [seed: nil]},
+       group: :sketch, doc: "Computes difference of two theta sketches."}
+    ]
+  end
+
+  defp kll_sketch_functions do
+    kll_types = ["bigint", "float", "double"]
+
+    Enum.flat_map(kll_types, fn type ->
+      [
+        {:"kll_sketch_agg_#{type}", "kll_sketch_agg_#{type}", {:col_opt, [k: nil]},
+         group: :sketch, doc: "Aggregates #{type} values into a KLL sketch."},
+        {:"kll_sketch_to_string_#{type}", "kll_sketch_to_string_#{type}", :one_col,
+         group: :sketch, doc: "Converts a KLL sketch (#{type}) to a string."},
+        {:"kll_sketch_get_n_#{type}", "kll_sketch_get_n_#{type}", :one_col,
+         group: :sketch, doc: "Returns n (number of items) from a KLL sketch (#{type})."},
+        {:"kll_sketch_merge_#{type}", "kll_sketch_merge_#{type}", {:col_opt, [k: nil]},
+         group: :sketch, doc: "Merges KLL sketches (#{type})."},
+        {:"kll_sketch_get_quantile_#{type}", "kll_sketch_get_quantile_#{type}", {:col_lit, 1},
+         group: :sketch, doc: "Gets quantile from a KLL sketch (#{type})."},
+        {:"kll_sketch_get_rank_#{type}", "kll_sketch_get_rank_#{type}", {:col_lit, 1},
+         group: :sketch, doc: "Gets rank from a KLL sketch (#{type})."}
+      ]
+    end)
+  end
+
+  defp geospatial_functions do
+    [
+      {:st_asbinary, "ST_AsBinary", :one_col,
+       group: :geospatial, doc: "Converts geometry/geography to WKB binary."},
+      {:st_geogfromwkb, "ST_GeogFromWKB", :one_col,
+       group: :geospatial, doc: "Creates geography from WKB binary."},
+      {:st_geomfromwkb, "ST_GeomFromWKB", :one_col,
+       group: :geospatial, doc: "Creates geometry from WKB binary."},
+      {:st_setsrid, "ST_SetSRID", {:col_lit, 1},
+       group: :geospatial, doc: "Sets the SRID of a geometry."},
+      {:st_srid, "ST_SRID", :one_col,
+       group: :geospatial, doc: "Returns the SRID of a geometry."}
     ]
   end
 

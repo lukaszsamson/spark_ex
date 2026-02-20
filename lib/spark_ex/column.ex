@@ -314,6 +314,12 @@ defmodule SparkEx.Column do
     cast(col, type_str)
   end
 
+  @doc "Marks this column for lateral join / generator context."
+  @spec outer(t()) :: t()
+  def outer(%__MODULE__{} = col) do
+    %__MODULE__{expr: {:outer, col.expr}}
+  end
+
   # ── Private helpers ──
 
   defp binary_fn(name, %__MODULE__{} = left, %__MODULE__{} = right) do

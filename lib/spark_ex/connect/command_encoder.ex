@@ -165,6 +165,46 @@ defmodule SparkEx.Connect.CommandEncoder do
     {command, counter}
   end
 
+  # --- SqlCommand ---
+
+  def encode_command({:sql_command, query, args}, counter) do
+    sql_cmd =
+      case args do
+        args when is_map(args) and map_size(args) > 0 ->
+          named =
+            Map.new(args, fn {k, v} ->
+              {to_string(k), PlanEncoder.encode_expression({:lit, v})}
+            end)
+
+          %Spark.Connect.SqlCommand{sql: query, named_arguments: named}
+
+        args when is_list(args) and length(args) > 0 ->
+          pos =
+            Enum.map(args, fn v ->
+              %Expression{expr_type: {:literal, lit}} = PlanEncoder.encode_expression({:lit, v})
+              lit
+            end)
+
+          %Spark.Connect.SqlCommand{sql: query, pos_args: pos}
+
+        _ ->
+          %Spark.Connect.SqlCommand{sql: query}
+      end
+
+    command = %Command{command_type: {:sql_command, sql_cmd}}
+    {command, counter}
+  end
+
+  # --- GetResourcesCommand ---
+
+  def encode_command({:get_resources_command}, counter) do
+    command = %Command{
+      command_type: {:get_resources_command, %Spark.Connect.GetResourcesCommand{}}
+    }
+
+    {command, counter}
+  end
+
   # --- RegisterJavaUDF ---
 
   def encode_command({:register_java_udf, name, class_name, return_type, aggregate}, counter) do

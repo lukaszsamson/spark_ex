@@ -1000,6 +1000,56 @@ defmodule SparkEx.DataFrame do
     df |> group_by([]) |> SparkEx.GroupedData.agg(exprs)
   end
 
+  @doc """
+  Parses string columns in the DataFrame as CSV or JSON.
+
+  ## Parameters
+
+  - `format` — `:csv` or `:json`
+  - `schema` — DDL string or struct type for the output schema (optional)
+  - `options` — map of parse options (optional)
+
+  ## Examples
+
+      df |> DataFrame.parse(:csv, "a INT, b STRING")
+      df |> DataFrame.parse(:json, "a INT, b STRING", %{"mode" => "FAILFAST"})
+  """
+  @spec parse(t(), :csv | :json, String.t() | SparkEx.Types.struct_type() | nil, map() | nil) ::
+          t()
+  def parse(%__MODULE__{} = df, format, schema \\ nil, options \\ nil)
+      when format in [:csv, :json] do
+    %__MODULE__{df | plan: {:parse, df.plan, format, schema, options}}
+  end
+
+  @doc """
+  Converts each row to a JSON string, returning a single-column DataFrame.
+
+  Equivalent to PySpark's `DataFrame.toJSON()`.
+
+  ## Examples
+
+      df |> DataFrame.to_json_rows()
+  """
+  @spec to_json_rows(t()) :: t()
+  def to_json_rows(%__MODULE__{} = df) do
+    to_json_expr = {:fn, "to_json", [{:fn, "struct", [{:star}], false}], false}
+    %__MODULE__{df | plan: {:project, df.plan, [{:alias, to_json_expr, "value"}]}}
+  end
+
+  @doc """
+  Repartitions by partition ID using `DirectShufflePartitionID`.
+
+  ## Examples
+
+      df |> DataFrame.repartition_by_id(col("partition_col"))
+  """
+  @spec repartition_by_id(t(), Column.t() | String.t() | atom()) :: t()
+  def repartition_by_id(%__MODULE__{} = df, col) do
+    col_expr = normalize_column_expr(col)
+    shuffle_expr = {:direct_shuffle_partition_id, col_expr}
+    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, [shuffle_expr], nil}}
+  end
+
   @doc "Alias for `filter/2`."
   @spec where(t(), Column.t()) :: t()
   def where(%__MODULE__{} = df, condition), do: filter(df, condition)

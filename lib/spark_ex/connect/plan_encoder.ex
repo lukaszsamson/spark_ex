@@ -664,6 +664,46 @@ defmodule SparkEx.Connect.PlanEncoder do
     {relation, counter}
   end
 
+  # --- Parse (CSV/JSON parsing within DataFrames) ---
+
+  def encode_relation({:parse, child_plan, format, schema, options}, counter) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    format_enum =
+      case format do
+        :csv -> :PARSE_FORMAT_CSV
+        :json -> :PARSE_FORMAT_JSON
+        _ -> :PARSE_FORMAT_UNSPECIFIED
+      end
+
+    schema_proto =
+      case schema do
+        nil -> nil
+        s -> encode_schema(s)
+      end
+
+    options_map =
+      case options do
+        nil -> %{}
+        opts when is_map(opts) -> Map.new(opts, fn {k, v} -> {to_string(k), to_string(v)} end)
+      end
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:parse,
+         %Spark.Connect.Parse{
+           input: child,
+           format: format_enum,
+           schema: schema_proto,
+           options: options_map
+         }}
+    }
+
+    {relation, counter}
+  end
+
   def encode_relation(
         {:sample, child_plan, lower_bound, upper_bound, with_replacement, seed,
          deterministic_order},
@@ -1403,6 +1443,28 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
+  def encode_expression({:direct_shuffle_partition_id, child_expr}) do
+    %Expression{
+      expr_type:
+        {:direct_shuffle_partition_id,
+         %Expression.DirectShufflePartitionID{
+           child: encode_expression(child_expr)
+         }}
+    }
+  end
+
+  def encode_expression({:outer, child_expr}) do
+    %Expression{
+      expr_type:
+        {:unresolved_function,
+         %Expression.UnresolvedFunction{
+           function_name: "outer",
+           arguments: [encode_expression(child_expr)],
+           is_distinct: false
+         }}
+    }
+  end
+
   # --- Subquery expression ---
   # The subquery expression references a plan via plan_id. The caller is responsible
   # for encoding the referenced plan and wrapping the root in {:with_relations, ...}.
@@ -1771,6 +1833,16 @@ defmodule SparkEx.Connect.PlanEncoder do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
     {exprs, plan_ids, refs, counter} = rewrite_expr_list(exprs, plan_ids, refs, counter)
     {{:repartition_by_expression, child_plan, exprs, num_partitions}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:parse, child_plan, format, schema, options},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:parse, child_plan, format, schema, options}, plan_ids, refs, counter}
   end
 
   defp rewrite_plan(

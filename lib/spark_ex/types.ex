@@ -44,6 +44,8 @@ defmodule SparkEx.Types do
           | {:map, spark_type(), spark_type()}
           | {:struct, [field()]}
           | :variant
+          | :geometry
+          | :geography
 
   @type field :: %{name: String.t(), type: spark_type(), nullable: boolean()}
   @type struct_type :: {:struct, [field()]}
@@ -174,6 +176,8 @@ defmodule SparkEx.Types do
   defp type_to_ddl({:array, element}), do: "ARRAY<#{type_to_ddl(element)}>"
   defp type_to_ddl({:map, key, value}), do: "MAP<#{type_to_ddl(key)}, #{type_to_ddl(value)}>"
   defp type_to_ddl(:variant), do: "VARIANT"
+  defp type_to_ddl(:geometry), do: "GEOMETRY"
+  defp type_to_ddl(:geography), do: "GEOGRAPHY"
 
   defp type_to_ddl({:struct, fields}) do
     inner =
@@ -220,6 +224,8 @@ defmodule SparkEx.Types do
   end
 
   defp type_to_json(:variant), do: "variant"
+  defp type_to_json(:geometry), do: "geometry"
+  defp type_to_json(:geography), do: "geography"
 
   defp type_to_json({:map, key, value}) do
     %{

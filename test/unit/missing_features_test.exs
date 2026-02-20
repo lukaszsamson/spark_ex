@@ -472,4 +472,248 @@ defmodule SparkEx.MissingFeaturesTest do
       assert %DataFrame{plan: {:repartition_by_expression, _, [{:col, "key"}], nil}} = result
     end
   end
+
+  # ── Theta sketch functions ──
+
+  describe "theta sketch functions" do
+    test "theta_sketch_agg/1" do
+      result = Functions.theta_sketch_agg(Functions.col("x"))
+      assert %Column{expr: {:fn, "theta_sketch_agg", [{:col, "x"}], false}} = result
+    end
+
+    test "theta_sketch_estimate/1" do
+      result = Functions.theta_sketch_estimate(Functions.col("sketch"))
+      assert %Column{expr: {:fn, "theta_sketch_estimate", [{:col, "sketch"}], false}} = result
+    end
+
+    test "theta_union/1" do
+      result = Functions.theta_union(Functions.col("sketch"))
+      assert %Column{expr: {:fn, "theta_union", [{:col, "sketch"}], false}} = result
+    end
+
+    test "theta_union_agg/1" do
+      result = Functions.theta_union_agg(Functions.col("sketch"))
+      assert %Column{expr: {:fn, "theta_union_agg", [{:col, "sketch"}], false}} = result
+    end
+
+    test "theta_intersection_agg/1" do
+      result = Functions.theta_intersection_agg(Functions.col("sketch"))
+      assert %Column{expr: {:fn, "theta_intersection_agg", [{:col, "sketch"}], false}} = result
+    end
+
+    test "theta_intersection/1" do
+      result = Functions.theta_intersection(Functions.col("sketch"))
+      assert %Column{expr: {:fn, "theta_intersection", [{:col, "sketch"}], false}} = result
+    end
+
+    test "theta_difference/1" do
+      result = Functions.theta_difference(Functions.col("sketch"))
+      assert %Column{expr: {:fn, "theta_difference", [{:col, "sketch"}], false}} = result
+    end
+  end
+
+  # ── KLL sketch functions ──
+
+  describe "KLL sketch functions" do
+    test "kll_sketch_agg_bigint/1" do
+      result = Functions.kll_sketch_agg_bigint(Functions.col("x"))
+      assert %Column{expr: {:fn, "kll_sketch_agg_bigint", [{:col, "x"}], false}} = result
+    end
+
+    test "kll_sketch_to_string_float/1" do
+      result = Functions.kll_sketch_to_string_float(Functions.col("sketch"))
+      assert %Column{expr: {:fn, "kll_sketch_to_string_float", [{:col, "sketch"}], false}} = result
+    end
+
+    test "kll_sketch_get_n_double/1" do
+      result = Functions.kll_sketch_get_n_double(Functions.col("sketch"))
+      assert %Column{expr: {:fn, "kll_sketch_get_n_double", [{:col, "sketch"}], false}} = result
+    end
+
+    test "kll_sketch_merge_bigint/1" do
+      result = Functions.kll_sketch_merge_bigint(Functions.col("sketch"))
+      assert %Column{expr: {:fn, "kll_sketch_merge_bigint", [{:col, "sketch"}], false}} = result
+    end
+
+    test "kll_sketch_get_quantile_float/2" do
+      result = Functions.kll_sketch_get_quantile_float(Functions.col("sketch"), 0.5)
+      assert %Column{expr: {:fn, "kll_sketch_get_quantile_float", [{:col, "sketch"}, {:lit, 0.5}], false}} = result
+    end
+
+    test "kll_sketch_get_rank_double/2" do
+      result = Functions.kll_sketch_get_rank_double(Functions.col("sketch"), 42)
+      assert %Column{expr: {:fn, "kll_sketch_get_rank_double", [{:col, "sketch"}, {:lit, 42}], false}} = result
+    end
+  end
+
+  # ── Geospatial functions ──
+
+  describe "geospatial functions" do
+    test "st_asbinary/1" do
+      result = Functions.st_asbinary(Functions.col("geom"))
+      assert %Column{expr: {:fn, "ST_AsBinary", [{:col, "geom"}], false}} = result
+    end
+
+    test "st_geogfromwkb/1" do
+      result = Functions.st_geogfromwkb(Functions.col("wkb"))
+      assert %Column{expr: {:fn, "ST_GeogFromWKB", [{:col, "wkb"}], false}} = result
+    end
+
+    test "st_geomfromwkb/1" do
+      result = Functions.st_geomfromwkb(Functions.col("wkb"))
+      assert %Column{expr: {:fn, "ST_GeomFromWKB", [{:col, "wkb"}], false}} = result
+    end
+
+    test "st_setsrid/2" do
+      result = Functions.st_setsrid(Functions.col("geom"), 4326)
+      assert %Column{expr: {:fn, "ST_SetSRID", [{:col, "geom"}, {:lit, 4326}], false}} = result
+    end
+
+    test "st_srid/1" do
+      result = Functions.st_srid(Functions.col("geom"))
+      assert %Column{expr: {:fn, "ST_SRID", [{:col, "geom"}], false}} = result
+    end
+  end
+
+  # ── Geospatial types ──
+
+  describe "geospatial types" do
+    test ":geometry type DDL" do
+      schema = Types.struct_type([Types.struct_field("g", :geometry)])
+      assert Types.to_ddl(schema) == "g GEOMETRY"
+    end
+
+    test ":geography type DDL" do
+      schema = Types.struct_type([Types.struct_field("g", :geography)])
+      assert Types.to_ddl(schema) == "g GEOGRAPHY"
+    end
+
+    test ":geometry type JSON" do
+      schema = Types.struct_type([Types.struct_field("g", :geometry)])
+      json = Types.to_json(schema)
+      assert json =~ "\"type\":\"geometry\""
+    end
+
+    test ":geography type JSON" do
+      schema = Types.struct_type([Types.struct_field("g", :geography)])
+      json = Types.to_json(schema)
+      assert json =~ "\"type\":\"geography\""
+    end
+  end
+
+  # ── DataFrame.to_json_rows ──
+
+  describe "DataFrame.to_json_rows/1" do
+    test "creates project with to_json(struct(*))" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      result = DataFrame.to_json_rows(df)
+
+      assert %DataFrame{
+               plan:
+                 {:project, _,
+                  [{:alias, {:fn, "to_json", [{:fn, "struct", [{:star}], false}], false}, "value"}]}
+             } = result
+    end
+  end
+
+  # ── DataFrame.repartition_by_id ──
+
+  describe "DataFrame.repartition_by_id/2" do
+    test "creates repartition with DirectShufflePartitionID" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      result = DataFrame.repartition_by_id(df, Functions.col("part"))
+
+      assert %DataFrame{
+               plan:
+                 {:repartition_by_expression, _,
+                  [{:direct_shuffle_partition_id, {:col, "part"}}], nil}
+             } = result
+    end
+  end
+
+  # ── Column.outer ──
+
+  describe "Column.outer/1" do
+    test "marks column for lateral join context" do
+      col = Functions.col("x")
+      result = Column.outer(col)
+      assert %Column{expr: {:outer, {:col, "x"}}} = result
+    end
+  end
+
+  # ── DataFrame.parse ──
+
+  describe "DataFrame.parse/3" do
+    test "creates parse plan for CSV" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      result = DataFrame.parse(df, :csv, "a INT, b STRING")
+      assert %DataFrame{plan: {:parse, _, :csv, "a INT, b STRING", nil}} = result
+    end
+
+    test "creates parse plan for JSON with options" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      result = DataFrame.parse(df, :json, "a INT", %{"mode" => "FAILFAST"})
+      assert %DataFrame{plan: {:parse, _, :json, "a INT", %{"mode" => "FAILFAST"}}} = result
+    end
+  end
+
+  # ── Plan encoder: Parse relation ──
+
+  describe "PlanEncoder: parse relation" do
+    alias SparkEx.Connect.PlanEncoder
+
+    test "encodes parse relation" do
+      plan = {:parse, {:sql, "SELECT 1", nil}, :csv, "a INT", %{"sep" => "|"}}
+      {encoded, _counter} = PlanEncoder.encode(plan, 0)
+
+      assert %Spark.Connect.Plan{op_type: {:root, relation}} = encoded
+      assert %Spark.Connect.Relation{rel_type: {:parse, parse}} = relation
+      assert parse.format == :PARSE_FORMAT_CSV
+      assert parse.options == %{"sep" => "|"}
+    end
+  end
+
+  # ── Plan encoder: DirectShufflePartitionID ──
+
+  describe "PlanEncoder: DirectShufflePartitionID" do
+    alias SparkEx.Connect.PlanEncoder
+
+    test "encodes direct_shuffle_partition_id expression" do
+      expr = {:direct_shuffle_partition_id, {:col, "part"}}
+      result = PlanEncoder.encode_expression(expr)
+
+      assert %Spark.Connect.Expression{
+               expr_type:
+                 {:direct_shuffle_partition_id,
+                  %Spark.Connect.Expression.DirectShufflePartitionID{child: child}}
+             } = result
+
+      assert child.expr_type != nil
+    end
+  end
+
+  # ── Command encoder: sql_command ──
+
+  describe "CommandEncoder: sql_command" do
+    alias SparkEx.Connect.CommandEncoder
+
+    test "encodes sql_command without args" do
+      {plan, _counter} = CommandEncoder.encode({:sql_command, "CREATE TABLE t (a INT)", nil}, 0)
+      assert %Spark.Connect.Plan{op_type: {:command, command}} = plan
+      assert %Spark.Connect.Command{command_type: {:sql_command, sql_cmd}} = command
+      assert sql_cmd.sql == "CREATE TABLE t (a INT)"
+    end
+  end
+
+  # ── Command encoder: get_resources_command ──
+
+  describe "CommandEncoder: get_resources_command" do
+    alias SparkEx.Connect.CommandEncoder
+
+    test "encodes get_resources_command" do
+      {plan, _counter} = CommandEncoder.encode({:get_resources_command}, 0)
+      assert %Spark.Connect.Plan{op_type: {:command, command}} = plan
+      assert %Spark.Connect.Command{command_type: {:get_resources_command, _}} = command
+    end
+  end
 end
