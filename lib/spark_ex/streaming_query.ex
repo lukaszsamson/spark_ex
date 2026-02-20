@@ -128,15 +128,15 @@ defmodule SparkEx.StreamingQuery do
   end
 
   @doc """
-  Returns a list of recent progress reports as parsed maps.
+  Returns a list of recent progress reports as JSON strings.
   """
-  @spec recent_progress(t()) :: {:ok, [map()]} | {:error, term()}
+  @spec recent_progress(t()) :: {:ok, [String.t()]} | {:error, term()}
   def recent_progress(%__MODULE__{} = query) do
     case execute_command(query, {:recent_progress}) do
       {:ok, {:streaming_query, result}} ->
         case result.result_type do
           {:recent_progress, rp} ->
-            {:ok, Enum.map(rp.recent_progress_json, &parse_progress_json/1)}
+            {:ok, rp.recent_progress_json}
 
           other ->
             {:error, {:unexpected_result, other}}
@@ -148,9 +148,9 @@ defmodule SparkEx.StreamingQuery do
   end
 
   @doc """
-  Returns the most recent progress report as a parsed map, or nil.
+  Returns the most recent progress report as a JSON string, or nil.
   """
-  @spec last_progress(t()) :: {:ok, map() | nil} | {:error, term()}
+  @spec last_progress(t()) :: {:ok, String.t() | nil} | {:error, term()}
   def last_progress(%__MODULE__{} = query) do
     case execute_command(query, {:last_progress}) do
       {:ok, {:streaming_query, result}} ->
@@ -158,7 +158,7 @@ defmodule SparkEx.StreamingQuery do
           {:recent_progress, rp} ->
             case List.last(rp.recent_progress_json) do
               nil -> {:ok, nil}
-              json -> {:ok, parse_progress_json(json)}
+              json -> {:ok, json}
             end
 
           other ->
@@ -243,10 +243,6 @@ defmodule SparkEx.StreamingQuery do
       {:streaming_query_command, query.query_id, query.run_id, cmd_type},
       opts
     )
-  end
-
-  defp parse_progress_json(json) when is_binary(json) do
-    Jason.decode!(json)
   end
 
   # PySpark strips the Java exception type prefix from the message.

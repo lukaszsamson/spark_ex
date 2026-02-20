@@ -292,8 +292,14 @@ defmodule SparkEx.Functions do
   @doc """
   Random value in [0, 1). Always generates a seed when none given.
   """
-  @spec rand(integer() | nil) :: Column.t()
-  def rand(seed \\ nil) do
+  @spec rand(integer() | nil | keyword()) :: Column.t()
+  def rand(seed \\ nil)
+
+  def rand(opts) when is_list(opts) do
+    rand(Keyword.get(opts, :seed))
+  end
+
+  def rand(seed) when is_integer(seed) or is_nil(seed) do
     seed = seed || :rand.uniform(9_223_372_036_854_775_807)
     %Column{expr: {:fn, "rand", [{:lit, seed}], false}}
   end
@@ -301,8 +307,14 @@ defmodule SparkEx.Functions do
   @doc """
   Random value from standard normal distribution. Always generates a seed when none given.
   """
-  @spec randn(integer() | nil) :: Column.t()
-  def randn(seed \\ nil) do
+  @spec randn(integer() | nil | keyword()) :: Column.t()
+  def randn(seed \\ nil)
+
+  def randn(opts) when is_list(opts) do
+    randn(Keyword.get(opts, :seed))
+  end
+
+  def randn(seed) when is_integer(seed) or is_nil(seed) do
     seed = seed || :rand.uniform(9_223_372_036_854_775_807)
     %Column{expr: {:fn, "randn", [{:lit, seed}], false}}
   end

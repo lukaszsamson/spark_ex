@@ -1775,6 +1775,12 @@ defmodule SparkEx.Connect.PlanEncoder do
     {{:drop, child_plan, column_names}, plan_ids, refs, counter}
   end
 
+  defp rewrite_plan({:drop, child_plan, column_names, col_exprs}, plan_ids, refs, counter) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {col_exprs, plan_ids, refs, counter} = rewrite_expr_list(col_exprs, plan_ids, refs, counter)
+    {{:drop, child_plan, column_names, col_exprs}, plan_ids, refs, counter}
+  end
+
   defp rewrite_plan(
          {:show_string, child_plan, num_rows, truncate, vertical},
          plan_ids,
