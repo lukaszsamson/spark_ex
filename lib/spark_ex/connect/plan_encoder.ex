@@ -2712,27 +2712,59 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp encode_literal({:array, elements}) when is_list(elements) do
+    element_type = infer_collection_element_type(elements)
+
     %Expression.Literal{
       literal_type:
-        {:array, %Expression.Literal.Array{elements: Enum.map(elements, &encode_literal/1)}}
+        {:array,
+         %Expression.Literal.Array{
+           element_type: element_type,
+           elements: Enum.map(elements, &encode_literal/1)
+         }}
     }
   end
 
   defp encode_literal({:map, map}) when is_map(map) do
+    key_type = infer_collection_element_type(Map.keys(map))
+    value_type = infer_collection_element_type(Map.values(map))
+
     {keys, values} =
       map
       |> Enum.map(fn {k, v} -> {encode_literal(k), encode_literal(v)} end)
       |> Enum.unzip()
 
     %Expression.Literal{
-      literal_type: {:map, %Expression.Literal.Map{keys: keys, values: values}}
+      literal_type:
+        {:map,
+         %Expression.Literal.Map{
+           key_type: key_type,
+           value_type: value_type,
+           keys: keys,
+           values: values
+         }}
     }
   end
 
   defp encode_literal({:struct, elements}) when is_list(elements) do
+    fields =
+      Enum.with_index(elements, 1)
+      |> Enum.map(fn {value, idx} ->
+        %DataType.StructField{
+          name: "col#{idx}",
+          data_type: infer_literal_data_type(value),
+          nullable: is_nil(value)
+        }
+      end)
+
+    struct_type = %DataType{kind: {:struct, %DataType.Struct{fields: fields}}}
+
     %Expression.Literal{
       literal_type:
-        {:struct, %Expression.Literal.Struct{elements: Enum.map(elements, &encode_literal/1)}}
+        {:struct,
+         %Expression.Literal.Struct{
+           struct_type: struct_type,
+           elements: Enum.map(elements, &encode_literal/1)
+         }}
     }
   end
 
@@ -2864,6 +2896,138 @@ defmodule SparkEx.Connect.PlanEncoder do
          %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:long, n}}}}}
     }
   end
+
+  defp infer_collection_element_type([]), do: null_data_type()
+
+  defp infer_collection_element_type(values) do
+    values
+    |> Enum.map(&infer_literal_data_type/1)
+    |> Enum.reduce(&merge_literal_data_types/2)
+  end
+
+  defp infer_literal_data_type(nil), do: null_data_type()
+  defp infer_literal_data_type(true), do: %DataType{kind: {:boolean, %DataType.Boolean{}}}
+  defp infer_literal_data_type(false), do: %DataType{kind: {:boolean, %DataType.Boolean{}}}
+
+  defp infer_literal_data_type(v)
+       when is_integer(v) and v >= -2_147_483_648 and v <= 2_147_483_647 do
+    %DataType{kind: {:integer, %DataType.Integer{}}}
+  end
+
+  defp infer_literal_data_type(v) when is_integer(v),
+    do: %DataType{kind: {:long, %DataType.Long{}}}
+
+  defp infer_literal_data_type(v) when is_float(v),
+    do: %DataType{kind: {:double, %DataType.Double{}}}
+
+  defp infer_literal_data_type(%Decimal{} = d) do
+    infer_literal_data_type({:decimal, Decimal.to_string(d)})
+  end
+
+  defp infer_literal_data_type({:decimal, value}) when is_binary(value) do
+    {precision, scale} = infer_decimal_precision_scale(value)
+    %DataType{kind: {:decimal, %DataType.Decimal{precision: precision, scale: scale}}}
+  end
+
+  defp infer_literal_data_type({:decimal, _value, precision, scale})
+       when is_integer(precision) and is_integer(scale) do
+    %DataType{kind: {:decimal, %DataType.Decimal{precision: precision, scale: scale}}}
+  end
+
+  defp infer_literal_data_type({:binary, _value}),
+    do: %DataType{kind: {:binary, %DataType.Binary{}}}
+
+  defp infer_literal_data_type({:calendar_interval, _months, _days, _micros}) do
+    %DataType{kind: {:calendar_interval, %DataType.CalendarInterval{}}}
+  end
+
+  defp infer_literal_data_type({:year_month_interval, _months}) do
+    %DataType{kind: {:year_month_interval, %DataType.YearMonthInterval{}}}
+  end
+
+  defp infer_literal_data_type({:day_time_interval, _micros}) do
+    %DataType{kind: {:day_time_interval, %DataType.DayTimeInterval{}}}
+  end
+
+  defp infer_literal_data_type({:array, elements}) when is_list(elements) do
+    %DataType{
+      kind:
+        {:array,
+         %DataType.Array{
+           element_type: infer_collection_element_type(elements),
+           contains_null: Enum.any?(elements, &is_nil/1)
+         }}
+    }
+  end
+
+  defp infer_literal_data_type({:map, map}) when is_map(map) do
+    %DataType{
+      kind:
+        {:map,
+         %DataType.Map{
+           key_type: infer_collection_element_type(Map.keys(map)),
+           value_type: infer_collection_element_type(Map.values(map)),
+           value_contains_null: Enum.any?(Map.values(map), &is_nil/1)
+         }}
+    }
+  end
+
+  defp infer_literal_data_type({:struct, elements}) when is_list(elements) do
+    fields =
+      Enum.with_index(elements, 1)
+      |> Enum.map(fn {value, idx} ->
+        %DataType.StructField{
+          name: "col#{idx}",
+          data_type: infer_literal_data_type(value),
+          nullable: is_nil(value)
+        }
+      end)
+
+    %DataType{kind: {:struct, %DataType.Struct{fields: fields}}}
+  end
+
+  defp infer_literal_data_type(v) when is_binary(v),
+    do: %DataType{kind: {:string, %DataType.String{}}}
+
+  defp infer_literal_data_type(%Date{}), do: %DataType{kind: {:date, %DataType.Date{}}}
+
+  defp infer_literal_data_type(%DateTime{}),
+    do: %DataType{kind: {:timestamp, %DataType.Timestamp{}}}
+
+  defp infer_literal_data_type(%NaiveDateTime{}),
+    do: %DataType{kind: {:timestamp_ntz, %DataType.TimestampNTZ{}}}
+
+  defp infer_literal_data_type(%Time{}), do: %DataType{kind: {:time, %DataType.Time{}}}
+  defp infer_literal_data_type(_), do: %DataType{kind: {:string, %DataType.String{}}}
+
+  defp merge_literal_data_types(%DataType{kind: {:null, _}}, right), do: right
+  defp merge_literal_data_types(left, %DataType{kind: {:null, _}}), do: left
+
+  defp merge_literal_data_types(
+         %DataType{kind: {:integer, _}},
+         %DataType{kind: {:long, _}}
+       ),
+       do: %DataType{kind: {:long, %DataType.Long{}}}
+
+  defp merge_literal_data_types(
+         %DataType{kind: {:long, _}},
+         %DataType{kind: {:integer, _}}
+       ),
+       do: %DataType{kind: {:long, %DataType.Long{}}}
+
+  defp merge_literal_data_types(%DataType{kind: {:double, _}} = left, %DataType{kind: {tag, _}})
+       when tag in [:integer, :long, :double],
+       do: left
+
+  defp merge_literal_data_types(%DataType{kind: {tag, _}}, %DataType{kind: {:double, _}} = right)
+       when tag in [:integer, :long, :double],
+       do: right
+
+  defp merge_literal_data_types(left, right) do
+    if left == right, do: left, else: left
+  end
+
+  defp null_data_type, do: %DataType{kind: {:null, %DataType.NULL{}}}
 
   # Infers precision and scale from a decimal string value.
   # Matches PySpark's behavior of computing from the actual value.

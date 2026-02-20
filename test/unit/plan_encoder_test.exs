@@ -135,14 +135,94 @@ defmodule SparkEx.Connect.PlanEncoderTest do
              } =
                PlanEncoder.encode_expression({:lit, {:binary, <<1, 2>>}})
 
-      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:array, _}}}} =
-               PlanEncoder.encode_expression({:lit, {:array, [1, 2]}})
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:array,
+                       %Expression.Literal.Array{
+                         element_type: %Spark.Connect.DataType{kind: {:integer, _}},
+                         elements: [_ | _]
+                       }}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, {:array, [1, 2]}})
 
-      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:map, _}}}} =
-               PlanEncoder.encode_expression({:lit, {:map, %{1 => 2}}})
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:map,
+                       %Expression.Literal.Map{
+                         key_type: %Spark.Connect.DataType{kind: {:integer, _}},
+                         value_type: %Spark.Connect.DataType{kind: {:integer, _}},
+                         keys: [_ | _],
+                         values: [_ | _]
+                       }}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, {:map, %{1 => 2}}})
 
-      assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:struct, _}}}} =
-               PlanEncoder.encode_expression({:lit, {:struct, [1, "a"]}})
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:struct,
+                       %Expression.Literal.Struct{
+                         struct_type: %Spark.Connect.DataType{kind: {:struct, struct_type}},
+                         elements: [_ | _]
+                       }}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, {:struct, [1, "a"]}})
+
+      assert length(struct_type.fields) == 2
+      assert Enum.map(struct_type.fields, & &1.name) == ["col1", "col2"]
+    end
+
+    test "encodes empty complex literals with null type defaults" do
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:array,
+                       %Expression.Literal.Array{
+                         element_type: %Spark.Connect.DataType{kind: {:null, _}},
+                         elements: []
+                       }}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, {:array, []}})
+
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:map,
+                       %Expression.Literal.Map{
+                         key_type: %Spark.Connect.DataType{kind: {:null, _}},
+                         value_type: %Spark.Connect.DataType{kind: {:null, _}},
+                         keys: [],
+                         values: []
+                       }}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, {:map, %{}}})
+
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:struct,
+                       %Expression.Literal.Struct{
+                         struct_type: %Spark.Connect.DataType{kind: {:struct, struct_type}},
+                         elements: []
+                       }}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, {:struct, []}})
+
+      assert struct_type.fields == []
     end
 
     test "encodes interval literals" do
