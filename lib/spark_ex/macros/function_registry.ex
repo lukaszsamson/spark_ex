@@ -109,8 +109,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:try_avg, "try_avg", :one_col,
        group: :math, doc: "Try average, returns null on overflow."},
       {:product, "product", :one_col, group: :math, doc: "Computes product of all values."},
-      {:uniform, "uniform", {:col_lit, 2},
-       group: :math, doc: "Random value uniformly distributed in [min, max)."}
+      # uniform hand-written in functions.ex to support seed parameter
+      # {:uniform, ...} — see Functions.uniform/2,3
     ]
   end
 
@@ -230,24 +230,22 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :string, doc: "Validates UTF-8 and raises on invalid."},
       {:try_validate_utf8, "try_validate_utf8", :one_col,
        group: :string, doc: "Validates UTF-8 and returns null on invalid."},
-      {:randstr, "randstr", {:col_lit, 1},
-       group: :string, doc: "Generates random string of given length."},
-      {:parse_url, "parse_url", :three_col,
-       group: :string, doc: "Extracts a part of a URL."},
-      {:try_parse_url, "try_parse_url", :three_col,
-       group: :string, doc: "Try to extract a part of a URL, returns null on failure."},
+      # randstr hand-written in functions.ex to support seed parameter
+      # {:randstr, ...} — see Functions.randstr/2,3
+      # parse_url/try_parse_url hand-written in functions.ex to support optional key parameter
+      # {:parse_url, ...} — see Functions.parse_url/2,3
+      # {:try_parse_url, ...} — see Functions.try_parse_url/2,3
       {:quote_, "quote", :one_col,
        group: :string, doc: "Quotes a string for use in SQL."},
       {:contains_, "contains", :two_col,
        group: :string, doc: "Returns true if string contains substring."},
-      {:like_, "like", :two_col,
-       group: :string, doc: "SQL LIKE pattern match."},
-      {:ilike_, "ilike", :two_col,
-       group: :string, doc: "Case-insensitive LIKE."},
+      # like_/ilike_ hand-written in functions.ex to support escape character parameter
+      # {:like_, ...} — see Functions.like_/2,3
+      # {:ilike_, ...} — see Functions.ilike_/2,3
       {:rlike_, "rlike", :two_col,
        group: :string, doc: "Regex pattern match."},
-      {:substr_, "substr", :three_col,
-       group: :string, doc: "Returns substring from pos for len."}
+      # substr_ hand-written in functions.ex to support optional len parameter
+      # {:substr_, ...} — see Functions.substr_/2,3
     ]
   end
 
@@ -307,8 +305,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:to_timestamp_ntz, "to_timestamp_ntz", {:col_opt, [format: nil]},
        group: :datetime, doc: "Converts to timestamp without timezone."},
       # from_unixtime hand-written in functions.ex to always send default format
-      {:unix_timestamp, "unix_timestamp", {:col_opt, [format: nil]},
-       group: :datetime, doc: "Converts timestamp to unix seconds."},
+      # unix_timestamp hand-written in functions.ex to support zero-arg form
+      # {:unix_timestamp, ...} — see Functions.unix_timestamp/0,1,2
       {:to_unix_timestamp, "to_unix_timestamp", {:col_opt, [format: nil]},
        group: :datetime, doc: "Converts timestamp to unix seconds."},
       {:from_utc_timestamp, "from_utc_timestamp", {:col_lit, 1},
@@ -341,8 +339,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :datetime, doc: "Truncates time to specified unit."},
       {:make_date, "make_date", :three_col,
        group: :datetime, doc: "Creates date from year, month, day."},
-      {:convert_timezone, "convert_timezone", :three_col,
-       group: :datetime, doc: "Converts timestamp between timezones."},
+      # convert_timezone hand-written in functions.ex to support 2-arg form
+      # {:convert_timezone, ...} — see Functions.convert_timezone/2,3
       {:to_time, "to_time", {:col_opt, [format: nil]},
        group: :datetime, doc: "Converts to time type."},
       {:try_to_time, "try_to_time", {:col_opt, [format: nil]},
@@ -378,8 +376,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :collection, doc: "Returns min element of array."},
       {:array_size, "array_size", :one_col,
        group: :collection, doc: "Returns array size.", aliases: [:size, :cardinality]},
-      {:array_sort, "array_sort", :one_col,
-       group: :collection, doc: "Sorts array in ascending order."},
+      # array_sort hand-written in functions.ex to support comparator function
+      # {:array_sort, ...} — see Functions.array_sort/1,2
       {:array_union, "array_union", :two_col,
        group: :collection, doc: "Returns union of two arrays."},
       {:array_append, "array_append", :two_col,
@@ -468,7 +466,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       # {:approx_count_distinct, ...} — see Functions.approx_count_distinct/1,2
       {:approx_percentile, "approx_percentile", {:col_lit, 2},
        group: :aggregate, doc: "Approximate percentile with accuracy parameter."},
-      {:percentile, "percentile", {:col_lit, 1}, group: :aggregate, doc: "Exact percentile."},
+      # percentile hand-written in functions.ex to support frequency parameter and list of percentages
+      # {:percentile, ...} — see Functions.percentile/2,3
       {:corr, "corr", :two_col, group: :aggregate, doc: "Pearson correlation."},
       {:covar_pop, "covar_pop", :two_col, group: :aggregate, doc: "Population covariance."},
       {:covar_samp, "covar_samp", :two_col, group: :aggregate, doc: "Sample covariance."},
@@ -675,7 +674,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:current_user_, "current_user", :zero,
        group: :session, doc: "Returns current user name.", aliases: [:user_]},
       {:session_user_, "session_user", :zero, group: :session, doc: "Returns session user name."},
-      {:uuid, "uuid", :zero, group: :session, doc: "Generates a random UUID string."},
+      # uuid hand-written in functions.ex to support seed parameter
+      # {:uuid, ...} — see Functions.uuid/0,1
       {:version_, "version", :zero, group: :session, doc: "Returns Spark version string."}
     ]
   end

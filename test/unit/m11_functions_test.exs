@@ -320,7 +320,8 @@ defmodule SparkEx.M11.FunctionsTest do
 
     test "session: uuid/0" do
       result = Functions.uuid()
-      assert %Column{expr: {:fn, "uuid", [], false}} = result
+      assert %Column{expr: {:fn, "uuid", [{:lit, seed}], false}} = result
+      assert is_integer(seed)
     end
 
     test "session: current_catalog/0" do

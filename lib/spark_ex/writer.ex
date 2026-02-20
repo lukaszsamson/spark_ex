@@ -462,9 +462,6 @@ defmodule SparkEx.Writer do
         is_boolean(overwrite) ->
           mode(writer, if(overwrite, do: :overwrite, else: :append))
 
-        writer.mode == :error_if_exists ->
-          mode(writer, :append)
-
         true ->
           writer
       end

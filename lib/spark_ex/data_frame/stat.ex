@@ -102,6 +102,7 @@ defmodule SparkEx.DataFrame.Stat do
     validate_fractions!(fractions)
     col_expr = normalize_col_expr(col)
     frac_list = Enum.map(fractions, fn {k, v} -> {k, v / 1} end)
+    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
     %DataFrame{df | plan: {:stat_sample_by, df.plan, col_expr, frac_list, seed}}
   end
 

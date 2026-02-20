@@ -1259,6 +1259,178 @@ defmodule SparkEx.Functions do
     %Column{expr: {:fn, "to_xml", args, false}}
   end
 
+  # ── Additional hand-written functions (optional parameters, seed support, etc.) ──
+
+  @doc "Converts timestamp to unix seconds. Can be called with no args for current timestamp."
+  @spec unix_timestamp() :: Column.t()
+  def unix_timestamp do
+    %Column{expr: {:fn, "unix_timestamp", [], false}}
+  end
+
+  @spec unix_timestamp(Column.t() | String.t(), keyword()) :: Column.t()
+  def unix_timestamp(col, opts \\ []) do
+    format = Keyword.get(opts, :format)
+
+    args =
+      case format do
+        nil -> [to_expr(col)]
+        f -> [to_expr(col), lit_expr(f)]
+      end
+
+    %Column{expr: {:fn, "unix_timestamp", args, false}}
+  end
+
+  @doc "Converts timestamp between timezones. 2-arg form uses session timezone as source."
+  @spec convert_timezone(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
+  def convert_timezone(target_tz, source_ts) do
+    %Column{expr: {:fn, "convert_timezone", [to_expr(target_tz), to_expr(source_ts)], false}}
+  end
+
+  @spec convert_timezone(
+          Column.t() | String.t(),
+          Column.t() | String.t(),
+          Column.t() | String.t()
+        ) :: Column.t()
+  def convert_timezone(source_tz, target_tz, source_ts) do
+    %Column{
+      expr:
+        {:fn, "convert_timezone", [to_expr(source_tz), to_expr(target_tz), to_expr(source_ts)],
+         false}
+    }
+  end
+
+  @doc "Extracts a part of a URL. Optional key for query string extraction."
+  @spec parse_url(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t() | nil) ::
+          Column.t()
+  def parse_url(url, part, key \\ nil) do
+    args =
+      case key do
+        nil -> [to_expr(url), to_expr(part)]
+        k -> [to_expr(url), to_expr(part), to_expr(k)]
+      end
+
+    %Column{expr: {:fn, "parse_url", args, false}}
+  end
+
+  @doc "Try to extract a part of a URL, returns null on failure. Optional key for query string."
+  @spec try_parse_url(
+          Column.t() | String.t(),
+          Column.t() | String.t(),
+          Column.t() | String.t() | nil
+        ) :: Column.t()
+  def try_parse_url(url, part, key \\ nil) do
+    args =
+      case key do
+        nil -> [to_expr(url), to_expr(part)]
+        k -> [to_expr(url), to_expr(part), to_expr(k)]
+      end
+
+    %Column{expr: {:fn, "try_parse_url", args, false}}
+  end
+
+  @doc "Returns substring from pos. Optional len parameter."
+  @spec substr_(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t() | nil) ::
+          Column.t()
+  def substr_(str, pos, len \\ nil) do
+    args =
+      case len do
+        nil -> [to_expr(str), to_expr(pos)]
+        l -> [to_expr(str), to_expr(pos), to_expr(l)]
+      end
+
+    %Column{expr: {:fn, "substr", args, false}}
+  end
+
+  @doc "SQL LIKE pattern match. Optional escape character."
+  @spec like_(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t() | nil) ::
+          Column.t()
+  def like_(col, pattern, escape \\ nil) do
+    args =
+      case escape do
+        nil -> [to_expr(col), to_expr(pattern)]
+        e -> [to_expr(col), to_expr(pattern), to_expr(e)]
+      end
+
+    %Column{expr: {:fn, "like", args, false}}
+  end
+
+  @doc "Case-insensitive LIKE. Optional escape character."
+  @spec ilike_(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t() | nil) ::
+          Column.t()
+  def ilike_(col, pattern, escape \\ nil) do
+    args =
+      case escape do
+        nil -> [to_expr(col), to_expr(pattern)]
+        e -> [to_expr(col), to_expr(pattern), to_expr(e)]
+      end
+
+    %Column{expr: {:fn, "ilike", args, false}}
+  end
+
+  @doc "Sorts array in ascending order. Optional comparator function."
+  @spec array_sort(Column.t() | String.t()) :: Column.t()
+  def array_sort(col) do
+    %Column{expr: {:fn, "array_sort", [to_expr(col)], false}}
+  end
+
+  @spec array_sort(Column.t() | String.t(), (Column.t(), Column.t() -> Column.t())) :: Column.t()
+  def array_sort(col, func) when is_function(func, 2) do
+    col_expr = to_expr(col)
+    {body, vars} = build_lambda(func, ["l", "r"])
+    %Column{expr: {:fn, "array_sort", [col_expr, {:lambda, body, vars}], false}}
+  end
+
+  @doc """
+  Exact percentile. Supports single percentage or list/array of percentages.
+
+  Optional frequency parameter (default 1).
+  """
+  @spec percentile(Column.t() | String.t(), number() | [number()], Column.t() | integer()) ::
+          Column.t()
+  def percentile(col, percentage, frequency \\ 1) do
+    pct_expr =
+      case percentage do
+        pcts when is_list(pcts) -> {:fn, "array", Enum.map(pcts, &lit_expr/1), false}
+        pct -> lit_expr(pct)
+      end
+
+    %Column{
+      expr: {:fn, "percentile", [to_expr(col), pct_expr, to_col_or_lit(frequency)], false}
+    }
+  end
+
+  @doc "Generates a random UUID string. Auto-generates seed when none given."
+  @spec uuid(integer() | nil) :: Column.t()
+  def uuid(seed \\ nil) do
+    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
+    %Column{expr: {:fn, "uuid", [{:lit, seed}], false}}
+  end
+
+  @doc "Random value uniformly distributed in [min, max). Auto-generates seed when none given."
+  @spec uniform(Column.t() | String.t(), term(), integer() | nil) :: Column.t()
+  def uniform(min, max, seed \\ nil) do
+    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
+    %Column{expr: {:fn, "uniform", [to_expr(min), lit_expr(max), {:lit, seed}], false}}
+  end
+
+  @doc "Generates random string of given length. Auto-generates seed when none given."
+  @spec randstr(Column.t() | String.t(), term(), integer() | nil) :: Column.t()
+  def randstr(length, charset_or_seed \\ nil, seed \\ nil)
+
+  def randstr(length, nil, nil) do
+    seed = :rand.uniform(9_223_372_036_854_775_807)
+    %Column{expr: {:fn, "randstr", [to_expr(length), {:lit, seed}], false}}
+  end
+
+  def randstr(length, seed, nil) when is_integer(seed) do
+    %Column{expr: {:fn, "randstr", [to_expr(length), {:lit, seed}], false}}
+  end
+
+  def randstr(length, charset, seed) do
+    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
+    %Column{expr: {:fn, "randstr", [to_expr(length), lit_expr(charset), {:lit, seed}], false}}
+  end
+
   # ── Internal helpers (used by generated functions) ──
 
   @doc false

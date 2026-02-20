@@ -859,6 +859,277 @@ defmodule SparkEx.MissOpus2Test do
     end
   end
 
+  # ── 3.7 dropFields empty validation ──
+
+  describe "3.7 dropFields empty validation" do
+    test "drop_fields raises on empty list" do
+      col = %Column{expr: {:col, "struct_col"}}
+
+      assert_raise ArgumentError, ~r/field names should not be empty/, fn ->
+        Column.drop_fields(col, [])
+      end
+    end
+  end
+
+  # ── 3.1 Column.alias with metadata ──
+
+  describe "3.1 Column.alias with metadata" do
+    test "alias_ without metadata" do
+      col = Functions.col("x")
+      result = Column.alias_(col, "y")
+      assert %Column{expr: {:alias, {:col, "x"}, "y"}} = result
+    end
+
+    test "alias_ with metadata" do
+      col = Functions.col("x")
+      result = Column.alias_(col, "y", metadata: %{"comment" => "test"})
+      assert %Column{expr: {:alias, {:col, "x"}, "y", json}} = result
+      assert Jason.decode!(json) == %{"comment" => "test"}
+    end
+  end
+
+  # ── 16.4 sample_by seed default generation ──
+
+  describe "16.4 sample_by seed default" do
+    test "sample_by generates seed when none given" do
+      df = make_df()
+      result = DataFrame.Stat.sample_by(df, "label", %{0 => 0.1})
+      assert %DataFrame{plan: {:stat_sample_by, _, _, _, seed}} = result
+      assert is_integer(seed) and seed > 0
+    end
+
+    test "sample_by uses provided seed" do
+      df = make_df()
+      result = DataFrame.Stat.sample_by(df, "label", %{0 => 0.1}, 42)
+      assert %DataFrame{plan: {:stat_sample_by, _, _, _, 42}} = result
+    end
+  end
+
+  # ── 14.18 unix_timestamp zero-arg form ──
+
+  describe "14.18 unix_timestamp zero-arg" do
+    test "unix_timestamp() with no args" do
+      result = Functions.unix_timestamp()
+      assert %Column{expr: {:fn, "unix_timestamp", [], false}} = result
+    end
+
+    test "unix_timestamp with column" do
+      result = Functions.unix_timestamp(Functions.col("ts"))
+      assert %Column{expr: {:fn, "unix_timestamp", [{:col, "ts"}], false}} = result
+    end
+
+    test "unix_timestamp with column and format" do
+      result = Functions.unix_timestamp(Functions.col("ts"), format: "yyyy-MM-dd")
+
+      assert %Column{
+               expr: {:fn, "unix_timestamp", [{:col, "ts"}, {:lit, "yyyy-MM-dd"}], false}
+             } = result
+    end
+  end
+
+  # ── 14.19 convert_timezone 2-arg form ──
+
+  describe "14.19 convert_timezone 2-arg" do
+    test "2-arg form (target_tz, source_ts)" do
+      result = Functions.convert_timezone("US/Pacific", Functions.col("ts"))
+
+      assert %Column{
+               expr: {:fn, "convert_timezone", [{:col, "US/Pacific"}, {:col, "ts"}], false}
+             } = result
+    end
+
+    test "3-arg form (source_tz, target_tz, source_ts)" do
+      result = Functions.convert_timezone("UTC", "US/Pacific", Functions.col("ts"))
+
+      assert %Column{
+               expr:
+                 {:fn, "convert_timezone",
+                  [{:col, "UTC"}, {:col, "US/Pacific"}, {:col, "ts"}], false}
+             } = result
+    end
+  end
+
+  # ── 14.22 parse_url optional key ──
+
+  describe "14.22 parse_url optional key" do
+    test "parse_url without key" do
+      result = Functions.parse_url(Functions.col("url"), Functions.col("part"))
+      assert %Column{expr: {:fn, "parse_url", [{:col, "url"}, {:col, "part"}], false}} = result
+    end
+
+    test "parse_url with key" do
+      result =
+        Functions.parse_url(Functions.col("url"), Functions.col("part"), Functions.col("key"))
+
+      assert %Column{
+               expr:
+                 {:fn, "parse_url", [{:col, "url"}, {:col, "part"}, {:col, "key"}], false}
+             } = result
+    end
+
+    test "try_parse_url without key" do
+      result = Functions.try_parse_url(Functions.col("url"), Functions.col("part"))
+
+      assert %Column{
+               expr: {:fn, "try_parse_url", [{:col, "url"}, {:col, "part"}], false}
+             } = result
+    end
+  end
+
+  # ── 14.23 substr_ optional len ──
+
+  describe "14.23 substr_ optional len" do
+    test "substr_ without len" do
+      result = Functions.substr_(Functions.col("s"), Functions.col("pos"))
+      assert %Column{expr: {:fn, "substr", [{:col, "s"}, {:col, "pos"}], false}} = result
+    end
+
+    test "substr_ with len" do
+      result =
+        Functions.substr_(Functions.col("s"), Functions.col("pos"), Functions.col("len"))
+
+      assert %Column{
+               expr: {:fn, "substr", [{:col, "s"}, {:col, "pos"}, {:col, "len"}], false}
+             } = result
+    end
+  end
+
+  # ── 4.5 like/ilike escape character ──
+
+  describe "4.5 like/ilike escape character" do
+    test "like_ without escape" do
+      result = Functions.like_(Functions.col("s"), Functions.col("pat"))
+      assert %Column{expr: {:fn, "like", [{:col, "s"}, {:col, "pat"}], false}} = result
+    end
+
+    test "like_ with escape" do
+      result = Functions.like_(Functions.col("s"), Functions.col("pat"), Functions.col("esc"))
+
+      assert %Column{
+               expr: {:fn, "like", [{:col, "s"}, {:col, "pat"}, {:col, "esc"}], false}
+             } = result
+    end
+
+    test "ilike_ without escape" do
+      result = Functions.ilike_(Functions.col("s"), Functions.col("pat"))
+      assert %Column{expr: {:fn, "ilike", [{:col, "s"}, {:col, "pat"}], false}} = result
+    end
+
+    test "ilike_ with escape" do
+      result =
+        Functions.ilike_(Functions.col("s"), Functions.col("pat"), Functions.col("esc"))
+
+      assert %Column{
+               expr: {:fn, "ilike", [{:col, "s"}, {:col, "pat"}, {:col, "esc"}], false}
+             } = result
+    end
+  end
+
+  # ── 14.4 array_sort with comparator ──
+
+  describe "14.4 array_sort with comparator" do
+    test "array_sort without comparator" do
+      result = Functions.array_sort(Functions.col("arr"))
+      assert %Column{expr: {:fn, "array_sort", [{:col, "arr"}], false}} = result
+    end
+
+    test "array_sort with comparator function" do
+      result =
+        Functions.array_sort(Functions.col("arr"), fn l, r -> Column.minus(l, r) end)
+
+      assert %Column{
+               expr: {:fn, "array_sort", [{:col, "arr"}, {:lambda, _, _}], false}
+             } = result
+    end
+  end
+
+  # ── 14.15 percentile with frequency and list ──
+
+  describe "14.15 percentile with frequency and list" do
+    test "percentile with single percentage" do
+      result = Functions.percentile(Functions.col("x"), 0.5)
+
+      assert %Column{
+               expr: {:fn, "percentile", [{:col, "x"}, {:lit, 0.5}, {:lit, 1}], false}
+             } = result
+    end
+
+    test "percentile with list of percentages" do
+      result = Functions.percentile(Functions.col("x"), [0.25, 0.5, 0.75])
+
+      assert %Column{
+               expr:
+                 {:fn, "percentile",
+                  [
+                    {:col, "x"},
+                    {:fn, "array", [{:lit, 0.25}, {:lit, 0.5}, {:lit, 0.75}], false},
+                    {:lit, 1}
+                  ], false}
+             } = result
+    end
+
+    test "percentile with frequency" do
+      result = Functions.percentile(Functions.col("x"), 0.5, 2)
+
+      assert %Column{
+               expr: {:fn, "percentile", [{:col, "x"}, {:lit, 0.5}, {:lit, 2}], false}
+             } = result
+    end
+  end
+
+  # ── 14.28 uuid/uniform/randstr seed ──
+
+  describe "14.28 uuid/uniform/randstr seed" do
+    test "uuid auto-generates seed" do
+      result = Functions.uuid()
+      assert %Column{expr: {:fn, "uuid", [{:lit, seed}], false}} = result
+      assert is_integer(seed)
+    end
+
+    test "uuid with explicit seed" do
+      result = Functions.uuid(42)
+      assert %Column{expr: {:fn, "uuid", [{:lit, 42}], false}} = result
+    end
+
+    test "uniform auto-generates seed" do
+      result = Functions.uniform(Functions.col("min"), 100)
+
+      assert %Column{
+               expr: {:fn, "uniform", [{:col, "min"}, {:lit, 100}, {:lit, seed}], false}
+             } = result
+
+      assert is_integer(seed)
+    end
+
+    test "uniform with explicit seed" do
+      result = Functions.uniform(Functions.col("min"), 100, 42)
+
+      assert %Column{
+               expr: {:fn, "uniform", [{:col, "min"}, {:lit, 100}, {:lit, 42}], false}
+             } = result
+    end
+
+    test "randstr auto-generates seed" do
+      result = Functions.randstr(Functions.col("len"))
+      assert %Column{expr: {:fn, "randstr", [{:col, "len"}, {:lit, seed}], false}} = result
+      assert is_integer(seed)
+    end
+
+    test "randstr with explicit seed" do
+      result = Functions.randstr(Functions.col("len"), 42)
+      assert %Column{expr: {:fn, "randstr", [{:col, "len"}, {:lit, 42}], false}} = result
+    end
+  end
+
+  # ── 12.5 insert_into no longer auto-changes mode ──
+
+  describe "12.5 insert_into mode preservation" do
+    test "Writer keeps error_if_exists mode when no overwrite given" do
+      writer = %SparkEx.Writer{mode: :error_if_exists, options: %{}}
+      assert writer.mode == :error_if_exists
+    end
+  end
+
   # ── Helper ──
 
   defp make_df do

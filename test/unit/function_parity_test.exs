@@ -213,7 +213,19 @@ defmodule SparkEx.Unit.FunctionParityTest do
         "mode",
         "shuffle",
         "from_unixtime",
-        "replace"
+        "replace",
+        "unix_timestamp",
+        "convert_timezone",
+        "parse_url",
+        "try_parse_url",
+        "substr_",
+        "like_",
+        "ilike_",
+        "array_sort",
+        "percentile",
+        "uuid",
+        "uniform",
+        "randstr"
       ])
 
     all_names = MapSet.union(registry_names, hand_written)

@@ -180,6 +180,10 @@ defmodule SparkEx.Column do
   """
   @spec drop_fields(t(), [String.t()]) :: t()
   def drop_fields(%__MODULE__{} = col, field_names) when is_list(field_names) do
+    if field_names == [] do
+      raise ArgumentError, "field names should not be empty"
+    end
+
     Enum.reduce(field_names, col, fn field_name, acc ->
       if not is_binary(field_name) do
         raise ArgumentError, "field name must be a string, got: #{inspect(field_name)}"
@@ -296,10 +300,21 @@ defmodule SparkEx.Column do
 
   # ── Naming ──
 
-  @doc "Assigns an alias (name) to this column expression."
-  @spec alias_(t(), String.t()) :: t()
-  def alias_(%__MODULE__{} = col, name) when is_binary(name) do
-    %__MODULE__{expr: {:alias, col.expr, name}}
+  @doc """
+  Assigns an alias (name) to this column expression.
+
+  Optionally accepts a `metadata` keyword with a JSON-serializable map.
+  """
+  @spec alias_(t(), String.t(), keyword()) :: t()
+  def alias_(%__MODULE__{} = col, name, opts \\ []) when is_binary(name) do
+    case Keyword.get(opts, :metadata) do
+      nil ->
+        %__MODULE__{expr: {:alias, col.expr, name}}
+
+      metadata when is_map(metadata) ->
+        metadata_json = Jason.encode!(metadata)
+        %__MODULE__{expr: {:alias, col.expr, name, metadata_json}}
+    end
   end
 
   @doc "Alias for `alias_/2`."

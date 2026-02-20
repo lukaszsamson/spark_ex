@@ -58,8 +58,10 @@ defmodule SparkEx.M13.StatTest do
       df = Stat.sample_by(make_df(), "label", %{0 => 0.1, 1 => 0.5})
 
       assert %DataFrame{
-               plan: {:stat_sample_by, :test_plan, {:col, "label"}, fractions, nil}
+               plan: {:stat_sample_by, :test_plan, {:col, "label"}, fractions, seed}
              } = df
+
+      assert is_integer(seed)
 
       assert length(fractions) == 2
     end
@@ -176,7 +178,8 @@ defmodule SparkEx.M13.StatTest do
 
     test "sample_by/3 delegates" do
       df = DataFrame.sample_by(make_df(), "label", %{0 => 0.1})
-      assert %DataFrame{plan: {:stat_sample_by, :test_plan, {:col, "label"}, _, nil}} = df
+      assert %DataFrame{plan: {:stat_sample_by, :test_plan, {:col, "label"}, _, seed}} = df
+      assert is_integer(seed)
     end
   end
 
