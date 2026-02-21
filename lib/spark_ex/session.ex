@@ -1388,7 +1388,25 @@ defmodule SparkEx.Session do
 
   @doc false
   @spec safe_disconnect(term()) :: :ok
+  def safe_disconnect(%GRPC.Channel{} = channel) do
+    require Logger
+
+    if grpc_disconnect_bug_risk?(channel) do
+      Logger.warning(
+        "spark_ex session channel disconnect skipped due grpc connection state containing unresolved channels"
+      )
+
+      :ok
+    else
+      do_safe_disconnect(channel)
+    end
+  end
+
   def safe_disconnect(channel) do
+    do_safe_disconnect(channel)
+  end
+
+  defp do_safe_disconnect(channel) do
     require Logger
 
     try do
@@ -1413,6 +1431,35 @@ defmodule SparkEx.Session do
 
         :ok
     end
+  end
+
+  # grpc-elixir 0.11.5 can crash during disconnect when the connection manager
+  # state contains unresolved real_channels entries ({:error, reason}).
+  # Detect that shape and skip disconnect to avoid noisy error logs on release.
+  defp grpc_disconnect_bug_risk?(%GRPC.Channel{ref: ref}) when is_reference(ref) do
+    case :global.whereis_name({GRPC.Client.Connection, ref}) do
+      pid when is_pid(pid) ->
+        case safe_connection_state(pid) do
+          %{real_channels: real_channels} when is_map(real_channels) ->
+            Enum.any?(real_channels, fn {_k, value} -> match?({:error, _}, value) end)
+
+          _ ->
+            false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp grpc_disconnect_bug_risk?(_), do: false
+
+  defp safe_connection_state(pid) do
+    :sys.get_state(pid)
+  rescue
+    _ -> :unknown
+  catch
+    _, _ -> :unknown
   end
 
   # --- Private ---

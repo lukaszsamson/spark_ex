@@ -123,6 +123,44 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert Enum.uniq(condition_plan_ids) |> Enum.sort() ==
                Enum.sort([join.left.common.plan_id, join.right.common.plan_id])
     end
+
+    test "maps bound self-join filter and projection to concrete join sides" do
+      base = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM emp", nil}}
+      e1 = DataFrame.alias_(base, "e1")
+      e2 = DataFrame.alias_(base, "e2")
+
+      planned =
+        DataFrame.join(e1, e2, ["dept_id"], :inner)
+        |> DataFrame.filter(Column.lt(DataFrame.col(e1, "emp_id"), DataFrame.col(e2, "emp_id")))
+        |> DataFrame.select([DataFrame.col(e1, "name"), DataFrame.col(e2, "name")])
+
+      {plan, _counter} = PlanEncoder.encode(planned.plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
+               plan
+
+      assert %Relation{rel_type: {:project, project}} = with_relations.root
+      assert %Relation{rel_type: {:filter, filter}} = project.input
+      assert %Relation{rel_type: {:join, join}} = filter.input
+
+      assert %Expression{expr_type: {:unresolved_function, filter_fn}} = filter.condition
+
+      filter_plan_ids =
+        Enum.flat_map(filter_fn.arguments, fn
+          %Expression{expr_type: {:unresolved_attribute, attr}} -> [attr.plan_id]
+          _ -> []
+        end)
+
+      project_plan_ids =
+        Enum.flat_map(project.expressions, fn
+          %Expression{expr_type: {:unresolved_attribute, attr}} -> [attr.plan_id]
+          _ -> []
+        end)
+
+      expected = Enum.sort([join.left.common.plan_id, join.right.common.plan_id])
+      assert Enum.sort(Enum.uniq(filter_plan_ids)) == expected
+      assert Enum.sort(Enum.uniq(project_plan_ids)) == expected
+    end
   end
 
   describe "col_regex encoding" do
@@ -142,7 +180,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                expr.expr_type
     end
 
-    test "reuses one relation reference for bound expressions from same dataframe" do
+    test "maps bound expressions to child relation plan id" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT 1 AS id, 2 AS name_a", nil}}
       selected = DataFrame.select(df, [DataFrame.col(df, "id"), DataFrame.col_regex(df, "^name")])
       {plan, _counter} = PlanEncoder.encode(selected.plan, 0)
@@ -151,7 +189,6 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                plan
 
       assert %Relation{rel_type: {:project, project}} = with_relations.root
-      assert [%Relation{} = reference] = with_relations.references
 
       plan_ids =
         Enum.flat_map(project.expressions, fn
@@ -160,7 +197,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
           _ -> []
         end)
 
-      assert Enum.uniq(plan_ids) == [reference.common.plan_id]
+      assert Enum.uniq(plan_ids) == [project.input.common.plan_id]
     end
   end
 

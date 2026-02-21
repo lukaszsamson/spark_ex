@@ -277,7 +277,11 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:project, child_plan, expressions}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
-    exprs = Enum.map(expressions, &encode_expression/1)
+
+    remapped_exprs =
+      remap_expr_list_plan_ids_to_input(expressions, child)
+
+    exprs = Enum.map(remapped_exprs, &encode_expression/1)
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -292,7 +296,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:filter, child_plan, condition}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
-    cond_expr = encode_expression(condition)
+    cond_expr =
+      condition
+      |> remap_expr_plan_ids_to_input(child)
+      |> encode_expression()
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -2548,138 +2555,192 @@ defmodule SparkEx.Connect.PlanEncoder do
   # synthetic plan IDs by attach_with_relations. For Spark 3.5 compatibility,
   # remap first/second distinct referenced IDs to concrete left/right child IDs.
   defp remap_join_condition_plan_ids(expr, left_plan_id, right_plan_id) do
-    {updated, _plan_id_map} =
-      do_remap_join_condition_plan_ids(expr, left_plan_id, right_plan_id, %{})
+    remap_expr_plan_ids(expr, [left_plan_id, right_plan_id])
+  end
+
+  defp remap_expr_plan_ids_to_input(expr, %Relation{} = input_relation) do
+    candidate_plan_ids = source_relation_plan_ids(input_relation)
+    remap_expr_plan_ids(expr, candidate_plan_ids)
+  end
+
+  defp remap_expr_list_plan_ids_to_input(exprs, %Relation{} = input_relation) do
+    candidate_plan_ids = source_relation_plan_ids(input_relation)
+    remap_expr_list_plan_ids(exprs, candidate_plan_ids)
+  end
+
+  defp remap_expr_plan_ids(expr, candidate_plan_ids) do
+    known_plan_ids = MapSet.new(candidate_plan_ids)
+    state = %{assignments: %{}, next_candidate_idx: 0}
+    {updated, _state} = do_remap_expr_plan_ids(expr, candidate_plan_ids, known_plan_ids, state)
+    updated
+  end
+
+  defp remap_expr_list_plan_ids(exprs, candidate_plan_ids) do
+    known_plan_ids = MapSet.new(candidate_plan_ids)
+    state = %{assignments: %{}, next_candidate_idx: 0}
+
+    {updated, _state} =
+      Enum.map_reduce(exprs, state, fn expr, acc ->
+        do_remap_expr_plan_ids(expr, candidate_plan_ids, known_plan_ids, acc)
+      end)
 
     updated
   end
 
-  defp do_remap_join_condition_plan_ids({:col, name, plan_id}, left, right, plan_id_map)
+  defp do_remap_expr_plan_ids({:col, name, plan_id}, candidates, known_ids, state)
        when is_binary(name) and is_integer(plan_id) do
-    {mapped_plan_id, plan_id_map} =
-      resolve_join_plan_id_mapping(plan_id, left, right, plan_id_map)
-
-    {{:col, name, mapped_plan_id}, plan_id_map}
+    {mapped_plan_id, state} = resolve_expr_plan_id_mapping(plan_id, candidates, known_ids, state)
+    {{:col, name, mapped_plan_id}, state}
   end
 
-  defp do_remap_join_condition_plan_ids({:metadata_col, name, plan_id}, left, right, plan_id_map)
+  defp do_remap_expr_plan_ids({:metadata_col, name, plan_id}, candidates, known_ids, state)
        when is_binary(name) and is_integer(plan_id) do
-    {mapped_plan_id, plan_id_map} =
-      resolve_join_plan_id_mapping(plan_id, left, right, plan_id_map)
-
-    {{:metadata_col, name, mapped_plan_id}, plan_id_map}
+    {mapped_plan_id, state} = resolve_expr_plan_id_mapping(plan_id, candidates, known_ids, state)
+    {{:metadata_col, name, mapped_plan_id}, state}
   end
 
-  defp do_remap_join_condition_plan_ids({:col_regex, name, plan_id}, left, right, plan_id_map)
+  defp do_remap_expr_plan_ids({:col_regex, name, plan_id}, candidates, known_ids, state)
        when is_binary(name) and is_integer(plan_id) do
-    {mapped_plan_id, plan_id_map} =
-      resolve_join_plan_id_mapping(plan_id, left, right, plan_id_map)
-
-    {{:col_regex, name, mapped_plan_id}, plan_id_map}
+    {mapped_plan_id, state} = resolve_expr_plan_id_mapping(plan_id, candidates, known_ids, state)
+    {{:col_regex, name, mapped_plan_id}, state}
   end
 
-  defp do_remap_join_condition_plan_ids({:star, target, plan_id}, left, right, plan_id_map)
+  defp do_remap_expr_plan_ids({:star, target, plan_id}, candidates, known_ids, state)
        when (is_binary(target) or is_nil(target)) and is_integer(plan_id) do
-    {mapped_plan_id, plan_id_map} =
-      resolve_join_plan_id_mapping(plan_id, left, right, plan_id_map)
-
-    {{:star, target, mapped_plan_id}, plan_id_map}
+    {mapped_plan_id, state} = resolve_expr_plan_id_mapping(plan_id, candidates, known_ids, state)
+    {{:star, target, mapped_plan_id}, state}
   end
 
-  defp do_remap_join_condition_plan_ids({:fn, name, args, is_distinct}, left, right, plan_id_map) do
-    {updated_args, plan_id_map} =
-      Enum.map_reduce(args, plan_id_map, fn arg, acc ->
-        do_remap_join_condition_plan_ids(arg, left, right, acc)
+  defp do_remap_expr_plan_ids({:fn, name, args, is_distinct}, candidates, known_ids, state) do
+    {updated_args, state} =
+      Enum.map_reduce(args, state, fn arg, acc ->
+        do_remap_expr_plan_ids(arg, candidates, known_ids, acc)
       end)
 
-    {{:fn, name, updated_args, is_distinct}, plan_id_map}
+    {{:fn, name, updated_args, is_distinct}, state}
   end
 
-  defp do_remap_join_condition_plan_ids({:alias, expr, name}, left, right, plan_id_map) do
-    {expr, plan_id_map} = do_remap_join_condition_plan_ids(expr, left, right, plan_id_map)
-    {{:alias, expr, name}, plan_id_map}
+  defp do_remap_expr_plan_ids({:alias, expr, name}, candidates, known_ids, state) do
+    {expr, state} = do_remap_expr_plan_ids(expr, candidates, known_ids, state)
+    {{:alias, expr, name}, state}
   end
 
-  defp do_remap_join_condition_plan_ids({:alias, expr, name, metadata}, left, right, plan_id_map) do
-    {expr, plan_id_map} = do_remap_join_condition_plan_ids(expr, left, right, plan_id_map)
-    {{:alias, expr, name, metadata}, plan_id_map}
+  defp do_remap_expr_plan_ids({:alias, expr, name, metadata}, candidates, known_ids, state) do
+    {expr, state} = do_remap_expr_plan_ids(expr, candidates, known_ids, state)
+    {{:alias, expr, name, metadata}, state}
   end
 
-  defp do_remap_join_condition_plan_ids({:cast, expr, type_str}, left, right, plan_id_map) do
-    {expr, plan_id_map} = do_remap_join_condition_plan_ids(expr, left, right, plan_id_map)
-    {{:cast, expr, type_str}, plan_id_map}
+  defp do_remap_expr_plan_ids({:cast, expr, type_str}, candidates, known_ids, state) do
+    {expr, state} = do_remap_expr_plan_ids(expr, candidates, known_ids, state)
+    {{:cast, expr, type_str}, state}
   end
 
-  defp do_remap_join_condition_plan_ids({:cast, expr, type_str, mode}, left, right, plan_id_map) do
-    {expr, plan_id_map} = do_remap_join_condition_plan_ids(expr, left, right, plan_id_map)
-    {{:cast, expr, type_str, mode}, plan_id_map}
+  defp do_remap_expr_plan_ids({:cast, expr, type_str, mode}, candidates, known_ids, state) do
+    {expr, state} = do_remap_expr_plan_ids(expr, candidates, known_ids, state)
+    {{:cast, expr, type_str, mode}, state}
   end
 
-  defp do_remap_join_condition_plan_ids(
+  defp do_remap_expr_plan_ids(
          {:sort_order, child, direction, null_ordering},
-         left,
-         right,
-         plan_id_map
+         candidates,
+         known_ids,
+         state
        ) do
-    {child, plan_id_map} = do_remap_join_condition_plan_ids(child, left, right, plan_id_map)
-    {{:sort_order, child, direction, null_ordering}, plan_id_map}
+    {child, state} = do_remap_expr_plan_ids(child, candidates, known_ids, state)
+    {{:sort_order, child, direction, null_ordering}, state}
   end
 
-  defp do_remap_join_condition_plan_ids(
+  defp do_remap_expr_plan_ids(
          {:unresolved_extract_value, child, extraction},
-         left,
-         right,
-         plan_id_map
+         candidates,
+         known_ids,
+         state
        ) do
-    {child, plan_id_map} = do_remap_join_condition_plan_ids(child, left, right, plan_id_map)
-
-    {extraction, plan_id_map} =
-      do_remap_join_condition_plan_ids(extraction, left, right, plan_id_map)
-
-    {{:unresolved_extract_value, child, extraction}, plan_id_map}
+    {child, state} = do_remap_expr_plan_ids(child, candidates, known_ids, state)
+    {extraction, state} = do_remap_expr_plan_ids(extraction, candidates, known_ids, state)
+    {{:unresolved_extract_value, child, extraction}, state}
   end
 
-  defp do_remap_join_condition_plan_ids({:lambda, body, variables}, left, right, plan_id_map) do
-    {body, plan_id_map} = do_remap_join_condition_plan_ids(body, left, right, plan_id_map)
+  defp do_remap_expr_plan_ids({:lambda, body, variables}, candidates, known_ids, state) do
+    {body, state} = do_remap_expr_plan_ids(body, candidates, known_ids, state)
 
-    {variables, plan_id_map} =
-      Enum.map_reduce(variables, plan_id_map, fn variable, acc ->
-        do_remap_join_condition_plan_ids(variable, left, right, acc)
+    {variables, state} =
+      Enum.map_reduce(variables, state, fn variable, acc ->
+        do_remap_expr_plan_ids(variable, candidates, known_ids, acc)
       end)
 
-    {{:lambda, body, variables}, plan_id_map}
+    {{:lambda, body, variables}, state}
   end
 
-  defp do_remap_join_condition_plan_ids(%Column{expr: expr} = col, left, right, plan_id_map) do
-    {expr, plan_id_map} = do_remap_join_condition_plan_ids(expr, left, right, plan_id_map)
-    {%Column{col | expr: expr}, plan_id_map}
+  defp do_remap_expr_plan_ids(%Column{expr: expr} = col, candidates, known_ids, state) do
+    {expr, state} = do_remap_expr_plan_ids(expr, candidates, known_ids, state)
+    {%Column{col | expr: expr}, state}
   end
 
-  defp do_remap_join_condition_plan_ids(list, left, right, plan_id_map) when is_list(list) do
-    Enum.map_reduce(list, plan_id_map, fn value, acc ->
-      do_remap_join_condition_plan_ids(value, left, right, acc)
+  defp do_remap_expr_plan_ids(list, candidates, known_ids, state) when is_list(list) do
+    Enum.map_reduce(list, state, fn value, acc ->
+      do_remap_expr_plan_ids(value, candidates, known_ids, acc)
     end)
   end
 
-  defp do_remap_join_condition_plan_ids(value, _left, _right, plan_id_map),
-    do: {value, plan_id_map}
+  defp do_remap_expr_plan_ids(value, _candidates, _known_ids, state), do: {value, state}
 
-  defp resolve_join_plan_id_mapping(plan_id, left_id, right_id, plan_id_map) do
-    case plan_id_map do
+  defp resolve_expr_plan_id_mapping(plan_id, candidates, known_ids, %{assignments: assignments} = state) do
+    case assignments do
       %{^plan_id => mapped_plan_id} ->
-        {mapped_plan_id, plan_id_map}
+        {mapped_plan_id, state}
 
       _ ->
-        mapped_plan_id =
-          case map_size(plan_id_map) do
-            0 -> left_id
-            1 -> right_id
-            _ -> plan_id
-          end
+        if MapSet.member?(known_ids, plan_id) do
+          {plan_id, %{state | assignments: Map.put(assignments, plan_id, plan_id)}}
+        else
+          mapped_plan_id = Enum.at(candidates, state.next_candidate_idx, plan_id)
 
-        {mapped_plan_id, Map.put(plan_id_map, plan_id, mapped_plan_id)}
+          next_candidate_idx =
+            if state.next_candidate_idx < length(candidates) do
+              state.next_candidate_idx + 1
+            else
+              state.next_candidate_idx
+            end
+
+          {
+            mapped_plan_id,
+            %{
+              assignments: Map.put(assignments, plan_id, mapped_plan_id),
+              next_candidate_idx: next_candidate_idx
+            }
+          }
+        end
     end
   end
+
+  defp source_relation_plan_ids(%Relation{rel_type: {:join, join}})
+       when is_map(join) do
+    [join.left, join.right]
+    |> Enum.flat_map(fn
+      %Relation{common: %RelationCommon{plan_id: plan_id}} when is_integer(plan_id) -> [plan_id]
+      _ -> []
+    end)
+  end
+
+  defp source_relation_plan_ids(%Relation{rel_type: {_type, rel}} = relation)
+       when is_map(rel) do
+    case Map.get(rel, :input) do
+      %Relation{} = input_relation ->
+        source_relation_plan_ids(input_relation)
+
+      _ ->
+        default_source_relation_plan_ids(relation)
+    end
+  end
+
+  defp source_relation_plan_ids(%Relation{} = relation), do: default_source_relation_plan_ids(relation)
+
+  defp default_source_relation_plan_ids(%{common: %RelationCommon{plan_id: plan_id}})
+       when is_integer(plan_id),
+       do: [plan_id]
+
+  defp default_source_relation_plan_ids(_), do: []
 
   defp expand_with_columns_renamed_plan(child_plan, renames) do
     normalized_renames =

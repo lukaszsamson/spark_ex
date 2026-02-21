@@ -1,5 +1,6 @@
 defmodule SparkEx.Unit.SessionLifecycleTest do
   use ExUnit.Case, async: true
+  import ExUnit.CaptureLog
 
   alias Spark.Connect.{CloneSessionRequest, ReleaseSessionRequest, UserContext}
 
@@ -18,6 +19,17 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       send(parent, {:interrupt_called, payload})
       {:reply, {:ok, ["op-1"]}, parent}
     end
+  end
+
+  defmodule FakeGrpcConnection do
+    use GenServer
+
+    def start_link(ref, state) do
+      GenServer.start_link(__MODULE__, state, name: {:global, {GRPC.Client.Connection, ref}})
+    end
+
+    @impl true
+    def init(state), do: {:ok, state}
   end
 
   describe "Session interrupt helpers" do
@@ -263,6 +275,27 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
   describe "Session.safe_disconnect/1" do
     test "does not raise for invalid channels" do
       assert :ok = SparkEx.Session.safe_disconnect(:invalid_channel)
+    end
+
+    test "skips disconnect when grpc connection has unresolved channels" do
+      ref = make_ref()
+
+      {:ok, pid} =
+        FakeGrpcConnection.start_link(ref, %{
+          real_channels: %{"ok" => {:ok, %GRPC.Channel{}}, "err" => {:error, :unreachable}}
+        })
+
+      on_exit(fn ->
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      end)
+
+      log =
+        capture_log(fn ->
+          assert :ok = SparkEx.Session.safe_disconnect(%GRPC.Channel{ref: ref})
+        end)
+
+      assert log =~ "disconnect skipped due grpc connection state containing unresolved channels"
+      assert Process.alive?(pid)
     end
   end
 end
