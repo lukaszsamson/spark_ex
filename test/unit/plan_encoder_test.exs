@@ -86,6 +86,43 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert Enum.sort(condition_plan_ids) ==
                Enum.sort([join.left.common.plan_id, join.right.common.plan_id])
     end
+
+    test "maps multi-predicate join conditions to only left/right plan ids" do
+      left = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM emp", nil}}
+      right = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM dept", nil}}
+
+      join_condition =
+        Column.and_(
+          Column.eq(DataFrame.col(left, "dept_id"), DataFrame.col(right, "dept_id")),
+          Column.eq(DataFrame.col(left, "org_id"), DataFrame.col(right, "org_id"))
+        )
+
+      joined = DataFrame.join(left, right, join_condition, :inner)
+      {plan, _counter} = PlanEncoder.encode(joined.plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
+               plan
+
+      assert %Relation{rel_type: {:join, join}} = with_relations.root
+      assert %Expression{expr_type: {:unresolved_function, top_fn}} = join.join_condition
+
+      condition_plan_ids =
+        Enum.flat_map(top_fn.arguments, fn
+          %Expression{expr_type: {:unresolved_function, nested_fn}} ->
+            Enum.flat_map(nested_fn.arguments, fn
+              %Expression{expr_type: {:unresolved_attribute, attr}} -> [attr.plan_id]
+              _ -> []
+            end)
+
+          _ ->
+            []
+        end)
+
+      assert length(condition_plan_ids) == 4
+
+      assert Enum.uniq(condition_plan_ids) |> Enum.sort() ==
+               Enum.sort([join.left.common.plan_id, join.right.common.plan_id])
+    end
   end
 
   describe "col_regex encoding" do
@@ -103,6 +140,27 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
       assert {:unresolved_regex, %Expression.UnresolvedRegex{col_name: "^name", plan_id: 7}} =
                expr.expr_type
+    end
+
+    test "reuses one relation reference for bound expressions from same dataframe" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1 AS id, 2 AS name_a", nil}}
+      selected = DataFrame.select(df, [DataFrame.col(df, "id"), DataFrame.col_regex(df, "^name")])
+      {plan, _counter} = PlanEncoder.encode(selected.plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
+               plan
+
+      assert %Relation{rel_type: {:project, project}} = with_relations.root
+      assert [%Relation{} = reference] = with_relations.references
+
+      plan_ids =
+        Enum.flat_map(project.expressions, fn
+          %Expression{expr_type: {:unresolved_attribute, attr}} -> [attr.plan_id]
+          %Expression{expr_type: {:unresolved_regex, regex}} -> [regex.plan_id]
+          _ -> []
+        end)
+
+      assert Enum.uniq(plan_ids) == [reference.common.plan_id]
     end
   end
 

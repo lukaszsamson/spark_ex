@@ -2370,8 +2370,26 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_expr(value, plan_ids, refs, counter), do: {value, plan_ids, refs, counter}
 
   defp ensure_plan_id(referenced_plan, plan_ids, refs, counter) do
-    {plan_id, referenced_plan, counter} = extract_referenced_plan_id(referenced_plan, counter)
+    case extract_explicit_referenced_plan_id(referenced_plan) do
+      {:ok, plan_id, explicit_plan} ->
+        ensure_referenced_plan_id(plan_id, explicit_plan, plan_ids, refs, counter)
 
+      :error ->
+        normalized_plan = normalize_referenced_plan(referenced_plan)
+
+        case find_existing_plan_id(refs, normalized_plan) do
+          {:ok, existing_plan_id} ->
+            {plan_ids, refs, existing_plan_id, counter}
+
+          :error ->
+            {plan_id, counter} = next_id(counter)
+            plan_ref = {:plan_id, plan_id, normalized_plan}
+            ensure_referenced_plan_id(plan_id, plan_ref, plan_ids, refs, counter)
+        end
+    end
+  end
+
+  defp ensure_referenced_plan_id(plan_id, referenced_plan, plan_ids, refs, counter) do
     case Map.fetch(plan_ids, plan_id) do
       {:ok, existing} ->
         {plan_ids, refs, existing, counter}
@@ -2382,6 +2400,30 @@ defmodule SparkEx.Connect.PlanEncoder do
         {plan_ids, refs, plan_id, counter}
     end
   end
+
+  defp find_existing_plan_id(refs, normalized_plan) do
+    case Enum.find(refs, fn %{plan: plan} ->
+           normalize_referenced_plan(plan) == normalized_plan
+         end) do
+      %{id: plan_id} -> {:ok, plan_id}
+      nil -> :error
+    end
+  end
+
+  defp extract_explicit_referenced_plan_id(%{plan_id: plan_id, plan: plan})
+       when is_integer(plan_id),
+       do: {:ok, plan_id, plan}
+
+  defp extract_explicit_referenced_plan_id({plan_id, plan}) when is_integer(plan_id),
+    do: {:ok, plan_id, plan}
+
+  defp extract_explicit_referenced_plan_id({:plan_id, plan_id, plan}) when is_integer(plan_id),
+    do: {:ok, plan_id, plan}
+
+  defp extract_explicit_referenced_plan_id(_), do: :error
+
+  defp normalize_referenced_plan({:plan_id, _plan_id, plan}), do: plan
+  defp normalize_referenced_plan(plan), do: plan
 
   defp rewrite_table_arg_options(table_opts, plan_ids, refs, counter) do
     {partition_spec, plan_ids, refs, counter} =
@@ -2396,24 +2438,6 @@ defmodule SparkEx.Connect.PlanEncoder do
       |> Keyword.put(:order_spec, order_spec)
 
     {table_opts, plan_ids, refs, counter}
-  end
-
-  defp extract_referenced_plan_id(%{plan_id: plan_id, plan: plan}, counter)
-       when is_integer(plan_id) do
-    {plan_id, plan, counter}
-  end
-
-  defp extract_referenced_plan_id({plan_id, plan}, counter) when is_integer(plan_id) do
-    {plan_id, plan, counter}
-  end
-
-  defp extract_referenced_plan_id({:plan_id, plan_id, plan}, counter) when is_integer(plan_id) do
-    {plan_id, plan, counter}
-  end
-
-  defp extract_referenced_plan_id(plan, counter) do
-    {plan_id, counter} = next_id(counter)
-    {plan_id, {:plan_id, plan_id, plan}, counter}
   end
 
   defp extract_referenced_plan_id(%{plan_id: plan_id, plan: plan}) when is_integer(plan_id) do
