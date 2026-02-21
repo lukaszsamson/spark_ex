@@ -76,6 +76,54 @@ defmodule SparkEx.LivebookTest do
       end
     end
 
+    describe "SparkEx.Livebook helper failures" do
+      test "preview raises on DataFrame.to_explorer error" do
+        {:ok, session} =
+          FakeSession.start_link(
+            parent: self(),
+            schema: {:ok, test_schema()},
+            explorer: {:error, :explorer_failed}
+          )
+
+        df = %DataFrame{session: session, plan: {:sql, "SELECT 1"}}
+
+        assert_raise RuntimeError, ~r/Livebook preview failed: :explorer_failed/, fn ->
+          SparkEx.Livebook.preview(df)
+        end
+      end
+
+      test "explain raises on DataFrame.explain error" do
+        {:ok, session} =
+          FakeSession.start_link(
+            parent: self(),
+            schema: {:ok, test_schema()},
+            explorer: {:ok, Explorer.DataFrame.new(%{"id" => [1]})},
+            explain: {:error, :explain_failed}
+          )
+
+        df = %DataFrame{session: session, plan: {:sql, "SELECT 1"}}
+
+        assert_raise RuntimeError, ~r/Livebook explain failed: :explain_failed/, fn ->
+          SparkEx.Livebook.explain(df)
+        end
+      end
+
+      test "schema raises on DataFrame.schema error" do
+        {:ok, session} =
+          FakeSession.start_link(
+            parent: self(),
+            schema: {:error, :schema_failed},
+            explorer: {:ok, Explorer.DataFrame.new(%{"id" => [1]})}
+          )
+
+        df = %DataFrame{session: session, plan: {:sql, "SELECT 1"}}
+
+        assert_raise RuntimeError, ~r/Livebook schema failed: :schema_failed/, fn ->
+          SparkEx.Livebook.schema(df)
+        end
+      end
+    end
+
     describe "Kino.Render implementation for SparkEx.DataFrame" do
       setup do
         schema = {:ok, test_schema()}

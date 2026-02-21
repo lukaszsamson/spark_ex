@@ -17,6 +17,7 @@ if Code.ensure_loaded?(Kino) do
     Returns a `Kino.DataTable` preview of the DataFrame.
 
     Always executes a bounded preview query (LIMIT is injected).
+    Raises `RuntimeError` if preview execution fails.
 
     ## Options
 
@@ -25,7 +26,7 @@ if Code.ensure_loaded?(Kino) do
     - `:sorting_enabled` — enable sorting in the table (default: true)
     - `:formatter` — optional formatter function
     """
-    @spec preview(DataFrame.t(), keyword()) :: Kino.DataTable.t() | Kino.Text.t()
+    @spec preview(DataFrame.t(), keyword()) :: Kino.DataTable.t()
     def preview(%DataFrame{} = df, opts \\ []) do
       num_rows = Keyword.get(opts, :num_rows, @preview_rows_default)
 
@@ -39,12 +40,13 @@ if Code.ensure_loaded?(Kino) do
           Kino.DataTable.new(explorer_df, table_opts)
 
         {:error, reason} ->
-          Kino.Text.new("Preview failed: #{inspect(reason)}")
+          raise RuntimeError, "Livebook preview failed: #{inspect(reason)}"
       end
     end
 
     @doc """
     Returns a `Kino.Text` with the explain plan string.
+    Raises `RuntimeError` if explain execution fails.
 
     ## Options
 
@@ -59,7 +61,7 @@ if Code.ensure_loaded?(Kino) do
           Kino.Text.new(text)
 
         {:error, reason} ->
-          Kino.Text.new("Explain failed: #{inspect(reason)}")
+          raise RuntimeError, "Livebook explain failed: #{inspect(reason)}"
       end
     end
 
@@ -72,13 +74,14 @@ if Code.ensure_loaded?(Kino) do
 
     Same as `preview/2`.
     """
-    @spec sample(DataFrame.t(), keyword()) :: Kino.DataTable.t() | Kino.Text.t()
+    @spec sample(DataFrame.t(), keyword()) :: Kino.DataTable.t()
     def sample(%DataFrame{} = df, opts \\ []) do
       preview(df, opts)
     end
 
     @doc """
     Returns a `Kino.Text` with the DataFrame's schema information.
+    Raises `RuntimeError` if schema retrieval fails.
     """
     @spec schema(DataFrame.t()) :: Kino.Text.t()
     def schema(%DataFrame{} = df) do
@@ -88,7 +91,7 @@ if Code.ensure_loaded?(Kino) do
           Kino.Text.new(text)
 
         {:error, reason} ->
-          Kino.Text.new("Schema failed: #{inspect(reason)}")
+          raise RuntimeError, "Livebook schema failed: #{inspect(reason)}"
       end
     end
 
