@@ -727,7 +727,20 @@ defmodule SparkEx.DataFrame do
   @spec union_by_name(t(), t(), keyword()) :: t()
   def union_by_name(%__MODULE__{} = left, %__MODULE__{} = right, opts \\ []) do
     ensure_same_session!(left, right, :union_by_name)
-    allow_missing = Keyword.get(opts, :allow_missing, false)
+
+    allow_missing =
+      cond do
+        Keyword.has_key?(opts, :allow_missing_columns) ->
+          Keyword.fetch!(opts, :allow_missing_columns)
+
+        true ->
+          Keyword.get(opts, :allow_missing, false)
+      end
+
+    unless is_boolean(allow_missing) do
+      raise ArgumentError,
+            "expected allow_missing/allow_missing_columns to be boolean, got: #{inspect(allow_missing)}"
+    end
 
     %__MODULE__{
       left
@@ -947,8 +960,19 @@ defmodule SparkEx.DataFrame do
   @doc """
   Randomly splits the DataFrame into multiple DataFrames using normalized weights.
   """
-  @spec random_split(t(), [number()], integer() | nil) :: [t()]
-  def random_split(%__MODULE__{} = df, weights, seed \\ nil) when is_list(weights) do
+  @spec random_split(t(), [number()], integer() | nil | keyword()) :: [t()]
+  def random_split(df, weights, seed_or_opts \\ nil)
+
+  def random_split(%__MODULE__{} = df, weights, opts)
+      when is_list(weights) and is_list(opts) do
+    if Keyword.keyword?(opts) do
+      random_split(df, weights, Keyword.get(opts, :seed, nil))
+    else
+      raise ArgumentError, "expected seed to be integer, nil, or keyword options"
+    end
+  end
+
+  def random_split(%__MODULE__{} = df, weights, seed_or_opts) when is_list(weights) do
     Enum.each(weights, fn w ->
       if not is_number(w) or w < 0.0 do
         raise ArgumentError, "weights must be non-negative numbers"
@@ -962,9 +986,10 @@ defmodule SparkEx.DataFrame do
     end
 
     resolved_seed =
-      case seed do
+      case seed_or_opts do
         nil -> System.unique_integer([:positive])
         s when is_integer(s) -> s
+        other -> raise ArgumentError, "expected seed to be integer or nil, got: #{inspect(other)}"
       end
 
     normalized = Enum.map(weights, &(&1 / total))
@@ -1204,7 +1229,7 @@ defmodule SparkEx.DataFrame do
   @spec unpivot(
           t(),
           [Column.t() | String.t() | atom()],
-          [Column.t() | String.t() | atom()] | nil,
+          [Column.t() | String.t() | atom() | {String.t() | atom(), String.t() | atom()}] | nil,
           String.t(),
           String.t()
         ) :: t()
@@ -1289,13 +1314,26 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.agg([Functions.count(Functions.col("id"))])
   """
-  @spec agg(t(), [Column.t()] | map()) :: t()
+  @spec agg(t() | SparkEx.GroupedData.t(), [Column.t()] | map()) :: t()
+  def agg(%SparkEx.GroupedData{} = grouped, exprs) when is_list(exprs) or is_map(exprs) do
+    SparkEx.GroupedData.agg(grouped, exprs)
+  end
+
   def agg(%__MODULE__{} = df, exprs) when is_list(exprs) do
     df |> group_by([]) |> SparkEx.GroupedData.agg(exprs)
   end
 
   def agg(%__MODULE__{} = df, exprs) when is_map(exprs) do
     df |> group_by([]) |> SparkEx.GroupedData.agg(exprs)
+  end
+
+  @doc """
+  Convenience wrapper for `SparkEx.GroupedData.pivot/3` so grouped pipelines can stay under `DataFrame`.
+  """
+  @spec pivot(SparkEx.GroupedData.t(), Column.t() | String.t(), [term()] | nil) ::
+          SparkEx.GroupedData.t()
+  def pivot(%SparkEx.GroupedData{} = grouped, pivot_col, values \\ nil) do
+    SparkEx.GroupedData.pivot(grouped, pivot_col, values)
   end
 
   @doc """
@@ -1559,6 +1597,14 @@ defmodule SparkEx.DataFrame do
       {:create_dataframe_view, df.plan, name, true, true},
       opts
     )
+  end
+
+  @doc """
+  Drops a local temporary view by name.
+  """
+  @spec drop_temp_view(GenServer.server(), String.t()) :: {:ok, boolean()} | {:error, term()}
+  def drop_temp_view(session, name) when is_binary(name) do
+    SparkEx.Catalog.drop_temp_view(session, name)
   end
 
   # ── Metadata ──
@@ -2072,9 +2118,22 @@ defmodule SparkEx.DataFrame do
     do: SparkEx.DataFrame.NA.drop(df, opts)
 
   @doc "Replaces values. Delegates to `SparkEx.DataFrame.NA.replace/4`."
+  @spec replace(t(), term(), keyword()) :: t()
   @spec replace(t(), term(), term(), keyword()) :: t()
-  def replace(%__MODULE__{} = df, to_replace, value \\ nil, opts \\ []),
-    do: SparkEx.DataFrame.NA.replace(df, to_replace, value, opts)
+  def replace(df, to_replace, value_or_opts \\ nil, opts \\ [])
+
+  def replace(%__MODULE__{} = df, to_replace, value_or_opts, opts)
+      when is_list(value_or_opts) and opts == [] do
+    if Keyword.keyword?(value_or_opts) do
+      SparkEx.DataFrame.NA.replace(df, to_replace, nil, value_or_opts)
+    else
+      SparkEx.DataFrame.NA.replace(df, to_replace, value_or_opts, opts)
+    end
+  end
+
+  def replace(%__MODULE__{} = df, to_replace, value, opts) do
+    SparkEx.DataFrame.NA.replace(df, to_replace, value, opts)
+  end
 
   @doc "Describes basic statistics. Delegates to `SparkEx.DataFrame.Stat.describe/2`."
   @spec describe(t(), String.t() | [String.t()]) :: t()
@@ -2201,6 +2260,8 @@ defmodule SparkEx.DataFrame do
   defp normalize_column_expr(%Column{} = col), do: col.expr
   defp normalize_column_expr(name) when is_binary(name), do: {:col, name}
   defp normalize_column_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
+  defp normalize_column_expr({name, _alias}) when is_binary(name), do: {:col, name}
+  defp normalize_column_expr({name, _alias}) when is_atom(name), do: {:col, Atom.to_string(name)}
   defp normalize_column_expr(idx) when is_integer(idx) and idx >= 0, do: {:col, "_c#{idx}"}
   defp normalize_column_expr({:col, _, _} = expr), do: expr
   defp normalize_column_expr({:star, _, _} = expr), do: expr

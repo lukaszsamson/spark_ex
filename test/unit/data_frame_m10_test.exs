@@ -114,6 +114,18 @@ defmodule SparkEx.Unit.DataFrameM10Test do
 
       assert %DataFrame{
                plan:
+                  {:set_operation, _, _, :union, true,
+                   [by_name: true, allow_missing_columns: true]}
+              } = result
+    end
+
+    test "supports allow_missing_columns option (PySpark parity)" do
+      df1 = df()
+      df2 = df({:sql, "SELECT * FROM b", nil})
+      result = DataFrame.union_by_name(df1, df2, allow_missing_columns: true)
+
+      assert %DataFrame{
+               plan:
                  {:set_operation, _, _, :union, true,
                   [by_name: true, allow_missing_columns: true]}
              } = result
@@ -233,6 +245,24 @@ defmodule SparkEx.Unit.DataFrameM10Test do
       assert_in_delta u2, 3.0 / 6.0, 1.0e-12
       assert_in_delta l3, 3.0 / 6.0, 1.0e-12
     end
+
+    test "accepts seed keyword option" do
+      [split] = DataFrame.random_split(df(), [1.0], seed: 42)
+      assert %DataFrame{plan: {:sample, @base_plan, +0.0, 1.0, false, 42, true}} = split
+    end
+  end
+
+  describe "agg/2 grouped-data pipeline parity" do
+    test "accepts GroupedData piped into DataFrame.agg/2" do
+      grouped = DataFrame.group_by(df(), ["dept"])
+      result = DataFrame.agg(grouped, [Functions.sum(Functions.col("salary"))])
+
+      assert %DataFrame{
+               plan:
+                 {:aggregate, @base_plan, :groupby, [{:col, "dept"}],
+                  [{:fn, "sum", [{:col, "salary"}], false}]}
+             } = result
+    end
   end
 
   # ── Row Operations ──
@@ -341,7 +371,17 @@ defmodule SparkEx.Unit.DataFrameM10Test do
       result = DataFrame.unpivot(df(), ["id"], nil, "var", "val")
 
       assert %DataFrame{
-               plan: {:unpivot, @base_plan, [{:col, "id"}], nil, "var", "val"}
+              plan: {:unpivot, @base_plan, [{:col, "id"}], nil, "var", "val"}
+              } = result
+    end
+
+    test "accepts tuple values and normalizes to source columns" do
+      result = DataFrame.unpivot(df(), ["id"], [{"col1", "c1"}, {"col2", "c2"}], "var", "val")
+
+      assert %DataFrame{
+               plan:
+                 {:unpivot, @base_plan, [{:col, "id"}], [{:col, "col1"}, {:col, "col2"}], "var",
+                  "val"}
              } = result
     end
   end
@@ -395,6 +435,22 @@ defmodule SparkEx.Unit.DataFrameM10Test do
       df1 = df()
       df2 = df({:sql, "SELECT * FROM b", nil})
       assert DataFrame.union_all(df1, df2).plan == DataFrame.union(df1, df2).plan
+    end
+  end
+
+  describe "pivot/3" do
+    test "delegates grouped data pivot to GroupedData" do
+      result =
+        df()
+        |> DataFrame.group_by(["region"])
+        |> DataFrame.pivot("rep", ["Alice", "Bob"])
+
+      assert %SparkEx.GroupedData{
+               group_type: :groupby,
+               grouping_exprs: [{:col, "region"}],
+               pivot_col: {:col, "rep"},
+               pivot_values: ["Alice", "Bob"]
+             } = result
     end
   end
 

@@ -243,8 +243,16 @@ defmodule SparkEx.Functions do
       log(10, col("x"))
   """
   @spec log(number(), Column.t() | String.t()) :: Column.t()
+  def log(%Column{expr: {:lit, base}}, col) when is_number(base) do
+    log(base, col)
+  end
+
   def log(base, col) when is_number(base) do
     %Column{expr: {:fn, "log", [lit_expr(base), to_expr(col)], false}}
+  end
+
+  def log(%Column{}, _col) do
+    raise ArgumentError, "log/2 base must be a numeric literal or number"
   end
 
   @doc """
@@ -293,9 +301,9 @@ defmodule SparkEx.Functions do
   @doc """
   Returns the nth value in a window frame. Optionally ignores null values.
   """
-  @spec nth_value(Column.t() | String.t(), integer(), boolean()) :: Column.t()
+  @spec nth_value(Column.t() | String.t(), integer() | Column.t(), boolean()) :: Column.t()
   def nth_value(col, offset, ignore_nulls \\ false) do
-    args = [to_expr(col), {:lit, offset}, {:lit, ignore_nulls}]
+    args = [to_expr(col), normalize_nth_value_offset(offset), {:lit, ignore_nulls}]
     %Column{expr: {:fn, "nth_value", args, false}}
   end
 
@@ -335,8 +343,20 @@ defmodule SparkEx.Functions do
   Locates position of substring in a string column. Optional `pos` start position (default 1).
   """
   @spec locate(String.t(), Column.t() | String.t(), integer()) :: Column.t()
-  def locate(substr, col, pos \\ 1) do
+  def locate(substr, col, pos \\ 1)
+
+  def locate(%Column{expr: {:lit, substr}}, col, pos) when is_binary(substr),
+    do: locate(substr, col, pos)
+
+  def locate(substr, col, %Column{expr: {:lit, pos}}) when is_integer(pos),
+    do: locate(substr, col, pos)
+
+  def locate(substr, col, pos) when is_binary(substr) and is_integer(pos) do
     %Column{expr: {:fn, "locate", [{:lit, substr}, to_expr(col), {:lit, pos}], false}}
+  end
+
+  def locate(_substr, _col, _pos) do
+    raise ArgumentError, "locate/3 expects substr as string and pos as integer"
   end
 
   @doc """
@@ -360,8 +380,18 @@ defmodule SparkEx.Functions do
   Converts unix timestamp to string. Always sends format (default "yyyy-MM-dd HH:mm:ss").
   """
   @spec from_unixtime(Column.t() | String.t(), String.t()) :: Column.t()
-  def from_unixtime(col, format \\ "yyyy-MM-dd HH:mm:ss") do
+  def from_unixtime(col, format \\ "yyyy-MM-dd HH:mm:ss")
+
+  def from_unixtime(col, %Column{expr: {:lit, format}}) when is_binary(format) do
+    from_unixtime(col, format)
+  end
+
+  def from_unixtime(col, format) when is_binary(format) do
     %Column{expr: {:fn, "from_unixtime", [to_expr(col), {:lit, format}], false}}
+  end
+
+  def from_unixtime(_col, _format) do
+    raise ArgumentError, "from_unixtime/2 expects format as string literal"
   end
 
   @doc """
@@ -1571,6 +1601,14 @@ defmodule SparkEx.Functions do
 
   defp to_expr_or_lit(%Column{expr: e}), do: e
   defp to_expr_or_lit(value), do: {:lit, value}
+
+  defp normalize_nth_value_offset(offset) when is_integer(offset), do: {:lit, offset}
+  defp normalize_nth_value_offset(%Column{expr: {:lit, offset}}) when is_integer(offset), do: {:lit, offset}
+
+  defp normalize_nth_value_offset(other) do
+    raise ArgumentError,
+          "nth_value/3 expects integer offset or literal column, got: #{inspect(other)}"
+  end
 
   defp options_expr(options) when is_map(options) do
     kvs =

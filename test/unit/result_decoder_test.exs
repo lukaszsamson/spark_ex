@@ -301,6 +301,34 @@ defmodule SparkEx.Connect.ResultDecoderTest do
       assert {:ok, result} = ResultDecoder.decode_stream(stream)
       assert result.execution_metrics[{"scan", 1}] == %{"numRows" => 10}
     end
+
+    test "returns arrow_decode_failed when Explorer to_rows panics on duplicate-field payload" do
+      payload_path =
+        Path.expand("../../checklist/payloads/arrow_duplicate_columns.ipc", __DIR__)
+
+      unless File.exists?(payload_path) do
+        flunk("missing payload fixture at #{payload_path}")
+      end
+
+      payload = File.read!(payload_path)
+
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: payload,
+                start_offset: 0,
+                chunk_index: 0,
+                num_chunks_in_batch: 1
+              }}
+         }}
+      ]
+
+      assert {:error, {:arrow_decode_failed, _reason}} = ResultDecoder.decode_stream(stream)
+    end
   end
 
   describe "decode_stream_arrow/2" do

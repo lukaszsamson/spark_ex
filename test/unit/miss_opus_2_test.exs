@@ -280,6 +280,11 @@ defmodule SparkEx.MissOpus2Test do
       result = Functions.log(2, "x")
       assert %Column{expr: {:fn, "log", [{:lit, 2}, {:col, "x"}], false}} = result
     end
+
+    test "log/2 accepts literal column base" do
+      result = Functions.log(Functions.lit(2), "x")
+      assert %Column{expr: {:fn, "log", [{:lit, 2}, {:col, "x"}], false}} = result
+    end
   end
 
   # ── 4.2 split() with limit parameter ──
@@ -746,6 +751,13 @@ defmodule SparkEx.MissOpus2Test do
       assert %Column{expr: {:fn, "nth_value", [{:col, "x"}, {:lit, 2}, {:lit, true}], false}} =
                result
     end
+
+    test "nth_value accepts literal column offset" do
+      result = Functions.nth_value(Functions.col("x"), Functions.lit(2))
+
+      assert %Column{expr: {:fn, "nth_value", [{:col, "x"}, {:lit, 2}, {:lit, false}], false}} =
+               result
+    end
   end
 
   # ── 4.4 any_value ignoreNulls ──
@@ -817,6 +829,20 @@ defmodule SparkEx.MissOpus2Test do
 
     test "locate/3 with explicit pos" do
       result = Functions.locate("abc", Functions.col("s"), 5)
+
+      assert %Column{expr: {:fn, "locate", [{:lit, "abc"}, {:col, "s"}, {:lit, 5}], false}} =
+                result
+    end
+
+    test "locate/2 accepts literal-column substring" do
+      result = Functions.locate(Functions.lit("abc"), Functions.col("s"))
+
+      assert %Column{expr: {:fn, "locate", [{:lit, "abc"}, {:col, "s"}, {:lit, 1}], false}} =
+               result
+    end
+
+    test "locate/3 accepts literal-column pos" do
+      result = Functions.locate("abc", Functions.col("s"), Functions.lit(5))
 
       assert %Column{expr: {:fn, "locate", [{:lit, "abc"}, {:col, "s"}, {:lit, 5}], false}} =
                result
@@ -1401,7 +1427,15 @@ defmodule SparkEx.MissOpus2Test do
       result = Column.neq(Functions.col("a"), 5)
 
       assert %Column{expr: {:fn, "not", [{:fn, "==", [{:col, "a"}, {:lit, 5}], false}], false}} =
-               result
+                result
+    end
+
+    test "from_unixtime/2 accepts literal-column format" do
+      result = Functions.from_unixtime(Functions.col("ts"), Functions.lit("yyyy-MM-dd"))
+
+      assert %Column{
+               expr: {:fn, "from_unixtime", [{:col, "ts"}, {:lit, "yyyy-MM-dd"}], false}
+             } = result
     end
   end
 

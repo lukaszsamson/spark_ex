@@ -45,6 +45,33 @@ defmodule SparkEx.M11.WindowTest do
       assert %WindowSpec{frame_spec: {:range, :unbounded, :current_row}} = spec
     end
 
+    test "order_by/2 chains from existing spec (PySpark parity)" do
+      spec =
+        Window.partition_by(["region"])
+        |> Window.order_by(["amount"])
+
+      assert %WindowSpec{
+               partition_spec: [{:col, "region"}],
+               order_spec: [{:sort_order, {:col, "amount"}, :asc, :nulls_first}]
+             } = spec
+    end
+
+    test "rows_between/3 chains from existing spec" do
+      spec =
+        Window.order_by(["ts"])
+        |> Window.rows_between(:unbounded, :current_row)
+
+      assert %WindowSpec{frame_spec: {:rows, :unbounded, :current_row}} = spec
+    end
+
+    test "range_between/3 chains from existing spec" do
+      spec =
+        Window.order_by(["ts"])
+        |> Window.range_between(:unbounded, :current_row)
+
+      assert %WindowSpec{frame_spec: {:range, :unbounded, :current_row}} = spec
+    end
+
     test "boundary constants" do
       assert Window.unbounded_preceding() == :unbounded
       assert Window.unbounded_following() == :unbounded

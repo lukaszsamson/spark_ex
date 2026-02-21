@@ -30,16 +30,34 @@ defmodule SparkEx.Window do
     WindowSpec.order_by(%WindowSpec{}, cols)
   end
 
+  @doc "Adds order-by columns to an existing window spec."
+  @spec order_by(WindowSpec.t(), [SparkEx.Column.t() | String.t()]) :: WindowSpec.t()
+  def order_by(%WindowSpec{} = spec, cols) when is_list(cols) do
+    WindowSpec.order_by(spec, cols)
+  end
+
   @doc "Creates a window spec with a row-based frame."
   @spec rows_between(WindowSpec.boundary(), WindowSpec.boundary()) :: WindowSpec.t()
   def rows_between(start, end_) do
     WindowSpec.rows_between(%WindowSpec{}, start, end_)
   end
 
+  @doc "Adds a row-based frame to an existing window spec."
+  @spec rows_between(WindowSpec.t(), WindowSpec.boundary(), WindowSpec.boundary()) :: WindowSpec.t()
+  def rows_between(%WindowSpec{} = spec, start, end_) do
+    WindowSpec.rows_between(spec, start, end_)
+  end
+
   @doc "Creates a window spec with a range-based frame."
   @spec range_between(WindowSpec.boundary(), WindowSpec.boundary()) :: WindowSpec.t()
   def range_between(start, end_) do
     WindowSpec.range_between(%WindowSpec{}, start, end_)
+  end
+
+  @doc "Adds a range-based frame to an existing window spec."
+  @spec range_between(WindowSpec.t(), WindowSpec.boundary(), WindowSpec.boundary()) :: WindowSpec.t()
+  def range_between(%WindowSpec{} = spec, start, end_) do
+    WindowSpec.range_between(spec, start, end_)
   end
 
   @doc "Unbounded preceding boundary constant."

@@ -786,7 +786,7 @@ defmodule SparkEx.Connect.ResultDecoder do
     if Code.ensure_loaded?(Explorer.DataFrame) do
       case safe_load_ipc_stream(ipc_data) do
         {:ok, df} ->
-          {:ok, Explorer.DataFrame.to_rows(df)}
+          safe_dataframe_to_rows(df)
 
         {:error, err_stream} ->
           decode_with_fallback(ipc_data, err_stream)
@@ -799,7 +799,7 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp decode_with_fallback(ipc_data, err_stream) do
     case safe_load_ipc(ipc_data) do
       {:ok, df} ->
-        {:ok, Explorer.DataFrame.to_rows(df)}
+        safe_dataframe_to_rows(df)
 
       {:error, _} ->
         {:error, {:arrow_decode_failed, err_stream}}
@@ -941,6 +941,16 @@ defmodule SparkEx.Connect.ResultDecoder do
       error -> {:error, error}
     catch
       kind, reason -> {:error, {kind, reason}}
+    end
+  end
+
+  defp safe_dataframe_to_rows(df) do
+    try do
+      {:ok, Explorer.DataFrame.to_rows(df)}
+    rescue
+      error -> {:error, {:arrow_decode_failed, error}}
+    catch
+      kind, reason -> {:error, {:arrow_decode_failed, {kind, reason}}}
     end
   end
 

@@ -153,5 +153,10 @@ defmodule SparkEx.M13.NATest do
       df = DataFrame.replace(make_df(), %{0 => 100})
       assert %DataFrame{plan: {:na_replace, :test_plan, [], [{0, 100}]}} = df
     end
+
+    test "replace/3 treats keyword third argument as opts" do
+      df = DataFrame.replace(make_df(), %{"a" => "b"}, subset: ["col1"])
+      assert %DataFrame{plan: {:na_replace, :test_plan, ["col1"], [{"a", "b"}]}} = df
+    end
   end
 end
