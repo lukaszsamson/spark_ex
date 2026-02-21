@@ -2839,7 +2839,7 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.SortOrder{
       child: encode_expression(other),
       direction: :SORT_DIRECTION_ASCENDING,
-      null_ordering: :SORT_NULLS_UNSPECIFIED
+      null_ordering: :SORT_NULLS_FIRST
     }
   end
 

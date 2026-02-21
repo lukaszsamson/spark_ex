@@ -42,6 +42,7 @@ defmodule SparkEx.Functions do
   @doc """
   Creates a literal value expression.
 
+  If a `Column` is passed, it is returned as-is (pass-through).
   Supports nil, booleans, integers, floats, and strings.
 
   ## Examples
@@ -49,6 +50,7 @@ defmodule SparkEx.Functions do
       lit(42)
       lit("hello")
       lit(true)
+      lit(col("age"))  # returns the Column unchanged
   """
   @spec lit(term()) :: Column.t()
   def lit(%Column{} = col), do: col

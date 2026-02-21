@@ -60,6 +60,11 @@ defmodule SparkEx.StreamWriter do
     %{writer | output_mode: mode}
   end
 
+  def output_mode(%__MODULE__{}, mode) do
+    raise ArgumentError,
+          "output_mode must be one of \"append\", \"complete\", \"update\", got: #{inspect(mode)}"
+  end
+
   @spec format(t(), String.t()) :: t()
   def format(%__MODULE__{} = writer, source) when is_binary(source) do
     %{writer | source: source}

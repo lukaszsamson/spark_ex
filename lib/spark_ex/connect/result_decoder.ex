@@ -233,8 +233,11 @@ defmodule SparkEx.Connect.ResultDecoder do
             :ok
 
           current ->
-            raise RuntimeError,
-                  "incomplete local iterator arrow batch: #{inspect(%{expected_chunks: current.expected_chunks, received_chunks: length(current.parts)})}"
+            require Logger
+
+            Logger.warning(
+              "incomplete local iterator arrow batch discarded: #{inspect(%{expected_chunks: current.expected_chunks, received_chunks: length(current.parts)})}"
+            )
         end
       end
     )

@@ -8,6 +8,7 @@ defmodule SparkEx.Observation do
   """
 
   alias Spark.Connect.Expression
+  alias SparkEx.Internal.UUID
 
   @enforce_keys [:name]
   defstruct [:name]
@@ -23,24 +24,11 @@ defmodule SparkEx.Observation do
   def new(name \\ nil)
 
   def new(nil) do
-    %__MODULE__{name: generate_uuid()}
+    %__MODULE__{name: UUID.generate_v4()}
   end
 
   def new(name) when is_binary(name) and name != "" do
     %__MODULE__{name: name}
-  end
-
-  defp generate_uuid do
-    <<a::48, _::4, b::12, _::2, c::62>> = :crypto.strong_rand_bytes(16)
-
-    <<a::48, 4::4, b::12, 2::2, c::62>>
-    |> Base.encode16(case: :lower)
-    |> then(fn hex ->
-      <<a::binary-size(8), b::binary-size(4), c::binary-size(4), d::binary-size(4),
-        e::binary-size(12)>> = hex
-
-      "#{a}-#{b}-#{c}-#{d}-#{e}"
-    end)
   end
 
   @doc """

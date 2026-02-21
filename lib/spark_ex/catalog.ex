@@ -495,7 +495,7 @@ defmodule SparkEx.Catalog do
 
         is_list(using_jars) ->
           jars = Enum.map(using_jars, &join_sql(["JAR", sql_string(&1)]))
-          ["USING", Enum.join(jars, ", ")]
+          ["USING", Enum.join(jars, " ")]
 
         true ->
           []

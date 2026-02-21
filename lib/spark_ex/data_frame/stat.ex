@@ -101,7 +101,7 @@ defmodule SparkEx.DataFrame.Stat do
   def sample_by(%DataFrame{} = df, col, fractions, seed \\ nil) when is_map(fractions) do
     validate_fractions!(fractions)
     col_expr = normalize_col_expr(col)
-    frac_list = Enum.map(fractions, fn {k, v} -> {k, v / 1} end)
+    frac_list = Enum.map(fractions, fn {k, v} -> {k, v * 1.0} end)
     seed = seed || :rand.uniform(9_223_372_036_854_775_807)
     %DataFrame{df | plan: {:stat_sample_by, df.plan, col_expr, frac_list, seed}}
   end
@@ -228,15 +228,24 @@ defmodule SparkEx.DataFrame.Stat do
     |> String.replace(~r/[\[\]]/, "")
     |> String.split(",")
     |> Enum.map(fn part ->
-      part |> String.trim() |> Float.parse() |> elem(0)
+      case part |> String.trim() |> Float.parse() do
+        {value, _rest} -> value
+        :error -> raise ArgumentError, "could not parse float from: #{inspect(String.trim(part))}"
+      end
     end)
   end
 
   defp collect_scalar(session, plan) do
     case DataFrame.collect(%DataFrame{session: session, plan: plan}) do
-      {:ok, [row]} ->
+      {:ok, [row]} when is_map(row) ->
         value = row |> Map.values() |> hd()
         {:ok, value}
+
+      {:ok, []} ->
+        {:ok, nil}
+
+      {:ok, rows} when is_list(rows) ->
+        {:error, {:unexpected_result, "expected 0 or 1 rows, got #{length(rows)}"}}
 
       {:error, _} = err ->
         err

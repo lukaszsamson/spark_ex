@@ -103,6 +103,11 @@ defmodule SparkEx.Writer do
     %{writer | mode: save_mode}
   end
 
+  def mode(%__MODULE__{}, save_mode) do
+    raise ArgumentError,
+          "unknown save mode: #{inspect(save_mode)}, expected :append, :overwrite, :error_if_exists, or :ignore"
+  end
+
   @doc """
   Sets a single writer option.
   """
@@ -269,7 +274,7 @@ defmodule SparkEx.Writer do
 
     writer = %{
       writer
-      | options: extra_options |> Map.merge(option_overrides) |> Map.merge(writer.options)
+      | options: writer.options |> Map.merge(extra_options) |> Map.merge(option_overrides)
     }
 
     save(writer, path, exec_opts)

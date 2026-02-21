@@ -182,11 +182,10 @@ defmodule SparkEx.Connect.CommandEncoder do
         args when is_list(args) and length(args) > 0 ->
           pos =
             Enum.map(args, fn v ->
-              %Expression{expr_type: {:literal, lit}} = PlanEncoder.encode_expression({:lit, v})
-              lit
+              PlanEncoder.encode_expression({:lit, v})
             end)
 
-          %Spark.Connect.SqlCommand{sql: query, pos_args: pos}
+          %Spark.Connect.SqlCommand{sql: query, pos_arguments: pos}
 
         _ ->
           %Spark.Connect.SqlCommand{sql: query}
@@ -434,6 +433,10 @@ defmodule SparkEx.Connect.CommandEncoder do
 
       nil ->
         nil
+
+      other ->
+        raise ArgumentError,
+              "bucket_by must be {num_buckets, columns} or nil, got: #{inspect(other)}"
     end
   end
 

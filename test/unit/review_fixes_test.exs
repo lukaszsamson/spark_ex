@@ -141,4 +141,96 @@ defmodule SparkEx.ReviewFixesTest do
       assert sql =~ "`f; DROP TABLE t`"
     end
   end
+
+  # ── REV_OPUS fixes ──
+
+  describe "CommandEncoder pos_arguments (REV_OPUS #7)" do
+    test "uses pos_arguments field with Expression instead of pos_args with Literal" do
+      {plan, _counter} =
+        SparkEx.Connect.CommandEncoder.encode({:sql_command, "SELECT ?", [42]}, 0)
+
+      %Spark.Connect.Plan{op_type: {:command, cmd}} = plan
+      {:sql_command, sql_cmd} = cmd.command_type
+      assert sql_cmd.pos_arguments != []
+      assert sql_cmd.pos_args == []
+      [expr] = sql_cmd.pos_arguments
+      assert %Spark.Connect.Expression{expr_type: {:literal, _}} = expr
+    end
+  end
+
+  describe "Column.substr mixed types (REV_OPUS #33)" do
+    test "accepts Column pos with integer len" do
+      c = SparkEx.Functions.col("s")
+      result = SparkEx.Column.substr(c, SparkEx.Functions.lit(1), 5)
+      assert %SparkEx.Column{expr: {:fn, "substr", [_, _, {:lit, 5}], false}} = result
+    end
+
+    test "accepts integer pos with Column len" do
+      c = SparkEx.Functions.col("s")
+      result = SparkEx.Column.substr(c, 1, SparkEx.Functions.lit(5))
+      assert %SparkEx.Column{expr: {:fn, "substr", [_, {:lit, 1}, _], false}} = result
+    end
+
+    test "rejects invalid types" do
+      c = SparkEx.Functions.col("s")
+
+      assert_raise ArgumentError, ~r/Column or integer/, fn ->
+        SparkEx.Column.substr(c, "1", "5")
+      end
+    end
+  end
+
+  describe "StreamWriter.output_mode catch-all (REV_OPUS #57)" do
+    test "rejects invalid output mode string" do
+      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      writer = %SparkEx.StreamWriter{df: df}
+
+      assert_raise ArgumentError, ~r/must be one of/, fn ->
+        SparkEx.StreamWriter.output_mode(writer, "invalid")
+      end
+    end
+  end
+
+  describe "Writer.mode catch-all (REV_OPUS #60)" do
+    test "rejects invalid atom mode" do
+      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      writer = %SparkEx.Writer{df: df}
+
+      assert_raise ArgumentError, ~r/unknown save mode/, fn ->
+        SparkEx.Writer.mode(writer, :invalid_mode)
+      end
+    end
+
+    test "rejects invalid string mode" do
+      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      writer = %SparkEx.Writer{df: df}
+
+      assert_raise ArgumentError, ~r/unknown save mode/, fn ->
+        SparkEx.Writer.mode(writer, "nope")
+      end
+    end
+  end
+
+  describe "Observation UUID dedup (REV_OPUS #14)" do
+    test "new/0 generates valid UUID using Internal.UUID" do
+      obs = SparkEx.Observation.new()
+      assert obs.name =~ ~r/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    end
+  end
+
+  describe "Functions.lit/1 Column pass-through (REV_OPUS #15)" do
+    test "returns Column unchanged" do
+      c = SparkEx.Functions.col("x")
+      assert SparkEx.Functions.lit(c) == c
+    end
+  end
+
+  describe "PlanEncoder sort ordering consistency (REV_OPUS #58)" do
+    test "encode_sort_order uses SORT_NULLS_FIRST for bare col expressions" do
+      sort = {:sort_order, {:col, "name"}, :asc, nil}
+      expr = SparkEx.Connect.PlanEncoder.encode_expression(sort)
+      assert %Spark.Connect.Expression{expr_type: {:sort_order, so}} = expr
+      assert so.null_ordering == :SORT_NULLS_FIRST
+    end
+  end
 end

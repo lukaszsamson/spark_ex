@@ -241,8 +241,20 @@ defmodule SparkEx.Column do
     }
   end
 
+  def substr(%__MODULE__{} = col, %__MODULE__{} = pos, len) when is_integer(len) do
+    %__MODULE__{
+      expr: {:fn, "substr", [col.expr, pos.expr, {:lit, len}], false}
+    }
+  end
+
+  def substr(%__MODULE__{} = col, pos, %__MODULE__{} = len) when is_integer(pos) do
+    %__MODULE__{
+      expr: {:fn, "substr", [col.expr, {:lit, pos}, len.expr], false}
+    }
+  end
+
   def substr(%__MODULE__{} = _col, _pos, _len) do
-    raise ArgumentError, "startPos and length must be the same type: both Column or both integer"
+    raise ArgumentError, "startPos and length must be Column or integer"
   end
 
   @doc """

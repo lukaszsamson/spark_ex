@@ -144,34 +144,39 @@ defmodule SparkEx.GroupedData do
   end
 
   defp numeric_agg(%__MODULE__{} = gd, spark_fn, cols) do
-    schema = fetch_schema!(gd.session, gd.plan)
-    numeric_names = numeric_column_names(schema)
+    case fetch_schema(gd.session, gd.plan) do
+      {:ok, schema} ->
+        numeric_names = numeric_column_names(schema)
 
-    agg_names =
-      case cols do
-        [] ->
-          numeric_names
+        agg_names =
+          case cols do
+            [] ->
+              numeric_names
 
-        cols when is_list(cols) ->
-          normalize_string_columns(cols)
-      end
+            cols when is_list(cols) ->
+              normalize_string_columns(cols)
+          end
 
-    invalid = Enum.reject(agg_names, &(&1 in numeric_names))
+        invalid = Enum.reject(agg_names, &(&1 in numeric_names))
 
-    if invalid != [] do
-      raise ArgumentError, "expected numeric columns, got: #{inspect(invalid)}"
+        if invalid != [] do
+          raise ArgumentError, "expected numeric columns, got: #{inspect(invalid)}"
+        end
+
+        if agg_names == [] do
+          raise ArgumentError, "expected at least one numeric column"
+        end
+
+        agg_exprs =
+          Enum.map(agg_names, fn name ->
+            %Column{expr: {:fn, spark_fn, [{:col, name}], false}}
+          end)
+
+        agg(gd, agg_exprs)
+
+      {:error, reason} ->
+        raise ArgumentError, "failed to fetch schema: #{inspect(reason)}"
     end
-
-    if agg_names == [] do
-      raise ArgumentError, "expected at least one numeric column"
-    end
-
-    agg_exprs =
-      Enum.map(agg_names, fn name ->
-        %Column{expr: {:fn, spark_fn, [{:col, name}], false}}
-      end)
-
-    agg(gd, agg_exprs)
   end
 
   defp normalize_string_columns(cols) do
@@ -187,11 +192,8 @@ defmodule SparkEx.GroupedData do
     end)
   end
 
-  defp fetch_schema!(session, plan) do
-    case SparkEx.Session.analyze_schema(session, plan) do
-      {:ok, schema} -> schema
-      {:error, reason} -> raise ArgumentError, "failed to fetch schema: #{inspect(reason)}"
-    end
+  defp fetch_schema(session, plan) do
+    SparkEx.Session.analyze_schema(session, plan)
   end
 
   defp numeric_column_names(%Spark.Connect.DataType{kind: {:struct, struct}}) do

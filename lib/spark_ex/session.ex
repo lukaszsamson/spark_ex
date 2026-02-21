@@ -756,6 +756,9 @@ defmodule SparkEx.Session do
           {:reply, :ok, state}
 
         {:error, _} = error ->
+          # Disconnect channel even on RPC error to prevent resource leak
+          Channel.disconnect(state.channel)
+          state = %{state | released: true, channel: nil}
           {:reply, error, state}
       end
     end
@@ -792,19 +795,24 @@ defmodule SparkEx.Session do
   end
 
   def handle_call({:execute_collect, plan, opts}, _from, state) do
-    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode(plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    opts = merge_session_tags(opts, state.tags)
+        opts = merge_session_tags(opts, state.tags)
 
-    case Client.execute_plan(state, proto_plan, opts) do
-      {:ok, result} ->
-        state = maybe_update_server_session(state, result.server_side_session_id)
-        state = %{state | last_execution_metrics: result.execution_metrics}
-        SparkEx.Observation.store_observed_metrics(result.observed_metrics)
-        {:reply, {:ok, result.rows}, state}
+        case Client.execute_plan(state, proto_plan, opts) do
+          {:ok, result} ->
+            state = maybe_update_server_session(state, result.server_side_session_id)
+            state = %{state | last_execution_metrics: result.execution_metrics}
+            SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+            {:reply, {:ok, result.rows}, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
@@ -836,37 +844,47 @@ defmodule SparkEx.Session do
         {{:limit, plan, max_rows}, opts}
       end
 
-    {proto_plan, counter} = PlanEncoder.encode(effective_plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode(effective_plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    decoder_opts = merge_session_tags(decoder_opts, state.tags)
+        decoder_opts = merge_session_tags(decoder_opts, state.tags)
 
-    case Client.execute_plan_explorer(state, proto_plan, decoder_opts) do
-      {:ok, result} ->
-        state = maybe_update_server_session(state, result.server_side_session_id)
-        state = %{state | last_execution_metrics: result.execution_metrics}
-        SparkEx.Observation.store_observed_metrics(result.observed_metrics)
-        {:reply, {:ok, result.dataframe}, state}
+        case Client.execute_plan_explorer(state, proto_plan, decoder_opts) do
+          {:ok, result} ->
+            state = maybe_update_server_session(state, result.server_side_session_id)
+            state = %{state | last_execution_metrics: result.execution_metrics}
+            SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+            {:reply, {:ok, result.dataframe}, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
 
   def handle_call({:execute_arrow, plan, opts}, _from, state) do
-    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode(plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    opts = merge_session_tags(opts, state.tags)
+        opts = merge_session_tags(opts, state.tags)
 
-    case Client.execute_plan_arrow(state, proto_plan, opts) do
-      {:ok, result} ->
-        state = maybe_update_server_session(state, result.server_side_session_id)
-        state = %{state | last_execution_metrics: result.execution_metrics}
-        SparkEx.Observation.store_observed_metrics(result.observed_metrics)
-        {:reply, {:ok, result.arrow}, state}
+        case Client.execute_plan_arrow(state, proto_plan, opts) do
+          {:ok, result} ->
+            state = maybe_update_server_session(state, result.server_side_session_id)
+            state = %{state | last_execution_metrics: result.execution_metrics}
+            SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+            {:reply, {:ok, result.arrow}, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
@@ -1330,13 +1348,20 @@ defmodule SparkEx.Session do
   def terminate(_reason, %{channel: nil}), do: :ok
 
   def terminate(_reason, %{channel: channel} = state) do
-    # Best-effort release before disconnect
-    _ = Client.release_session(state)
+    # Best-effort release before disconnect with timeout to prevent blocking
+    task = Task.async(fn -> Client.release_session(state) end)
+    Task.yield(task, 5_000) || Task.shutdown(task)
     Channel.disconnect(channel)
     :ok
   end
 
   # --- Private ---
+
+  defp safe_encode(plan, counter) do
+    {PlanEncoder.encode(plan, counter), nil}
+  rescue
+    e -> {nil, {:error, {:plan_encode_error, Exception.message(e)}}}
+  end
 
   defp maybe_update_server_session(state, nil), do: state
   defp maybe_update_server_session(state, ""), do: state

@@ -1565,12 +1565,13 @@ defmodule SparkEx.MissOpus2Test do
   # ── Round 7 ──
 
   describe "round 7" do
-    test "1.8 substr validates mixed types raise" do
+    test "1.8 substr accepts mixed int/Column types" do
       c = Functions.col("s")
+      result = Column.substr(c, 1, Functions.lit(5))
+      assert %Column{expr: {:fn, "substr", [_, {:lit, 1}, _], false}} = result
 
-      assert_raise ArgumentError, ~r/same type/, fn ->
-        Column.substr(c, 1, Functions.lit(5))
-      end
+      result2 = Column.substr(c, Functions.lit(1), 5)
+      assert %Column{expr: {:fn, "substr", [_, _, {:lit, 5}], false}} = result2
     end
 
     test "1.8 substr accepts both Column args" do
