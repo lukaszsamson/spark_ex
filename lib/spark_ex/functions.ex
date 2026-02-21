@@ -214,10 +214,18 @@ defmodule SparkEx.Functions do
   """
   @spec otherwise(Column.t(), Column.t() | term()) :: Column.t()
   def otherwise(%Column{expr: {:fn, "when", args, false}} = _when_col, %Column{} = value) do
+    if rem(Kernel.length(args), 2) == 1 do
+      raise ArgumentError, "otherwise() can only be called once on a when() expression"
+    end
+
     %Column{expr: {:fn, "when", args ++ [value.expr], false}}
   end
 
   def otherwise(%Column{expr: {:fn, "when", args, false}} = _when_col, value) do
+    if rem(Kernel.length(args), 2) == 1 do
+      raise ArgumentError, "otherwise() can only be called once on a when() expression"
+    end
+
     %Column{expr: {:fn, "when", args ++ [{:lit, value}], false}}
   end
 

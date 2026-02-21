@@ -305,8 +305,18 @@ defmodule SparkEx.StreamingQueryListenerBus do
   defp safe_call(module, function, args) do
     apply(module, function, args)
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning(
+        "Streaming listener #{inspect(module)}.#{function} failed: #{Exception.format(:error, e, __STACKTRACE__)}"
+      )
+
+      :ok
   catch
-    _, _ -> :ok
+    kind, reason ->
+      Logger.warning(
+        "Streaming listener #{inspect(module)}.#{function} failed: #{inspect({kind, reason})}"
+      )
+
+      :ok
   end
 end

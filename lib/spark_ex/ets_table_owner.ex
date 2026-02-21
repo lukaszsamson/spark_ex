@@ -24,7 +24,17 @@ defmodule SparkEx.EtsTableOwner do
           :ets.new(table, [:named_table, :public, type])
           :ok
         rescue
-          ArgumentError -> :ok
+          ArgumentError ->
+            # Race condition: another process may have created the table.
+            # Verify it now exists; if not, re-raise.
+            case :ets.whereis(table) do
+              :undefined ->
+                raise ArgumentError,
+                      "failed to create ETS table #{inspect(table)} and it does not exist"
+
+              _tid ->
+                :ok
+            end
         end
 
       _tid ->

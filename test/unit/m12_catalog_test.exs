@@ -398,7 +398,7 @@ defmodule SparkEx.M12.CatalogPlanEncoderTest do
           location: "/tmp/db"
         )
 
-      assert sql == "CREATE DATABASE IF NOT EXISTS db1 LOCATION '/tmp/db'"
+      assert sql == "CREATE DATABASE IF NOT EXISTS `db1` LOCATION '/tmp/db'"
     end
 
     test "build_drop_database_sql supports IF EXISTS and CASCADE" do
@@ -408,32 +408,32 @@ defmodule SparkEx.M12.CatalogPlanEncoderTest do
           cascade: true
         )
 
-      assert sql == "DROP DATABASE IF EXISTS db1 CASCADE"
+      assert sql == "DROP DATABASE IF EXISTS `db1` CASCADE"
     end
 
     test "build_alter_database_sql supports set_location" do
       sql = SparkEx.Catalog.build_alter_database_sql("db1", set_location: "/tmp/db")
-      assert sql == "ALTER DATABASE db1 SET LOCATION '/tmp/db'"
+      assert sql == "ALTER DATABASE `db1` SET LOCATION '/tmp/db'"
     end
 
     test "build_alter_database_sql supports set_properties" do
       sql = SparkEx.Catalog.build_alter_database_sql("db1", set_properties: %{"k" => "v"})
-      assert sql == "ALTER DATABASE db1 SET DBPROPERTIES ('k'='v')"
+      assert sql == "ALTER DATABASE `db1` SET DBPROPERTIES ('k'='v')"
     end
 
     test "build_drop_table_sql supports IF EXISTS and PURGE" do
       sql = SparkEx.Catalog.build_drop_table_sql("t1", if_exists: true, purge: true)
-      assert sql == "DROP TABLE IF EXISTS t1 PURGE"
+      assert sql == "DROP TABLE IF EXISTS `t1` PURGE"
     end
 
     test "build_alter_table_sql supports rename_to" do
       sql = SparkEx.Catalog.build_alter_table_sql("t1", rename_to: "t2")
-      assert sql == "ALTER TABLE t1 RENAME TO t2"
+      assert sql == "ALTER TABLE `t1` RENAME TO `t2`"
     end
 
     test "build_alter_table_sql supports set_properties" do
       sql = SparkEx.Catalog.build_alter_table_sql("t1", set_properties: %{"k" => "v"})
-      assert sql == "ALTER TABLE t1 SET TBLPROPERTIES ('k'='v')"
+      assert sql == "ALTER TABLE `t1` SET TBLPROPERTIES ('k'='v')"
     end
 
     test "build_create_function_sql supports temporary + using jar" do
@@ -444,12 +444,22 @@ defmodule SparkEx.M12.CatalogPlanEncoderTest do
         )
 
       assert sql ==
-               "CREATE TEMPORARY FUNCTION f1 AS 'com.example.F' USING JAR '/tmp/f.jar'"
+               "CREATE TEMPORARY FUNCTION `f1` AS 'com.example.F' USING JAR '/tmp/f.jar'"
     end
 
     test "build_drop_function_sql supports temporary and IF EXISTS" do
       sql = SparkEx.Catalog.build_drop_function_sql("f1", temporary: true, if_exists: true)
-      assert sql == "DROP TEMPORARY FUNCTION IF EXISTS f1"
+      assert sql == "DROP TEMPORARY FUNCTION IF EXISTS `f1`"
+    end
+
+    test "identifiers are quoted to prevent SQL injection" do
+      sql = SparkEx.Catalog.build_drop_table_sql("t1; DROP TABLE t2", if_exists: true)
+      assert sql == "DROP TABLE IF EXISTS `t1; DROP TABLE t2`"
+    end
+
+    test "backticks in identifiers are escaped" do
+      sql = SparkEx.Catalog.build_drop_table_sql("t`1", [])
+      assert sql == "DROP TABLE `t``1`"
     end
   end
 end

@@ -22,6 +22,14 @@ defmodule SparkEx.Artifacts do
           {normalized_prefix <> Path.basename(path), data}
         end)
 
+      names = Enum.map(artifacts, &elem(&1, 0))
+      dupes = names -- Enum.uniq(names)
+
+      if dupes != [] do
+        raise ArgumentError,
+              "duplicate artifact names after path normalization: #{inspect(Enum.uniq(dupes))}"
+      end
+
       {:ok, artifacts}
     end
   end

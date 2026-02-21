@@ -97,6 +97,18 @@ defmodule SparkEx.Connect.ChannelTest do
     test "rejects non-numeric port" do
       assert {:error, {:invalid_uri, _}} = Channel.parse_uri("sc://localhost:abc")
     end
+
+    test "parses IPv6 URI with port" do
+      assert {:ok, opts} = Channel.parse_uri("sc://[::1]:15002")
+      assert opts.host == "::1"
+      assert opts.port == 15002
+    end
+
+    test "parses IPv6 URI without port uses default" do
+      assert {:ok, opts} = Channel.parse_uri("sc://[::1]")
+      assert opts.host == "::1"
+      assert opts.port == 15002
+    end
   end
 
   describe "build_grpc_opts/1" do

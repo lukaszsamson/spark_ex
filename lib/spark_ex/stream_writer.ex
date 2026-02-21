@@ -132,16 +132,44 @@ defmodule SparkEx.StreamWriter do
     trigger_value =
       cond do
         Keyword.has_key?(opts, :processing_time) ->
-          {:processing_time, Keyword.fetch!(opts, :processing_time)}
+          value = Keyword.fetch!(opts, :processing_time)
+
+          if not is_binary(value) or String.trim(value) == "" do
+            raise ArgumentError,
+                  "processing_time must be a non-empty string, got: #{inspect(value)}"
+          end
+
+          {:processing_time, String.trim(value)}
 
         Keyword.has_key?(opts, :available_now) ->
+          value = Keyword.fetch!(opts, :available_now)
+
+          if value != true do
+            raise ArgumentError,
+                  "available_now must be true, got: #{inspect(value)}"
+          end
+
           :available_now
 
         Keyword.has_key?(opts, :once) ->
+          value = Keyword.fetch!(opts, :once)
+
+          if value != true do
+            raise ArgumentError,
+                  "once must be true, got: #{inspect(value)}"
+          end
+
           :once
 
         Keyword.has_key?(opts, :continuous) ->
-          {:continuous, Keyword.fetch!(opts, :continuous)}
+          value = Keyword.fetch!(opts, :continuous)
+
+          if not is_binary(value) or String.trim(value) == "" do
+            raise ArgumentError,
+                  "continuous must be a non-empty string, got: #{inspect(value)}"
+          end
+
+          {:continuous, String.trim(value)}
       end
 
     %{writer | trigger: trigger_value}

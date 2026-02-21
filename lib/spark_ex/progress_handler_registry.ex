@@ -3,6 +3,8 @@ defmodule SparkEx.ProgressHandlerRegistry do
   Registry for session-scoped progress handlers driven by telemetry events.
   """
 
+  require Logger
+
   @table :spark_ex_progress_handlers
   @event [:spark_ex, :result, :progress]
 
@@ -58,9 +60,16 @@ defmodule SparkEx.ProgressHandlerRegistry do
   defp invoke(handler, payload) do
     handler.(payload)
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning(
+        "Progress handler callback failed: #{Exception.format(:error, e, __STACKTRACE__)}"
+      )
+
+      :ok
   catch
-    _, _ -> :ok
+    kind, reason ->
+      Logger.warning("Progress handler callback failed: #{inspect({kind, reason})}")
+      :ok
   end
 
   defp find_handler_entry(session_id, handler) do

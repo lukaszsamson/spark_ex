@@ -1375,7 +1375,12 @@ defmodule SparkEx.Session do
   defp extract_show_string(rows), do: {:error, {:invalid_show_response, rows}}
 
   defp call_timeout(opts) do
-    Keyword.get(opts, :timeout, 60_000) + 5_000
+    case Keyword.get(opts, :timeout, 60_000) do
+      nil -> :infinity
+      :infinity -> :infinity
+      timeout when is_integer(timeout) and timeout > 0 -> timeout + 5_000
+      other -> raise ArgumentError, "timeout must be a positive integer or nil, got: #{inspect(other)}"
+    end
   end
 
   defp safe_get_state(session, timeout) do

@@ -59,6 +59,16 @@ defmodule SparkEx.M11.FunctionsTest do
                expr: {:fn, "when", [_, {:lit, "positive"}, {:lit, "non-positive"}], false}
              } = result
     end
+
+    test "raises when otherwise called twice via Functions" do
+      col =
+        Functions.when_(Functions.col("x") |> Column.gt(0), Functions.lit("pos"))
+        |> Functions.otherwise("zero")
+
+      assert_raise ArgumentError, ~r/otherwise.*once/, fn ->
+        Functions.otherwise(col, "neg")
+      end
+    end
   end
 
   # ── Higher-order functions (HOF) with lambda ──

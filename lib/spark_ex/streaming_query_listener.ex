@@ -31,7 +31,8 @@ defmodule SparkEx.StreamingQueryListener do
   Each callback receives a map with:
 
     * `:type` — `:started`, `:progress`, `:terminated`, or `:idle`
-    * `:data` — parsed JSON event data (map)
+    * `:data` — event data as a parsed JSON map, or the raw JSON string
+      if decoding fails (`map() | String.t()`)
     * `:raw_json` — the original JSON string from the server
   """
 

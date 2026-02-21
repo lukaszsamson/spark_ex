@@ -43,6 +43,9 @@ defmodule SparkEx.StreamingQueryManager do
           {:query, instance} ->
             build_streaming_query(session, instance)
 
+          nil ->
+            {:ok, nil}
+
           other ->
             {:error, {:unexpected_result, other}}
         end
@@ -186,6 +189,10 @@ defmodule SparkEx.StreamingQueryManager do
        run_id: run_id,
        name: if(instance.name == "", do: nil, else: instance.name)
      }}
+  end
+
+  defp build_streaming_query(_session, nil) do
+    {:ok, nil}
   end
 
   defp build_streaming_query(_session, instance) do

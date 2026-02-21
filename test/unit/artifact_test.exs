@@ -219,6 +219,20 @@ defmodule SparkEx.Unit.ArtifactTest do
       missing = tmp_path("missing.txt")
       assert {:error, {:file_read_error, ^missing, _}} = Artifacts.prepare(missing, "files/")
     end
+
+    test "raises on duplicate artifact names from different paths" do
+      path_a = tmp_path("dup_dir_a/config.json")
+      path_b = tmp_path("dup_dir_b/config.json")
+
+      File.mkdir_p!(Path.dirname(path_a))
+      File.mkdir_p!(Path.dirname(path_b))
+      File.write!(path_a, "a")
+      File.write!(path_b, "b")
+
+      assert_raise ArgumentError, ~r/duplicate artifact names/, fn ->
+        Artifacts.prepare([path_a, path_b], "files")
+      end
+    end
   end
 
   defp tmp_path(name) do

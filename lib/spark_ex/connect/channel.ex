@@ -210,12 +210,26 @@ defmodule SparkEx.Connect.Channel do
   defp validate_token(_params), do: :ok
 
   defp malformed_port?(authority, nil) do
-    case String.split(authority, ":", parts: 2) do
-      [_host] ->
+    # For bracketed IPv6 hosts like [::1], strip the bracket prefix
+    # and only check for a port after the closing bracket.
+    case Regex.run(~r/^\[.*\](?::(.+))?$/, authority) do
+      [_full] ->
+        # Bracketed host, no port — valid
         false
 
-      [_host, maybe_port] ->
-        maybe_port != "" and not String.match?(maybe_port, ~r/^\d+$/)
+      [_full, maybe_port] ->
+        # Bracketed host with port
+        not String.match?(maybe_port, ~r/^\d+$/)
+
+      nil ->
+        # Non-bracketed host
+        case String.split(authority, ":", parts: 2) do
+          [_host] ->
+            false
+
+          [_host, maybe_port] ->
+            maybe_port != "" and not String.match?(maybe_port, ~r/^\d+$/)
+        end
     end
   end
 

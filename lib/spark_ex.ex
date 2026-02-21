@@ -104,19 +104,31 @@ defmodule SparkEx do
   end
 
   @doc """
-  Returns a UDF registration accessor (PySpark-style `spark.udf`).
+  Returns the `SparkEx.UDFRegistration` module for registering UDFs.
+
+  Unlike PySpark's `spark.udf` which returns a session-bound accessor,
+  this returns the module directly. The session must still be passed
+  explicitly to registration functions:
+
+      SparkEx.UDFRegistration.register_java(session, "fn_name", "com.example.Fn")
   """
   @spec udf(GenServer.server()) :: module()
   def udf(_session), do: SparkEx.UDFRegistration
 
   @doc """
-  Returns a UDTF registration accessor (PySpark-style `spark.udtf`).
+  Returns the `SparkEx.UDFRegistration` module for registering UDTFs.
+
+  The session must be passed explicitly to registration functions.
+  See `udf/1` for usage pattern.
   """
   @spec udtf(GenServer.server()) :: module()
   def udtf(_session), do: SparkEx.UDFRegistration
 
   @doc """
-  Returns a DataSource registration accessor (PySpark-style `spark.dataSource`).
+  Returns the `SparkEx.UDFRegistration` module for registering data sources.
+
+  The session must be passed explicitly to registration functions.
+  See `udf/1` for usage pattern.
   """
   @spec data_source(GenServer.server()) :: module()
   def data_source(_session), do: SparkEx.UDFRegistration
@@ -178,7 +190,9 @@ defmodule SparkEx do
   end
 
   @doc """
-  Clears all user context extensions (global and thread-local).
+  Clears all global user context extensions and thread-local extensions
+  for the current process only. Thread-local extensions in other processes
+  are not affected.
   """
   @spec clear_user_context_extensions() :: :ok
   def clear_user_context_extensions do
