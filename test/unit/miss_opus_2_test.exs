@@ -1381,7 +1381,7 @@ defmodule SparkEx.MissOpus2Test do
         Functions.when_(Functions.col("x") |> Column.gt(0), Functions.lit("pos"))
         |> Column.otherwise("zero")
 
-      assert_raise ArgumentError, ~r/otherwise.*once/, fn ->
+      assert_raise ArgumentError, ~r/otherwise.*already been called/, fn ->
         Column.otherwise(col, "neg")
       end
     end

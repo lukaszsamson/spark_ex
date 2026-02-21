@@ -360,20 +360,29 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   @doc """
   Decodes an ExecutePlan response stream into a raw Arrow IPC payload.
-  """
-  @spec decode_stream_arrow(Enumerable.t(), SparkEx.Session.t() | nil) ::
-          {:ok, arrow_result()} | {:error, term()}
-  def decode_stream_arrow(stream, session \\ nil) do
-    decode_stream_arrow(stream, session, nil)
-  end
 
-  defp decode_stream_arrow(stream, session, _opts) do
+  ## Options
+
+  - `:max_rows` — maximum number of rows to collect (default: `:infinity`)
+  - `:max_bytes` — maximum total bytes of Arrow data (default: `:infinity`)
+  """
+  @spec decode_stream_arrow(Enumerable.t(), SparkEx.Session.t() | nil, keyword()) ::
+          {:ok, arrow_result()} | {:error, term()}
+  def decode_stream_arrow(stream, session \\ nil, opts \\ [])
+
+  def decode_stream_arrow(stream, session, opts) do
+    max_rows = Keyword.get(opts, :max_rows, :infinity)
+    max_bytes = Keyword.get(opts, :max_bytes, :infinity)
+
     state = %{
       arrow_parts: [],
       current_chunked_batch: nil,
       schema: nil,
       server_side_session_id: nil,
       num_records: 0,
+      total_bytes: 0,
+      max_rows: max_rows,
+      max_bytes: max_bytes,
       observed_metrics: %{},
       execution_metrics: %{}
     }
@@ -400,6 +409,14 @@ defmodule SparkEx.Connect.ResultDecoder do
               end
 
             {:result_complete, _} ->
+              if state[:current_chunked_batch] do
+                require Logger
+
+                Logger.warning(
+                  "incomplete chunked arrow batch discarded on result_complete: #{inspect(%{expected_chunks: state.current_chunked_batch.expected_chunks, received_chunks: length(state.current_chunked_batch.parts)})}"
+                )
+              end
+
               arrow_state =
                 state
                 |> Map.put_new(:arrow_parts, [])
@@ -576,12 +593,7 @@ defmodule SparkEx.Connect.ResultDecoder do
                  }
              }}
           else
-            {:ok,
-             %{
-               state
-               | arrow_parts: [batch.data | state.arrow_parts],
-                 num_records: state.num_records + batch.row_count
-             }}
+            check_arrow_limits_and_append(state, batch.data, batch.row_count)
           end
         end
 
@@ -598,19 +610,49 @@ defmodule SparkEx.Connect.ResultDecoder do
 
           if updated.next_chunk_index == updated.expected_chunks do
             assembled = updated.parts |> Enum.reverse() |> IO.iodata_to_binary()
-
-            state = %{
-              state
-              | current_chunked_batch: nil,
-                arrow_parts: [assembled | state.arrow_parts],
-                num_records: state.num_records + updated.row_count
-            }
-
-            {:ok, state}
+            state = %{state | current_chunked_batch: nil}
+            check_arrow_limits_and_append(state, assembled, updated.row_count)
           else
             {:ok, %{state | current_chunked_batch: updated}}
           end
         end
+    end
+  end
+
+  defp check_arrow_limits_and_append(state, data, row_count) do
+    batch_bytes = byte_size(data)
+    new_total_bytes = state.total_bytes + batch_bytes
+
+    if exceeds_limit?(new_total_bytes, state.max_bytes) do
+      {:error,
+       %SparkEx.Error.LimitExceeded{
+         limit_type: :bytes,
+         limit_value: state.max_bytes,
+         actual_value: new_total_bytes,
+         remediation:
+           "Use DataFrame.limit/2 to reduce result size, or pass max_bytes: <value> to increase the limit"
+       }}
+    else
+      new_num_records = state.num_records + row_count
+
+      if exceeds_limit?(new_num_records, state.max_rows) do
+        {:error,
+         %SparkEx.Error.LimitExceeded{
+           limit_type: :rows,
+           limit_value: state.max_rows,
+           actual_value: new_num_records,
+           remediation:
+             "Use DataFrame.limit/2 to reduce result size, or pass max_rows: <value> to increase the limit"
+         }}
+      else
+        {:ok,
+         %{
+           state
+           | arrow_parts: [data | state.arrow_parts],
+             num_records: new_num_records,
+             total_bytes: new_total_bytes
+         }}
+      end
     end
   end
 

@@ -86,7 +86,7 @@ defmodule SparkEx.Session do
   @doc """
   Generates the next plan ID and returns it.
   """
-  @spec next_plan_id(GenServer.server()) :: non_neg_integer()
+  @spec next_plan_id(GenServer.server()) :: non_neg_integer() | {:error, :session_released}
   def next_plan_id(session) do
     GenServer.call(session, :next_plan_id)
   end
@@ -737,6 +737,10 @@ defmodule SparkEx.Session do
       {:error, _} = error ->
         {:reply, error, state}
     end
+  end
+
+  def handle_call(:next_plan_id, _from, %{released: true} = state) do
+    {:reply, {:error, :session_released}, state}
   end
 
   def handle_call(:next_plan_id, _from, state) do

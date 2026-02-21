@@ -29,18 +29,25 @@ defmodule SparkEx.Connect.TypeMapper do
   end
 
   @doc """
-  Converts a Spark Connect `DataType` to a Spark DDL type string.
+  Converts a Spark Connect `DataType` directly to a Spark DDL type string.
+
+  Uses direct mapping to preserve precision information (e.g., DECIMAL scale/precision)
+  that would be lost in an Explorer dtype round-trip.
   """
   @spec data_type_to_ddl(DataType.t()) :: String.t()
-  def data_type_to_ddl(dt) do
-    {:ok, dtype} = to_explorer_dtype(dt)
-    to_spark_ddl_type(dtype)
+  def data_type_to_ddl(%DataType{kind: {tag, value}}) do
+    direct_ddl(tag, value)
   end
+
+  def data_type_to_ddl(%DataType{kind: nil}), do: "VOID"
 
   @doc """
   Converts a Spark Connect schema (`DataType.Struct`) to Explorer dtypes map.
 
   Returns a keyword list of `{column_name, dtype}` pairs.
+
+  Note: the `nullable` field from `StructField` is not preserved, as Explorer
+  schemas do not carry nullability information.
   """
   @spec schema_to_dtypes(DataType.Struct.t()) :: {:ok, [{String.t(), atom() | {atom(), term()}}]}
   def schema_to_dtypes(%DataType.Struct{fields: fields}) do
@@ -108,6 +115,44 @@ defmodule SparkEx.Connect.TypeMapper do
   # Catch-all for future types
   defp map_kind(_unknown, _dt), do: :string
 
+  # --- Direct DataType → DDL mapping (preserves precision) ---
+
+  defp direct_ddl(:null, _), do: "VOID"
+  defp direct_ddl(:boolean, _), do: "BOOLEAN"
+  defp direct_ddl(:byte, _), do: "BYTE"
+  defp direct_ddl(:short, _), do: "SHORT"
+  defp direct_ddl(:integer, _), do: "INT"
+  defp direct_ddl(:long, _), do: "LONG"
+  defp direct_ddl(:float, _), do: "FLOAT"
+  defp direct_ddl(:double, _), do: "DOUBLE"
+  defp direct_ddl(:string, _), do: "STRING"
+  defp direct_ddl(:char, _), do: "STRING"
+  defp direct_ddl(:var_char, _), do: "STRING"
+  defp direct_ddl(:binary, _), do: "BINARY"
+  defp direct_ddl(:date, _), do: "DATE"
+  defp direct_ddl(:timestamp, _), do: "TIMESTAMP"
+  defp direct_ddl(:timestamp_ntz, _), do: "TIMESTAMP_NTZ"
+  defp direct_ddl(:time, _), do: "TIME"
+
+  defp direct_ddl(:decimal, %DataType.Decimal{precision: p, scale: s})
+       when not is_nil(p) and not is_nil(s) do
+    "DECIMAL(#{p}, #{s})"
+  end
+
+  defp direct_ddl(:decimal, %DataType.Decimal{precision: p}) when not is_nil(p) do
+    "DECIMAL(#{p}, 0)"
+  end
+
+  defp direct_ddl(:decimal, _), do: "DECIMAL(10, 0)"
+
+  defp direct_ddl(:calendar_interval, _), do: "STRING"
+  defp direct_ddl(:year_month_interval, _), do: "STRING"
+  defp direct_ddl(:day_time_interval, _), do: "STRING"
+  defp direct_ddl(:array, _), do: "STRING"
+  defp direct_ddl(:struct, _), do: "STRING"
+  defp direct_ddl(:map, _), do: "STRING"
+  defp direct_ddl(_, _), do: "STRING"
+
   # --- Reverse mapping: Explorer dtype → Spark DDL type string ---
 
   @doc """
@@ -131,6 +176,8 @@ defmodule SparkEx.Connect.TypeMapper do
   def to_spark_ddl_type({:u, 8}), do: "SHORT"
   def to_spark_ddl_type({:u, 16}), do: "INT"
   def to_spark_ddl_type({:u, 32}), do: "LONG"
+  # Note: {:u, 64} (max 2^64-1) mapped to LONG (signed, max 2^63-1) is lossy.
+  # Values above 2^63-1 will overflow. Spark has no unsigned 64-bit integer type.
   def to_spark_ddl_type({:u, 64}), do: "LONG"
   def to_spark_ddl_type({:f, 32}), do: "FLOAT"
   def to_spark_ddl_type({:f, 64}), do: "DOUBLE"

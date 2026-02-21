@@ -1408,6 +1408,12 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
+  # Multi-name alias with metadata: PySpark raises an error for this combination
+  def encode_expression({:alias, _expr, names, _metadata_json}) when is_list(names) do
+    raise ArgumentError,
+          "cannot provide metadata for multi-name alias (got #{length(names)} names)"
+  end
+
   def encode_expression({:cast, expr, type_str}) do
     %Expression{
       expr_type:

@@ -37,7 +37,7 @@ defmodule SparkEx.Unit.WriterV2Test do
     end
 
     test "option/3 rejects non-primitive values", %{writer: writer} do
-      assert_raise ArgumentError, ~r/writer_v2 option value must be a primitive/, fn ->
+      assert_raise ArgumentError, ~r/option value must be a primitive/, fn ->
         WriterV2.option(writer, "bad", %{a: 1})
       end
     end
@@ -62,7 +62,7 @@ defmodule SparkEx.Unit.WriterV2Test do
     end
 
     test "table_property/3 rejects non-primitive values", %{writer: writer} do
-      assert_raise ArgumentError, ~r/writer_v2 option value must be a primitive/, fn ->
+      assert_raise ArgumentError, ~r/option value must be a primitive/, fn ->
         WriterV2.table_property(writer, "bad", [:list])
       end
     end

@@ -289,7 +289,7 @@ defmodule SparkEx.Column do
   @spec otherwise(t(), t() | term()) :: t()
   def otherwise(%__MODULE__{expr: {:fn, "when", args, false}} = _when_col, %__MODULE__{} = value) do
     if rem(length(args), 2) == 1 do
-      raise ArgumentError, "otherwise() can only be called once on a when() expression"
+      raise ArgumentError, "otherwise() has already been called on this when() expression"
     end
 
     %__MODULE__{expr: {:fn, "when", args ++ [value.expr], false}}
@@ -297,7 +297,7 @@ defmodule SparkEx.Column do
 
   def otherwise(%__MODULE__{expr: {:fn, "when", args, false}} = _when_col, value) do
     if rem(length(args), 2) == 1 do
-      raise ArgumentError, "otherwise() can only be called once on a when() expression"
+      raise ArgumentError, "otherwise() has already been called on this when() expression"
     end
 
     %__MODULE__{expr: {:fn, "when", args ++ [{:lit, value}], false}}

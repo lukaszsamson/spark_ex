@@ -217,7 +217,7 @@ defmodule SparkEx.Functions do
   @spec otherwise(Column.t(), Column.t() | term()) :: Column.t()
   def otherwise(%Column{expr: {:fn, "when", args, false}} = _when_col, %Column{} = value) do
     if rem(Kernel.length(args), 2) == 1 do
-      raise ArgumentError, "otherwise() can only be called once on a when() expression"
+      raise ArgumentError, "otherwise() has already been called on this when() expression"
     end
 
     %Column{expr: {:fn, "when", args ++ [value.expr], false}}
@@ -225,7 +225,7 @@ defmodule SparkEx.Functions do
 
   def otherwise(%Column{expr: {:fn, "when", args, false}} = _when_col, value) do
     if rem(Kernel.length(args), 2) == 1 do
-      raise ArgumentError, "otherwise() can only be called once on a when() expression"
+      raise ArgumentError, "otherwise() has already been called on this when() expression"
     end
 
     %Column{expr: {:fn, "when", args ++ [{:lit, value}], false}}
@@ -300,7 +300,8 @@ defmodule SparkEx.Functions do
   end
 
   @doc """
-  Random value in [0, 1). Always generates a seed when none given.
+  Random value in [0, 1). Auto-generates a random seed when none given.
+  Pass an explicit seed for reproducible results.
   """
   @spec rand(integer() | nil | keyword()) :: Column.t()
   def rand(seed \\ nil)
@@ -315,7 +316,8 @@ defmodule SparkEx.Functions do
   end
 
   @doc """
-  Random value from standard normal distribution. Always generates a seed when none given.
+  Random value from standard normal distribution. Auto-generates a random seed when none given.
+  Pass an explicit seed for reproducible results.
   """
   @spec randn(integer() | nil | keyword()) :: Column.t()
   def randn(seed \\ nil)

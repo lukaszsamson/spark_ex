@@ -233,4 +233,224 @@ defmodule SparkEx.ReviewFixesTest do
       assert so.null_ordering == :SORT_NULLS_FIRST
     end
   end
+
+  # ── decode_stream_arrow memory limits (REV_OPUS #55) ──
+
+  describe "decode_stream_arrow max_bytes enforcement" do
+    test "enforces max_bytes limit" do
+      alias Spark.Connect.ExecutePlanResponse
+      alias Spark.Connect.ExecutePlanResponse.ArrowBatch
+
+      big_data = :binary.copy(<<0>>, 1000)
+
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ArrowBatch{data: big_data, row_count: 10, start_offset: 0}},
+           schema: nil,
+           observed_metrics: [],
+           metrics: nil
+         }}
+      ]
+
+      assert {:error, %SparkEx.Error.LimitExceeded{limit_type: :bytes}} =
+               SparkEx.Connect.ResultDecoder.decode_stream_arrow(stream, nil, max_bytes: 500)
+    end
+
+    test "enforces max_rows limit" do
+      alias Spark.Connect.ExecutePlanResponse
+      alias Spark.Connect.ExecutePlanResponse.ArrowBatch
+
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ArrowBatch{data: <<1, 2, 3>>, row_count: 100, start_offset: 0}},
+           schema: nil,
+           observed_metrics: [],
+           metrics: nil
+         }}
+      ]
+
+      assert {:error, %SparkEx.Error.LimitExceeded{limit_type: :rows}} =
+               SparkEx.Connect.ResultDecoder.decode_stream_arrow(stream, nil, max_rows: 50)
+    end
+
+    test "passes with limits not exceeded" do
+      alias Spark.Connect.ExecutePlanResponse
+      alias Spark.Connect.ExecutePlanResponse.ArrowBatch
+
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ArrowBatch{data: <<1, 2, 3>>, row_count: 5, start_offset: 0}},
+           schema: nil,
+           observed_metrics: [],
+           metrics: nil
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}},
+           schema: nil,
+           observed_metrics: [],
+           metrics: nil
+         }}
+      ]
+
+      assert {:ok, result} =
+               SparkEx.Connect.ResultDecoder.decode_stream_arrow(stream, nil,
+                 max_rows: 100,
+                 max_bytes: 10_000
+               )
+
+      assert is_binary(result.arrow)
+    end
+  end
+
+  # ── Writer partition_by empty list (REV_OPUS #37) ──
+
+  describe "Writer.partition_by empty list validation" do
+    test "rejects empty column list" do
+      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      writer = %SparkEx.Writer{df: df}
+
+      assert_raise ArgumentError, ~r/partition_by columns should not be empty/, fn ->
+        SparkEx.Writer.partition_by(writer, [])
+      end
+    end
+  end
+
+  # ── DataFrame.drop type validation (REV_OPUS #46) ──
+
+  describe "DataFrame.drop type validation" do
+    test "rejects non-string/atom/Column values" do
+      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+
+      assert_raise ArgumentError, ~r/drop expects column names/, fn ->
+        SparkEx.DataFrame.drop(df, [123])
+      end
+    end
+
+    test "accepts string column names" do
+      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      result = SparkEx.DataFrame.drop(df, ["col1", "col2"])
+      assert %SparkEx.DataFrame{plan: {:drop, _, ["col1", "col2"], []}} = result
+    end
+
+    test "accepts atom column names" do
+      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      result = SparkEx.DataFrame.drop(df, [:col1])
+      assert %SparkEx.DataFrame{plan: {:drop, _, ["col1"], []}} = result
+    end
+  end
+
+  # ── Column.otherwise improved error message (REV_OPUS #48) ──
+
+  describe "Column.otherwise error message (REV_OPUS #48)" do
+    test "error says 'already been called' not 'can only be called once'" do
+      col =
+        SparkEx.Functions.when_(
+          SparkEx.Functions.col("x") |> SparkEx.Column.gt(0),
+          SparkEx.Functions.lit("pos")
+        )
+        |> SparkEx.Column.otherwise("zero")
+
+      assert_raise ArgumentError, ~r/already been called/, fn ->
+        SparkEx.Column.otherwise(col, "neg")
+      end
+    end
+  end
+
+  # ── DataFrame.normalize_column_expr negative integer guard (REV_OPUS #47) ──
+
+  describe "DataFrame.normalize_column_expr negative integer (REV_OPUS #47)" do
+    test "rejects negative integer column index" do
+      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+
+      assert_raise FunctionClauseError, fn ->
+        SparkEx.DataFrame.select(df, [-1])
+      end
+    end
+
+    test "accepts non-negative integer column index" do
+      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      result = SparkEx.DataFrame.select(df, [0])
+      assert %SparkEx.DataFrame{} = result
+    end
+  end
+
+  # ── ProgressHandlerRegistry dedup (REV_OPUS #20) ──
+
+  describe "ProgressHandlerRegistry dedup (REV_OPUS #20)" do
+    test "duplicate registration is idempotent" do
+      session_id = "test-dedup-#{System.unique_integer([:positive])}"
+      handler = fn _payload -> :ok end
+
+      :ok = SparkEx.ProgressHandlerRegistry.register(session_id, handler)
+      :ok = SparkEx.ProgressHandlerRegistry.register(session_id, handler)
+
+      # Should have only one entry
+      entries = :ets.lookup(:spark_ex_progress_handlers, session_id)
+      assert length(entries) == 1
+
+      # Cleanup
+      SparkEx.ProgressHandlerRegistry.clear(session_id)
+    end
+  end
+
+  # ── TypeMapper.data_type_to_ddl preserves decimal precision (REV_OPUS #29) ──
+
+  describe "TypeMapper.data_type_to_ddl decimal precision (REV_OPUS #29)" do
+    alias Spark.Connect.DataType
+
+    test "preserves DECIMAL precision and scale" do
+      dt = %DataType{kind: {:decimal, %DataType.Decimal{precision: 10, scale: 2}}}
+      assert SparkEx.Connect.TypeMapper.data_type_to_ddl(dt) == "DECIMAL(10, 2)"
+    end
+
+    test "defaults DECIMAL scale to 0 when only precision given" do
+      dt = %DataType{kind: {:decimal, %DataType.Decimal{precision: 18, scale: nil}}}
+      assert SparkEx.Connect.TypeMapper.data_type_to_ddl(dt) == "DECIMAL(18, 0)"
+    end
+
+    test "defaults DECIMAL to (10, 0) when no precision" do
+      dt = %DataType{kind: {:decimal, %DataType.Decimal{}}}
+      assert SparkEx.Connect.TypeMapper.data_type_to_ddl(dt) == "DECIMAL(10, 0)"
+    end
+
+    test "direct DDL for timestamp preserves type name" do
+      dt = %DataType{kind: {:timestamp, %DataType.Timestamp{}}}
+      assert SparkEx.Connect.TypeMapper.data_type_to_ddl(dt) == "TIMESTAMP"
+    end
+
+    test "direct DDL for null returns VOID" do
+      dt = %DataType{kind: nil}
+      assert SparkEx.Connect.TypeMapper.data_type_to_ddl(dt) == "VOID"
+    end
+  end
+
+  # ── PlanEncoder multi-name alias with metadata (REV_OPUS #52) ──
+
+  describe "PlanEncoder multi-name alias with metadata (REV_OPUS #52)" do
+    test "raises for multi-name alias with metadata" do
+      assert_raise ArgumentError, ~r/cannot provide metadata for multi-name alias/, fn ->
+        SparkEx.Connect.PlanEncoder.encode_expression(
+          {:alias, {:col, "x"}, ["a", "b"], "{\"key\": \"val\"}"}
+        )
+      end
+    end
+
+    test "multi-name alias without metadata works" do
+      result = SparkEx.Connect.PlanEncoder.encode_expression(
+        {:alias, {:col, "x"}, ["a", "b"]}
+      )
+      assert %Spark.Connect.Expression{expr_type: {:alias, alias}} = result
+      assert alias.name == ["a", "b"]
+    end
+  end
 end

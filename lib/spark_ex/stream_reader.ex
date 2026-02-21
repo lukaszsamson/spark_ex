@@ -211,23 +211,15 @@ defmodule SparkEx.StreamReader do
   defp normalize_schema(schema), do: schema
 
   defp normalize_options(opts) when is_list(opts) do
-    opts |> Enum.into(%{}) |> normalize_options()
+    SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
   end
 
   defp normalize_options(opts) when is_map(opts) do
-    opts
-    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-    |> Map.new(fn {k, v} -> {to_string(k), normalize_option_value(v)} end)
+    SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
   end
 
-  defp normalize_option_value(value) when is_binary(value), do: value
-  defp normalize_option_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp normalize_option_value(value) when is_float(value), do: Float.to_string(value)
-  defp normalize_option_value(value) when is_boolean(value), do: to_string(value)
-
   defp normalize_option_value(value) do
-    raise ArgumentError,
-          "stream reader option value must be a primitive (string, integer, float, boolean), got: #{inspect(value)}"
+    SparkEx.Internal.OptionUtils.normalize_option_value(value)
   end
 
   defp validate_path!(path) when is_binary(path) do

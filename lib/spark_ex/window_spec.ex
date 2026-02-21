@@ -35,13 +35,13 @@ defmodule SparkEx.WindowSpec do
         }
 
   @doc "Adds partition-by columns to the window specification."
-  @spec partition_by(t(), [Column.t() | String.t()]) :: t()
+  @spec partition_by(t(), [Column.t() | String.t() | atom()]) :: t()
   def partition_by(%__MODULE__{} = spec, cols) when is_list(cols) do
     %__MODULE__{spec | partition_spec: Enum.map(cols, &to_expr/1)}
   end
 
   @doc "Adds order-by columns to the window specification."
-  @spec order_by(t(), [Column.t() | String.t()]) :: t()
+  @spec order_by(t(), [Column.t() | String.t() | atom()]) :: t()
   def order_by(%__MODULE__{} = spec, cols) when is_list(cols) do
     order_exprs =
       Enum.map(cols, fn

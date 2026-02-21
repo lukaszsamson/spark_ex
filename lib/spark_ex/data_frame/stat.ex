@@ -90,7 +90,7 @@ defmodule SparkEx.DataFrame.Stat do
 
   - `col` — column name (string) or `Column` used for stratification.
   - `fractions` — map of `%{stratum_value => sampling_fraction}`.
-  - `seed` — optional random seed.
+  - `seed` — optional random seed. Auto-generated if not provided; pass an explicit seed for reproducibility.
 
   ## Examples
 

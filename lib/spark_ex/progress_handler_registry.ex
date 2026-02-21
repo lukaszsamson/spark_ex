@@ -11,15 +11,22 @@ defmodule SparkEx.ProgressHandlerRegistry do
   @spec register(String.t(), (map() -> any())) :: :ok
   def register(session_id, handler)
       when is_binary(session_id) and is_function(handler, 1) do
-    handler_id = {__MODULE__, session_id, make_ref()}
+    # Idempotent: silently ignore duplicate registrations (matches PySpark behavior)
+    case find_handler_entry(session_id, handler) do
+      {:ok, _} ->
+        :ok
 
-    :telemetry.attach(handler_id, @event, &__MODULE__.dispatch/4, %{
-      session_id: session_id,
-      handler: handler
-    })
+      :error ->
+        handler_id = {__MODULE__, session_id, make_ref()}
 
-    :ets.insert(@table, {session_id, handler_id, handler})
-    :ok
+        :telemetry.attach(handler_id, @event, &__MODULE__.dispatch/4, %{
+          session_id: session_id,
+          handler: handler
+        })
+
+        :ets.insert(@table, {session_id, handler_id, handler})
+        :ok
+    end
   end
 
   @spec remove(String.t(), (map() -> any())) :: :ok

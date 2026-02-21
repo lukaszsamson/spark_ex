@@ -158,7 +158,9 @@ defmodule SparkEx.DataFrame do
       Enum.reduce(columns, {[], []}, fn
         %Column{expr: {:col, name}}, {names, exprs} -> {[name | names], exprs}
         %Column{} = col, {names, exprs} -> {names, [col.expr | exprs]}
-        other, {names, exprs} -> {[to_string(other) | names], exprs}
+        name, {names, exprs} when is_binary(name) -> {[name | names], exprs}
+        name, {names, exprs} when is_atom(name) -> {[Atom.to_string(name) | names], exprs}
+        other, _acc -> raise ArgumentError, "drop expects column names (string/atom) or Column expressions, got: #{inspect(other)}"
       end)
 
     %__MODULE__{df | plan: {:drop, df.plan, Enum.reverse(names), Enum.reverse(col_exprs)}}
@@ -661,6 +663,9 @@ defmodule SparkEx.DataFrame do
 
   @doc """
   Renames multiple columns using a map of old -> new names.
+
+  When called with a function, makes an eager schema RPC to discover column
+  names. The map variant is fully lazy.
 
   ## Examples
 
@@ -2178,7 +2183,7 @@ defmodule SparkEx.DataFrame do
   defp normalize_column_expr(%Column{} = col), do: col.expr
   defp normalize_column_expr(name) when is_binary(name), do: {:col, name}
   defp normalize_column_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
-  defp normalize_column_expr(idx) when is_integer(idx), do: {:col, "_c#{idx}"}
+  defp normalize_column_expr(idx) when is_integer(idx) and idx >= 0, do: {:col, "_c#{idx}"}
   defp normalize_column_expr({:col, _, _} = expr), do: expr
   defp normalize_column_expr({:star, _, _} = expr), do: expr
   defp normalize_column_expr({:col_regex, _} = expr), do: expr

@@ -137,6 +137,10 @@ defmodule SparkEx.Writer do
   """
   @spec partition_by(t(), [String.t()]) :: t()
   def partition_by(%__MODULE__{} = writer, columns) when is_list(columns) do
+    if columns == [] do
+      raise ArgumentError, "partition_by columns should not be empty"
+    end
+
     %{writer | partition_by: Enum.map(columns, &to_string/1)}
   end
 
@@ -478,23 +482,15 @@ defmodule SparkEx.Writer do
   end
 
   defp stringify_options(opts) when is_map(opts) do
-    Map.new(opts, fn {k, v} -> {to_string(k), normalize_option_value(v)} end)
+    SparkEx.Internal.OptionUtils.stringify_options(opts)
   end
 
   defp stringify_options(opts) when is_list(opts) do
-    opts
-    |> Enum.into(%{})
-    |> stringify_options()
+    SparkEx.Internal.OptionUtils.stringify_options(opts)
   end
 
-  defp normalize_option_value(value) when is_binary(value), do: value
-  defp normalize_option_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp normalize_option_value(value) when is_float(value), do: Float.to_string(value)
-  defp normalize_option_value(value) when is_boolean(value), do: to_string(value)
-
   defp normalize_option_value(value) do
-    raise ArgumentError,
-          "writer option value must be a primitive (string, integer, float, boolean), got: #{inspect(value)}"
+    SparkEx.Internal.OptionUtils.normalize_option_value(value)
   end
 
   defp resolve_insert_into_opts(writer, overwrite) when is_boolean(overwrite) do

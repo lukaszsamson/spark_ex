@@ -65,7 +65,7 @@ defmodule SparkEx.M11.FunctionsTest do
         Functions.when_(Functions.col("x") |> Column.gt(0), Functions.lit("pos"))
         |> Functions.otherwise("zero")
 
-      assert_raise ArgumentError, ~r/otherwise.*once/, fn ->
+      assert_raise ArgumentError, ~r/otherwise.*already been called/, fn ->
         Functions.otherwise(col, "neg")
       end
     end

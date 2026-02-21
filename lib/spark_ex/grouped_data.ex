@@ -5,6 +5,10 @@ defmodule SparkEx.GroupedData do
   Aggregation functions like `agg/2` can be applied to produce a new DataFrame.
   Convenience methods `count/1`, `min/2`, `max/2`, `sum/2`, `avg/2`, `mean/2`
   apply common aggregations. `pivot/3` enables pivot-style aggregation.
+
+  Note: convenience numeric aggregation methods (`sum/1`, `avg/1`, `min/1`, `max/1`, `mean/1`)
+  called without explicit columns make an eager schema RPC to discover numeric columns.
+  Each call triggers a separate round-trip. Pass explicit column names to avoid this.
   """
 
   alias SparkEx.Column
