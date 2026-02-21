@@ -174,6 +174,23 @@ defmodule SparkEx.DataFrameTest do
 
       assert {:ok, [{"id", "LONG"}]} = DataFrame.dtypes(df)
     end
+
+    test "accepts {:ok, dataframe} for create_dataframe-style pipelines" do
+      schema = %Spark.Connect.DataType.Struct{
+        fields: [
+          %Spark.Connect.DataType.StructField{
+            name: "id",
+            data_type: %Spark.Connect.DataType{kind: {:long, %Spark.Connect.DataType.Long{}}},
+            nullable: true
+          }
+        ]
+      }
+
+      {:ok, session} = SchemaSession.start_link(schema)
+      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      assert {:ok, [{"id", "LONG"}]} = DataFrame.dtypes({:ok, df})
+    end
   end
 
   describe "SparkEx.range/3" do

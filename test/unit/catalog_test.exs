@@ -6,21 +6,66 @@ defmodule SparkEx.CatalogTest do
   defmodule FakeCatalogSession do
     use GenServer
 
-    def start_link(test_pid, current_db, databases \\ ["analytics"]) do
-      GenServer.start_link(__MODULE__, {test_pid, current_db, databases})
+    def start_link(test_pid, current_db, databases \\ ["analytics"], current_catalog \\ "spark_catalog") do
+      GenServer.start_link(__MODULE__, {test_pid, current_db, databases, current_catalog})
     end
 
     @impl true
-    def init({test_pid, current_db, databases}),
+    def init({test_pid, current_db, databases, current_catalog}),
       do:
         {:ok,
          %{
-           test_pid: test_pid,
-           current_db: current_db,
-           databases: databases
-         }}
+            test_pid: test_pid,
+            current_db: current_db,
+            databases: databases,
+            current_catalog: current_catalog
+          }}
 
     @impl true
+    def handle_call({:execute_collect, {:catalog, {:current_catalog}}, _opts}, _from, state) do
+      {:reply, {:ok, [%{"current_catalog" => state.current_catalog}]}, state}
+    end
+
+    def handle_call(
+          {:execute_collect, {:catalog, {:get_table, table_name, db_name}}, _opts},
+          _from,
+          state
+        ) do
+      send(state.test_pid, {:get_table_called, table_name, db_name})
+      short_name = table_name |> String.split(".") |> List.last()
+
+      row = %{
+        "name" => short_name,
+        "catalog" => "sfx",
+        "namespace" => ["sfx_dev_warehouse"],
+        "description" => nil,
+        "tableType" => "MANAGED",
+        "isTemporary" => false
+      }
+
+      {:reply, {:ok, [row]}, state}
+    end
+
+    def handle_call(
+          {:execute_collect, {:catalog, {:list_columns, table_name, db_name}}, _opts},
+          _from,
+          state
+        ) do
+      send(state.test_pid, {:list_columns_called, table_name, db_name})
+
+      row = %{
+        "name" => "id",
+        "description" => nil,
+        "dataType" => "int",
+        "nullable" => true,
+        "isPartition" => false,
+        "isBucket" => false,
+        "isCluster" => false
+      }
+
+      {:reply, {:ok, [row]}, state}
+    end
+
     def handle_call({:execute_collect, {:catalog, {:current_database}}, _opts}, _from, state) do
       {:reply, {:ok, [%{"current_database" => state.current_db}]}, state}
     end
@@ -96,5 +141,23 @@ defmodule SparkEx.CatalogTest do
     assert {:ok, false} = Catalog.table_exists?(session, "orders", "warehouse")
     assert_receive {:table_exists_called, "orders", "warehouse"}
     refute_receive {:list_tables_called, "warehouse", "orders"}
+  end
+
+  test "get_table/3 qualifies db_name with current catalog" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "sfx_dev_warehouse", ["sfx_dev_warehouse"], "sfx")
+
+    assert {:ok, %Catalog.Table{name: "orders"}} =
+             Catalog.get_table(session, "orders", "sfx_dev_warehouse")
+
+    assert_receive {:get_table_called, "sfx.sfx_dev_warehouse.orders", nil}
+  end
+
+  test "list_columns/3 qualifies db_name with current catalog" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "sfx_dev_warehouse", ["sfx_dev_warehouse"], "sfx")
+
+    assert {:ok, [%Catalog.ColumnInfo{name: "id"}]} =
+             Catalog.list_columns(session, "orders", "sfx_dev_warehouse")
+
+    assert_receive {:list_columns_called, "sfx.sfx_dev_warehouse.orders", nil}
   end
 end

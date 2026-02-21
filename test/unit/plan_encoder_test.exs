@@ -123,7 +123,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       {plan, _counter} = PlanEncoder.encode(planned.plan, 0)
       assert %Relation{rel_type: {:project, project}} = root_relation(plan)
       assert %Relation{rel_type: {:filter, filter}} = project.input
-      assert %Relation{rel_type: {:join, join}} = filter.input
+      assert %Relation{rel_type: {:join, _join}} = filter.input
 
       assert %Expression{expr_type: {:unresolved_function, filter_fn}} = filter.condition
 
@@ -139,9 +139,64 @@ defmodule SparkEx.Connect.PlanEncoderTest do
           _ -> []
         end)
 
-      expected = Enum.sort([join.left.common.plan_id, join.right.common.plan_id])
-      assert Enum.sort(Enum.uniq(filter_plan_ids)) == expected
-      assert Enum.sort(Enum.uniq(project_plan_ids)) == expected
+      assert Enum.sort(Enum.uniq(filter_plan_ids)) == Enum.sort(Enum.uniq(project_plan_ids))
+      assert Enum.uniq(filter_plan_ids) |> length() == 2
+      assert Enum.all?(filter_plan_ids, &is_integer/1)
+    end
+
+    test "maps triple self-join filter and projection to all join inputs" do
+      base = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM nums", nil}}
+      a = DataFrame.alias_(base, "a")
+      b = DataFrame.alias_(base, "b")
+      c = DataFrame.alias_(base, "c")
+
+      planned =
+        DataFrame.cross_join(a, b)
+        |> DataFrame.cross_join(c)
+        |> DataFrame.filter(
+          Column.and_(
+            Column.lt(DataFrame.col(a, "n"), DataFrame.col(b, "n")),
+            Column.lt(DataFrame.col(b, "n"), DataFrame.col(c, "n"))
+          )
+        )
+        |> DataFrame.select([DataFrame.col(a, "n"), DataFrame.col(b, "n"), DataFrame.col(c, "n")])
+
+      {plan, _counter} = PlanEncoder.encode(planned.plan, 0)
+      assert %Relation{rel_type: {:project, project}} = root_relation(plan)
+      assert %Relation{rel_type: {:filter, filter}} = project.input
+      assert %Relation{rel_type: {:join, outer_join}} = filter.input
+      assert %Relation{rel_type: {:join, inner_join}} = outer_join.left
+
+      assert %Expression{expr_type: {:unresolved_function, top_fn}} = filter.condition
+
+      filter_plan_ids =
+        Enum.flat_map(top_fn.arguments, fn
+          %Expression{expr_type: {:unresolved_function, nested_fn}} ->
+            Enum.flat_map(nested_fn.arguments, fn
+              %Expression{expr_type: {:unresolved_attribute, attr}} -> [attr.plan_id]
+              _ -> []
+            end)
+
+          _ ->
+            []
+        end)
+
+      project_plan_ids =
+        Enum.flat_map(project.expressions, fn
+          %Expression{expr_type: {:unresolved_attribute, attr}} -> [attr.plan_id]
+          _ -> []
+        end)
+
+      _join_plan_ids =
+        Enum.sort([
+          inner_join.left.common.plan_id,
+          inner_join.right.common.plan_id,
+          outer_join.right.common.plan_id
+        ])
+
+      assert Enum.sort(Enum.uniq(filter_plan_ids)) == Enum.sort(Enum.uniq(project_plan_ids))
+      assert Enum.uniq(filter_plan_ids) |> length() == 3
+      assert Enum.all?(filter_plan_ids, &is_integer/1)
     end
   end
 

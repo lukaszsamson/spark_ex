@@ -163,9 +163,19 @@ defmodule SparkEx.Catalog do
 
   @spec get_table(GenServer.server(), String.t()) :: {:ok, Table.t()} | {:error, term()}
   def get_table(session, table_name) when is_binary(table_name) do
-    case execute_catalog(session, {:get_table, table_name, nil}) do
-      {:ok, [row | _]} -> {:ok, parse_table(row)}
-      {:ok, []} -> {:error, :not_found}
+    get_table(session, table_name, nil)
+  end
+
+  @spec get_table(GenServer.server(), String.t(), String.t() | nil) ::
+          {:ok, Table.t()} | {:error, term()}
+  def get_table(session, table_name, db_name) when is_binary(table_name) do
+    with {:ok, {table_name, db_name}} <- resolve_table_lookup(session, table_name, db_name),
+         {:ok, rows} <- execute_catalog(session, {:get_table, table_name, db_name}) do
+      case rows do
+        [row | _] -> {:ok, parse_table(row)}
+        [] -> {:error, :not_found}
+      end
+    else
       {:error, _} = err -> err
     end
   end
@@ -179,8 +189,10 @@ defmodule SparkEx.Catalog do
   @spec list_columns(GenServer.server(), String.t(), String.t() | nil) ::
           {:ok, [ColumnInfo.t()]} | {:error, term()}
   def list_columns(session, table_name, db_name \\ nil) when is_binary(table_name) do
-    case execute_catalog(session, {:list_columns, table_name, db_name}) do
-      {:ok, rows} -> {:ok, Enum.map(rows, &parse_column_info/1)}
+    with {:ok, {table_name, db_name}} <- resolve_table_lookup(session, table_name, db_name),
+         {:ok, rows} <- execute_catalog(session, {:list_columns, table_name, db_name}) do
+      {:ok, Enum.map(rows, &parse_column_info/1)}
+    else
       {:error, _} = err -> err
     end
   end
@@ -402,6 +414,34 @@ defmodule SparkEx.Catalog do
 
       {:error, _} = err ->
         err
+    end
+  end
+
+  defp resolve_table_lookup(_session, table_name, nil), do: {:ok, {table_name, nil}}
+
+  defp resolve_table_lookup(session, table_name, db_name)
+       when is_binary(table_name) and is_binary(db_name) do
+    cond do
+      table_name != "" and String.contains?(table_name, ".") ->
+        {:ok, {table_name, nil}}
+
+      db_name != "" and String.contains?(db_name, ".") ->
+        {:ok, {"#{db_name}.#{table_name}", nil}}
+
+      true ->
+        case current_catalog(session) do
+          {:ok, "spark_catalog"} ->
+            {:ok, {table_name, db_name}}
+
+          {:ok, catalog} when is_binary(catalog) and catalog != "" ->
+            {:ok, {"#{catalog}.#{db_name}.#{table_name}", nil}}
+
+          {:ok, _} ->
+            {:ok, {table_name, db_name}}
+
+          {:error, _} = err ->
+            err
+        end
     end
   end
 

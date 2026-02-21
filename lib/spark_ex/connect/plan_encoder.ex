@@ -2965,9 +2965,15 @@ defmodule SparkEx.Connect.PlanEncoder do
        when is_map(join) do
     [join.left, join.right]
     |> Enum.flat_map(fn
-      %Relation{common: %RelationCommon{plan_id: plan_id}} when is_integer(plan_id) -> [plan_id]
+      %Relation{} = relation ->
+        case source_relation_plan_ids(relation) do
+          [] -> default_source_relation_plan_ids(relation)
+          ids -> ids
+        end
+
       _ -> []
     end)
+    |> Enum.uniq()
   end
 
   defp source_relation_plan_ids(%Relation{rel_type: {_type, rel}} = relation)

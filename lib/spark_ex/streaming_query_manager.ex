@@ -32,6 +32,10 @@ defmodule SparkEx.StreamingQueryManager do
     end
   end
 
+  @doc "Alias for `active/1`."
+  @spec list_active(GenServer.server()) :: {:ok, [StreamingQuery.t()]} | {:error, term()}
+  def list_active(session), do: active(session)
+
   @doc """
   Returns the streaming query with the given ID, or nil if not found.
   """

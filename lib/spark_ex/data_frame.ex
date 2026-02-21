@@ -1919,7 +1919,8 @@ defmodule SparkEx.DataFrame do
   @doc """
   Returns list of `{column_name, type_string}` tuples.
   """
-  @spec dtypes(t()) :: {:ok, [{String.t(), String.t()}]} | {:error, term()}
+  @spec dtypes(t() | {:ok, t()} | {:error, term()}) ::
+          {:ok, [{String.t(), String.t()}]} | {:error, term()}
   def dtypes(%__MODULE__{} = df) do
     with {:ok, struct} <- unwrap_schema(df) do
       dtypes =
@@ -1930,6 +1931,9 @@ defmodule SparkEx.DataFrame do
       {:ok, dtypes}
     end
   end
+
+  def dtypes({:ok, %__MODULE__{} = df}), do: dtypes(df)
+  def dtypes({:error, _} = error), do: error
 
   defp unwrap_schema(%__MODULE__{} = df) do
     case schema(df) do
