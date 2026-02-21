@@ -81,17 +81,41 @@ defmodule SparkEx.Connect.PlanEncoder do
     {plan_id, counter} = next_id(counter)
     {root, counter} = encode_relation(root_plan, counter)
 
-    {references, counter} =
-      Enum.map_reduce(reference_plans, counter, fn ref_plan, acc ->
-        encode_relation(ref_plan, acc)
-      end)
+    reference_plans =
+      if Enum.all?(reference_plans, &explicit_reference_plan?/1) do
+        reference_plan_ids =
+          reference_plans
+          |> Enum.map(&extract_referenced_plan_id/1)
+          |> Enum.map(fn {id, _plan} -> id end)
+          |> MapSet.new()
 
-    relation = %Relation{
-      common: %RelationCommon{plan_id: plan_id},
-      rel_type: {:with_relations, %WithRelations{root: root, references: references}}
-    }
+        used_reference_ids =
+          collect_expression_plan_ids_from_relation(root, MapSet.new())
+          |> MapSet.intersection(reference_plan_ids)
 
-    {relation, counter}
+        Enum.filter(reference_plans, fn ref_plan ->
+          {id, _plan} = extract_referenced_plan_id(ref_plan)
+          MapSet.member?(used_reference_ids, id)
+        end)
+      else
+        reference_plans
+      end
+
+    if reference_plans == [] do
+      {root, counter}
+    else
+      {references, counter} =
+        Enum.map_reduce(reference_plans, counter, fn ref_plan, acc ->
+          encode_relation(ref_plan, acc)
+        end)
+
+      relation = %Relation{
+        common: %RelationCommon{plan_id: plan_id},
+        rel_type: {:with_relations, %WithRelations{root: root, references: references}}
+      }
+
+      {relation, counter}
+    end
   end
 
   def encode_relation({:range, start, end_, step, num_partitions}, counter) do
@@ -296,6 +320,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:filter, child_plan, condition}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
+
     cond_expr =
       condition
       |> remap_expr_plan_ids_to_input(child)
@@ -493,6 +518,14 @@ defmodule SparkEx.Connect.PlanEncoder do
     {left, counter} = encode_relation(left_plan, counter)
     {right, counter} = encode_relation(right_plan, counter)
 
+    {join_condition, using_columns} =
+      normalize_join_condition_using_columns(
+        join_condition,
+        using_columns || [],
+        left_plan,
+        right_plan
+      )
+
     join_cond =
       case join_condition do
         nil ->
@@ -513,7 +546,7 @@ defmodule SparkEx.Connect.PlanEncoder do
            right: right,
            join_condition: join_cond,
            join_type: encode_join_type(join_type),
-           using_columns: using_columns || []
+           using_columns: using_columns
          }}
     }
 
@@ -1626,8 +1659,150 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp collect_subquery_references(plan, counter) do
     {updated_plan, _plan_ids, refs, counter} = rewrite_plan(plan, %{}, [], counter)
-    {updated_plan, Enum.reverse(refs), counter}
+    refs = retain_used_references(updated_plan, Enum.reverse(refs))
+    {updated_plan, refs, counter}
   end
+
+  defp retain_used_references(plan, refs) do
+    refs_by_id = Map.new(refs, fn %{id: id} = ref -> {id, ref} end)
+    used_ids = collect_bound_plan_ids(plan, MapSet.new())
+    used_ids = expand_used_ref_ids(used_ids, refs_by_id, %{})
+
+    Enum.filter(refs, fn %{id: id} ->
+      MapSet.member?(used_ids, id)
+    end)
+  end
+
+  defp expand_used_ref_ids(pending_ids, refs_by_id, visited_ids) do
+    next_id = Enum.find(pending_ids, fn id -> not Map.has_key?(visited_ids, id) end)
+
+    case next_id do
+      nil ->
+        pending_ids
+
+      id ->
+        visited_ids = Map.put(visited_ids, id, true)
+
+        pending_ids =
+          case Map.fetch(refs_by_id, id) do
+            {:ok, %{plan: ref_plan}} ->
+              collect_bound_plan_ids(ref_plan, pending_ids)
+
+            :error ->
+              pending_ids
+          end
+
+        expand_used_ref_ids(pending_ids, refs_by_id, visited_ids)
+    end
+  end
+
+  defp collect_bound_plan_ids({:col, _name, plan_id}, acc) when is_integer(plan_id),
+    do: MapSet.put(acc, plan_id)
+
+  defp collect_bound_plan_ids({:metadata_col, _name, plan_id}, acc) when is_integer(plan_id),
+    do: MapSet.put(acc, plan_id)
+
+  defp collect_bound_plan_ids({:col_regex, _name, plan_id}, acc) when is_integer(plan_id),
+    do: MapSet.put(acc, plan_id)
+
+  defp collect_bound_plan_ids({:star, _target, plan_id}, acc) when is_integer(plan_id),
+    do: MapSet.put(acc, plan_id)
+
+  defp collect_bound_plan_ids({:subquery, _type, plan_id, _opts}, acc) when is_integer(plan_id),
+    do: MapSet.put(acc, plan_id)
+
+  defp collect_bound_plan_ids(%Column{expr: expr}, acc), do: collect_bound_plan_ids(expr, acc)
+
+  defp collect_bound_plan_ids(list, acc) when is_list(list) do
+    Enum.reduce(list, acc, &collect_bound_plan_ids/2)
+  end
+
+  defp collect_bound_plan_ids(tuple, acc) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.reduce(acc, &collect_bound_plan_ids/2)
+  end
+
+  defp collect_bound_plan_ids(%_{} = struct, acc) do
+    struct
+    |> Map.from_struct()
+    |> Map.values()
+    |> Enum.reduce(acc, &collect_bound_plan_ids/2)
+  end
+
+  defp collect_bound_plan_ids(map, acc) when is_map(map) do
+    map
+    |> Map.values()
+    |> Enum.reduce(acc, &collect_bound_plan_ids/2)
+  end
+
+  defp collect_bound_plan_ids(_value, acc), do: acc
+
+  defp collect_expression_plan_ids_from_relation(%Relation{} = relation, acc) do
+    relation
+    |> Map.from_struct()
+    |> Map.values()
+    |> Enum.reduce(acc, &collect_expression_plan_ids_from_value/2)
+  end
+
+  defp collect_expression_plan_ids_from_value(%Relation{} = relation, acc),
+    do: collect_expression_plan_ids_from_relation(relation, acc)
+
+  defp collect_expression_plan_ids_from_value(%Expression{expr_type: expr_type}, acc) do
+    acc =
+      case expr_type do
+        {:unresolved_attribute, %{plan_id: plan_id}} when is_integer(plan_id) ->
+          MapSet.put(acc, plan_id)
+
+        {:unresolved_regex, %{plan_id: plan_id}} when is_integer(plan_id) ->
+          MapSet.put(acc, plan_id)
+
+        {:unresolved_star, %{plan_id: plan_id}} when is_integer(plan_id) ->
+          MapSet.put(acc, plan_id)
+
+        {:subquery_expression, %{plan_id: plan_id}} when is_integer(plan_id) ->
+          MapSet.put(acc, plan_id)
+
+        _ ->
+          acc
+      end
+
+    collect_expression_plan_ids_from_value(expr_type, acc)
+  end
+
+  defp collect_expression_plan_ids_from_value(%RelationCommon{}, acc), do: acc
+
+  defp collect_expression_plan_ids_from_value(%_{} = struct, acc) do
+    struct
+    |> Map.from_struct()
+    |> Map.values()
+    |> Enum.reduce(acc, &collect_expression_plan_ids_from_value/2)
+  end
+
+  defp collect_expression_plan_ids_from_value(list, acc) when is_list(list) do
+    Enum.reduce(list, acc, &collect_expression_plan_ids_from_value/2)
+  end
+
+  defp collect_expression_plan_ids_from_value(tuple, acc) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.reduce(acc, &collect_expression_plan_ids_from_value/2)
+  end
+
+  defp collect_expression_plan_ids_from_value(map, acc) when is_map(map) do
+    map
+    |> Map.values()
+    |> Enum.reduce(acc, &collect_expression_plan_ids_from_value/2)
+  end
+
+  defp collect_expression_plan_ids_from_value(_value, acc), do: acc
+
+  defp explicit_reference_plan?(%{plan_id: plan_id, plan: _plan}) when is_integer(plan_id),
+    do: true
+
+  defp explicit_reference_plan?({plan_id, _plan}) when is_integer(plan_id), do: true
+  defp explicit_reference_plan?({:plan_id, plan_id, _plan}) when is_integer(plan_id), do: true
+  defp explicit_reference_plan?(_), do: false
 
   defp rewrite_plan({:with_relations, root_plan, reference_plans}, plan_ids, refs, counter) do
     {root_plan, plan_ids, refs, counter} = rewrite_plan(root_plan, plan_ids, refs, counter)
@@ -2558,6 +2733,73 @@ defmodule SparkEx.Connect.PlanEncoder do
     remap_expr_plan_ids(expr, [left_plan_id, right_plan_id])
   end
 
+  defp normalize_join_condition_using_columns(nil, using_columns, _left_plan, _right_plan),
+    do: {nil, using_columns}
+
+  defp normalize_join_condition_using_columns(
+         join_condition,
+         using_columns,
+         left_plan,
+         right_plan
+       ) do
+    if using_columns == [] do
+      case extract_single_column_using_join(join_condition, left_plan, right_plan) do
+        nil -> {join_condition, using_columns}
+        column_name -> {nil, [column_name]}
+      end
+    else
+      {join_condition, using_columns}
+    end
+  end
+
+  defp extract_single_column_using_join(
+         {:fn, "==", [left_expr, right_expr], _distinct},
+         left_plan,
+         right_plan
+       ) do
+    with {:ok, {:left, column_name}} <- join_column_side(left_expr, left_plan, right_plan),
+         {:ok, {:right, ^column_name}} <- join_column_side(right_expr, left_plan, right_plan) do
+      column_name
+    else
+      _ ->
+        with {:ok, {:right, column_name}} <- join_column_side(left_expr, left_plan, right_plan),
+             {:ok, {:left, ^column_name}} <- join_column_side(right_expr, left_plan, right_plan) do
+          column_name
+        else
+          _ ->
+            with {:ok, {left_plan_id, column_name}} when is_integer(left_plan_id) <-
+                   join_column_plan_id(left_expr),
+                 {:ok, {right_plan_id, ^column_name}} when is_integer(right_plan_id) <-
+                   join_column_plan_id(right_expr),
+                 true <- left_plan_id != right_plan_id do
+              column_name
+            else
+              _ -> nil
+            end
+        end
+    end
+  end
+
+  defp extract_single_column_using_join(_expr, _left_plan, _right_plan), do: nil
+
+  defp join_column_side({:col, column_name, source_plan}, left_plan, right_plan)
+       when is_binary(column_name) do
+    cond do
+      source_plan == left_plan -> {:ok, {:left, column_name}}
+      source_plan == right_plan -> {:ok, {:right, column_name}}
+      true -> :error
+    end
+  end
+
+  defp join_column_side(_expr, _left_plan, _right_plan), do: :error
+
+  defp join_column_plan_id({:col, column_name, plan_id})
+       when is_binary(column_name) and is_integer(plan_id) do
+    {:ok, {plan_id, column_name}}
+  end
+
+  defp join_column_plan_id(_expr), do: :error
+
   defp remap_expr_plan_ids_to_input(expr, %Relation{} = input_relation) do
     candidate_plan_ids = source_relation_plan_ids(input_relation)
     remap_expr_plan_ids(expr, candidate_plan_ids)
@@ -2685,7 +2927,12 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp do_remap_expr_plan_ids(value, _candidates, _known_ids, state), do: {value, state}
 
-  defp resolve_expr_plan_id_mapping(plan_id, candidates, known_ids, %{assignments: assignments} = state) do
+  defp resolve_expr_plan_id_mapping(
+         plan_id,
+         candidates,
+         known_ids,
+         %{assignments: assignments} = state
+       ) do
     case assignments do
       %{^plan_id => mapped_plan_id} ->
         {mapped_plan_id, state}
@@ -2734,7 +2981,8 @@ defmodule SparkEx.Connect.PlanEncoder do
     end
   end
 
-  defp source_relation_plan_ids(%Relation{} = relation), do: default_source_relation_plan_ids(relation)
+  defp source_relation_plan_ids(%Relation{} = relation),
+    do: default_source_relation_plan_ids(relation)
 
   defp default_source_relation_plan_ids(%{common: %RelationCommon{plan_id: plan_id}})
        when is_integer(plan_id),

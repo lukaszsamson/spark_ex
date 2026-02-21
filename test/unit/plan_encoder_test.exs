@@ -70,21 +70,11 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       join_condition = Column.eq(DataFrame.col(left, "dept_id"), DataFrame.col(right, "dept_id"))
       joined = DataFrame.join(left, right, join_condition, :inner)
       {plan, _counter} = PlanEncoder.encode(joined.plan, 0)
-
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
-               plan
-
-      assert %Relation{rel_type: {:join, join}} = with_relations.root
-      assert %Expression{expr_type: {:unresolved_function, unresolved_fn}} = join.join_condition
-
-      condition_plan_ids =
-        Enum.map(unresolved_fn.arguments, fn
-          %Expression{expr_type: {:unresolved_attribute, attr}} -> attr.plan_id
-          _ -> nil
-        end)
-
-      assert Enum.sort(condition_plan_ids) ==
-               Enum.sort([join.left.common.plan_id, join.right.common.plan_id])
+      assert %Relation{rel_type: {:join, join}} = root_relation(plan)
+      assert is_nil(join.join_condition)
+      assert join.using_columns == ["dept_id"]
+      assert is_integer(join.left.common.plan_id)
+      assert is_integer(join.right.common.plan_id)
     end
 
     test "maps multi-predicate join conditions to only left/right plan ids" do
@@ -99,11 +89,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
       joined = DataFrame.join(left, right, join_condition, :inner)
       {plan, _counter} = PlanEncoder.encode(joined.plan, 0)
-
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
-               plan
-
-      assert %Relation{rel_type: {:join, join}} = with_relations.root
+      assert %Relation{rel_type: {:join, join}} = root_relation(plan)
       assert %Expression{expr_type: {:unresolved_function, top_fn}} = join.join_condition
 
       condition_plan_ids =
@@ -135,11 +121,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
         |> DataFrame.select([DataFrame.col(e1, "name"), DataFrame.col(e2, "name")])
 
       {plan, _counter} = PlanEncoder.encode(planned.plan, 0)
-
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
-               plan
-
-      assert %Relation{rel_type: {:project, project}} = with_relations.root
+      assert %Relation{rel_type: {:project, project}} = root_relation(plan)
       assert %Relation{rel_type: {:filter, filter}} = project.input
       assert %Relation{rel_type: {:join, join}} = filter.input
 
@@ -184,11 +166,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT 1 AS id, 2 AS name_a", nil}}
       selected = DataFrame.select(df, [DataFrame.col(df, "id"), DataFrame.col_regex(df, "^name")])
       {plan, _counter} = PlanEncoder.encode(selected.plan, 0)
-
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
-               plan
-
-      assert %Relation{rel_type: {:project, project}} = with_relations.root
+      assert %Relation{rel_type: {:project, project}} = root_relation(plan)
 
       plan_ids =
         Enum.flat_map(project.expressions, fn
@@ -471,11 +449,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
           0
         )
 
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
-               plan
-
-      assert %Spark.Connect.WithRelations{root: %Relation{rel_type: {:to_schema, to_schema}}} =
-               with_relations
+      assert %Relation{rel_type: {:to_schema, to_schema}} = root_relation(plan)
 
       assert %Spark.Connect.ToSchema{} = to_schema
       assert %Spark.Connect.DataType{kind: {:unparsed, _}} = to_schema.schema
@@ -493,11 +467,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
           0
         )
 
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
-               plan
-
-      assert %Spark.Connect.WithRelations{root: %Relation{rel_type: {:to_schema, to_schema}}} =
-               with_relations
+      assert %Relation{rel_type: {:to_schema, to_schema}} = root_relation(plan)
 
       assert %Spark.Connect.ToSchema{} = to_schema
       assert %Spark.Connect.DataType{kind: {:struct, struct_schema}} = to_schema.schema
@@ -517,11 +487,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
           0
         )
 
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
-               plan
-
-      assert %Spark.Connect.WithRelations{root: %Relation{rel_type: {:to_schema, to_schema}}} =
-               with_relations
+      assert %Relation{rel_type: {:to_schema, to_schema}} = root_relation(plan)
 
       assert %Spark.Connect.ToSchema{} = to_schema
       assert %Spark.Connect.DataType{kind: {:long, _}} = to_schema.schema
@@ -533,13 +499,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       {plan, _counter} =
         PlanEncoder.encode({:with_relations, {:cached_remote_relation, "rel-1"}, []}, 0)
 
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
-               plan
-
-      assert %Spark.Connect.WithRelations{
-               root: %Relation{rel_type: {:cached_remote_relation, cached}}
-             } =
-               with_relations
+      assert %Relation{rel_type: {:cached_remote_relation, cached}} = root_relation(plan)
 
       assert %Spark.Connect.CachedRemoteRelation{relation_id: "rel-1"} = cached
     end
@@ -660,16 +620,14 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       plan = {:project, source_plan, [{:col, "id", source_plan}]}
 
       {encoded, _} = PlanEncoder.encode(plan, 0)
-
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
-      assert length(wr.references) == 1
-      assert %Relation{rel_type: {:project, project}} = wr.root
+      assert %Relation{rel_type: {:project, project}} = root_relation(encoded)
       [expr] = project.expressions
 
       assert {:unresolved_attribute, %Expression.UnresolvedAttribute{plan_id: plan_id}} =
                expr.expr_type
 
       assert is_integer(plan_id)
+      assert plan_id == project.input.common.plan_id
     end
   end
 
@@ -777,4 +735,9 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert length(agg.grouping_sets) == 2
     end
   end
+
+  defp root_relation(%Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}}),
+    do: wr.root
+
+  defp root_relation(%Plan{op_type: {:root, %Relation{} = relation}}), do: relation
 end

@@ -784,7 +784,7 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   defp decode_single_batch(ipc_data) do
     if Code.ensure_loaded?(Explorer.DataFrame) do
-      case Explorer.DataFrame.load_ipc_stream(ipc_data) do
+      case safe_load_ipc_stream(ipc_data) do
         {:ok, df} ->
           {:ok, Explorer.DataFrame.to_rows(df)}
 
@@ -797,7 +797,7 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp decode_with_fallback(ipc_data, err_stream) do
-    case Explorer.DataFrame.load_ipc(ipc_data) do
+    case safe_load_ipc(ipc_data) do
       {:ok, df} ->
         {:ok, Explorer.DataFrame.to_rows(df)}
 
@@ -909,18 +909,38 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   defp decode_single_batch_explorer(ipc_data) do
     if Code.ensure_loaded?(Explorer.DataFrame) do
-      case Explorer.DataFrame.load_ipc_stream(ipc_data) do
+      case safe_load_ipc_stream(ipc_data) do
         {:ok, df} ->
           {:ok, df}
 
         {:error, err_stream} ->
-          case Explorer.DataFrame.load_ipc(ipc_data) do
+          case safe_load_ipc(ipc_data) do
             {:ok, df} -> {:ok, df}
             {:error, _} -> {:error, {:arrow_decode_failed, err_stream}}
           end
       end
     else
       {:error, {:missing_dependency, :explorer}}
+    end
+  end
+
+  defp safe_load_ipc_stream(ipc_data) do
+    try do
+      Explorer.DataFrame.load_ipc_stream(ipc_data)
+    rescue
+      error -> {:error, error}
+    catch
+      kind, reason -> {:error, {kind, reason}}
+    end
+  end
+
+  defp safe_load_ipc(ipc_data) do
+    try do
+      Explorer.DataFrame.load_ipc(ipc_data)
+    rescue
+      error -> {:error, error}
+    catch
+      kind, reason -> {:error, {kind, reason}}
     end
   end
 
