@@ -46,19 +46,27 @@ defmodule SparkEx.Unit.PlanEncoderM10Test do
   # ── WithColumnsRenamed ──
 
   describe "encode_relation :with_columns_renamed" do
-    test "encodes rename pairs" do
+    test "encodes rename pairs via with_columns/drop compatibility plan" do
       {relation, _} =
         PlanEncoder.encode_relation(
           {:with_columns_renamed, @base_plan, [{"old", "new"}, {"a", "b"}]},
           0
         )
 
-      assert %Relation{rel_type: {:with_columns_renamed, renamed}} = relation
-      assert length(renamed.renames) == 2
+      assert %Relation{rel_type: {:drop, final_drop}} = relation
+      assert length(final_drop.column_names) == 2
 
-      [r1, r2] = renamed.renames
-      assert %Spark.Connect.WithColumnsRenamed.Rename{col_name: "old", new_col_name: "new"} = r1
-      assert %Spark.Connect.WithColumnsRenamed.Rename{col_name: "a", new_col_name: "b"} = r2
+      assert Enum.all?(
+               final_drop.column_names,
+               &String.starts_with?(&1, "__spark_ex_rename_tmp_")
+             )
+
+      assert %Relation{rel_type: {:with_columns, rename_stage}} = final_drop.input
+      assert length(rename_stage.aliases) == 2
+      assert %Relation{rel_type: {:drop, drop_originals}} = rename_stage.input
+      assert Enum.sort(drop_originals.column_names) == ["a", "old"]
+      assert %Relation{rel_type: {:with_columns, temp_stage}} = drop_originals.input
+      assert length(temp_stage.aliases) == 2
     end
   end
 

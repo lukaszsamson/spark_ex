@@ -384,8 +384,24 @@ defmodule SparkEx.Catalog do
   defp resolve_catalog_db_name(session, nil) do
     case current_database(session) do
       {:ok, db_name} when is_binary(db_name) and db_name != "" -> {:ok, db_name}
-      {:ok, _} -> {:ok, nil}
+      {:ok, _} -> resolve_fallback_catalog_db_name(session)
       {:error, _} = err -> err
+    end
+  end
+
+  defp resolve_fallback_catalog_db_name(session) do
+    case execute_catalog(session, {:list_databases, nil}) do
+      {:ok, [first | _]} when is_map(first) ->
+        case first["name"] do
+          db_name when is_binary(db_name) and db_name != "" -> {:ok, db_name}
+          _ -> {:ok, nil}
+        end
+
+      {:ok, _} ->
+        {:ok, nil}
+
+      {:error, _} = err ->
+        err
     end
   end
 

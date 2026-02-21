@@ -603,25 +603,9 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   def encode_relation({:with_columns_renamed, child_plan, renames}, counter) do
-    {plan_id, counter} = next_id(counter)
-    {child, counter} = encode_relation(child_plan, counter)
-
-    rename_protos =
-      Enum.map(renames, fn {old_name, new_name} ->
-        %Spark.Connect.WithColumnsRenamed.Rename{
-          col_name: to_string(old_name),
-          new_col_name: to_string(new_name)
-        }
-      end)
-
-    relation = %Relation{
-      common: %RelationCommon{plan_id: plan_id},
-      rel_type:
-        {:with_columns_renamed,
-         %Spark.Connect.WithColumnsRenamed{input: child, renames: rename_protos}}
-    }
-
-    {relation, counter}
+    # Spark 3.5 does not reliably apply WithColumnsRenamed relation.
+    # Expand into supported with_columns/drop primitives for compatibility.
+    encode_relation(expand_with_columns_renamed_plan(child_plan, renames), counter)
   end
 
   def encode_relation({:repartition, child_plan, num_partitions, shuffle}, counter) do
@@ -2528,6 +2512,72 @@ defmodule SparkEx.Connect.PlanEncoder do
     |> case do
       :non_literal -> []
       literals -> Enum.reverse(literals)
+    end
+  end
+
+  defp expand_with_columns_renamed_plan(child_plan, renames) do
+    normalized_renames =
+      renames
+      |> Enum.map(fn {old_name, new_name} -> {to_string(old_name), to_string(new_name)} end)
+      |> Enum.reject(fn {old_name, new_name} -> old_name == new_name end)
+
+    if normalized_renames == [] do
+      child_plan
+    else
+      reserved_names =
+        normalized_renames
+        |> Enum.flat_map(fn {old_name, new_name} -> [old_name, new_name] end)
+        |> MapSet.new()
+
+      {temp_pairs, _reserved_names} =
+        Enum.map_reduce(
+          Enum.with_index(normalized_renames),
+          reserved_names,
+          fn {{old_name, _new_name}, idx}, used_names ->
+            temp_name = generate_rename_temp_name(idx, used_names)
+            {{old_name, temp_name}, MapSet.put(used_names, temp_name)}
+          end
+        )
+
+      temp_aliases =
+        Enum.map(temp_pairs, fn {old_name, temp_name} ->
+          {:alias, {:col, old_name}, temp_name}
+        end)
+
+      rename_aliases =
+        Enum.zip(temp_pairs, normalized_renames)
+        |> Enum.map(fn {{_old_name, temp_name}, {_old_name2, new_name}} ->
+          {:alias, {:col, temp_name}, new_name}
+        end)
+
+      dropped_original_names = Enum.map(normalized_renames, &elem(&1, 0))
+      dropped_temp_names = Enum.map(temp_pairs, &elem(&1, 1))
+
+      child_plan
+      |> then(&{:with_columns, &1, temp_aliases})
+      |> then(&{:drop, &1, dropped_original_names})
+      |> then(&{:with_columns, &1, rename_aliases})
+      |> then(&{:drop, &1, dropped_temp_names})
+    end
+  end
+
+  defp generate_rename_temp_name(idx, used_names) do
+    base = "__spark_ex_rename_tmp_#{idx}"
+    generate_rename_temp_name(base, 0, used_names)
+  end
+
+  defp generate_rename_temp_name(base, suffix, used_names) do
+    candidate =
+      if suffix == 0 do
+        base
+      else
+        "#{base}_#{suffix}"
+      end
+
+    if MapSet.member?(used_names, candidate) do
+      generate_rename_temp_name(base, suffix + 1, used_names)
+    else
+      candidate
     end
   end
 
