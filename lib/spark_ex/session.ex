@@ -16,6 +16,7 @@ defmodule SparkEx.Session do
   alias SparkEx.Connect.TypeMapper
   alias SparkEx.Internal.Tag
   alias SparkEx.Internal.UUID
+  require Logger
 
   defstruct [
     :channel,
@@ -739,6 +740,16 @@ defmodule SparkEx.Session do
             {:reply, {:ok, clone_session}, state}
 
           {:error, _} = error ->
+            case cleanup_cloned_session_on_start_failure(state, clone_info) do
+              :ok ->
+                :ok
+
+              {:error, cleanup_error} ->
+                Logger.warning(
+                  "failed to cleanup orphaned cloned session #{inspect(clone_info.new_session_id)} after start_link failure: #{inspect(cleanup_error)}"
+                )
+            end
+
             {:reply, error, state}
         end
 
@@ -1706,6 +1717,42 @@ defmodule SparkEx.Session do
     else
       %__MODULE__{session_id: session_id} = session
       session_id
+    end
+  end
+
+  @doc false
+  @spec cleanup_cloned_session_on_start_failure(
+          t(),
+          %{
+            required(:new_session_id) => String.t(),
+            optional(:new_server_side_session_id) => String.t() | nil,
+            optional(:source_server_side_session_id) => String.t() | nil
+          },
+          (t() -> {:ok, String.t() | nil} | {:error, term()})
+        ) :: :ok | {:error, term()}
+  def cleanup_cloned_session_on_start_failure(
+        %__MODULE__{} = state,
+        %{new_session_id: new_session_id} = clone_info,
+        release_fun \\ &Client.release_session/1
+      )
+      when is_binary(new_session_id) and is_function(release_fun, 1) do
+    cleanup_session = %__MODULE__{
+      channel: state.channel,
+      session_id: new_session_id,
+      server_side_session_id: Map.get(clone_info, :new_server_side_session_id),
+      user_id: state.user_id,
+      client_type: state.client_type
+    }
+
+    case release_fun.(cleanup_session) do
+      {:ok, _} ->
+        :ok
+
+      {:error, _} = error ->
+        error
+
+      other ->
+        {:error, {:unexpected_release_session_result, other}}
     end
   end
 

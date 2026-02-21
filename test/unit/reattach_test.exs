@@ -310,6 +310,107 @@ defmodule SparkEx.Unit.ReattachTest do
       assert_receive :release_called
     end
 
+    test "release_execute not-found errors are treated as benign", %{session: session} do
+      assert {:ok, %{rows: []}} =
+               Client.execute_plan(session, %Plan{},
+                 release_execute_fun: fn _opts ->
+                   {:error,
+                    %SparkEx.Error.Remote{
+                      error_class: "INVALID_HANDLE.OPERATION_NOT_FOUND",
+                      message: "operation missing",
+                      grpc_status: 5
+                    }}
+                 end,
+                 execute_stream_fun: fn _request, _timeout ->
+                   {:ok,
+                    [
+                      {:ok,
+                       %ExecutePlanResponse{
+                         response_id: "done",
+                         response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+                       }}
+                    ]}
+                 end,
+                 reattach_stream_fun: fn _last_response_id -> {:ok, []} end
+               )
+    end
+
+    test "release_execute timeout emits best-effort telemetry", %{session: session} do
+      parent = self()
+      handler_id = "release-best-effort-timeout-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:spark_ex, :release_execute, :best_effort],
+          fn event, measurements, metadata, pid ->
+            send(pid, {:release_telemetry, event, measurements, metadata})
+          end,
+          parent
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:ok, %{rows: []}} =
+               Client.execute_plan(session, %Plan{},
+                 release_execute_timeout: 5,
+                 release_execute_fun: fn _opts ->
+                   Process.sleep(50)
+                   {:ok, nil}
+                 end,
+                 execute_stream_fun: fn _request, _timeout ->
+                   {:ok,
+                    [
+                      {:ok,
+                       %ExecutePlanResponse{
+                         response_id: "done",
+                         response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+                       }}
+                    ]}
+                 end,
+                 reattach_stream_fun: fn _last_response_id -> {:ok, []} end
+               )
+
+      assert_receive {:release_telemetry, [:spark_ex, :release_execute, :best_effort], _m,
+                      %{result: :timeout}}
+    end
+
+    test "release_execute failures emit best-effort telemetry", %{session: session} do
+      parent = self()
+      handler_id = "release-best-effort-error-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:spark_ex, :release_execute, :best_effort],
+          fn event, measurements, metadata, pid ->
+            send(pid, {:release_telemetry, event, measurements, metadata})
+          end,
+          parent
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:ok, %{rows: []}} =
+               Client.execute_plan(session, %Plan{},
+                 release_execute_fun: fn _opts -> {:error, :release_failed} end,
+                 execute_stream_fun: fn _request, _timeout ->
+                   {:ok,
+                    [
+                      {:ok,
+                       %ExecutePlanResponse{
+                         response_id: "done",
+                         response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+                       }}
+                    ]}
+                 end,
+                 reattach_stream_fun: fn _last_response_id -> {:ok, []} end
+               )
+
+      assert_receive {:release_telemetry, [:spark_ex, :release_execute, :best_effort], _m,
+                      %{result: :error, error: :release_failed}}
+    end
+
     test "reattach retry uses configured reattach sleep_fun", %{session: session} do
       parent = self()
 

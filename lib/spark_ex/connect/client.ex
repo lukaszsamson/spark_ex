@@ -46,10 +46,12 @@ defmodule SparkEx.Connect.Client do
   # gRPC status codes considered transient (eligible for retry)
   @status_unavailable 14
   @status_deadline_exceeded 4
+  @status_not_found 5
 
   @artifact_chunk_size 32 * 1024
   @release_checkpoint_max_concurrency 8
   @release_checkpoint_timeout 15_000
+  @release_execute_timeout 5_000
 
   # --- AnalyzePlan RPCs ---
 
@@ -1188,6 +1190,9 @@ defmodule SparkEx.Connect.Client do
     default_policy = RetryPolicyRegistry.policy(:reattach)
     max_retries = Keyword.get(opts, :reattach_retries, default_policy.max_retries)
 
+    release_execute_timeout =
+      Keyword.get(opts, :release_execute_timeout, @release_execute_timeout)
+
     execute_stream_fun =
       Keyword.get(opts, :execute_stream_fun, fn req, req_timeout ->
         execute_plan_stream(session, req, req_timeout)
@@ -1223,12 +1228,12 @@ defmodule SparkEx.Connect.Client do
             wrapped = Enum.map(responses, &{:ok, &1})
             result = decode_fn.(wrapped)
 
-            release_execute_best_effort(release_execute_fun)
+            release_execute_best_effort(release_execute_fun, [], release_execute_timeout)
 
             result
 
           {:error, _} = error ->
-            release_execute_best_effort(release_execute_fun)
+            release_execute_best_effort(release_execute_fun, [], release_execute_timeout)
             error
         end
 
@@ -1493,13 +1498,70 @@ defmodule SparkEx.Connect.Client do
     do_chunk_binary(rest, chunk_size, [chunk | acc])
   end
 
-  defp release_execute_best_effort(release_execute_fun, opts \\ []) do
-    Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
-      release_execute_fun.(opts)
-    end)
+  defp release_execute_best_effort(release_execute_fun, opts, timeout_ms) do
+    start_time = System.monotonic_time()
 
-    :ok
+    task =
+      Task.Supervisor.async_nolink(SparkEx.TaskSupervisor, fn -> release_execute_fun.(opts) end)
+
+    outcome =
+      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, {:ok, _}} ->
+          :ok
+
+        {:ok, {:error, reason}} ->
+          if benign_release_execute_error?(reason), do: :benign_not_found, else: {:error, reason}
+
+        {:ok, other} ->
+          {:error, {:unexpected_release_execute_result, other}}
+
+        {:exit, reason} ->
+          {:error, {:task_exit, reason}}
+
+        nil ->
+          :timeout
+      end
+
+    duration = System.monotonic_time() - start_time
+
+    case outcome do
+      :ok ->
+        :ok
+
+      :benign_not_found ->
+        :ok
+
+      :timeout ->
+        :telemetry.execute(
+          [:spark_ex, :release_execute, :best_effort],
+          %{duration: duration},
+          %{result: :timeout, timeout_ms: timeout_ms}
+        )
+
+        :ok
+
+      {:error, reason} ->
+        :telemetry.execute(
+          [:spark_ex, :release_execute, :best_effort],
+          %{duration: duration},
+          %{result: :error, timeout_ms: timeout_ms, error: reason}
+        )
+
+        :ok
+    end
   end
+
+  defp benign_release_execute_error?(%SparkEx.Error.Remote{error_class: error_class})
+       when error_class in [
+              "INVALID_HANDLE.OPERATION_NOT_FOUND",
+              "INVALID_HANDLE.SESSION_NOT_FOUND"
+            ],
+       do: true
+
+  defp benign_release_execute_error?(%SparkEx.Error.Remote{grpc_status: @status_not_found}),
+    do: true
+
+  defp benign_release_execute_error?(_), do: false
 
   defp release_checkpoints_best_effort(release_execute_fun, responses) do
     response_ids =
