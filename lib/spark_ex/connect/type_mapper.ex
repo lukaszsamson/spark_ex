@@ -78,8 +78,16 @@ defmodule SparkEx.Connect.TypeMapper do
   defp map_kind(:float, _dt), do: {:f, 32}
   defp map_kind(:double, _dt), do: {:f, 64}
 
-  # Decimal — map to string fallback (Explorer decimal support varies)
-  defp map_kind(:decimal, _dt), do: :string
+  # Decimal
+  defp map_kind(:decimal, %DataType{kind: {:decimal, %DataType.Decimal{precision: p, scale: s}}})
+       when not is_nil(p) and not is_nil(s),
+       do: {:decimal, p, s}
+
+  defp map_kind(:decimal, %DataType{kind: {:decimal, %DataType.Decimal{precision: p}}})
+       when not is_nil(p),
+       do: {:decimal, p, 0}
+
+  defp map_kind(:decimal, _dt), do: {:decimal, 10, 0}
 
   # String types
   defp map_kind(:string, _dt), do: :string
@@ -181,6 +189,7 @@ defmodule SparkEx.Connect.TypeMapper do
   def to_spark_ddl_type({:u, 64}), do: "LONG"
   def to_spark_ddl_type({:f, 32}), do: "FLOAT"
   def to_spark_ddl_type({:f, 64}), do: "DOUBLE"
+  def to_spark_ddl_type({:decimal, precision, scale}), do: "DECIMAL(#{precision}, #{scale})"
   def to_spark_ddl_type(:string), do: "STRING"
   def to_spark_ddl_type(:binary), do: "BINARY"
   def to_spark_ddl_type(:date), do: "DATE"

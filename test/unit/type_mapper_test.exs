@@ -45,9 +45,9 @@ defmodule SparkEx.Connect.TypeMapperTest do
       assert {:ok, {:f, 64}} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "maps decimal to :string" do
+    test "maps decimal to Explorer decimal dtype" do
       dt = %DataType{kind: {:decimal, %DataType.Decimal{precision: 10, scale: 2}}}
-      assert {:ok, :string} = TypeMapper.to_explorer_dtype(dt)
+      assert {:ok, {:decimal, 10, 2}} = TypeMapper.to_explorer_dtype(dt)
     end
 
     test "maps string type" do

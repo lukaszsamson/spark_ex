@@ -60,23 +60,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:sql, query, args}, counter) do
     {plan_id, counter} = next_id(counter)
 
-    sql =
-      case args do
-        args when is_map(args) and map_size(args) > 0 ->
-          named =
-            Map.new(args, fn {k, v} ->
-              {to_string(k), encode_sql_argument(v)}
-            end)
-
-          %SQL{query: query, named_arguments: named}
-
-        args when is_list(args) and length(args) > 0 ->
-          pos = Enum.map(args, &encode_sql_argument/1)
-          %SQL{query: query, pos_arguments: pos}
-
-        _ ->
-          %SQL{query: query}
-      end
+    sql = encode_sql_relation(query, args)
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -2164,7 +2148,17 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_args(nil, plan_ids, refs, counter), do: {nil, plan_ids, refs, counter}
 
   defp rewrite_args(args, plan_ids, refs, counter) when is_list(args) do
-    rewrite_expr_list(args, plan_ids, refs, counter)
+    if Keyword.keyword?(args) do
+      {rewritten_args, {plan_ids, refs, counter}} =
+        Enum.map_reduce(args, {plan_ids, refs, counter}, fn {key, value}, {ids, acc, ctr} ->
+          {rewritten_value, ids, acc, ctr} = rewrite_expr(value, ids, acc, ctr)
+          {{key, rewritten_value}, {ids, acc, ctr}}
+        end)
+
+      {rewritten_args, plan_ids, refs, counter}
+    else
+      rewrite_expr_list(args, plan_ids, refs, counter)
+    end
   end
 
   defp rewrite_args(args, plan_ids, refs, counter) when is_map(args) do
@@ -2486,6 +2480,56 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_sql_argument({:lambda_var, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument({:subquery, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument(value), do: encode_literal_expression(value)
+
+  defp encode_sql_relation(query, args) do
+    cond do
+      is_map(args) and map_size(args) > 0 ->
+        named = encode_sql_named_arguments(args)
+        %SQL{query: query, named_arguments: named, args: extract_legacy_named_args(named)}
+
+      is_list(args) and args != [] and Keyword.keyword?(args) ->
+        named = encode_sql_named_arguments(args)
+        %SQL{query: query, named_arguments: named, args: extract_legacy_named_args(named)}
+
+      is_list(args) and args != [] ->
+        pos = Enum.map(args, &encode_sql_argument/1)
+        %SQL{query: query, pos_arguments: pos, pos_args: extract_legacy_pos_args(pos)}
+
+      true ->
+        %SQL{query: query}
+    end
+  end
+
+  defp encode_sql_named_arguments(args) do
+    Enum.into(args, %{}, fn {k, v} ->
+      {to_string(k), encode_sql_argument(v)}
+    end)
+  end
+
+  defp extract_legacy_named_args(named_arguments) do
+    Enum.reduce_while(named_arguments, %{}, fn
+      {key, %Expression{expr_type: {:literal, literal}}}, acc ->
+        {:cont, Map.put(acc, key, literal)}
+
+      {_key, _expr}, _acc ->
+        {:halt, :non_literal}
+    end)
+    |> case do
+      :non_literal -> %{}
+      literals -> literals
+    end
+  end
+
+  defp extract_legacy_pos_args(pos_arguments) do
+    Enum.reduce_while(pos_arguments, [], fn
+      %Expression{expr_type: {:literal, literal}}, acc -> {:cont, [literal | acc]}
+      _expr, _acc -> {:halt, :non_literal}
+    end)
+    |> case do
+      :non_literal -> []
+      literals -> Enum.reverse(literals)
+    end
+  end
 
   defp encode_schema(%DataType{} = schema), do: schema
 

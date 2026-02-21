@@ -181,6 +181,52 @@ defmodule SparkEx.DataFrame.ToExplorerTest do
       assert Explorer.DataFrame.n_rows(result.dataframe) == 2
     end
 
+    test "decode_stream_explorer preserves decimal columns as decimals" do
+      ipc_data = build_decimal_ipc_data()
+      assert ipc_data != <<>>
+
+      schema =
+        %DataType{
+          kind:
+            {:struct,
+             %DataType.Struct{
+               fields: [
+                 %DataType.StructField{
+                   name: "salary",
+                   data_type: %DataType{
+                     kind: {:decimal, %DataType.Decimal{precision: 10, scale: 1}}
+                   },
+                   nullable: true
+                 }
+               ]
+             }}
+        }
+
+      stream = [
+        {:ok, %ExecutePlanResponse{schema: schema}},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                data: ipc_data,
+                row_count: 2,
+                start_offset: 0
+              }},
+           server_side_session_id: "test"
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      {:ok, result} = ResultDecoder.decode_stream_explorer(stream, nil)
+      assert Explorer.DataFrame.dtypes(result.dataframe)["salary"] == {:decimal, 10, 1}
+      values = result.dataframe |> Explorer.DataFrame.pull("salary") |> Explorer.Series.to_list()
+      assert Enum.map(values, &Decimal.to_string/1) == ["100.0", "200.5"]
+    end
+
     test "returns error for incomplete chunked arrow batch in explorer mode" do
       stream = [
         {:ok,
@@ -376,6 +422,23 @@ defmodule SparkEx.DataFrame.ToExplorerTest do
   defp build_multi_row_ipc_data(n) do
     if Code.ensure_loaded?(Explorer.DataFrame) do
       df = Explorer.DataFrame.new(%{"a" => Enum.to_list(1..n)})
+
+      case Explorer.DataFrame.dump_ipc_stream(df) do
+        {:ok, data} -> data
+        _ -> <<>>
+      end
+    else
+      <<>>
+    end
+  end
+
+  defp build_decimal_ipc_data do
+    if Code.ensure_loaded?(Explorer.DataFrame) do
+      df =
+        Explorer.DataFrame.new(
+          %{"salary" => [Decimal.new("100.0"), Decimal.new("200.5")]},
+          dtypes: [{"salary", {:decimal, 10, 1}}]
+        )
 
       case Explorer.DataFrame.dump_ipc_stream(df) do
         {:ok, data} -> data

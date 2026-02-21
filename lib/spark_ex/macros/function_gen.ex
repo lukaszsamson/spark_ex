@@ -211,11 +211,18 @@ defmodule SparkEx.Macros.FunctionGen do
 
   defp generate_function(name, spark_name, {:col_opt, defaults}, is_distinct, doc) do
     escaped_defaults = Macro.escape(defaults)
+    {first_key, _default} = hd(defaults)
 
     quote do
       @doc unquote(doc)
       @spec unquote(name)(Column.t() | String.t(), keyword()) :: Column.t()
-      def unquote(name)(col, opts \\ []) do
+      def unquote(name)(col, opts \\ [])
+
+      def unquote(name)(col, opt_value) when not is_list(opt_value) do
+        unquote(name)(col, [{unquote(first_key), opt_value}])
+      end
+
+      def unquote(name)(col, opts) do
         opt_args =
           unquote(escaped_defaults)
           |> Enum.map(fn {key, default} -> Keyword.get(opts, key, default) end)

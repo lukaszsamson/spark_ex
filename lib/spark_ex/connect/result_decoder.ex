@@ -1041,7 +1041,6 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   defp fallback_string_type?(tag) do
     tag in [
-      :decimal,
       :calendar_interval,
       :year_month_interval,
       :day_time_interval,

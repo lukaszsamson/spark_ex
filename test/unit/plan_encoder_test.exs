@@ -2,6 +2,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
   use ExUnit.Case, async: true
 
   alias SparkEx.Connect.PlanEncoder
+  alias SparkEx.{DataFrame, Column}
   alias Spark.Connect.{Expression, Plan, Relation, RelationCommon, SQL, Range}
 
   describe "encode/2 with SQL" do
@@ -21,6 +22,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert %Plan{op_type: {:root, %Relation{rel_type: {:sql, sql}}}} = plan
       assert %SQL{query: "SELECT :id, :name"} = sql
       assert map_size(sql.named_arguments) == 2
+      assert map_size(sql.args) == 2
 
       assert %Expression{
                expr_type: {:literal, %Expression.Literal{literal_type: {:integer, 42}}}
@@ -29,12 +31,23 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert counter == 1
     end
 
+    test "encodes SQL with keyword list arguments as named arguments" do
+      args = [id: 42, name: "test"]
+      {plan, _counter} = PlanEncoder.encode({:sql, "SELECT :id, :name", args}, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:sql, sql}}}} = plan
+      assert map_size(sql.named_arguments) == 2
+      assert map_size(sql.args) == 2
+      assert sql.pos_arguments == []
+    end
+
     test "encodes SQL with positional arguments" do
       args = [1, "hello", true]
       {plan, counter} = PlanEncoder.encode({:sql, "SELECT ?, ?, ?", args}, 5)
 
       assert %Plan{op_type: {:root, %Relation{rel_type: {:sql, sql}}}} = plan
       assert length(sql.pos_arguments) == 3
+      assert length(sql.pos_args) == 3
       assert counter == 6
     end
 
@@ -45,6 +58,33 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert %Plan{op_type: {:root, %Relation{rel_type: {:sql, sql}}}} = plan
       [arg] = sql.pos_arguments
       assert {:expression_string, %{expression: "array(42)"}} = arg.expr_type
+      assert sql.pos_args == []
+    end
+  end
+
+  describe "join encoding with bound columns" do
+    test "encodes bound join condition without empty relation" do
+      left = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM emp", nil}}
+      right = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM dept", nil}}
+
+      join_condition = Column.eq(DataFrame.col(left, "dept_id"), DataFrame.col(right, "dept_id"))
+      joined = DataFrame.join(left, right, join_condition, :inner)
+      {plan, _counter} = PlanEncoder.encode(joined.plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, with_relations}}}} =
+               plan
+
+      assert %Relation{rel_type: {:join, join}} = with_relations.root
+      assert %Expression{expr_type: {:unresolved_function, unresolved_fn}} = join.join_condition
+
+      assert Enum.all?(unresolved_fn.arguments, fn
+               %Expression{expr_type: {:unresolved_attribute, attr}}
+               when is_integer(attr.plan_id) ->
+                 true
+
+               _ ->
+                 false
+             end)
     end
   end
 

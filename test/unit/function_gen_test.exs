@@ -242,6 +242,11 @@ defmodule SparkEx.Unit.FunctionGenTest do
                Functions.to_date("s", format: "yyyy-MM-dd")
     end
 
+    test "to_date/2 accepts positional format argument" do
+      assert %Column{expr: {:fn, "to_date", [{:col, "s"}, {:lit, "yyyy-MM-dd"}], false}} =
+               Functions.to_date("s", Functions.lit("yyyy-MM-dd"))
+    end
+
     test "to_timestamp/1 with nil default" do
       assert %Column{expr: {:fn, "to_timestamp", [{:col, "s"}], false}} =
                Functions.to_timestamp("s")
@@ -262,6 +267,11 @@ defmodule SparkEx.Unit.FunctionGenTest do
     test "lag/2 with explicit offset, nil default trimmed" do
       assert %Column{expr: {:fn, "lag", [{:col, "v"}, {:lit, 3}], false}} =
                Functions.lag("v", offset: 3)
+    end
+
+    test "lag/2 accepts positional offset argument" do
+      assert %Column{expr: {:fn, "lag", [{:col, "v"}, {:lit, 3}], false}} =
+               Functions.lag("v", 3)
     end
 
     test "lag/2 with explicit offset and default" do

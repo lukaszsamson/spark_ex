@@ -153,8 +153,10 @@ defmodule SparkEx.Catalog do
   @spec list_tables(GenServer.server(), String.t() | nil, String.t() | nil) ::
           {:ok, [Table.t()]} | {:error, term()}
   def list_tables(session, db_name \\ nil, pattern \\ nil) do
-    case execute_catalog(session, {:list_tables, db_name, pattern}) do
-      {:ok, rows} -> {:ok, Enum.map(rows, &parse_table/1)}
+    with {:ok, db_name} <- resolve_catalog_db_name(session, db_name),
+         {:ok, rows} <- execute_catalog(session, {:list_tables, db_name, pattern}) do
+      {:ok, Enum.map(rows, &parse_table/1)}
+    else
       {:error, _} = err -> err
     end
   end
@@ -200,8 +202,10 @@ defmodule SparkEx.Catalog do
   @spec list_functions(GenServer.server(), String.t() | nil, String.t() | nil) ::
           {:ok, [Function.t()]} | {:error, term()}
   def list_functions(session, db_name \\ nil, pattern \\ nil) do
-    case execute_catalog(session, {:list_functions, db_name, pattern}) do
-      {:ok, rows} -> {:ok, Enum.map(rows, &parse_function/1)}
+    with {:ok, db_name} <- resolve_catalog_db_name(session, db_name),
+         {:ok, rows} <- execute_catalog(session, {:list_functions, db_name, pattern}) do
+      {:ok, Enum.map(rows, &parse_function/1)}
+    else
       {:error, _} = err -> err
     end
   end
@@ -371,6 +375,16 @@ defmodule SparkEx.Catalog do
 
     case DataFrame.collect(df) do
       {:ok, _} -> :ok
+      {:error, _} = err -> err
+    end
+  end
+
+  defp resolve_catalog_db_name(_session, db_name) when is_binary(db_name), do: {:ok, db_name}
+
+  defp resolve_catalog_db_name(session, nil) do
+    case current_database(session) do
+      {:ok, db_name} when is_binary(db_name) and db_name != "" -> {:ok, db_name}
+      {:ok, _} -> {:ok, nil}
       {:error, _} = err -> err
     end
   end
