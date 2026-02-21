@@ -95,7 +95,7 @@ defmodule SparkEx.SqlFormatter do
   # Single-pass tokenizer for named args that skips string literals
   defp format_named(sql, args) do
     string_keys = Map.new(args, fn {k, v} -> {to_string(k), v} end)
-    {result, used_keys} = do_format_named(sql, string_keys, [], MapSet.new())
+    {result, used_keys} = do_format_named(sql, string_keys, [], %{})
 
     result_str = IO.iodata_to_binary(Enum.reverse(result))
 
@@ -108,7 +108,7 @@ defmodule SparkEx.SqlFormatter do
     end
 
     # Check for unused args
-    unused = Map.keys(string_keys) -- MapSet.to_list(used_keys)
+    unused = Map.keys(string_keys) -- Map.keys(used_keys)
 
     if unused != [] do
       raise ArgumentError,
@@ -134,7 +134,7 @@ defmodule SparkEx.SqlFormatter do
 
     if name != "" and Map.has_key?(args, name) do
       value = Map.fetch!(args, name)
-      do_format_named(remaining, args, [quote_value(value) | acc], MapSet.put(used, name))
+      do_format_named(remaining, args, [quote_value(value) | acc], Map.put(used, name, true))
     else
       do_format_named(remaining, args, [name, ":" | acc], used)
     end
