@@ -774,13 +774,13 @@ defmodule SparkEx.Session do
       case Client.release_session(state) do
         {:ok, server_side_session_id} ->
           state = maybe_update_server_session(state, server_side_session_id)
-          Channel.disconnect(state.channel)
+          safe_disconnect(state.channel)
           state = %{state | released: true, channel: nil}
           {:reply, :ok, state}
 
         {:error, _} = error ->
           # Disconnect channel even on RPC error to prevent resource leak
-          Channel.disconnect(state.channel)
+          safe_disconnect(state.channel)
           state = %{state | released: true, channel: nil}
           {:reply, error, state}
       end
@@ -1382,8 +1382,37 @@ defmodule SparkEx.Session do
     # Best-effort release before disconnect with timeout to prevent blocking
     task = Task.async(fn -> Client.release_session(state) end)
     Task.yield(task, 5_000) || Task.shutdown(task)
-    Channel.disconnect(channel)
+    safe_disconnect(channel)
     :ok
+  end
+
+  @doc false
+  @spec safe_disconnect(term()) :: :ok
+  def safe_disconnect(channel) do
+    require Logger
+
+    try do
+      case Channel.disconnect(channel) do
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("spark_ex session channel disconnect failed: #{inspect(reason)}")
+          :ok
+      end
+    rescue
+      exception ->
+        Logger.warning(
+          "spark_ex session channel disconnect raised #{inspect(exception.__struct__)}: #{Exception.message(exception)}"
+        )
+
+        :ok
+    catch
+      kind, reason ->
+        Logger.warning("spark_ex session channel disconnect #{kind}: #{inspect(reason)}")
+
+        :ok
+    end
   end
 
   # --- Private ---

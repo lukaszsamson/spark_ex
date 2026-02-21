@@ -259,4 +259,10 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       assert SparkEx.Session.is_stopped(released)
     end
   end
+
+  describe "Session.safe_disconnect/1" do
+    test "does not raise for invalid channels" do
+      assert :ok = SparkEx.Session.safe_disconnect(:invalid_channel)
+    end
+  end
 end

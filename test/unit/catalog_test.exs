@@ -12,7 +12,13 @@ defmodule SparkEx.CatalogTest do
 
     @impl true
     def init({test_pid, current_db, databases}),
-      do: {:ok, %{test_pid: test_pid, current_db: current_db, databases: databases}}
+      do:
+        {:ok,
+         %{
+           test_pid: test_pid,
+           current_db: current_db,
+           databases: databases
+         }}
 
     @impl true
     def handle_call({:execute_collect, {:catalog, {:current_database}}, _opts}, _from, state) do
@@ -26,6 +32,15 @@ defmodule SparkEx.CatalogTest do
         ) do
       send(state.test_pid, {:list_tables_called, db_name, pattern})
       {:reply, {:ok, []}, state}
+    end
+
+    def handle_call(
+          {:execute_collect, {:catalog, {:table_exists, table_name, db_name}}, _opts},
+          _from,
+          state
+        ) do
+      send(state.test_pid, {:table_exists_called, table_name, db_name})
+      {:reply, {:ok, [%{"table_exists" => false}]}, state}
     end
 
     def handle_call(
@@ -73,5 +88,13 @@ defmodule SparkEx.CatalogTest do
 
     assert {:ok, []} = Catalog.list_functions(session, nil, nil)
     assert_receive {:list_functions_called, "warehouse", nil}
+  end
+
+  test "table_exists?/3 matches direct TableExists RPC behavior" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "warehouse", ["warehouse"])
+
+    assert {:ok, false} = Catalog.table_exists?(session, "orders", "warehouse")
+    assert_receive {:table_exists_called, "orders", "warehouse"}
+    refute_receive {:list_tables_called, "warehouse", "orders"}
   end
 end

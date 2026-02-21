@@ -1768,8 +1768,16 @@ defmodule SparkEx.DataFrame do
   - `:timeout` — gRPC call timeout in ms (default: 60_000)
   """
   @spec collect(t(), keyword()) :: {:ok, [map()]} | {:error, term()}
-  def collect(%__MODULE__{} = df, opts \\ []) do
+  def collect(df_or_other, opts \\ [])
+
+  def collect(%__MODULE__{} = df, opts) do
     SparkEx.Session.execute_collect(df.session, df.plan, merge_tags(df, opts))
+  end
+
+  def collect(other, _opts) do
+    raise ArgumentError,
+          "expected SparkEx.DataFrame, got: #{inspect(other)}. " <>
+            "If you used DataFrame.col_regex/2, wrap it in DataFrame.select/2 first."
   end
 
   @doc """

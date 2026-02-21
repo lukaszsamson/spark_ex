@@ -256,6 +256,15 @@ defmodule SparkEx.DataFrameTest do
       assert %SparkEx.Column{expr: {:col_regex, "^name_.*", {:sql, "SELECT * FROM t", nil}}} =
                result
     end
+
+    test "collect on col_regex result raises clear error" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      col = DataFrame.col_regex(df, "^name_.*")
+
+      assert_raise ArgumentError, ~r/wrap it in DataFrame.select\/2 first/, fn ->
+        DataFrame.collect(col)
+      end
+    end
   end
 
   describe "metadata_column/2" do

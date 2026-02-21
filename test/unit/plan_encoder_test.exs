@@ -77,14 +77,14 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert %Relation{rel_type: {:join, join}} = with_relations.root
       assert %Expression{expr_type: {:unresolved_function, unresolved_fn}} = join.join_condition
 
-      assert Enum.all?(unresolved_fn.arguments, fn
-               %Expression{expr_type: {:unresolved_attribute, attr}}
-               when is_integer(attr.plan_id) ->
-                 true
+      condition_plan_ids =
+        Enum.map(unresolved_fn.arguments, fn
+          %Expression{expr_type: {:unresolved_attribute, attr}} -> attr.plan_id
+          _ -> nil
+        end)
 
-               _ ->
-                 false
-             end)
+      assert Enum.sort(condition_plan_ids) ==
+               Enum.sort([join.left.common.plan_id, join.right.common.plan_id])
     end
   end
 

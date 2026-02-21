@@ -488,8 +488,13 @@ defmodule SparkEx.Connect.PlanEncoder do
 
     join_cond =
       case join_condition do
-        nil -> nil
-        expr -> encode_expression(expr)
+        nil ->
+          nil
+
+        expr ->
+          expr
+          |> remap_join_condition_plan_ids(left.common.plan_id, right.common.plan_id)
+          |> encode_expression()
       end
 
     relation = %Relation{
@@ -2512,6 +2517,143 @@ defmodule SparkEx.Connect.PlanEncoder do
     |> case do
       :non_literal -> []
       literals -> Enum.reverse(literals)
+    end
+  end
+
+  # Join conditions can include DataFrame-bound column references rewritten to
+  # synthetic plan IDs by attach_with_relations. For Spark 3.5 compatibility,
+  # remap first/second distinct referenced IDs to concrete left/right child IDs.
+  defp remap_join_condition_plan_ids(expr, left_plan_id, right_plan_id) do
+    {updated, _plan_id_map} =
+      do_remap_join_condition_plan_ids(expr, left_plan_id, right_plan_id, %{})
+
+    updated
+  end
+
+  defp do_remap_join_condition_plan_ids({:col, name, plan_id}, left, right, plan_id_map)
+       when is_binary(name) and is_integer(plan_id) do
+    {mapped_plan_id, plan_id_map} =
+      resolve_join_plan_id_mapping(plan_id, left, right, plan_id_map)
+
+    {{:col, name, mapped_plan_id}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids({:metadata_col, name, plan_id}, left, right, plan_id_map)
+       when is_binary(name) and is_integer(plan_id) do
+    {mapped_plan_id, plan_id_map} =
+      resolve_join_plan_id_mapping(plan_id, left, right, plan_id_map)
+
+    {{:metadata_col, name, mapped_plan_id}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids({:col_regex, name, plan_id}, left, right, plan_id_map)
+       when is_binary(name) and is_integer(plan_id) do
+    {mapped_plan_id, plan_id_map} =
+      resolve_join_plan_id_mapping(plan_id, left, right, plan_id_map)
+
+    {{:col_regex, name, mapped_plan_id}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids({:star, target, plan_id}, left, right, plan_id_map)
+       when (is_binary(target) or is_nil(target)) and is_integer(plan_id) do
+    {mapped_plan_id, plan_id_map} =
+      resolve_join_plan_id_mapping(plan_id, left, right, plan_id_map)
+
+    {{:star, target, mapped_plan_id}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids({:fn, name, args, is_distinct}, left, right, plan_id_map) do
+    {updated_args, plan_id_map} =
+      Enum.map_reduce(args, plan_id_map, fn arg, acc ->
+        do_remap_join_condition_plan_ids(arg, left, right, acc)
+      end)
+
+    {{:fn, name, updated_args, is_distinct}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids({:alias, expr, name}, left, right, plan_id_map) do
+    {expr, plan_id_map} = do_remap_join_condition_plan_ids(expr, left, right, plan_id_map)
+    {{:alias, expr, name}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids({:alias, expr, name, metadata}, left, right, plan_id_map) do
+    {expr, plan_id_map} = do_remap_join_condition_plan_ids(expr, left, right, plan_id_map)
+    {{:alias, expr, name, metadata}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids({:cast, expr, type_str}, left, right, plan_id_map) do
+    {expr, plan_id_map} = do_remap_join_condition_plan_ids(expr, left, right, plan_id_map)
+    {{:cast, expr, type_str}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids({:cast, expr, type_str, mode}, left, right, plan_id_map) do
+    {expr, plan_id_map} = do_remap_join_condition_plan_ids(expr, left, right, plan_id_map)
+    {{:cast, expr, type_str, mode}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids(
+         {:sort_order, child, direction, null_ordering},
+         left,
+         right,
+         plan_id_map
+       ) do
+    {child, plan_id_map} = do_remap_join_condition_plan_ids(child, left, right, plan_id_map)
+    {{:sort_order, child, direction, null_ordering}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids(
+         {:unresolved_extract_value, child, extraction},
+         left,
+         right,
+         plan_id_map
+       ) do
+    {child, plan_id_map} = do_remap_join_condition_plan_ids(child, left, right, plan_id_map)
+
+    {extraction, plan_id_map} =
+      do_remap_join_condition_plan_ids(extraction, left, right, plan_id_map)
+
+    {{:unresolved_extract_value, child, extraction}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids({:lambda, body, variables}, left, right, plan_id_map) do
+    {body, plan_id_map} = do_remap_join_condition_plan_ids(body, left, right, plan_id_map)
+
+    {variables, plan_id_map} =
+      Enum.map_reduce(variables, plan_id_map, fn variable, acc ->
+        do_remap_join_condition_plan_ids(variable, left, right, acc)
+      end)
+
+    {{:lambda, body, variables}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids(%Column{expr: expr} = col, left, right, plan_id_map) do
+    {expr, plan_id_map} = do_remap_join_condition_plan_ids(expr, left, right, plan_id_map)
+    {%Column{col | expr: expr}, plan_id_map}
+  end
+
+  defp do_remap_join_condition_plan_ids(list, left, right, plan_id_map) when is_list(list) do
+    Enum.map_reduce(list, plan_id_map, fn value, acc ->
+      do_remap_join_condition_plan_ids(value, left, right, acc)
+    end)
+  end
+
+  defp do_remap_join_condition_plan_ids(value, _left, _right, plan_id_map),
+    do: {value, plan_id_map}
+
+  defp resolve_join_plan_id_mapping(plan_id, left_id, right_id, plan_id_map) do
+    case plan_id_map do
+      %{^plan_id => mapped_plan_id} ->
+        {mapped_plan_id, plan_id_map}
+
+      _ ->
+        mapped_plan_id =
+          case map_size(plan_id_map) do
+            0 -> left_id
+            1 -> right_id
+            _ -> plan_id
+          end
+
+        {mapped_plan_id, Map.put(plan_id_map, plan_id, mapped_plan_id)}
     end
   end
 
