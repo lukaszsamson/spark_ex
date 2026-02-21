@@ -1405,10 +1405,17 @@ defmodule SparkEx.Session do
 
   defp call_timeout(opts) do
     case Keyword.get(opts, :timeout, 60_000) do
-      nil -> :infinity
-      :infinity -> :infinity
-      timeout when is_integer(timeout) and timeout > 0 -> timeout + 5_000
-      other -> raise ArgumentError, "timeout must be a positive integer or nil, got: #{inspect(other)}"
+      nil ->
+        :infinity
+
+      :infinity ->
+        :infinity
+
+      timeout when is_integer(timeout) and timeout > 0 ->
+        timeout + 5_000
+
+      other ->
+        raise ArgumentError, "timeout must be a positive integer or nil, got: #{inspect(other)}"
     end
   end
 

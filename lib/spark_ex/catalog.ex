@@ -400,7 +400,8 @@ defmodule SparkEx.Catalog do
 
     join_sql(
       ["CREATE", "DATABASE"] ++
-        maybe_add([], "IF NOT EXISTS", if_not_exists) ++ [quote_identifier(db_name)] ++ tail_clauses
+        maybe_add([], "IF NOT EXISTS", if_not_exists) ++
+        [quote_identifier(db_name)] ++ tail_clauses
     )
   end
 
@@ -413,7 +414,10 @@ defmodule SparkEx.Catalog do
       []
       |> maybe_add("IF EXISTS", if_exists)
 
-    join_sql(["DROP", "DATABASE"] ++ clauses ++ [quote_identifier(db_name)] ++ maybe_add([], "CASCADE", cascade))
+    join_sql(
+      ["DROP", "DATABASE"] ++
+        clauses ++ [quote_identifier(db_name)] ++ maybe_add([], "CASCADE", cascade)
+    )
   end
 
   @doc false
@@ -426,11 +430,26 @@ defmodule SparkEx.Catalog do
         raise ArgumentError, "alter_database requires :set_location or :set_properties"
 
       {loc, nil} ->
-        join_sql(["ALTER", "DATABASE", quote_identifier(db_name), "SET", "LOCATION", sql_string(loc)])
+        join_sql([
+          "ALTER",
+          "DATABASE",
+          quote_identifier(db_name),
+          "SET",
+          "LOCATION",
+          sql_string(loc)
+        ])
 
       {nil, props} when is_map(props) ->
         props_sql = format_properties(props)
-        join_sql(["ALTER", "DATABASE", quote_identifier(db_name), "SET", "DBPROPERTIES", props_sql])
+
+        join_sql([
+          "ALTER",
+          "DATABASE",
+          quote_identifier(db_name),
+          "SET",
+          "DBPROPERTIES",
+          props_sql
+        ])
 
       {_loc, _props} ->
         raise ArgumentError,
@@ -466,11 +485,26 @@ defmodule SparkEx.Catalog do
         raise ArgumentError, "alter_table requires :rename_to or :set_properties"
 
       {new_name, nil} when is_binary(new_name) ->
-        join_sql(["ALTER", "TABLE", quote_identifier(table_name), "RENAME", "TO", quote_identifier(new_name)])
+        join_sql([
+          "ALTER",
+          "TABLE",
+          quote_identifier(table_name),
+          "RENAME",
+          "TO",
+          quote_identifier(new_name)
+        ])
 
       {nil, props} when is_map(props) ->
         props_sql = format_properties(props)
-        join_sql(["ALTER", "TABLE", quote_identifier(table_name), "SET", "TBLPROPERTIES", props_sql])
+
+        join_sql([
+          "ALTER",
+          "TABLE",
+          quote_identifier(table_name),
+          "SET",
+          "TBLPROPERTIES",
+          props_sql
+        ])
 
       {_new_name, _props} ->
         raise ArgumentError, "alter_table supports only one of :rename_to or :set_properties"
@@ -508,7 +542,9 @@ defmodule SparkEx.Catalog do
 
     join_sql(
       ["CREATE"] ++
-        clauses ++ ["FUNCTION", quote_identifier(function_name), "AS", sql_string(class_name)] ++ using_clause
+        clauses ++
+        ["FUNCTION", quote_identifier(function_name), "AS", sql_string(class_name)] ++
+        using_clause
     )
   end
 

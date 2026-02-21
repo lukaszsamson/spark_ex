@@ -247,8 +247,7 @@ defmodule SparkEx.ReviewFixesTest do
         {:ok,
          %ExecutePlanResponse{
            response_type:
-             {:arrow_batch,
-              %ArrowBatch{data: big_data, row_count: 10, start_offset: 0}},
+             {:arrow_batch, %ArrowBatch{data: big_data, row_count: 10, start_offset: 0}},
            schema: nil,
            observed_metrics: [],
            metrics: nil
@@ -267,8 +266,7 @@ defmodule SparkEx.ReviewFixesTest do
         {:ok,
          %ExecutePlanResponse{
            response_type:
-             {:arrow_batch,
-              %ArrowBatch{data: <<1, 2, 3>>, row_count: 100, start_offset: 0}},
+             {:arrow_batch, %ArrowBatch{data: <<1, 2, 3>>, row_count: 100, start_offset: 0}},
            schema: nil,
            observed_metrics: [],
            metrics: nil
@@ -287,8 +285,7 @@ defmodule SparkEx.ReviewFixesTest do
         {:ok,
          %ExecutePlanResponse{
            response_type:
-             {:arrow_batch,
-              %ArrowBatch{data: <<1, 2, 3>>, row_count: 5, start_offset: 0}},
+             {:arrow_batch, %ArrowBatch{data: <<1, 2, 3>>, row_count: 5, start_offset: 0}},
            schema: nil,
            observed_metrics: [],
            metrics: nil
@@ -446,9 +443,7 @@ defmodule SparkEx.ReviewFixesTest do
     end
 
     test "multi-name alias without metadata works" do
-      result = SparkEx.Connect.PlanEncoder.encode_expression(
-        {:alias, {:col, "x"}, ["a", "b"]}
-      )
+      result = SparkEx.Connect.PlanEncoder.encode_expression({:alias, {:col, "x"}, ["a", "b"]})
       assert %Spark.Connect.Expression{expr_type: {:alias, alias}} = result
       assert alias.name == ["a", "b"]
     end

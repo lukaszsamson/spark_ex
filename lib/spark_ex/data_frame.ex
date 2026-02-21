@@ -156,11 +156,21 @@ defmodule SparkEx.DataFrame do
   def drop(%__MODULE__{} = df, columns) when is_list(columns) do
     {names, col_exprs} =
       Enum.reduce(columns, {[], []}, fn
-        %Column{expr: {:col, name}}, {names, exprs} -> {[name | names], exprs}
-        %Column{} = col, {names, exprs} -> {names, [col.expr | exprs]}
-        name, {names, exprs} when is_binary(name) -> {[name | names], exprs}
-        name, {names, exprs} when is_atom(name) -> {[Atom.to_string(name) | names], exprs}
-        other, _acc -> raise ArgumentError, "drop expects column names (string/atom) or Column expressions, got: #{inspect(other)}"
+        %Column{expr: {:col, name}}, {names, exprs} ->
+          {[name | names], exprs}
+
+        %Column{} = col, {names, exprs} ->
+          {names, [col.expr | exprs]}
+
+        name, {names, exprs} when is_binary(name) ->
+          {[name | names], exprs}
+
+        name, {names, exprs} when is_atom(name) ->
+          {[Atom.to_string(name) | names], exprs}
+
+        other, _acc ->
+          raise ArgumentError,
+                "drop expects column names (string/atom) or Column expressions, got: #{inspect(other)}"
       end)
 
     %__MODULE__{df | plan: {:drop, df.plan, Enum.reverse(names), Enum.reverse(col_exprs)}}
