@@ -39,7 +39,7 @@ defmodule SparkEx.Connect.Client do
 
   alias SparkEx.Connect.{Errors, ResultDecoder}
   alias SparkEx.Internal.UUID
-  alias SparkEx.{RetryPolicyRegistry, UserContextExtensions}
+  alias SparkEx.{ManagedStream, RetryPolicyRegistry, UserContextExtensions}
 
   require Logger
 
@@ -590,6 +590,48 @@ defmodule SparkEx.Connect.Client do
       {:ok, stream} -> {:ok, stream}
       {:error, %GRPC.RPCError{} = error} -> {:error, Errors.from_grpc_error(error, session)}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Executes a plan as a reattachable stream and returns a managed stream handle.
+
+  The handle auto-releases server-side execute state when:
+  - stream consumption finishes/halts
+  - owner process exits
+  - optional idle timeout elapses
+  """
+  @spec execute_plan_managed_stream(SparkEx.Session.t(), Plan.t(), keyword()) ::
+          {:ok, SparkEx.ManagedStream.t()} | {:error, term()}
+  def execute_plan_managed_stream(session, plan, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, :infinity)
+    owner = Keyword.get(opts, :stream_owner, self())
+    idle_timeout = Keyword.get(opts, :idle_timeout, nil)
+    operation_id = generate_operation_id()
+    request = build_execute_request(session, plan, [], operation_id, true, opts)
+
+    case Stub.execute_plan(session.channel, request, timeout: timeout) do
+      {:ok, stream} ->
+        release_fun = fn release_opts -> release_execute(session, operation_id, release_opts) end
+
+        case ManagedStream.new(stream,
+               owner: owner,
+               idle_timeout: idle_timeout,
+               release_fun: release_fun
+             ) do
+          {:ok, managed_stream} ->
+            {:ok, managed_stream}
+
+          {:error, _} = error ->
+            _ = release_execute(session, operation_id)
+            error
+        end
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

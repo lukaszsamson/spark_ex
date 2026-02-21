@@ -203,12 +203,15 @@ defmodule SparkEx.Session do
   end
 
   @doc """
-  Executes a plan and returns the raw gRPC response stream.
+  Executes a plan and returns a managed response stream handle.
 
   Used by APIs that need incremental row consumption.
+
+  The returned stream handle is enumerable and also supports
+  `SparkEx.ManagedStream.close/1` for explicit early cleanup.
   """
   @spec execute_plan_stream(GenServer.server(), term(), keyword()) ::
-          {:ok, Enumerable.t()} | {:error, term()}
+          {:ok, SparkEx.ManagedStream.t()} | {:error, term()}
   def execute_plan_stream(session, plan, opts \\ []) do
     timeout = call_timeout(opts)
 
@@ -216,7 +219,12 @@ defmodule SparkEx.Session do
       {:ok, %__MODULE__{} = state} ->
         {proto_plan, _counter} = PlanEncoder.encode(plan, 0)
         opts = merge_session_tags(opts, state.tags)
-        Client.execute_plan_raw_stream(state, proto_plan, opts)
+
+        Client.execute_plan_managed_stream(
+          state,
+          proto_plan,
+          Keyword.put(opts, :stream_owner, self())
+        )
 
       _ ->
         GenServer.call(session, {:execute_plan_stream, plan, opts}, timeout)
@@ -554,13 +562,13 @@ defmodule SparkEx.Session do
   end
 
   @doc """
-  Executes a command and returns a raw gRPC response stream.
+  Executes a command and returns a managed response stream handle.
 
   Used for long-lived streaming operations like the listener bus.
-  The caller is responsible for consuming the stream.
+  The caller is responsible for consuming/closing the stream.
   """
   @spec execute_command_stream(GenServer.server(), term(), keyword()) ::
-          {:ok, Enumerable.t()} | {:error, term()}
+          {:ok, SparkEx.ManagedStream.t()} | {:error, term()}
   def execute_command_stream(session, command, opts \\ []) do
     GenServer.call(session, {:execute_command_stream, command, opts}, call_timeout(opts))
   end
@@ -821,13 +829,17 @@ defmodule SparkEx.Session do
     end
   end
 
-  def handle_call({:execute_plan_stream, plan, opts}, _from, state) do
+  def handle_call({:execute_plan_stream, plan, opts}, {owner, _tag}, state) do
     {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
     state = %{state | plan_id_counter: counter}
 
     opts = merge_session_tags(opts, state.tags)
 
-    case Client.execute_plan_raw_stream(state, proto_plan, opts) do
+    case Client.execute_plan_managed_stream(
+           state,
+           proto_plan,
+           Keyword.put(opts, :stream_owner, owner)
+         ) do
       {:ok, stream} ->
         {:reply, {:ok, stream}, state}
 
@@ -1273,7 +1285,7 @@ defmodule SparkEx.Session do
     end
   end
 
-  def handle_call({:execute_command_stream, command, opts}, _from, state) do
+  def handle_call({:execute_command_stream, command, opts}, {owner, _tag}, state) do
     alias SparkEx.Connect.CommandEncoder
 
     {proto_plan, counter} = CommandEncoder.encode(command, state.plan_id_counter)
@@ -1281,7 +1293,11 @@ defmodule SparkEx.Session do
 
     opts = merge_session_tags(opts, state.tags)
 
-    case Client.execute_plan_raw_stream(state, proto_plan, opts) do
+    case Client.execute_plan_managed_stream(
+           state,
+           proto_plan,
+           Keyword.put(opts, :stream_owner, owner)
+         ) do
       {:ok, stream} ->
         {:reply, {:ok, stream}, state}
 

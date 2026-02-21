@@ -34,7 +34,112 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   alias Spark.Connect.{ExecutePlanResponse, StreamingQueryListenerEvent}
   require Logger
-  @registry_table :spark_ex_streaming_listener_buses
+
+  defmodule Registry do
+    @moduledoc false
+    use GenServer
+
+    @registry_table :spark_ex_streaming_listener_buses
+
+    @spec ensure_started() :: :ok
+    def ensure_started do
+      case Process.whereis(__MODULE__) do
+        nil ->
+          case GenServer.start_link(__MODULE__, :ok, name: __MODULE__) do
+            {:ok, _pid} -> :ok
+            {:error, {:already_started, _pid}} -> :ok
+          end
+
+        _pid ->
+          :ok
+      end
+    end
+
+    @spec register(term(), pid()) :: :ok
+    def register(session, pid) when is_pid(pid) do
+      ensure_started()
+      GenServer.call(__MODULE__, {:register, session, pid})
+    end
+
+    @spec unregister(term(), pid()) :: :ok
+    def unregister(session, pid) when is_pid(pid) do
+      ensure_started()
+      GenServer.call(__MODULE__, {:unregister, session, pid})
+    end
+
+    @spec buses_for_session(term()) :: [pid()]
+    def buses_for_session(session) do
+      ensure_started()
+      GenServer.call(__MODULE__, {:buses_for_session, session})
+    end
+
+    @impl true
+    def init(:ok) do
+      SparkEx.EtsTableOwner.ensure_table!(@registry_table, :bag)
+      {:ok, %{refs: %{}}}
+    end
+
+    @impl true
+    def handle_call({:register, session, pid}, _from, state) do
+      existing =
+        @registry_table
+        |> :ets.lookup(session)
+        |> Enum.find(fn
+          {^session, ^pid, _ref} -> true
+          _ -> false
+        end)
+
+      case existing do
+        nil ->
+          ref = Process.monitor(pid)
+          true = :ets.insert(@registry_table, {session, pid, ref})
+          {:reply, :ok, put_in(state.refs[ref], {session, pid})}
+
+        {_session, _pid, _ref} ->
+          {:reply, :ok, state}
+      end
+    end
+
+    def handle_call({:unregister, session, pid}, _from, state) do
+      entries =
+        @registry_table
+        |> :ets.lookup(session)
+        |> Enum.filter(fn
+          {^session, ^pid, _ref} -> true
+          _ -> false
+        end)
+
+      next_state =
+        Enum.reduce(entries, state, fn {^session, ^pid, ref}, acc ->
+          Process.demonitor(ref, [:flush])
+          true = :ets.delete_object(@registry_table, {session, pid, ref})
+          %{acc | refs: Map.delete(acc.refs, ref)}
+        end)
+
+      {:reply, :ok, next_state}
+    end
+
+    def handle_call({:buses_for_session, session}, _from, state) do
+      buses =
+        @registry_table
+        |> :ets.lookup(session)
+        |> Enum.map(fn {^session, pid, _ref} -> pid end)
+
+      {:reply, buses, state}
+    end
+
+    @impl true
+    def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+      case Map.pop(state.refs, ref) do
+        {{session, pid}, refs} ->
+          true = :ets.delete_object(@registry_table, {session, pid, ref})
+          {:noreply, %{state | refs: refs}}
+
+        {nil, _refs} ->
+          {:noreply, state}
+      end
+    end
+  end
 
   defstruct [
     :session,
@@ -282,24 +387,15 @@ defmodule SparkEx.StreamingQueryListenerBus do
   defp dispatch_event(_listeners, _event), do: :ok
 
   defp register_bus(session, pid) do
-    :ets.insert(@registry_table, {session, pid})
+    Registry.register(session, pid)
   end
 
   defp unregister_bus(session, pid) do
-    :ets.delete_object(@registry_table, {session, pid})
+    Registry.unregister(session, pid)
   end
 
   defp buses_for_session(session) do
-    @registry_table
-    |> :ets.lookup(session)
-    |> Enum.reduce([], fn {^session, pid}, acc ->
-      if Process.alive?(pid) do
-        [pid | acc]
-      else
-        :ets.delete_object(@registry_table, {session, pid})
-        acc
-      end
-    end)
+    Registry.buses_for_session(session)
   end
 
   defp safe_call(module, function, args) do

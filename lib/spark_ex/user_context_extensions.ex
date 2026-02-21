@@ -7,30 +7,26 @@ defmodule SparkEx.UserContextExtensions do
   alias Spark.Connect.UserContext
 
   @table :spark_ex_user_context_extensions
-  @thread_key {:spark_ex, :user_context_extensions}
 
   @spec add_threadlocal_user_context_extension(Any.t()) :: :ok
   def add_threadlocal_user_context_extension(%Any{} = extension) do
-    extensions = threadlocal_extensions()
-    updated = Map.put(extensions, extension.type_url, extension)
-    Process.put(@thread_key, updated)
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
+    :ets.insert(@table, {{thread_scope(self()), extension.type_url}, extension})
     :ok
   end
 
   @spec add_global_user_context_extension(Any.t()) :: :ok
   def add_global_user_context_extension(%Any{} = extension) do
     SparkEx.EtsTableOwner.ensure_table!(@table, :set)
-    :ets.insert(@table, {extension.type_url, extension})
+    :ets.insert(@table, {{:global, extension.type_url}, extension})
     :ok
   end
 
   @spec remove_user_context_extension(String.t()) :: :ok
   def remove_user_context_extension(extension_id) when is_binary(extension_id) do
     SparkEx.EtsTableOwner.ensure_table!(@table, :set)
-    :ets.delete(@table, extension_id)
-
-    extensions = threadlocal_extensions()
-    Process.put(@thread_key, Map.delete(extensions, extension_id))
+    :ets.delete(@table, {:global, extension_id})
+    :ets.delete(@table, {thread_scope(self()), extension_id})
     :ok
   end
 
@@ -38,7 +34,13 @@ defmodule SparkEx.UserContextExtensions do
   def clear_user_context_extensions() do
     SparkEx.EtsTableOwner.ensure_table!(@table, :set)
     :ets.delete_all_objects(@table)
-    Process.put(@thread_key, %{})
+    :ok
+  end
+
+  @spec clear_threadlocal_user_context_extensions() :: :ok
+  def clear_threadlocal_user_context_extensions() do
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
+    :ets.match_delete(@table, {{thread_scope(self()), :_}, :_})
     :ok
   end
 
@@ -63,15 +65,7 @@ defmodule SparkEx.UserContextExtensions do
 
   defp extensions_map() do
     global_extensions()
-    |> Map.merge(threadlocal_extensions())
-  end
-
-  defp threadlocal_extensions() do
-    case Process.get(@thread_key) do
-      nil -> %{}
-      extensions when is_map(extensions) -> extensions
-      _ -> %{}
-    end
+    |> Map.merge(threadlocal_extensions(self()))
   end
 
   defp global_extensions() do
@@ -79,6 +73,22 @@ defmodule SparkEx.UserContextExtensions do
 
     @table
     |> :ets.tab2list()
-    |> Map.new(fn {id, extension} -> {id, extension} end)
+    |> Enum.reduce(%{}, fn
+      {{:global, id}, extension}, acc -> Map.put(acc, id, extension)
+      _, acc -> acc
+    end)
   end
+
+  defp threadlocal_extensions(pid) when is_pid(pid) do
+    scope = thread_scope(pid)
+
+    @table
+    |> :ets.tab2list()
+    |> Enum.reduce(%{}, fn
+      {{^scope, id}, extension}, acc -> Map.put(acc, id, extension)
+      _, acc -> acc
+    end)
+  end
+
+  defp thread_scope(pid), do: {:pid, pid}
 end
