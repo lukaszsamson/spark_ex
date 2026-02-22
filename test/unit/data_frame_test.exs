@@ -741,7 +741,18 @@ defmodule SparkEx.DataFrameTest do
                plan:
                  {:as_of_join, {:sql, _, _}, {:sql, _, _}, {:col, "t1"}, {:col, "t2"},
                   {:col, "id"}, [], "inner", {:lit, 5}, false, "forward"}
-             } = result
+              } = result
+    end
+
+    test "raises on invalid allow_exact_matches option type" do
+      df1 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t1", nil}}
+      df2 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t2", nil}}
+
+      assert_raise ArgumentError, ~r/allow_exact_matches/, fn ->
+        DataFrame.as_of_join(df1, df2, Functions.col("t1"), Functions.col("t2"),
+          allow_exact_matches: "oops"
+        )
+      end
     end
   end
 
@@ -1189,6 +1200,44 @@ defmodule SparkEx.DataFrameTest do
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
       assert ^df = DataFrame.unpersist(df)
+    end
+  end
+
+  describe "option validation errors" do
+    test "show/html/tree_string reject invalid option types without session crash" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:error, msg} = DataFrame.show(df, num_rows: "oops")
+      assert msg =~ "num_rows"
+
+      assert {:error, msg} = DataFrame.html_string(df, truncate: "oops")
+      assert msg =~ "truncate"
+
+      assert {:error, msg} = DataFrame.tree_string(df, level: "oops")
+      assert msg =~ "level"
+    end
+
+    test "checkpoint and local_checkpoint validate eager/storage_level options" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:error, msg} = DataFrame.checkpoint(df, eager: "oops")
+      assert msg =~ "eager"
+
+      assert {:error, msg} = DataFrame.local_checkpoint(df, eager: "oops")
+      assert msg =~ "eager"
+
+      assert {:error, msg} = DataFrame.local_checkpoint(df, storage_level: "oops")
+      assert msg =~ "storage_level"
+    end
+
+    test "persist/unpersist validate option types" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:error, msg} = DataFrame.persist(df, storage_level: "oops")
+      assert msg =~ "storage_level"
+
+      assert {:error, msg} = DataFrame.unpersist(df, blocking: "oops")
+      assert msg =~ "blocking"
     end
   end
 

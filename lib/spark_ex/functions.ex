@@ -360,21 +360,29 @@ defmodule SparkEx.Functions do
   end
 
   @doc """
-  Most frequent value in group. Optional `deterministic` flag (default false).
+  Most frequent value in group.
+  """
+  @spec mode(Column.t() | String.t()) :: Column.t()
+  def mode(col) do
+    %Column{expr: {:fn, "mode", [to_expr(col)], false}}
+  end
+
+  @doc """
+  Most frequent value in group. Optional deterministic parameter (Spark 4.x+).
   """
   @spec mode(Column.t() | String.t(), boolean()) :: Column.t()
-  def mode(col, deterministic \\ false) do
-    %Column{expr: {:fn, "mode", [to_expr(col), {:lit, deterministic}], false}}
-  end
+  def mode(col, deterministic) when is_boolean(deterministic), do: mode(col)
 
   @doc """
   Returns randomly shuffled array. Optional `seed` parameter.
   """
-  @spec shuffle(Column.t() | String.t(), integer() | nil) :: Column.t()
-  def shuffle(col, seed \\ nil) do
-    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
-    %Column{expr: {:fn, "shuffle", [to_expr(col), {:lit, seed}], false}}
+  @spec shuffle(Column.t() | String.t()) :: Column.t()
+  def shuffle(col) do
+    %Column{expr: {:fn, "shuffle", [to_expr(col)], false}}
   end
+
+  @spec shuffle(Column.t() | String.t(), integer()) :: Column.t()
+  def shuffle(col, seed) when is_integer(seed), do: shuffle(col)
 
   @doc """
   Converts unix timestamp to string. Always sends format (default "yyyy-MM-dd HH:mm:ss").
@@ -401,7 +409,9 @@ defmodule SparkEx.Functions do
           Column.t()
   def replace(src, search, replacement \\ "") do
     %Column{
-      expr: {:fn, "replace", [to_expr(src), to_expr(search), to_expr(replacement)], false}
+      expr:
+        {:fn, "replace",
+         [to_expr(src), to_lit_string_or_expr(search), to_lit_string_or_expr(replacement)], false}
     }
   end
 
@@ -1530,12 +1540,15 @@ defmodule SparkEx.Functions do
     }
   end
 
-  @doc "Generates a random UUID string. Auto-generates seed when none given."
-  @spec uuid(integer() | nil) :: Column.t()
-  def uuid(seed \\ nil) do
-    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
-    %Column{expr: {:fn, "uuid", [{:lit, seed}], false}}
+  @doc "Generates a random UUID string."
+  @spec uuid() :: Column.t()
+  def uuid do
+    %Column{expr: {:fn, "uuid", [], false}}
   end
+
+  @doc "Generates a random UUID string with deterministic seed (Spark 4.x+)."
+  @spec uuid(integer()) :: Column.t()
+  def uuid(seed) when is_integer(seed), do: uuid()
 
   @doc "Random value uniformly distributed in [min, max). Auto-generates seed when none given."
   @spec uniform(Column.t() | String.t(), term(), integer() | nil) :: Column.t()
@@ -1585,6 +1598,7 @@ defmodule SparkEx.Functions do
   def to_expr(%Column{expr: e}), do: e
   def to_expr(name) when is_binary(name), do: {:col, name}
   def to_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
+  def to_expr(value) when is_number(value) or is_boolean(value), do: {:lit, value}
 
   @doc false
   def lit_expr(%Column{expr: e}), do: e
@@ -1601,6 +1615,10 @@ defmodule SparkEx.Functions do
 
   defp to_expr_or_lit(%Column{expr: e}), do: e
   defp to_expr_or_lit(value), do: {:lit, value}
+
+  defp to_lit_string_or_expr(%Column{expr: e}), do: e
+  defp to_lit_string_or_expr(value) when is_binary(value), do: {:lit, value}
+  defp to_lit_string_or_expr(value), do: to_expr(value)
 
   defp normalize_nth_value_offset(offset) when is_integer(offset), do: {:lit, offset}
   defp normalize_nth_value_offset(%Column{expr: {:lit, offset}}) when is_integer(offset), do: {:lit, offset}

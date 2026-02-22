@@ -74,6 +74,12 @@ defmodule SparkEx.M13.NATest do
       assert %DataFrame{plan: {:na_drop, :test_plan, [], 3}} = df
     end
 
+    test "raises when thresh is not a non-negative integer" do
+      assert_raise ArgumentError, ~r/non-negative integer/, fn ->
+        NA.drop(make_df(), thresh: 1.5)
+      end
+    end
+
     test "with subset" do
       df = NA.drop(make_df(), subset: ["a", "b"])
       assert %DataFrame{plan: {:na_drop, :test_plan, ["a", "b"], nil}} = df

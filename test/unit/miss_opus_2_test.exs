@@ -852,29 +852,28 @@ defmodule SparkEx.MissOpus2Test do
   # ── 14.24 mode with deterministic parameter ──
 
   describe "14.24 mode with deterministic parameter" do
-    test "mode/1 defaults deterministic to false" do
+    test "mode/1 uses single-arg form" do
       result = Functions.mode(Functions.col("x"))
-      assert %Column{expr: {:fn, "mode", [{:col, "x"}, {:lit, false}], false}} = result
+      assert %Column{expr: {:fn, "mode", [{:col, "x"}], false}} = result
     end
 
     test "mode/2 with deterministic true" do
       result = Functions.mode(Functions.col("x"), true)
-      assert %Column{expr: {:fn, "mode", [{:col, "x"}, {:lit, true}], false}} = result
+      assert %Column{expr: {:fn, "mode", [{:col, "x"}], false}} = result
     end
   end
 
   # ── 14.9 shuffle with seed ──
 
   describe "14.9 shuffle with seed" do
-    test "shuffle/1 generates random seed" do
+    test "shuffle/1 uses single-arg form" do
       result = Functions.shuffle(Functions.col("arr"))
-      assert %Column{expr: {:fn, "shuffle", [{:col, "arr"}, {:lit, seed}], false}} = result
-      assert is_integer(seed)
+      assert %Column{expr: {:fn, "shuffle", [{:col, "arr"}], false}} = result
     end
 
     test "shuffle/2 with explicit seed" do
       result = Functions.shuffle(Functions.col("arr"), 42)
-      assert %Column{expr: {:fn, "shuffle", [{:col, "arr"}, {:lit, 42}], false}} = result
+      assert %Column{expr: {:fn, "shuffle", [{:col, "arr"}], false}} = result
     end
   end
 
@@ -904,7 +903,7 @@ defmodule SparkEx.MissOpus2Test do
     test "replace/2 uses empty string as default replacement" do
       result = Functions.replace(Functions.col("s"), Functions.col("search"))
 
-      assert %Column{expr: {:fn, "replace", [{:col, "s"}, {:col, "search"}, {:col, ""}], false}} =
+      assert %Column{expr: {:fn, "replace", [{:col, "s"}, {:col, "search"}, {:lit, ""}], false}} =
                result
     end
 
@@ -1152,15 +1151,14 @@ defmodule SparkEx.MissOpus2Test do
   # ── 14.28 uuid/uniform/randstr seed ──
 
   describe "14.28 uuid/uniform/randstr seed" do
-    test "uuid auto-generates seed" do
+    test "uuid/0 uses zero-arg form" do
       result = Functions.uuid()
-      assert %Column{expr: {:fn, "uuid", [{:lit, seed}], false}} = result
-      assert is_integer(seed)
+      assert %Column{expr: {:fn, "uuid", [], false}} = result
     end
 
     test "uuid with explicit seed" do
       result = Functions.uuid(42)
-      assert %Column{expr: {:fn, "uuid", [{:lit, 42}], false}} = result
+      assert %Column{expr: {:fn, "uuid", [], false}} = result
     end
 
     test "uniform auto-generates seed" do

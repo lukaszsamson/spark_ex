@@ -116,6 +116,10 @@ defmodule SparkEx.DataFrame.NA do
     min_non_nulls =
       cond do
         thresh != nil ->
+          unless is_integer(thresh) and thresh >= 0 do
+            raise ArgumentError, "expected :thresh to be a non-negative integer"
+          end
+
           thresh
 
         how == :all ->

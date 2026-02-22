@@ -230,6 +230,18 @@ defmodule SparkEx.Unit.DataFrameM10Test do
       assert %DataFrame{plan: {:sample, @base_plan, lower, 0.5, true, 42, false}} = result
       assert lower == +0.0
     end
+
+    test "raises on invalid seed type" do
+      assert_raise ArgumentError, ~r/expected :seed to be an integer/, fn ->
+        DataFrame.sample(df(), 0.5, seed: "oops")
+      end
+    end
+
+    test "raises on invalid with_replacement type" do
+      assert_raise ArgumentError, ~r/expected :with_replacement to be a boolean/, fn ->
+        DataFrame.sample(df(), 0.5, with_replacement: "oops")
+      end
+    end
   end
 
   describe "random_split/3" do

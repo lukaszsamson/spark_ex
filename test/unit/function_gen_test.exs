@@ -92,12 +92,12 @@ defmodule SparkEx.Unit.FunctionGenTest do
 
   describe "three-col functions" do
     test "conv/3" do
-      assert %Column{expr: {:fn, "conv", [{:col, "n"}, {:col, "from"}, {:col, "to"}], false}} =
+      assert %Column{expr: {:fn, "conv", [{:col, "n"}, {:lit, "from"}, {:lit, "to"}], false}} =
                Functions.conv("n", "from", "to")
     end
 
     test "translate/3" do
-      assert %Column{expr: {:fn, "translate", [{:col, "s"}, {:col, "m"}, {:col, "r"}], false}} =
+      assert %Column{expr: {:fn, "translate", [{:col, "s"}, {:lit, "m"}, {:lit, "r"}], false}} =
                Functions.translate("s", "m", "r")
     end
 

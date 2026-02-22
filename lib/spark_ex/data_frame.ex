@@ -453,6 +453,15 @@ defmodule SparkEx.DataFrame do
     allow_exact_matches = Keyword.get(opts, :allow_exact_matches, true)
     direction = Keyword.get(opts, :direction, "backward")
 
+    unless is_boolean(allow_exact_matches) do
+      raise ArgumentError,
+            "expected :allow_exact_matches to be a boolean, got: #{inspect(allow_exact_matches)}"
+    end
+
+    unless is_binary(direction) do
+      raise ArgumentError, "expected :direction to be a string, got: #{inspect(direction)}"
+    end
+
     join_expr =
       case join_expr do
         nil -> {:lit, nil}
@@ -938,7 +947,7 @@ defmodule SparkEx.DataFrame do
 
   def sample(%__MODULE__{} = df, with_replacement, fraction, opts)
       when is_boolean(with_replacement) and is_float(fraction) and is_list(opts) do
-    seed = Keyword.get(opts, :seed, :rand.uniform(9_223_372_036_854_775_807))
+    seed = normalize_sample_seed!(Keyword.get(opts, :seed, nil))
 
     %__MODULE__{
       df
@@ -948,8 +957,8 @@ defmodule SparkEx.DataFrame do
 
   def sample(%__MODULE__{} = df, fraction, opts, _ignored)
       when is_float(fraction) and is_list(opts) do
-    with_replacement = Keyword.get(opts, :with_replacement, false)
-    seed = Keyword.get(opts, :seed, :rand.uniform(9_223_372_036_854_775_807))
+    with_replacement = normalize_with_replacement!(Keyword.get(opts, :with_replacement, false))
+    seed = normalize_sample_seed!(Keyword.get(opts, :seed, nil))
 
     %__MODULE__{
       df
@@ -1501,11 +1510,11 @@ defmodule SparkEx.DataFrame do
   """
   @spec html_string(t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def html_string(%__MODULE__{} = df, opts \\ []) do
-    num_rows = Keyword.get(opts, :num_rows, 20)
-    truncate = Keyword.get(opts, :truncate, 20)
-
-    html_plan = {:html_string, df.plan, num_rows, truncate}
-    SparkEx.Session.execute_show(df.session, html_plan)
+    with {:ok, num_rows} <- fetch_non_neg_integer_option(opts, :num_rows, 20),
+         {:ok, truncate} <- fetch_non_neg_integer_option(opts, :truncate, 20) do
+      html_plan = {:html_string, df.plan, num_rows, truncate}
+      SparkEx.Session.execute_show(df.session, html_plan)
+    end
   end
 
   # ── Writer entry points ──
@@ -1680,27 +1689,27 @@ defmodule SparkEx.DataFrame do
   """
   @spec checkpoint(t(), keyword()) :: t() | {:error, term()}
   def checkpoint(%__MODULE__{} = df, opts) do
-    eager = Keyword.get(opts, :eager, true)
+    with {:ok, eager} <- fetch_boolean_option(opts, :eager, true) do
+      case SparkEx.Session.execute_command_with_result(
+             df.session,
+             {:checkpoint, df.plan, false, eager, nil},
+             merge_tags(df, opts)
+           ) do
+        {:ok, {:checkpoint, %Spark.Connect.CheckpointCommandResult{relation: relation}}} ->
+          case relation do
+            %{relation_id: relation_id} when is_binary(relation_id) and relation_id != "" ->
+              %__MODULE__{df | plan: {:cached_remote_relation, relation_id}}
 
-    case SparkEx.Session.execute_command_with_result(
-           df.session,
-           {:checkpoint, df.plan, false, eager, nil},
-           merge_tags(df, opts)
-         ) do
-      {:ok, {:checkpoint, %Spark.Connect.CheckpointCommandResult{relation: relation}}} ->
-        case relation do
-          %{relation_id: relation_id} when is_binary(relation_id) and relation_id != "" ->
-            %__MODULE__{df | plan: {:cached_remote_relation, relation_id}}
+            _ ->
+              {:error, {:unexpected_result, :missing_checkpoint_relation}}
+          end
 
-          _ ->
-            {:error, {:unexpected_result, :missing_checkpoint_relation}}
-        end
+        {:ok, other} ->
+          {:error, {:unexpected_result, other}}
 
-      {:ok, other} ->
-        {:error, {:unexpected_result, other}}
-
-      {:error, _} = error ->
-        if checkpoint_not_supported?(error), do: df, else: error
+        {:error, _} = error ->
+          if checkpoint_not_supported?(error), do: df, else: error
+      end
     end
   end
 
@@ -1718,28 +1727,28 @@ defmodule SparkEx.DataFrame do
   """
   @spec local_checkpoint(t(), keyword()) :: t() | {:error, term()}
   def local_checkpoint(%__MODULE__{} = df, opts) do
-    eager = Keyword.get(opts, :eager, true)
-    storage_level = Keyword.get(opts, :storage_level, nil)
+    with {:ok, eager} <- fetch_boolean_option(opts, :eager, true),
+         {:ok, storage_level} <- normalize_storage_level_option(Keyword.get(opts, :storage_level, nil)) do
+      case SparkEx.Session.execute_command_with_result(
+             df.session,
+             {:checkpoint, df.plan, true, eager, storage_level},
+             merge_tags(df, opts)
+           ) do
+        {:ok, {:checkpoint, %Spark.Connect.CheckpointCommandResult{relation: relation}}} ->
+          case relation do
+            %{relation_id: relation_id} when is_binary(relation_id) and relation_id != "" ->
+              %__MODULE__{df | plan: {:cached_remote_relation, relation_id}}
 
-    case SparkEx.Session.execute_command_with_result(
-           df.session,
-           {:checkpoint, df.plan, true, eager, storage_level},
-           merge_tags(df, opts)
-         ) do
-      {:ok, {:checkpoint, %Spark.Connect.CheckpointCommandResult{relation: relation}}} ->
-        case relation do
-          %{relation_id: relation_id} when is_binary(relation_id) and relation_id != "" ->
-            %__MODULE__{df | plan: {:cached_remote_relation, relation_id}}
+            _ ->
+              {:error, {:unexpected_result, :missing_checkpoint_relation}}
+          end
 
-          _ ->
-            {:error, {:unexpected_result, :missing_checkpoint_relation}}
-        end
+        {:ok, other} ->
+          {:error, {:unexpected_result, other}}
 
-      {:ok, other} ->
-        {:error, {:unexpected_result, other}}
-
-      {:error, _} = error ->
-        if checkpoint_not_supported?(error), do: df, else: error
+        {:error, _} = error ->
+          if checkpoint_not_supported?(error), do: df, else: error
+      end
     end
   end
 
@@ -1952,6 +1961,19 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
+  Returns the number of partitions in the underlying RDD.
+  """
+  @spec rdd_num_partitions(t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def rdd_num_partitions(%__MODULE__{} = df) do
+    partition_id = %Column{expr: {:fn, "spark_partition_id", [], false}}
+
+    df
+    |> select([partition_id])
+    |> distinct()
+    |> count()
+  end
+
+  @doc """
   Returns up to `n` rows from the DataFrame as a list of maps.
   """
   @spec take(t(), non_neg_integer(), keyword()) :: {:ok, [map()]} | {:error, term()}
@@ -2049,19 +2071,12 @@ defmodule SparkEx.DataFrame do
   """
   @spec show(t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def show(%__MODULE__{} = df, opts \\ []) do
-    num_rows = Keyword.get(opts, :num_rows, 20)
-
-    truncate =
-      case Keyword.get(opts, :truncate, 20) do
-        true -> 20
-        false -> 0
-        n when is_integer(n) -> n
-      end
-
-    vertical = Keyword.get(opts, :vertical, false)
-
-    show_plan = {:show_string, df.plan, num_rows, truncate, vertical}
-    SparkEx.Session.execute_show(df.session, show_plan)
+    with {:ok, num_rows} <- fetch_non_neg_integer_option(opts, :num_rows, 20),
+         {:ok, truncate} <- normalize_show_truncate_option(opts),
+         {:ok, vertical} <- fetch_boolean_option(opts, :vertical, false) do
+      show_plan = {:show_string, df.plan, num_rows, truncate, vertical}
+      SparkEx.Session.execute_show(df.session, show_plan)
+    end
   end
 
   @doc """
@@ -2073,7 +2088,15 @@ defmodule SparkEx.DataFrame do
   """
   @spec tree_string(t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def tree_string(%__MODULE__{} = df, opts \\ []) do
-    SparkEx.Session.analyze_tree_string(df.session, df.plan, opts)
+    with {:ok, level} <- fetch_optional_integer_option(opts, :level) do
+      tree_opts =
+        case level do
+          nil -> opts
+          _ -> Keyword.put(opts, :level, level)
+        end
+
+      SparkEx.Session.analyze_tree_string(df.session, df.plan, tree_opts)
+    end
   end
 
   @doc """
@@ -2130,9 +2153,17 @@ defmodule SparkEx.DataFrame do
   """
   @spec persist(t(), keyword()) :: t() | {:error, term()}
   def persist(%__MODULE__{} = df, opts \\ []) do
-    case SparkEx.Session.analyze_persist(df.session, df.plan, opts) do
-      :ok -> df
-      {:error, _} = error -> error
+    with {:ok, storage_level} <- normalize_storage_level_option(Keyword.get(opts, :storage_level, nil)) do
+      opts =
+        case storage_level do
+          nil -> opts
+          _ -> Keyword.put(opts, :storage_level, storage_level)
+        end
+
+      case SparkEx.Session.analyze_persist(df.session, df.plan, opts) do
+        :ok -> df
+        {:error, _} = error -> error
+      end
     end
   end
 
@@ -2145,9 +2176,17 @@ defmodule SparkEx.DataFrame do
   """
   @spec unpersist(t(), keyword()) :: t() | {:error, term()}
   def unpersist(%__MODULE__{} = df, opts \\ []) do
-    case SparkEx.Session.analyze_unpersist(df.session, df.plan, opts) do
-      :ok -> df
-      {:error, _} = error -> error
+    with {:ok, blocking} <- fetch_optional_boolean_option(opts, :blocking) do
+      opts =
+        case blocking do
+          nil -> opts
+          _ -> Keyword.put(opts, :blocking, blocking)
+        end
+
+      case SparkEx.Session.analyze_unpersist(df.session, df.plan, opts) do
+        :ok -> df
+        {:error, _} = error -> error
+      end
     end
   end
 
@@ -2365,6 +2404,122 @@ defmodule SparkEx.DataFrame do
 
   defp normalize_sort_expr(idx) when is_integer(idx) do
     {:sort_order, {:col, "_c#{idx}"}, :asc, :nulls_first}
+  end
+
+  defp normalize_sample_seed!(nil), do: :rand.uniform(9_223_372_036_854_775_807)
+  defp normalize_sample_seed!(seed) when is_integer(seed), do: seed
+
+  defp normalize_sample_seed!(seed) do
+    raise ArgumentError, "expected :seed to be an integer, got: #{inspect(seed)}"
+  end
+
+  defp normalize_with_replacement!(value) when is_boolean(value), do: value
+
+  defp normalize_with_replacement!(value) do
+    raise ArgumentError,
+          "expected :with_replacement to be a boolean, got: #{inspect(value)}"
+  end
+
+  defp fetch_non_neg_integer_option(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      value when is_integer(value) and value >= 0 ->
+        {:ok, value}
+
+      other ->
+        {:error, "#{key} must be a non-negative integer, got: #{inspect(other)}"}
+    end
+  end
+
+  defp fetch_optional_integer_option(opts, key) do
+    case Keyword.get(opts, key, nil) do
+      nil -> {:ok, nil}
+      value when is_integer(value) -> {:ok, value}
+      other -> {:error, "#{key} must be an integer, got: #{inspect(other)}"}
+    end
+  end
+
+  defp fetch_boolean_option(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      value when is_boolean(value) -> {:ok, value}
+      other -> {:error, "#{key} must be a boolean, got: #{inspect(other)}"}
+    end
+  end
+
+  defp fetch_optional_boolean_option(opts, key) do
+    case Keyword.get(opts, key, nil) do
+      nil -> {:ok, nil}
+      value when is_boolean(value) -> {:ok, value}
+      other -> {:error, "#{key} must be a boolean, got: #{inspect(other)}"}
+    end
+  end
+
+  defp normalize_show_truncate_option(opts) do
+    case Keyword.get(opts, :truncate, 20) do
+      true -> {:ok, 20}
+      false -> {:ok, 0}
+      value when is_integer(value) and value >= 0 -> {:ok, value}
+      other -> {:error, ":truncate must be a non-negative integer or boolean, got: #{inspect(other)}"}
+    end
+  end
+
+  defp normalize_storage_level_option(nil), do: {:ok, nil}
+  defp normalize_storage_level_option(%Spark.Connect.StorageLevel{} = level), do: {:ok, level}
+
+  defp normalize_storage_level_option(level) when is_atom(level) do
+    case level do
+      :none ->
+        {:ok, %Spark.Connect.StorageLevel{}}
+
+      :disk_only ->
+        {:ok, %Spark.Connect.StorageLevel{use_disk: true, replication: 1}}
+
+      :disk_only_2 ->
+        {:ok, %Spark.Connect.StorageLevel{use_disk: true, replication: 2}}
+
+      :memory_only ->
+        {:ok, %Spark.Connect.StorageLevel{use_memory: true, deserialized: true, replication: 1}}
+
+      :memory_only_2 ->
+        {:ok, %Spark.Connect.StorageLevel{use_memory: true, deserialized: true, replication: 2}}
+
+      :memory_and_disk ->
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: true,
+           deserialized: true,
+           replication: 1
+         }}
+
+      :memory_and_disk_2 ->
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: true,
+           deserialized: true,
+           replication: 2
+         }}
+
+      :off_heap ->
+        {:ok, %Spark.Connect.StorageLevel{use_off_heap: true, replication: 1}}
+
+      :memory_and_disk_deser ->
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: true,
+           use_off_heap: true,
+           deserialized: false,
+           replication: 1
+         }}
+
+      _ ->
+        {:error, ":storage_level must be a StorageLevel struct or supported atom, got: #{inspect(level)}"}
+    end
+  end
+
+  defp normalize_storage_level_option(other) do
+    {:error, ":storage_level must be a StorageLevel struct or supported atom, got: #{inspect(other)}"}
   end
 
   defp ensure_same_session!(%__MODULE__{session: left}, %__MODULE__{session: right}, _op)
