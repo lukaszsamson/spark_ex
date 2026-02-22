@@ -794,6 +794,21 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert length(wr.references) == 1
     end
 
+    test "encodes correlated exists subquery without plan encode crash" do
+      main = {:sql, "SELECT * FROM main_t", nil}
+
+      exists_plan =
+        {:filter, {:sql, "SELECT * FROM lookup_t", nil},
+         {:fn, "==", [{:col, "ref_id"}, {:col, "id", main}], false}}
+
+      plan = {:filter, main, {:subquery, :exists, exists_plan, []}}
+
+      {encoded, _} = PlanEncoder.encode(plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
+      assert length(wr.references) >= 1
+    end
+
     test "encode_expression rejects subquery plans without pre-wired plan_id" do
       assert_raise ArgumentError,
                    ~r/subquery expression requires an explicit plan_id reference/,

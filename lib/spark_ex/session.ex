@@ -848,6 +848,18 @@ defmodule SparkEx.Session do
                 {:reply, error, state}
             end
 
+          {:error, %SparkEx.Error.Remote{} = remote} = error ->
+            case retry_collect_with_legacy_fallbacks(state, plan, opts, remote) do
+              {:ok, result, state} ->
+                state = maybe_update_server_session(state, result.server_side_session_id)
+                state = %{state | last_execution_metrics: result.execution_metrics}
+                SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+                {:reply, {:ok, result.rows}, state}
+
+              :error ->
+                {:reply, error, state}
+            end
+
           {:error, _} = error ->
             {:reply, error, state}
         end
@@ -1572,6 +1584,507 @@ defmodule SparkEx.Session do
       _ -> {:error, state}
     end
   end
+
+  defp retry_collect_with_legacy_fallbacks(
+         state,
+         plan,
+         opts,
+         %SparkEx.Error.Remote{message: message}
+       )
+       when is_binary(message) do
+    cond do
+      String.contains?(message, "Unknown Group Type UNRECOGNIZED") ->
+        with {:ok, rewritten_plan} <- rewrite_grouping_sets_collect_plan(plan),
+             {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
+          {:ok, result, state}
+        else
+          _ -> :error
+        end
+
+      String.contains?(message, "Expected Relation to be set, but is empty.") ->
+        retry_collect_for_empty_relation_errors(state, plan, opts)
+
+      true ->
+        :error
+    end
+  end
+
+  defp retry_collect_with_legacy_fallbacks(_state, _plan, _opts, _remote), do: :error
+
+  defp retry_collect_for_empty_relation_errors(state, plan, opts) do
+    with {:ok, rewritten_plan} <- rewrite_transpose_collect_plan(plan),
+         {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
+      {:ok, result, state}
+    else
+      _ ->
+        with {:ok, rewritten_plan} <- rewrite_subquery_collect_plan(plan),
+             {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
+          {:ok, result, state}
+        else
+          _ -> :error
+        end
+    end
+  end
+
+  defp rewrite_transpose_collect_plan({:transpose, child_plan, index_columns}) do
+    case transpose_emulation_plan(child_plan, index_columns) do
+      {:ok, rewritten} -> {:ok, rewritten}
+      :error -> :error
+    end
+  end
+
+  defp rewrite_transpose_collect_plan({:sort, child_plan, sort_orders}) do
+    with {:ok, rewritten_child} <- rewrite_transpose_collect_plan(child_plan) do
+      {:ok, {:sort, rewritten_child, sort_orders}}
+    end
+  end
+
+  defp rewrite_transpose_collect_plan({:sort, child_plan, sort_orders, is_global}) do
+    with {:ok, rewritten_child} <- rewrite_transpose_collect_plan(child_plan) do
+      {:ok, {:sort, rewritten_child, sort_orders, is_global}}
+    end
+  end
+
+  defp rewrite_transpose_collect_plan(_plan), do: :error
+
+  defp transpose_emulation_plan(child_plan, [index_expr]) do
+    with {:ok, index_name} <- extract_col_name(index_expr) do
+      unpivot_plan =
+        {:unpivot, child_plan, [{:col, index_name}], nil, "__spark_ex_transpose_key",
+         "__spark_ex_transpose_value"}
+
+      pivot_plan =
+        {:aggregate, unpivot_plan, :pivot, [{:col, "__spark_ex_transpose_key"}],
+         [{:fn, "first", [{:col, "__spark_ex_transpose_value"}], false}], {:col, index_name}, nil}
+
+      {:ok,
+       {:sort, pivot_plan,
+        [{:sort_order, {:col, "__spark_ex_transpose_key"}, :asc, :nulls_first}]}}
+    end
+  end
+
+  defp transpose_emulation_plan(_child_plan, _index_columns), do: :error
+
+  defp rewrite_grouping_sets_collect_plan({:sort, child_plan, sort_orders}) do
+    with {:ok, rewritten_child} <- rewrite_grouping_sets_collect_plan(child_plan) do
+      {:ok, {:sort, rewritten_child, sort_orders}}
+    end
+  end
+
+  defp rewrite_grouping_sets_collect_plan({:sort, child_plan, sort_orders, is_global}) do
+    with {:ok, rewritten_child} <- rewrite_grouping_sets_collect_plan(child_plan) do
+      {:ok, {:sort, rewritten_child, sort_orders, is_global}}
+    end
+  end
+
+  defp rewrite_grouping_sets_collect_plan(
+         {:aggregate, child_plan, :grouping_sets, grouping_exprs, agg_exprs, grouping_sets}
+       ) do
+    with {:ok, grouping_names} <- extract_col_names(grouping_exprs),
+         {:ok, agg_aliases} <- extract_agg_alias_names(agg_exprs),
+         {:ok, set_specs} <- extract_grouping_set_specs(grouping_sets) do
+      set_plans =
+        Enum.map(set_specs, fn {set_exprs, set_names} ->
+          grouped_plan = {:aggregate, child_plan, :groupby, set_exprs, agg_exprs}
+          set_name_set = MapSet.new(set_names)
+
+          grouping_projections =
+            Enum.map(grouping_names, fn grouping_name ->
+              expr =
+                if MapSet.member?(set_name_set, grouping_name),
+                  do: {:col, grouping_name},
+                  else: {:lit, nil}
+
+              {:alias, expr, grouping_name}
+            end)
+
+          agg_projections =
+            Enum.map(agg_aliases, fn alias_name ->
+              {:alias, {:col, alias_name}, alias_name}
+            end)
+
+          {:project, grouped_plan, grouping_projections ++ agg_projections}
+        end)
+
+      case set_plans do
+        [first_plan | rest_plans] ->
+          rewritten =
+            Enum.reduce(rest_plans, first_plan, fn set_plan, acc ->
+              {:set_operation, acc, set_plan, :union, true}
+            end)
+
+          {:ok, rewritten}
+
+        [] ->
+          :error
+      end
+    end
+  end
+
+  defp rewrite_grouping_sets_collect_plan(_plan), do: :error
+
+  defp rewrite_subquery_collect_plan(plan) do
+    {rewritten, changed?} = rewrite_subquery_plan(plan)
+    if changed?, do: {:ok, rewritten}, else: :error
+  end
+
+  defp rewrite_subquery_plan({:sort, child_plan, sort_orders}) do
+    {child_plan, child_changed?} = rewrite_subquery_plan(child_plan)
+    {sort_orders, sort_changed?} = rewrite_subquery_expr_list(sort_orders)
+    {{:sort, child_plan, sort_orders}, child_changed? or sort_changed?}
+  end
+
+  defp rewrite_subquery_plan({:sort, child_plan, sort_orders, is_global}) do
+    {child_plan, child_changed?} = rewrite_subquery_plan(child_plan)
+    {sort_orders, sort_changed?} = rewrite_subquery_expr_list(sort_orders)
+    {{:sort, child_plan, sort_orders, is_global}, child_changed? or sort_changed?}
+  end
+
+  defp rewrite_subquery_plan({:filter, child_plan, condition}) do
+    {child_plan, child_changed?} = rewrite_subquery_plan(child_plan)
+    {condition, cond_changed?} = rewrite_subquery_expr(condition)
+    {{:filter, child_plan, condition}, child_changed? or cond_changed?}
+  end
+
+  defp rewrite_subquery_plan({:project, child_plan, expressions}) do
+    {child_plan, child_changed?} = rewrite_subquery_plan(child_plan)
+    {expressions, expr_changed?} = rewrite_subquery_expr_list(expressions)
+    {{:project, child_plan, expressions}, child_changed? or expr_changed?}
+  end
+
+  defp rewrite_subquery_plan({:limit, child_plan, limit}) do
+    {child_plan, changed?} = rewrite_subquery_plan(child_plan)
+    {{:limit, child_plan, limit}, changed?}
+  end
+
+  defp rewrite_subquery_plan(plan), do: {plan, false}
+
+  defp rewrite_subquery_expr({:subquery, subquery_type, referenced_plan, opts} = expr)
+       when is_list(opts) do
+    case subquery_to_sql_expression(subquery_type, referenced_plan, opts) do
+      {:ok, sql_expr} -> {sql_expr, true}
+      :error -> {expr, false}
+    end
+  end
+
+  defp rewrite_subquery_expr({:fn, name, args, is_distinct}) do
+    {args, changed?} = rewrite_subquery_expr_list(args)
+    {{:fn, name, args, is_distinct}, changed?}
+  end
+
+  defp rewrite_subquery_expr({:alias, expr, name}) do
+    {expr, changed?} = rewrite_subquery_expr(expr)
+    {{:alias, expr, name}, changed?}
+  end
+
+  defp rewrite_subquery_expr({:alias, expr, name, metadata}) do
+    {expr, changed?} = rewrite_subquery_expr(expr)
+    {{:alias, expr, name, metadata}, changed?}
+  end
+
+  defp rewrite_subquery_expr({:cast, expr, type_str}) do
+    {expr, changed?} = rewrite_subquery_expr(expr)
+    {{:cast, expr, type_str}, changed?}
+  end
+
+  defp rewrite_subquery_expr({:cast, expr, type_str, mode}) do
+    {expr, changed?} = rewrite_subquery_expr(expr)
+    {{:cast, expr, type_str, mode}, changed?}
+  end
+
+  defp rewrite_subquery_expr({:sort_order, expr, direction, null_order}) do
+    {expr, changed?} = rewrite_subquery_expr(expr)
+    {{:sort_order, expr, direction, null_order}, changed?}
+  end
+
+  defp rewrite_subquery_expr(%SparkEx.Column{expr: expr} = col) do
+    {expr, changed?} = rewrite_subquery_expr(expr)
+    {%{col | expr: expr}, changed?}
+  end
+
+  defp rewrite_subquery_expr(expr), do: {expr, false}
+
+  defp rewrite_subquery_expr_list(values) when is_list(values) do
+    Enum.map_reduce(values, false, fn value, acc_changed? ->
+      {value, value_changed?} = rewrite_subquery_expr(value)
+      {value, acc_changed? or value_changed?}
+    end)
+  end
+
+  defp subquery_to_sql_expression(subquery_type, referenced_plan, opts) when is_list(opts) do
+    if explicit_subquery_reference_plan?(referenced_plan) do
+      :error
+    else
+      referenced_plan = normalize_subquery_reference_plan(referenced_plan)
+
+      with {:ok, subquery_sql} <- subquery_plan_to_sql(referenced_plan) do
+        case subquery_type do
+          :scalar ->
+            {:ok, {:expr, "(#{subquery_sql})"}}
+
+          :exists ->
+            {:ok, {:expr, "EXISTS (#{subquery_sql})"}}
+
+          :in ->
+            case Keyword.get(opts, :in_values, []) do
+              [] ->
+                :error
+
+              in_values ->
+                with {:ok, in_values_sql} <- expr_list_to_sql(in_values) do
+                  left_expr_sql =
+                    case in_values_sql do
+                      [single] -> single
+                      many -> "(" <> Enum.join(many, ", ") <> ")"
+                    end
+
+                  {:ok, {:expr, "#{left_expr_sql} IN (#{subquery_sql})"}}
+                end
+            end
+
+          _ ->
+            :error
+        end
+      end
+    end
+  end
+
+  defp explicit_subquery_reference_plan?(%{plan_id: plan_id, plan: _plan})
+       when is_integer(plan_id),
+       do: true
+
+  defp explicit_subquery_reference_plan?({plan_id, _plan}) when is_integer(plan_id), do: true
+  defp explicit_subquery_reference_plan?({:plan_id, plan_id, _plan}) when is_integer(plan_id), do: true
+  defp explicit_subquery_reference_plan?(_), do: false
+
+  defp normalize_subquery_reference_plan({:plan_id, _plan_id, plan}), do: plan
+  defp normalize_subquery_reference_plan(%{plan: plan}), do: plan
+  defp normalize_subquery_reference_plan(plan), do: plan
+
+  defp subquery_plan_to_sql({:sql, query, args}) when args in [nil, []] and is_binary(query),
+    do: {:ok, query}
+
+  defp subquery_plan_to_sql({:project, child_plan, expressions}) when is_list(expressions) do
+    with {:ok, child_sql} <- subquery_plan_to_sql(child_plan),
+         {:ok, select_items} <- select_items_to_sql(expressions) do
+      {:ok, "SELECT #{Enum.join(select_items, ", ")} FROM (#{child_sql}) spark_ex_sub"}
+    end
+  end
+
+  defp subquery_plan_to_sql({:filter, child_plan, condition}) do
+    with {:ok, child_sql} <- subquery_plan_to_sql(child_plan),
+         {:ok, condition_sql} <- expr_to_sql(condition) do
+      {:ok, "SELECT * FROM (#{child_sql}) spark_ex_sub WHERE #{condition_sql}"}
+    end
+  end
+
+  defp subquery_plan_to_sql({:sort, child_plan, sort_orders}) do
+    with {:ok, child_sql} <- subquery_plan_to_sql(child_plan),
+         {:ok, order_sql} <- sort_orders_to_sql(sort_orders) do
+      {:ok, "SELECT * FROM (#{child_sql}) spark_ex_sub ORDER BY #{Enum.join(order_sql, ", ")}"}
+    end
+  end
+
+  defp subquery_plan_to_sql({:sort, child_plan, sort_orders, _is_global}) do
+    subquery_plan_to_sql({:sort, child_plan, sort_orders})
+  end
+
+  defp subquery_plan_to_sql({:limit, child_plan, limit}) when is_integer(limit) and limit >= 0 do
+    with {:ok, child_sql} <- subquery_plan_to_sql(child_plan) do
+      {:ok, "SELECT * FROM (#{child_sql}) spark_ex_sub LIMIT #{limit}"}
+    end
+  end
+
+  defp subquery_plan_to_sql(_plan), do: :error
+
+  defp select_items_to_sql(expressions) do
+    sql_items =
+      Enum.map(expressions, fn
+        {:alias, expr, name} when is_binary(name) ->
+          with {:ok, expr_sql} <- expr_to_sql(expr) do
+            {:ok, "#{expr_sql} AS #{quote_sql_identifier(name)}"}
+          end
+
+        expr ->
+          expr_to_sql(expr)
+      end)
+
+    if Enum.all?(sql_items, &match?({:ok, _}, &1)) do
+      {:ok, Enum.map(sql_items, fn {:ok, sql} -> sql end)}
+    else
+      :error
+    end
+  end
+
+  defp sort_orders_to_sql(sort_orders) when is_list(sort_orders) do
+    sql_items =
+      Enum.map(sort_orders, fn
+        {:sort_order, expr, direction, null_ordering} ->
+          with {:ok, expr_sql} <- expr_to_sql(expr) do
+            dir =
+              case direction do
+                :desc -> "DESC"
+                _ -> "ASC"
+              end
+
+            nulls =
+              case null_ordering do
+                :nulls_last -> "NULLS LAST"
+                _ -> "NULLS FIRST"
+              end
+
+            {:ok, "#{expr_sql} #{dir} #{nulls}"}
+          end
+
+        _ ->
+          :error
+      end)
+
+    if Enum.all?(sql_items, &match?({:ok, _}, &1)) do
+      {:ok, Enum.map(sql_items, fn {:ok, sql} -> sql end)}
+    else
+      :error
+    end
+  end
+
+  defp expr_list_to_sql(exprs) when is_list(exprs) do
+    sql_items = Enum.map(exprs, &expr_to_sql/1)
+
+    if Enum.all?(sql_items, &match?({:ok, _}, &1)) do
+      {:ok, Enum.map(sql_items, fn {:ok, sql} -> sql end)}
+    else
+      :error
+    end
+  end
+
+  defp expr_to_sql(%SparkEx.Column{expr: expr}), do: expr_to_sql(expr)
+
+  defp expr_to_sql({:col, name}) when is_binary(name), do: {:ok, quote_sql_identifier(name)}
+
+  defp expr_to_sql({:col, name, _plan_ref}) when is_binary(name),
+    do: {:ok, quote_sql_identifier(name)}
+
+  defp expr_to_sql({:lit, value}), do: {:ok, literal_to_sql(value)}
+  defp expr_to_sql({:expr, sql}) when is_binary(sql), do: {:ok, "(#{sql})"}
+
+  defp expr_to_sql({:fn, name, args, is_distinct}) when is_binary(name) and is_list(args) do
+    with {:ok, arg_sql} <- expr_list_to_sql(args) do
+      case {name, arg_sql} do
+        {"==", [left, right]} -> {:ok, "(#{left} = #{right})"}
+        {"!=", [left, right]} -> {:ok, "(#{left} <> #{right})"}
+        {"<>", [left, right]} -> {:ok, "(#{left} <> #{right})"}
+        {">", [left, right]} -> {:ok, "(#{left} > #{right})"}
+        {"<", [left, right]} -> {:ok, "(#{left} < #{right})"}
+        {">=", [left, right]} -> {:ok, "(#{left} >= #{right})"}
+        {"<=", [left, right]} -> {:ok, "(#{left} <= #{right})"}
+        {"and", [left, right]} -> {:ok, "(#{left} AND #{right})"}
+        {"or", [left, right]} -> {:ok, "(#{left} OR #{right})"}
+        {"not", [arg]} -> {:ok, "(NOT #{arg})"}
+        {"+", [left, right]} -> {:ok, "(#{left} + #{right})"}
+        {"-", [left, right]} -> {:ok, "(#{left} - #{right})"}
+        {"*", [left, right]} -> {:ok, "(#{left} * #{right})"}
+        {"/", [left, right]} -> {:ok, "(#{left} / #{right})"}
+        _ -> {:ok, sql_function_call(name, arg_sql, is_distinct)}
+      end
+    end
+  end
+
+  defp expr_to_sql(_expr), do: :error
+
+  defp sql_function_call(name, args_sql, is_distinct) do
+    args_sql =
+      case {is_distinct, args_sql} do
+        {true, [first | rest]} -> ["DISTINCT " <> first | rest]
+        _ -> args_sql
+      end
+
+    "#{name}(#{Enum.join(args_sql, ", ")})"
+  end
+
+  defp literal_to_sql(nil), do: "NULL"
+  defp literal_to_sql(true), do: "TRUE"
+  defp literal_to_sql(false), do: "FALSE"
+  defp literal_to_sql(value) when is_integer(value), do: Integer.to_string(value)
+  defp literal_to_sql(value) when is_float(value), do: Float.to_string(value)
+  defp literal_to_sql(%Decimal{} = value), do: Decimal.to_string(value)
+
+  defp literal_to_sql(%Date{} = value), do: "'#{Date.to_iso8601(value)}'"
+
+  defp literal_to_sql(%NaiveDateTime{} = value),
+    do: "'#{NaiveDateTime.to_iso8601(value)}'"
+
+  defp literal_to_sql(%DateTime{} = value), do: "'#{DateTime.to_iso8601(value)}'"
+
+  defp literal_to_sql(value) when is_binary(value) do
+    escaped =
+      value
+      |> String.replace("\\", "\\\\")
+      |> String.replace("'", "''")
+
+    "'#{escaped}'"
+  end
+
+  defp literal_to_sql(other), do: "'#{to_string(other)}'"
+
+  defp quote_sql_identifier(name) when is_binary(name) do
+    name
+    |> String.split(".")
+    |> Enum.map(fn part ->
+      escaped = String.replace(part, "`", "``")
+      "`#{escaped}`"
+    end)
+    |> Enum.join(".")
+  end
+
+  defp extract_grouping_set_specs(grouping_sets) when is_list(grouping_sets) do
+    set_specs =
+      Enum.map(grouping_sets, fn set_exprs ->
+        with {:ok, set_names} <- extract_col_names(set_exprs) do
+          {:ok, {set_exprs, set_names}}
+        end
+      end)
+
+    if Enum.all?(set_specs, &match?({:ok, _}, &1)) do
+      {:ok, Enum.map(set_specs, fn {:ok, spec} -> spec end)}
+    else
+      :error
+    end
+  end
+
+  defp extract_grouping_set_specs(_), do: :error
+
+  defp extract_col_names(exprs) when is_list(exprs) do
+    names = Enum.map(exprs, &extract_col_name/1)
+
+    if Enum.all?(names, &match?({:ok, _}, &1)) do
+      {:ok, Enum.map(names, fn {:ok, name} -> name end)}
+    else
+      :error
+    end
+  end
+
+  defp extract_col_names(_), do: :error
+
+  defp extract_col_name({:col, name}) when is_binary(name), do: {:ok, name}
+  defp extract_col_name({:col, name, _plan_ref}) when is_binary(name), do: {:ok, name}
+  defp extract_col_name(_expr), do: :error
+
+  defp extract_agg_alias_names(agg_exprs) when is_list(agg_exprs) do
+    names =
+      Enum.map(agg_exprs, fn
+        {:alias, _expr, name} when is_binary(name) -> {:ok, name}
+        {:alias, _expr, [name | _]} when is_binary(name) -> {:ok, name}
+        _ -> :error
+      end)
+
+    if Enum.all?(names, &match?({:ok, _}, &1)) do
+      {:ok, Enum.map(names, fn {:ok, name} -> name end)}
+    else
+      :error
+    end
+  end
+
+  defp extract_agg_alias_names(_), do: :error
 
   defp retry_collect_with_json_projection(state, plan, schema, opts) do
     case json_fallback_projection_plan(plan, schema) do

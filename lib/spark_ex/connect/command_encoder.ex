@@ -146,21 +146,28 @@ defmodule SparkEx.Connect.CommandEncoder do
         counter
       ) do
     {source_relation, counter} = PlanEncoder.encode_relation(source_plan, counter)
-    merge_condition = PlanEncoder.encode_expression(condition_expr)
+    source_plan_id = source_relation.common.plan_id
+    rewritten_condition = rewrite_merge_expr(condition_expr, source_plan, source_plan_id)
+    merge_condition = PlanEncoder.encode_expression(rewritten_condition)
 
     command = %Command{
       command_type:
         {:merge_into_table_command,
          %MergeIntoTableCommand{
-           target_table_name: target_table,
-           source_table_plan: source_relation,
-           merge_condition: merge_condition,
-           match_actions: Enum.map(match_actions, &encode_merge_action/1),
-           not_matched_actions: Enum.map(not_matched_actions, &encode_merge_action/1),
-           not_matched_by_source_actions:
-             Enum.map(not_matched_by_source_actions, &encode_merge_action/1),
-           with_schema_evolution: schema_evolution
-         }}
+            target_table_name: target_table,
+            source_table_plan: source_relation,
+            merge_condition: merge_condition,
+            match_actions:
+              Enum.map(match_actions, &encode_merge_action(&1, source_plan, source_plan_id)),
+            not_matched_actions:
+              Enum.map(not_matched_actions, &encode_merge_action(&1, source_plan, source_plan_id)),
+            not_matched_by_source_actions:
+              Enum.map(
+                not_matched_by_source_actions,
+                &encode_merge_action(&1, source_plan, source_plan_id)
+              ),
+            with_schema_evolution: schema_evolution
+          }}
     }
 
     {command, counter}
@@ -357,7 +364,7 @@ defmodule SparkEx.Connect.CommandEncoder do
 
   # --- Private helpers ---
 
-  defp encode_merge_action({action_type, condition_expr, assignments}) do
+  defp encode_merge_action({action_type, condition_expr, assignments}, source_plan, source_plan_id) do
     action_type_enum =
       case action_type do
         :delete -> :ACTION_TYPE_DELETE
@@ -370,14 +377,23 @@ defmodule SparkEx.Connect.CommandEncoder do
     condition =
       case condition_expr do
         nil -> nil
-        expr -> PlanEncoder.encode_expression(expr)
+        expr ->
+          expr
+          |> rewrite_merge_expr(source_plan, source_plan_id)
+          |> PlanEncoder.encode_expression()
       end
 
     encoded_assignments =
       Enum.map(assignments, fn {key_expr, value_expr} ->
         %MergeAction.Assignment{
-          key: PlanEncoder.encode_expression(key_expr),
-          value: PlanEncoder.encode_expression(value_expr)
+          key:
+            key_expr
+            |> rewrite_merge_expr(source_plan, source_plan_id)
+            |> PlanEncoder.encode_expression(),
+          value:
+            value_expr
+            |> rewrite_merge_expr(source_plan, source_plan_id)
+            |> PlanEncoder.encode_expression()
         }
       end)
 
@@ -391,6 +407,40 @@ defmodule SparkEx.Connect.CommandEncoder do
          }}
     }
   end
+
+  defp rewrite_merge_expr({:col, name, referenced_plan}, source_plan, source_plan_id)
+       when is_binary(name) and not is_integer(referenced_plan) do
+    if same_plan_ref?(referenced_plan, source_plan) do
+      {:col, name, source_plan_id}
+    else
+      {:col, name}
+    end
+  end
+
+  defp rewrite_merge_expr(%SparkEx.Column{expr: expr} = col, source_plan, source_plan_id) do
+    %{col | expr: rewrite_merge_expr(expr, source_plan, source_plan_id)}
+  end
+
+  defp rewrite_merge_expr(list, source_plan, source_plan_id) when is_list(list) do
+    Enum.map(list, &rewrite_merge_expr(&1, source_plan, source_plan_id))
+  end
+
+  defp rewrite_merge_expr(tuple, source_plan, source_plan_id) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.map(&rewrite_merge_expr(&1, source_plan, source_plan_id))
+    |> List.to_tuple()
+  end
+
+  defp rewrite_merge_expr(value, _source_plan, _source_plan_id), do: value
+
+  defp same_plan_ref?(left, right) do
+    normalize_plan_ref(left) == normalize_plan_ref(right)
+  end
+
+  defp normalize_plan_ref({:plan_id, _id, plan}), do: normalize_plan_ref(plan)
+  defp normalize_plan_ref(%{plan: plan}), do: normalize_plan_ref(plan)
+  defp normalize_plan_ref(other), do: other
 
   defp encode_save_type(opts) do
     path = Keyword.get(opts, :path, nil)

@@ -98,6 +98,23 @@ defmodule SparkEx.M13.CommandEncoderTest do
       assert merge.with_schema_evolution == true
     end
 
+    test "rewrites source-bound columns in merge condition" do
+      source_plan = {:sql, "SELECT 1 AS id", nil}
+      condition_expr = {:fn, "==", [{:col, "id", source_plan}, {:col, "id"}], false}
+
+      command_tuple =
+        {:merge_into_table, source_plan, "t", condition_expr, [{:update_star, nil, []}], [], [],
+         false}
+
+      {command, _counter} = CommandEncoder.encode_command(command_tuple, 0)
+      assert {:merge_into_table_command, merge} = command.command_type
+
+      assert {:unresolved_function, fn_expr} = merge.merge_condition.expr_type
+      [left, _right] = fn_expr.arguments
+      assert {:unresolved_attribute, left_attr} = left.expr_type
+      assert is_integer(left_attr.plan_id)
+    end
+
     test "encodes merge with not_matched_by_source actions" do
       source_plan = {:sql, "SELECT 1", nil}
       condition_expr = {:fn, "==", [{:col, "s.id"}, {:col, "t.id"}], false}

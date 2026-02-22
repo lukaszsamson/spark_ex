@@ -71,6 +71,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   def encode_relation({:plan_id, plan_id, plan}, counter) do
+    {plan, counter} = attach_with_relations(plan, counter)
     {relation, counter} = encode_relation(plan, counter)
     relation = put_in(relation.common.plan_id, plan_id)
     {relation, counter}

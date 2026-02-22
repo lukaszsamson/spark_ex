@@ -78,9 +78,26 @@ defmodule SparkEx.DataFrame.Stat do
       DataFrame.Stat.freq_items(df, ["category", "status"])
       DataFrame.Stat.freq_items(df, ["category"], 0.05)
   """
-  @spec freq_items(DataFrame.t(), [String.t()], float()) :: DataFrame.t()
-  def freq_items(%DataFrame{} = df, cols, support \\ 0.01) when is_list(cols) do
+  @spec freq_items(DataFrame.t(), [String.t()], float() | keyword()) :: DataFrame.t()
+  def freq_items(df, cols, support \\ 0.01)
+
+  def freq_items(%DataFrame{} = df, cols, support) when is_list(cols) and is_number(support) do
+    validate_support!(support)
     %DataFrame{df | plan: {:stat_freq_items, df.plan, cols, support}}
+  end
+
+  def freq_items(%DataFrame{} = df, cols, opts) when is_list(cols) and is_list(opts) do
+    unless Keyword.keyword?(opts) do
+      raise ArgumentError, "expected options as keyword list, got: #{inspect(opts)}"
+    end
+
+    support = Keyword.get(opts, :support, 0.01)
+
+    unless is_number(support) do
+      raise ArgumentError, "support must be a number, got: #{inspect(support)}"
+    end
+
+    freq_items(df, cols, support * 1.0)
   end
 
   @doc """
@@ -97,12 +114,13 @@ defmodule SparkEx.DataFrame.Stat do
       DataFrame.Stat.sample_by(df, "label", %{0 => 0.1, 1 => 0.5})
       DataFrame.Stat.sample_by(df, "label", %{0 => 0.1, 1 => 0.5}, 42)
   """
-  @spec sample_by(DataFrame.t(), Column.t() | String.t(), map(), integer() | nil) :: DataFrame.t()
+  @spec sample_by(DataFrame.t(), Column.t() | String.t(), map(), integer() | keyword() | nil) ::
+          DataFrame.t()
   def sample_by(%DataFrame{} = df, col, fractions, seed \\ nil) when is_map(fractions) do
     validate_fractions!(fractions)
     col_expr = normalize_col_expr(col)
     frac_list = Enum.map(fractions, fn {k, v} -> {k, v * 1.0} end)
-    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
+    seed = normalize_seed(seed)
     %DataFrame{df | plan: {:stat_sample_by, df.plan, col_expr, frac_list, seed}}
   end
 
@@ -274,4 +292,28 @@ defmodule SparkEx.DataFrame.Stat do
       end
     end)
   end
+
+  defp validate_support!(support) when is_number(support) do
+    if support < 0.0 or support > 1.0 do
+      raise ArgumentError, "support must be between 0 and 1, got: #{inspect(support)}"
+    end
+  end
+
+  defp normalize_seed(nil), do: :rand.uniform(9_223_372_036_854_775_807)
+
+  defp normalize_seed(seed) when is_integer(seed), do: seed
+
+  defp normalize_seed(opts) when is_list(opts) do
+    unless Keyword.keyword?(opts) do
+      raise ArgumentError, "expected options as keyword list, got: #{inspect(opts)}"
+    end
+
+    case Keyword.get(opts, :seed, nil) do
+      nil -> normalize_seed(nil)
+      seed when is_integer(seed) -> seed
+      other -> raise ArgumentError, "seed must be an integer, got: #{inspect(other)}"
+    end
+  end
+
+  defp normalize_seed(other), do: raise(ArgumentError, "seed must be an integer, got: #{inspect(other)}")
 end

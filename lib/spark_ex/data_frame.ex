@@ -2231,7 +2231,7 @@ defmodule SparkEx.DataFrame do
     do: SparkEx.DataFrame.Stat.crosstab(df, col1, col2)
 
   @doc "Finds frequent items. Delegates to `SparkEx.DataFrame.Stat.freq_items/3`."
-  @spec freq_items(t(), [String.t()], float()) :: t()
+  @spec freq_items(t(), [String.t()], float() | keyword()) :: t()
   def freq_items(%__MODULE__{} = df, cols, support \\ 0.01),
     do: SparkEx.DataFrame.Stat.freq_items(df, cols, support)
 
@@ -2242,7 +2242,7 @@ defmodule SparkEx.DataFrame do
     do: SparkEx.DataFrame.Stat.approx_quantile(df, col, probabilities, relative_error)
 
   @doc "Returns stratified sample. Delegates to `SparkEx.DataFrame.Stat.sample_by/4`."
-  @spec sample_by(t(), Column.t() | String.t(), map(), integer() | nil) :: t()
+  @spec sample_by(t(), Column.t() | String.t(), map(), integer() | keyword() | nil) :: t()
   def sample_by(%__MODULE__{} = df, col, fractions, seed \\ nil),
     do: SparkEx.DataFrame.Stat.sample_by(df, col, fractions, seed)
 

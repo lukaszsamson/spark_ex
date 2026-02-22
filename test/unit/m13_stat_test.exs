@@ -51,6 +51,11 @@ defmodule SparkEx.M13.StatTest do
       df = Stat.freq_items(make_df(), ["category", "status"], 0.05)
       assert %DataFrame{plan: {:stat_freq_items, :test_plan, ["category", "status"], 0.05}} = df
     end
+
+    test "accepts keyword support option" do
+      df = Stat.freq_items(make_df(), ["category"], support: 0.5)
+      assert %DataFrame{plan: {:stat_freq_items, :test_plan, ["category"], 0.5}} = df
+    end
   end
 
   describe "sample_by/3" do
@@ -68,6 +73,14 @@ defmodule SparkEx.M13.StatTest do
 
     test "with seed" do
       df = Stat.sample_by(make_df(), "label", %{0 => 0.1}, 42)
+
+      assert %DataFrame{
+               plan: {:stat_sample_by, :test_plan, {:col, "label"}, [{0, 0.1}], 42}
+              } = df
+    end
+
+    test "accepts keyword seed option" do
+      df = Stat.sample_by(make_df(), "label", %{0 => 0.1}, seed: 42)
 
       assert %DataFrame{
                plan: {:stat_sample_by, :test_plan, {:col, "label"}, [{0, 0.1}], 42}
