@@ -827,6 +827,10 @@ defmodule SparkEx.Session do
         case Client.execute_plan(state, proto_plan, opts) do
           {:ok, result} ->
             state = maybe_update_server_session(state, result.server_side_session_id)
+
+            {:ok, result, state} =
+              maybe_retry_collect_with_json_projection(state, plan, proto_plan, opts, result)
+
             state = %{state | last_execution_metrics: result.execution_metrics}
             SparkEx.Observation.store_observed_metrics(result.observed_metrics)
             {:reply, {:ok, result.rows}, state}
@@ -1487,17 +1491,40 @@ defmodule SparkEx.Session do
               {:ok, result, state}
 
             {:error, state} ->
-              maybe_retry_collect_with_json_projection(state, plan, schema, opts)
+              retry_collect_with_json_projection(state, plan, schema, opts)
           end
 
         _ ->
-          maybe_retry_collect_with_json_projection(state, plan, schema, opts)
+          retry_collect_with_json_projection(state, plan, schema, opts)
       end
     else
       _ ->
         {:error, state}
     end
   end
+
+  defp maybe_retry_collect_with_json_projection(state, plan, proto_plan, opts, primary_result) do
+    if maybe_json_relation_plan?(plan) do
+      with {:ok, schema, server_side_session_id} <- Client.analyze_schema(state, proto_plan),
+           state <- maybe_update_server_session(state, server_side_session_id),
+           true <- schema_has_nested_map?(schema),
+           true <- rows_show_nested_map_decode_loss?(primary_result.rows, schema),
+           {:ok, retry_result, state} <-
+             retry_collect_with_json_projection(state, plan, schema, opts) do
+        {:ok, retry_result, state}
+      else
+        _ -> {:ok, primary_result, state}
+      end
+    else
+      {:ok, primary_result, state}
+    end
+  end
+
+  defp maybe_json_relation_plan?({:sql, query, _args}) when is_binary(query) do
+    String.contains?(query, "from_json(_spark_ex_json")
+  end
+
+  defp maybe_json_relation_plan?(_), do: false
 
   defp execute_retry_plan(state, retry_plan, opts) do
     with {{retry_proto_plan, counter}, nil} <- safe_encode(retry_plan, state.plan_id_counter),
@@ -1509,12 +1536,74 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp maybe_retry_collect_with_json_projection(state, plan, schema, opts) do
+  defp retry_collect_with_json_projection(state, plan, schema, opts) do
     case json_fallback_projection_plan(plan, schema) do
       nil -> {:error, state}
       retry_plan -> execute_retry_plan(state, retry_plan, opts)
     end
   end
+
+  defp schema_has_nested_map?(%Spark.Connect.DataType{kind: {:struct, struct}}) do
+    Enum.any?(struct.fields, fn field ->
+      nested_map_type?(field.data_type, 1)
+    end)
+  end
+
+  defp schema_has_nested_map?(_), do: false
+
+  defp nested_map_type?(%Spark.Connect.DataType{kind: {:map, _}}, depth), do: depth > 1
+
+  defp nested_map_type?(%Spark.Connect.DataType{kind: {:array, array}}, depth) do
+    nested_map_type?(array.element_type, depth + 1)
+  end
+
+  defp nested_map_type?(%Spark.Connect.DataType{kind: {:struct, struct}}, depth) do
+    Enum.any?(struct.fields, fn field ->
+      nested_map_type?(field.data_type, depth + 1)
+    end)
+  end
+
+  defp nested_map_type?(_other, _depth), do: false
+
+  defp rows_show_nested_map_decode_loss?(rows, %Spark.Connect.DataType{kind: {:struct, struct}})
+       when is_list(rows) do
+    map_paths = nested_map_paths(struct, [])
+
+    map_paths != [] and
+      Enum.any?(rows, fn row ->
+        Enum.any?(map_paths, fn path -> map_value_at_path(row, path) == [] end)
+      end)
+  end
+
+  defp rows_show_nested_map_decode_loss?(_rows, _schema), do: false
+
+  defp nested_map_paths(%Spark.Connect.DataType.Struct{fields: fields}, prefix) do
+    Enum.flat_map(fields, fn field ->
+      nested_map_paths(field.data_type, prefix ++ [field.name])
+    end)
+  end
+
+  defp nested_map_paths(%Spark.Connect.DataType{kind: {:map, _}}, prefix), do: [prefix]
+
+  defp nested_map_paths(%Spark.Connect.DataType{kind: {:array, array}}, prefix) do
+    nested_map_paths(array.element_type, prefix)
+  end
+
+  defp nested_map_paths(%Spark.Connect.DataType{kind: {:struct, struct}}, prefix) do
+    nested_map_paths(struct, prefix)
+  end
+
+  defp nested_map_paths(_other, _prefix), do: []
+
+  defp map_value_at_path(current, []), do: current
+
+  defp map_value_at_path(current, [key | rest]) when is_map(current) do
+    current
+    |> Map.get(key)
+    |> map_value_at_path(rest)
+  end
+
+  defp map_value_at_path(_current, _path), do: nil
 
   defp json_fallback_projection_plan(
          plan,
@@ -1703,10 +1792,27 @@ defmodule SparkEx.Session do
 
   defp prepare_list_data_with_schema(data, schema_ddl, opts) when is_binary(schema_ddl) do
     if normalize_local_relation_arrow?(opts) do
-      with {:ok, normalized_rows} <- normalize_rows_for_schema(data),
+      non_string_map_fields = non_string_top_level_map_fields(schema_ddl)
+
+      with {:ok, normalized_rows} <-
+             normalize_rows_for_schema(
+               data,
+               Enum.map(non_string_map_fields, & &1.name)
+             ),
            {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
-        query = json_rows_to_sql_query(length(row_json), schema_ddl)
-        {:ok, {:sql_relation, query, row_json}}
+        if non_string_map_fields == [] do
+          query = json_rows_to_sql_query(length(row_json), schema_ddl)
+          {:ok, {:sql_relation, query, row_json}}
+        else
+          query =
+            json_rows_to_sql_query_with_projection(
+              length(row_json),
+              helper_schema_for_non_string_map_fields(schema_ddl, non_string_map_fields),
+              projected_select_list_for_non_string_map_fields(schema_ddl, non_string_map_fields)
+            )
+
+          {:ok, {:sql_relation, query, row_json}}
+        end
       end
     else
       try do
@@ -1726,7 +1832,19 @@ defmodule SparkEx.Session do
         explorer_df = list_of_maps_to_explorer(data)
         prepare_local_data(explorer_df, opts)
       rescue
-        e -> {:error, {:data_conversion_error, Exception.message(e)}}
+        e ->
+          if normalize_local_relation_arrow?(opts) do
+            with {:ok, normalized_rows} <- normalize_rows_for_schema(data),
+                 {:ok, inferred_schema_ddl} <- infer_schema_ddl_from_rows(normalized_rows),
+                 {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
+              query = json_rows_to_sql_query(length(row_json), inferred_schema_ddl)
+              {:ok, {:sql_relation, query, row_json}}
+            else
+              {:error, _} = error -> error
+            end
+          else
+            {:error, {:data_conversion_error, Exception.message(e)}}
+          end
       end
     end
   end
@@ -1765,13 +1883,25 @@ defmodule SparkEx.Session do
     Explorer.DataFrame.new(columns)
   end
 
-  defp normalize_rows_for_schema(rows) when is_list(rows) do
+  defp normalize_rows_for_schema(rows, non_string_map_fields \\ [])
+       when is_list(rows) do
+    non_string_map_fields_map = Map.new(non_string_map_fields, &{&1, true})
+
     Enum.reduce_while(rows, {:ok, []}, fn
       row, {:ok, acc} when is_map(row) and not is_struct(row) ->
         normalized =
           row
           |> Enum.map(fn {key, value} ->
-            {to_string(key), normalize_json_value(value)}
+            key_string = to_string(key)
+
+            value =
+              if Map.has_key?(non_string_map_fields_map, key_string) do
+                normalize_non_string_map_value(value)
+              else
+                normalize_json_value(value)
+              end
+
+            {key_string, value}
           end)
           |> Map.new()
 
@@ -1787,6 +1917,280 @@ defmodule SparkEx.Session do
       {:ok, rows_rev} -> {:ok, Enum.reverse(rows_rev)}
       {:error, _} = error -> error
     end
+  end
+
+  defp normalize_non_string_map_value(nil), do: nil
+
+  defp normalize_non_string_map_value(value) when is_map(value) and not is_struct(value) do
+    Enum.map(value, fn {k, v} ->
+      %{"key" => k, "value" => normalize_json_value(v)}
+    end)
+  end
+
+  defp normalize_non_string_map_value(value), do: normalize_json_value(value)
+
+  defp non_string_top_level_map_fields(schema_ddl) do
+    schema_ddl
+    |> split_top_level_schema_fields()
+    |> Enum.flat_map(fn field ->
+      case parse_schema_field(field) do
+        {name, type} ->
+          case parse_map_type(type) do
+            {:ok, key_type, value_type} ->
+              if String.upcase(String.trim(key_type)) == "STRING" do
+                []
+              else
+                [
+                  %{
+                    name: name,
+                    key_type: String.trim(key_type),
+                    value_type: String.trim(value_type)
+                  }
+                ]
+              end
+
+            :error ->
+              []
+          end
+
+        :error ->
+          []
+      end
+    end)
+  end
+
+  defp helper_schema_for_non_string_map_fields(schema_ddl, non_string_map_fields) do
+    replacements =
+      Map.new(non_string_map_fields, fn %{name: name, key_type: key_type, value_type: value_type} ->
+        {name, "ARRAY<STRUCT<key: #{key_type}, value: #{value_type}>>"}
+      end)
+
+    schema_ddl
+    |> split_top_level_schema_fields()
+    |> Enum.map(fn field ->
+      case parse_schema_field(field) do
+        {name, _type} ->
+          replacement = Map.get(replacements, name)
+          "#{name} #{replacement || schema_field_type(field)}"
+
+        :error ->
+          field
+      end
+    end)
+    |> Enum.join(", ")
+  end
+
+  defp projected_select_list_for_non_string_map_fields(schema_ddl, non_string_map_fields) do
+    map_fields = MapSet.new(Enum.map(non_string_map_fields, & &1.name))
+
+    schema_ddl
+    |> split_top_level_schema_fields()
+    |> Enum.map(fn field ->
+      case parse_schema_field(field) do
+        {name, _type} ->
+          if MapSet.member?(map_fields, name) do
+            "map_from_entries(parsed.`#{name}`) AS `#{name}`"
+          else
+            "parsed.`#{name}` AS `#{name}`"
+          end
+
+        :error ->
+          nil
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(", ")
+  end
+
+  defp split_top_level_schema_fields(schema_ddl) do
+    {parts, current, _depth} =
+      schema_ddl
+      |> String.graphemes()
+      |> Enum.reduce({[], "", 0}, fn
+        "<", {parts, current, depth} ->
+          {parts, current <> "<", depth + 1}
+
+        ">", {parts, current, depth} when depth > 0 ->
+          {parts, current <> ">", depth - 1}
+
+        ",", {parts, current, 0} ->
+          {[String.trim(current) | parts], "", 0}
+
+        ch, {parts, current, depth} ->
+          {parts, current <> ch, depth}
+      end)
+
+    parts = [String.trim(current) | parts]
+
+    parts
+    |> Enum.reverse()
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp parse_schema_field(field) do
+    case Regex.run(~r/^\s*(`?[^`\s]+`?)\s+(.+)$/, field) do
+      [_, raw_name, raw_type] ->
+        name = raw_name |> String.trim_leading("`") |> String.trim_trailing("`")
+        {name, String.trim(raw_type)}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp schema_field_type(field) do
+    case parse_schema_field(field) do
+      {_name, type} -> type
+      :error -> field
+    end
+  end
+
+  defp parse_map_type(type) do
+    trimmed = String.trim(type)
+
+    if String.starts_with?(String.upcase(trimmed), "MAP<") and String.ends_with?(trimmed, ">") do
+      inner = String.slice(trimmed, 4, String.length(trimmed) - 5)
+
+      case split_map_type_inner(inner) do
+        {key_type, value_type} ->
+          {:ok, String.trim(key_type), String.trim(value_type)}
+
+        :error ->
+          :error
+      end
+    else
+      :error
+    end
+  end
+
+  defp split_map_type_inner(inner) do
+    {key, value, angle_depth, paren_depth, split?} =
+      inner
+      |> String.graphemes()
+      |> Enum.reduce({"", "", 0, 0, false}, fn
+        "<", {k, v, a, p, s} -> {append_part(k, v, s, "<"), v_if_needed(v, s, "<"), a + 1, p, s}
+        ">", {k, v, a, p, s} -> {append_part(k, v, s, ">"), v_if_needed(v, s, ">"), max(a - 1, 0), p, s}
+        "(", {k, v, a, p, s} -> {append_part(k, v, s, "("), v_if_needed(v, s, "("), a, p + 1, s}
+        ")", {k, v, a, p, s} -> {append_part(k, v, s, ")"), v_if_needed(v, s, ")"), a, max(p - 1, 0), s}
+        ",", {k, v, 0, 0, false} -> {k, v, 0, 0, true}
+        ch, {k, v, a, p, s} -> {append_part(k, v, s, ch), v_if_needed(v, s, ch), a, p, s}
+      end)
+
+    cond do
+      not split? -> :error
+      angle_depth != 0 or paren_depth != 0 -> :error
+      String.trim(key) == "" or String.trim(value) == "" -> :error
+      true -> {key, value}
+    end
+  end
+
+  defp append_part(k, _v, false, ch), do: k <> ch
+  defp append_part(k, _v, true, _ch), do: k
+  defp v_if_needed(v, false, _ch), do: v
+  defp v_if_needed(v, true, ch), do: v <> ch
+
+  defp infer_schema_ddl_from_rows(rows) when is_list(rows) do
+    ordered_keys = collect_ordered_keys(rows)
+
+    fields =
+      Enum.map(ordered_keys, fn key ->
+        values = Enum.map(rows, &Map.get(&1, key))
+        {key, infer_value_type(values)}
+      end)
+
+    {:ok,
+     fields
+     |> Enum.map(fn {name, type} -> "#{name} #{type_to_inferred_ddl(type)}" end)
+     |> Enum.join(", ")}
+  end
+
+  defp collect_ordered_keys(rows) do
+    {_seen, ordered_keys_rev} =
+      Enum.reduce(rows, {MapSet.new(), []}, fn row, {seen, keys_rev} ->
+        Enum.reduce(row, {seen, keys_rev}, fn {key, _value}, {seen_acc, keys_acc} ->
+          if MapSet.member?(seen_acc, key) do
+            {seen_acc, keys_acc}
+          else
+            {MapSet.put(seen_acc, key), [key | keys_acc]}
+          end
+        end)
+      end)
+
+    Enum.reverse(ordered_keys_rev)
+  end
+
+  defp infer_value_type(values) do
+    values
+    |> Enum.map(&infer_single_type/1)
+    |> Enum.reduce(:null, &merge_inferred_types/2)
+  end
+
+  defp infer_single_type(nil), do: :null
+  defp infer_single_type(v) when is_boolean(v), do: :boolean
+  defp infer_single_type(v) when is_integer(v), do: :long
+  defp infer_single_type(v) when is_float(v), do: :double
+  defp infer_single_type(%Decimal{}), do: :double
+  defp infer_single_type(%Date{}), do: :date
+  defp infer_single_type(%DateTime{}), do: :timestamp
+  defp infer_single_type(%NaiveDateTime{}), do: :timestamp
+  defp infer_single_type(v) when is_binary(v), do: :string
+
+  defp infer_single_type(v) when is_list(v) do
+    {:array, infer_value_type(v)}
+  end
+
+  defp infer_single_type(v) when is_map(v) and not is_struct(v) do
+    fields =
+      v
+      |> Enum.map(fn {k, value} -> {to_string(k), infer_single_type(value)} end)
+      |> Map.new()
+
+    {:struct, fields}
+  end
+
+  defp infer_single_type(_), do: :string
+
+  defp merge_inferred_types(:null, type), do: type
+  defp merge_inferred_types(type, :null), do: type
+  defp merge_inferred_types(type, type), do: type
+  defp merge_inferred_types(:long, :double), do: :double
+  defp merge_inferred_types(:double, :long), do: :double
+  defp merge_inferred_types({:array, a}, {:array, b}), do: {:array, merge_inferred_types(a, b)}
+
+  defp merge_inferred_types({:struct, a}, {:struct, b}) do
+    keys = (Map.keys(a) ++ Map.keys(b)) |> Enum.uniq()
+
+    merged =
+      Enum.map(keys, fn key ->
+        {key, merge_inferred_types(Map.get(a, key, :null), Map.get(b, key, :null))}
+      end)
+      |> Map.new()
+
+    {:struct, merged}
+  end
+
+  defp merge_inferred_types(_a, _b), do: :string
+
+  defp type_to_inferred_ddl(:null), do: "STRING"
+  defp type_to_inferred_ddl(:boolean), do: "BOOLEAN"
+  defp type_to_inferred_ddl(:long), do: "BIGINT"
+  defp type_to_inferred_ddl(:double), do: "DOUBLE"
+  defp type_to_inferred_ddl(:date), do: "DATE"
+  defp type_to_inferred_ddl(:timestamp), do: "TIMESTAMP"
+  defp type_to_inferred_ddl(:string), do: "STRING"
+
+  defp type_to_inferred_ddl({:array, element_type}) do
+    "ARRAY<#{type_to_inferred_ddl(element_type)}>"
+  end
+
+  defp type_to_inferred_ddl({:struct, fields}) do
+    inner =
+      fields
+      |> Enum.sort_by(fn {name, _} -> name end)
+      |> Enum.map(fn {name, type} -> "#{name}: #{type_to_inferred_ddl(type)}" end)
+      |> Enum.join(", ")
+
+    "STRUCT<#{inner}>"
   end
 
   defp normalize_json_value(value) when is_map(value) and not is_struct(value) do
@@ -1857,6 +2261,38 @@ defmodule SparkEx.Session do
 
     """
     SELECT parsed.*
+    FROM (
+      SELECT from_json(_spark_ex_json, '#{escaped_schema}', map('mode', 'FAILFAST')) AS parsed
+      FROM VALUES #{placeholders} AS _spark_ex_input(_spark_ex_json)
+    ) _spark_ex_parsed
+    """
+    |> String.trim()
+  end
+
+  defp json_rows_to_sql_query_with_projection(0, schema_ddl, select_list) do
+    escaped_schema = sql_escape_string(schema_ddl)
+
+    """
+    SELECT #{select_list}
+    FROM (
+      SELECT from_json(NULL, '#{escaped_schema}', map('mode', 'FAILFAST')) AS parsed
+    ) _spark_ex_parsed
+    WHERE 1 = 0
+    """
+    |> String.trim()
+  end
+
+  defp json_rows_to_sql_query_with_projection(row_count, schema_ddl, select_list)
+       when row_count > 0 do
+    escaped_schema = sql_escape_string(schema_ddl)
+
+    placeholders =
+      1..row_count
+      |> Enum.map(fn _ -> "(?)" end)
+      |> Enum.join(", ")
+
+    """
+    SELECT #{select_list}
     FROM (
       SELECT from_json(_spark_ex_json, '#{escaped_schema}', map('mode', 'FAILFAST')) AS parsed
       FROM VALUES #{placeholders} AS _spark_ex_input(_spark_ex_json)

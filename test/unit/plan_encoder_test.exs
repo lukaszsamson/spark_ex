@@ -376,6 +376,19 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                        }}
                   }}
              } = PlanEncoder.encode_expression({:lit, %{"k" => 1}})
+
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:array,
+                       %Expression.Literal.Array{
+                         element_type: %Spark.Connect.DataType{kind: {:array, _}},
+                         elements: [_ | _]
+                       }}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, [[1, 2], [3, 4]]})
     end
 
     test "encodes empty complex literals with null type defaults" do

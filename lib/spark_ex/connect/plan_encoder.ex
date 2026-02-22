@@ -2971,7 +2971,8 @@ defmodule SparkEx.Connect.PlanEncoder do
           ids -> ids
         end
 
-      _ -> []
+      _ ->
+        []
     end)
     |> Enum.uniq()
   end
@@ -3562,6 +3563,14 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp infer_literal_data_type({:day_time_interval, _micros}) do
     %DataType{kind: {:day_time_interval, %DataType.DayTimeInterval{}}}
+  end
+
+  defp infer_literal_data_type(v) when is_list(v) do
+    infer_literal_data_type({:array, v})
+  end
+
+  defp infer_literal_data_type(v) when is_map(v) and not is_struct(v) do
+    infer_literal_data_type({:map, v})
   end
 
   defp infer_literal_data_type({:array, elements}) when is_list(elements) do

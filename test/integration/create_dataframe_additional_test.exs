@@ -84,7 +84,9 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
       %{"id" => 2, "meta" => %{"k3" => "v3"}}
     ]
 
-    {:ok, df} = SparkEx.create_dataframe(session, rows, schema: "id INT, meta MAP<STRING, STRING>")
+    {:ok, df} =
+      SparkEx.create_dataframe(session, rows, schema: "id INT, meta MAP<STRING, STRING>")
+
     assert {:ok, data} = DataFrame.collect(df)
     assert length(data) == 2
   end
@@ -143,5 +145,71 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
 
     assert {:ok, rows} = DataFrame.take(df, 2)
     assert Enum.map(rows, & &1["id"]) == [1, 2]
+  end
+
+  test "create_dataframe infers heterogeneous nested map keys without crashing", %{
+    session: session
+  } do
+    rows = [
+      %{"id" => 1, "nested" => %{"level1" => %{"a" => 10, "b" => 20}}},
+      %{"id" => 2, "nested" => %{"level1" => %{"c" => 30}}}
+    ]
+
+    assert {:ok, df} = SparkEx.create_dataframe(session, rows)
+    assert {:ok, data} = DataFrame.collect(df)
+    assert length(data) == 2
+
+    second = Enum.find(data, &(&1["id"] == 2))
+    assert get_in(second, ["nested", "level1", "c"]) == 30
+  end
+
+  test "create_dataframe supports map schemas with integer keys", %{session: session} do
+    rows = [
+      %{"id" => 1, "scores" => %{1 => 100, 2 => 95}},
+      %{"id" => 2, "scores" => %{1 => 80, 3 => 70}}
+    ]
+
+    assert {:ok, df} =
+             SparkEx.create_dataframe(session, rows, schema: "id INT, scores MAP<INT, INT>")
+
+    assert {:ok, data} = DataFrame.collect(df)
+    assert length(data) == 2
+
+    first_scores =
+      data
+      |> Enum.find(&(&1["id"] == 1))
+      |> Map.fetch!("scores")
+      |> Enum.into(%{}, fn %{"key" => key, "value" => value} -> {key, value} end)
+
+    assert first_scores[1] == 100
+    assert first_scores[2] == 95
+  end
+
+  test "create_dataframe preserves nested struct map content via json fallback", %{
+    session: session
+  } do
+    rows = [%{"id" => 1, "profile" => %{"tags" => ["a", "b"], "attrs" => %{"x" => "1"}}}]
+
+    assert {:ok, df} =
+             SparkEx.create_dataframe(session, rows,
+               schema: "id INT, profile STRUCT<tags: ARRAY<STRING>, attrs: MAP<STRING, STRING>>"
+             )
+
+    assert {:ok, [%{"profile" => profile_json}]} =
+             DataFrame.select(df, ["profile"]) |> DataFrame.collect()
+
+    assert is_binary(profile_json)
+    assert profile_json =~ "\"attrs\":{\"x\":\"1\"}"
+  end
+
+  test "lit nested arrays preserves inner values", %{session: session} do
+    df =
+      SparkEx.sql(session, "SELECT 1 AS id")
+      |> DataFrame.with_column("nested", SparkEx.Functions.lit([[1, 2], [3, 4]]))
+
+    assert {:ok, [%{"nested" => nested}]} =
+             DataFrame.select(df, ["nested"]) |> DataFrame.collect()
+
+    assert nested == [[1, 2], [3, 4]]
   end
 end
