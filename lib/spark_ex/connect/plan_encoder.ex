@@ -1329,6 +1329,10 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
+  def encode_expression({:lit, []}) do
+    encode_expression({:fn, "array", [], false})
+  end
+
   def encode_expression({:lit, value}) when is_map(value) and not is_struct(value) do
     encode_map_literal_expression(value)
   end
@@ -3411,7 +3415,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp encode_map_literal_expression(map) when map_size(map) == 0 do
-    encode_literal_expression(map)
+    encode_expression({:fn, "map", [], false})
   end
 
   defp encode_map_literal_expression(map) do

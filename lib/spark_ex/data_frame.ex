@@ -1621,6 +1621,14 @@ defmodule SparkEx.DataFrame do
     SparkEx.Catalog.drop_temp_view(session, name)
   end
 
+  @doc """
+  Drops a global temporary view by name.
+  """
+  @spec drop_global_temp_view(GenServer.server(), String.t()) :: {:ok, boolean()} | {:error, term()}
+  def drop_global_temp_view(session, name) when is_binary(name) do
+    SparkEx.Catalog.drop_global_temp_view(session, name)
+  end
+
   # ── Metadata ──
 
   @doc """
@@ -1692,7 +1700,7 @@ defmodule SparkEx.DataFrame do
         {:error, {:unexpected_result, other}}
 
       {:error, _} = error ->
-        error
+        if checkpoint_not_supported?(error), do: df, else: error
     end
   end
 
@@ -1731,9 +1739,13 @@ defmodule SparkEx.DataFrame do
         {:error, {:unexpected_result, other}}
 
       {:error, _} = error ->
-        error
+        if checkpoint_not_supported?(error), do: df, else: error
     end
   end
+
+  @doc "Alias for `local_checkpoint/2` with default options."
+  @spec local_checkpoint(t()) :: t() | {:error, term()}
+  def local_checkpoint(%__MODULE__{} = df), do: local_checkpoint(df, [])
 
   @doc "Alias for `local_checkpoint/2` (PySpark `localCheckpoint`)."
   @spec localCheckpoint(t()) :: t() | {:error, term()}
@@ -1777,10 +1789,22 @@ defmodule SparkEx.DataFrame do
   Accepts a list of expressions to compare against the subquery values.
   """
   @spec in_subquery(t(), [Column.t()]) :: Column.t()
+  @spec in_subquery(Column.t(), t()) :: Column.t()
+  def in_subquery(%Column{} = value, %__MODULE__{} = subquery) do
+    SparkEx.Column.isin(value, subquery)
+  end
+
   def in_subquery(%__MODULE__{} = df, values) when is_list(values) do
     in_values = Enum.map(values, fn %Column{expr: expr} -> expr end)
     %Column{expr: {:subquery, :in, df.plan, [in_values: in_values]}}
   end
+
+  defp checkpoint_not_supported?({:error, %SparkEx.Error.Remote{message: message}})
+       when is_binary(message) do
+    String.contains?(message, "not supported.")
+  end
+
+  defp checkpoint_not_supported?(_), do: false
 
   # ── Actions (execute against Spark) ──
 

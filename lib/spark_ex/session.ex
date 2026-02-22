@@ -839,6 +839,7 @@ defmodule SparkEx.Session do
             case retry_collect_with_unique_columns(state, plan, proto_plan, opts) do
               {:ok, result, state} ->
                 state = maybe_update_server_session(state, result.server_side_session_id)
+                {result, state} = maybe_decode_retry_result_rows(state, plan, proto_plan, result)
                 state = %{state | last_execution_metrics: result.execution_metrics}
                 SparkEx.Observation.store_observed_metrics(result.observed_metrics)
                 {:reply, {:ok, result.rows}, state}
@@ -1504,19 +1505,39 @@ defmodule SparkEx.Session do
   end
 
   defp maybe_retry_collect_with_json_projection(state, plan, proto_plan, opts, primary_result) do
-    if maybe_json_relation_plan?(plan) do
-      with {:ok, schema, server_side_session_id} <- Client.analyze_schema(state, proto_plan),
-           state <- maybe_update_server_session(state, server_side_session_id),
-           true <- schema_has_nested_map?(schema),
-           true <- rows_show_nested_map_decode_loss?(primary_result.rows, schema),
-           {:ok, retry_result, state} <-
-             retry_collect_with_json_projection(state, plan, schema, opts) do
-        {:ok, retry_result, state}
-      else
-        _ -> {:ok, primary_result, state}
-      end
-    else
-      {:ok, primary_result, state}
+    case Client.analyze_schema(state, proto_plan) do
+      {:ok, schema, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+
+        primary_result =
+          if maybe_json_relation_plan?(plan) do
+            primary_result
+          else
+            Map.update!(primary_result, :rows, &decode_rows_from_json_projection(&1, schema))
+          end
+
+        if schema_has_nested_map?(schema) and
+             rows_show_nested_map_decode_loss?(primary_result.rows, schema) do
+          case retry_collect_with_json_projection(state, plan, schema, opts) do
+            {:ok, retry_result, state} ->
+              retry_result =
+                if maybe_json_relation_plan?(plan) do
+                  retry_result
+                else
+                  Map.update!(retry_result, :rows, &decode_rows_from_json_projection(&1, schema))
+                end
+
+              {:ok, retry_result, state}
+
+            _ ->
+              {:ok, primary_result, state}
+          end
+        else
+          {:ok, primary_result, state}
+        end
+
+      _ ->
+        {:ok, primary_result, state}
     end
   end
 
@@ -1525,6 +1546,22 @@ defmodule SparkEx.Session do
   end
 
   defp maybe_json_relation_plan?(_), do: false
+
+  defp maybe_decode_retry_result_rows(state, plan, proto_plan, result) do
+    if maybe_json_relation_plan?(plan) do
+      {result, state}
+    else
+      case Client.analyze_schema(state, proto_plan) do
+        {:ok, schema, server_side_session_id} ->
+          state = maybe_update_server_session(state, server_side_session_id)
+          result = Map.update!(result, :rows, &decode_rows_from_json_projection(&1, schema))
+          {result, state}
+
+        _ ->
+          {result, state}
+      end
+    end
+  end
 
   defp execute_retry_plan(state, retry_plan, opts) do
     with {{retry_proto_plan, counter}, nil} <- safe_encode(retry_plan, state.plan_id_counter),
@@ -1551,7 +1588,16 @@ defmodule SparkEx.Session do
 
   defp schema_has_nested_map?(_), do: false
 
-  defp nested_map_type?(%Spark.Connect.DataType{kind: {:map, _}}, depth), do: depth > 1
+  defp nested_map_type?(
+         %Spark.Connect.DataType{
+           kind:
+             {:map,
+              %Spark.Connect.DataType.Map{key_type: key_type, value_type: value_type}}
+         },
+         depth
+       ) do
+    depth > 1 or nested_map_type?(key_type, depth + 1) or nested_map_type?(value_type, depth + 1)
+  end
 
   defp nested_map_type?(%Spark.Connect.DataType{kind: {:array, array}}, depth) do
     nested_map_type?(array.element_type, depth + 1)
@@ -1571,11 +1617,20 @@ defmodule SparkEx.Session do
 
     map_paths != [] and
       Enum.any?(rows, fn row ->
-        Enum.any?(map_paths, fn path -> map_value_at_path(row, path) == [] end)
+        Enum.any?(map_paths, fn path ->
+          row
+          |> map_value_at_path(path)
+          |> suspicious_nested_map_decode_value?()
+        end)
       end)
   end
 
   defp rows_show_nested_map_decode_loss?(_rows, _schema), do: false
+
+  defp suspicious_nested_map_decode_value?(value) when is_binary(value), do: true
+  defp suspicious_nested_map_decode_value?([]), do: true
+  defp suspicious_nested_map_decode_value?([[]]), do: true
+  defp suspicious_nested_map_decode_value?(_value), do: false
 
   defp nested_map_paths(%Spark.Connect.DataType.Struct{fields: fields}, prefix) do
     Enum.flat_map(fields, fn field ->
@@ -1604,6 +1659,99 @@ defmodule SparkEx.Session do
   end
 
   defp map_value_at_path(_current, _path), do: nil
+
+  defp decode_rows_from_json_projection(
+         rows,
+         %Spark.Connect.DataType{kind: {:struct, %Spark.Connect.DataType.Struct{fields: fields}}}
+       )
+       when is_list(rows) do
+    field_types =
+      fields
+      |> Enum.filter(fn field -> complex_field_type?(field.data_type) end)
+      |> Map.new(fn field -> {field.name, field.data_type} end)
+
+    Enum.map(rows, fn
+      row when is_map(row) ->
+        Enum.reduce(field_types, row, fn {name, data_type}, acc ->
+          Map.update(acc, name, nil, &decode_complex_json_value(&1, data_type))
+        end)
+
+      other ->
+        other
+    end)
+  end
+
+  defp decode_rows_from_json_projection(rows, _schema), do: rows
+
+  defp decode_complex_json_value(nil, _data_type), do: nil
+
+  defp decode_complex_json_value(value, data_type) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, decoded} -> coerce_complex_decoded_value(decoded, data_type)
+      _ -> value
+    end
+  end
+
+  defp decode_complex_json_value(value, _data_type), do: value
+
+  defp coerce_complex_decoded_value(
+         value,
+         %Spark.Connect.DataType{kind: {:array, %Spark.Connect.DataType.Array{element_type: element_type}}}
+       )
+       when is_list(value) do
+    Enum.map(value, &coerce_complex_decoded_value(&1, element_type))
+  end
+
+  defp coerce_complex_decoded_value(
+         value,
+         %Spark.Connect.DataType{
+           kind:
+             {:map,
+              %Spark.Connect.DataType.Map{key_type: key_type, value_type: value_type}}
+         }
+       )
+       when is_map(value) do
+    Enum.map(value, fn {key, item} ->
+      %{
+        "key" => coerce_json_map_key(key, key_type),
+        "value" => coerce_complex_decoded_value(item, value_type)
+      }
+    end)
+  end
+
+  defp coerce_complex_decoded_value(
+         value,
+         %Spark.Connect.DataType{kind: {:struct, %Spark.Connect.DataType.Struct{fields: fields}}}
+       )
+       when is_map(value) do
+    Enum.reduce(fields, %{}, fn field, acc ->
+      Map.put(
+        acc,
+        field.name,
+        coerce_complex_decoded_value(Map.get(value, field.name), field.data_type)
+      )
+    end)
+  end
+
+  defp coerce_complex_decoded_value(value, _data_type), do: value
+
+  defp coerce_json_map_key(key, %Spark.Connect.DataType{kind: {tag, _}})
+       when tag in [:byte, :short, :integer, :long] do
+    case Integer.parse(to_string(key)) do
+      {parsed, ""} -> parsed
+      _ -> key
+    end
+  end
+
+  defp coerce_json_map_key(key, %Spark.Connect.DataType{kind: {tag, _}})
+       when tag in [:float, :double] do
+    case Float.parse(to_string(key)) do
+      {parsed, ""} -> parsed
+      _ -> key
+    end
+  end
+
+  defp coerce_json_map_key(key, _key_type), do: key
 
   defp json_fallback_projection_plan(
          plan,
@@ -1795,30 +1943,26 @@ defmodule SparkEx.Session do
       non_string_map_fields = non_string_top_level_map_fields(schema_ddl)
       binary_fields = binary_top_level_fields(schema_ddl)
 
-      with {:ok, normalized_rows} <-
-             normalize_rows_for_schema(
-               data,
-               Enum.map(non_string_map_fields, & &1.name),
-               binary_fields
-             ),
-           {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
-        if non_string_map_fields == [] do
-          query =
-            json_rows_to_sql_query(length(row_json), schema_ddl)
-            |> inline_sql_json_args(row_json)
+      if rows_contain_null_byte_text?(data, binary_fields) do
+        case prepare_list_data_with_schema_arrow_fallback(data, schema_ddl, opts) do
+          {:ok, _} = ok ->
+            ok
 
-          {:ok, {:sql_relation, query, nil}}
-        else
-          query =
-            json_rows_to_sql_query_with_projection(
-              length(row_json),
-              helper_schema_for_non_string_map_fields(schema_ddl, non_string_map_fields),
-              projected_select_list_for_non_string_map_fields(schema_ddl, non_string_map_fields)
+          {:error, _} ->
+            prepare_list_data_with_schema_json_relation(
+              data,
+              schema_ddl,
+              non_string_map_fields,
+              binary_fields
             )
-            |> inline_sql_json_args(row_json)
-
-          {:ok, {:sql_relation, query, nil}}
         end
+      else
+        prepare_list_data_with_schema_json_relation(
+          data,
+          schema_ddl,
+          non_string_map_fields,
+          binary_fields
+        )
       end
     else
       try do
@@ -1827,6 +1971,54 @@ defmodule SparkEx.Session do
       rescue
         e -> {:error, {:data_conversion_error, Exception.message(e)}}
       end
+    end
+  end
+
+  defp prepare_list_data_with_schema_json_relation(
+         data,
+         schema_ddl,
+         non_string_map_fields,
+         binary_fields
+       ) do
+    with {:ok, normalized_rows} <-
+           normalize_rows_for_schema(
+             data,
+             Enum.map(non_string_map_fields, & &1.name),
+             binary_fields
+           ),
+         {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
+      if non_string_map_fields == [] do
+        query =
+          json_rows_to_sql_query(length(row_json), schema_ddl)
+          |> inline_sql_json_args(row_json)
+
+        {:ok, {:sql_relation, query, nil}}
+      else
+        query =
+          json_rows_to_sql_query_with_projection(
+            length(row_json),
+            helper_schema_for_non_string_map_fields(schema_ddl, non_string_map_fields),
+            projected_select_list_for_non_string_map_fields(schema_ddl, non_string_map_fields)
+          )
+          |> inline_sql_json_args(row_json)
+
+        {:ok, {:sql_relation, query, nil}}
+      end
+    end
+  end
+
+  defp prepare_list_data_with_schema_arrow_fallback(data, schema_ddl, opts) do
+    try do
+      explorer_df = list_of_maps_to_explorer(data)
+
+      prepare_local_data(
+        explorer_df,
+        opts
+        |> Keyword.put(:schema, schema_ddl)
+        |> Keyword.put(:normalize_local_relation_arrow, false)
+      )
+    rescue
+      _ -> {:error, :arrow_fallback_failed}
     end
   end
 
@@ -1946,6 +2138,39 @@ defmodule SparkEx.Session do
   defp normalize_binary_field_value(nil), do: nil
   defp normalize_binary_field_value(value) when is_binary(value), do: Base.encode64(value)
   defp normalize_binary_field_value(value), do: normalize_json_value(value)
+
+  defp rows_contain_null_byte_text?(rows, binary_fields) when is_list(rows) do
+    binary_fields_set = MapSet.new(binary_fields)
+
+    Enum.any?(rows, fn
+      row when is_map(row) and not is_struct(row) ->
+        Enum.any?(row, fn {key, value} ->
+          key_string = to_string(key)
+          not MapSet.member?(binary_fields_set, key_string) and value_contains_null_byte_text?(value)
+        end)
+
+      _ ->
+        false
+    end)
+  end
+
+  defp rows_contain_null_byte_text?(_rows, _binary_fields), do: false
+
+  defp value_contains_null_byte_text?(value) when is_binary(value) do
+    :binary.match(value, <<0>>) != :nomatch
+  end
+
+  defp value_contains_null_byte_text?(value) when is_list(value) do
+    Enum.any?(value, &value_contains_null_byte_text?/1)
+  end
+
+  defp value_contains_null_byte_text?(value) when is_map(value) and not is_struct(value) do
+    Enum.any?(value, fn {k, v} ->
+      value_contains_null_byte_text?(k) or value_contains_null_byte_text?(v)
+    end)
+  end
+
+  defp value_contains_null_byte_text?(_value), do: false
 
   defp binary_top_level_fields(schema_ddl) do
     schema_ddl

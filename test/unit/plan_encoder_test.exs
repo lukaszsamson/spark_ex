@@ -391,6 +391,20 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert length(unresolved_fn.arguments) == 4
     end
 
+    test "encodes empty plain list/map literals via functions" do
+      assert %Expression{expr_type: {:unresolved_function, array_fn}} =
+               PlanEncoder.encode_expression({:lit, []})
+
+      assert array_fn.function_name == "array"
+      assert array_fn.arguments == []
+
+      assert %Expression{expr_type: {:unresolved_function, map_fn}} =
+               PlanEncoder.encode_expression({:lit, %{}})
+
+      assert map_fn.function_name == "map"
+      assert map_fn.arguments == []
+    end
+
     test "encodes mixed scalar/nested map values as string map literals" do
       assert %Expression{expr_type: {:unresolved_function, unresolved_fn}} =
                PlanEncoder.encode_expression(

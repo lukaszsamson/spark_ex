@@ -765,6 +765,14 @@ defmodule SparkEx.DataFrameTest do
       assert %SparkEx.Column{expr: {:subquery, :in, {:sql, _, _}, [in_values: [{:col, "id"}]]}} =
                result
     end
+
+    test "accepts column plus subquery dataframe signature" do
+      subquery = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.in_subquery(Functions.col("id"), subquery)
+
+      assert %SparkEx.Column{expr: {:subquery, :in, {:sql, _, _}, [in_values: [{:col, "id"}]]}} =
+               result
+    end
   end
 
   describe "distinct/1" do
@@ -980,6 +988,35 @@ defmodule SparkEx.DataFrameTest do
       assert %DataFrame{plan: {:cached_remote_relation, "rel-1"}} = DataFrame.checkpoint(df)
       assert_receive {:checkpoint_args, false, true, nil}
     end
+
+    defmodule UnsupportedCheckpointSession do
+      use GenServer
+
+      def start_link(test_pid) do
+        GenServer.start_link(__MODULE__, test_pid, [])
+      end
+
+      @impl true
+      def init(test_pid), do: {:ok, test_pid}
+
+      @impl true
+      def handle_call(
+            {:execute_command_with_result, {:checkpoint, _plan, _local, _eager, _storage_level},
+             _opts},
+            _from,
+            test_pid
+          ) do
+        error = %SparkEx.Error.Remote{message: "checkpoint command not supported."}
+        {:reply, {:error, error}, test_pid}
+      end
+    end
+
+    test "checkpoint/1 returns original dataframe when checkpoint command is unsupported" do
+      {:ok, session} = UnsupportedCheckpointSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert %DataFrame{plan: {:sql, "SELECT * FROM t", nil}} = DataFrame.checkpoint(df)
+    end
   end
 
   describe "local_checkpoint/2" do
@@ -1028,6 +1065,27 @@ defmodule SparkEx.DataFrameTest do
 
       assert %DataFrame{plan: {:cached_remote_relation, "rel-2"}} = DataFrame.localCheckpoint(df)
       assert_receive {:local_checkpoint_args, true, true, nil}
+    end
+
+    test "local_checkpoint/1 aliases local_checkpoint/2" do
+      {:ok, session} = LocalCheckpointSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert %DataFrame{plan: {:cached_remote_relation, "rel-2"}} = DataFrame.local_checkpoint(df)
+      assert_receive {:local_checkpoint_args, true, true, nil}
+    end
+
+    test "local_checkpoint/1 returns original dataframe when checkpoint command is unsupported" do
+      {:ok, session} = __MODULE__.UnsupportedCheckpointSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert %DataFrame{plan: {:sql, "SELECT * FROM t", nil}} = DataFrame.local_checkpoint(df)
+    end
+  end
+
+  describe "global temp view API" do
+    test "drop_global_temp_view/2 is exported" do
+      assert function_exported?(DataFrame, :drop_global_temp_view, 2)
     end
   end
 

@@ -286,6 +286,42 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
     assert dtypes["st"] != :string
   end
 
+  test "lit supports empty list and empty map literals", %{session: session} do
+    df =
+      SparkEx.sql(session, "SELECT 1 AS id")
+      |> DataFrame.with_column("empty_arr", SparkEx.Functions.lit([]))
+      |> DataFrame.with_column("empty_map", SparkEx.Functions.lit(%{}))
+
+    assert {:ok, [%{"empty_arr" => empty_arr, "empty_map" => empty_map}]} =
+             DataFrame.select(df, ["empty_arr", "empty_map"]) |> DataFrame.collect()
+
+    assert empty_arr == []
+    assert empty_map == []
+  end
+
+  test "create_dataframe supports strings containing null byte", %{session: session} do
+    rows = [%{"id" => 1, "text" => "null byte: \0 end"}]
+
+    assert {:ok, df} = SparkEx.create_dataframe(session, rows, schema: "id INT, text STRING")
+    assert {:ok, [%{"text" => text}]} = DataFrame.select(df, ["text"]) |> DataFrame.collect()
+    assert :binary.match(text, <<0>>) != :nomatch
+  end
+
+  test "collect keeps nested array-map structure instead of json string", %{session: session} do
+    df = SparkEx.sql(session, "SELECT array(map('a', array(1,2), 'b', array(3,4))) AS v")
+
+    assert {:ok, [%{"v" => value}]} = DataFrame.collect(df)
+    assert is_list(value)
+    refute is_binary(value)
+  end
+
+  test "collect avoids deep nested corruption payload", %{session: session} do
+    df = SparkEx.sql(session, "SELECT array(map('a', map('b', array(1,2)))) AS v")
+
+    assert {:ok, [%{"v" => value}]} = DataFrame.collect(df)
+    refute value == [[]]
+  end
+
   test "lit nested arrays preserves inner values", %{session: session} do
     df =
       SparkEx.sql(session, "SELECT 1 AS id")
