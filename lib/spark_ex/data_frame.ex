@@ -1109,6 +1109,10 @@ defmodule SparkEx.DataFrame do
     end
   end
 
+  @doc "Alias for `is_empty/1`."
+  @spec is_empty?(t()) :: {:ok, boolean()} | {:error, term()}
+  def is_empty?(%__MODULE__{} = df), do: is_empty(df)
+
   # ── M10: Query Shaping ──
 
   @doc """
@@ -2029,6 +2033,10 @@ defmodule SparkEx.DataFrame do
   def is_streaming(%__MODULE__{} = df) do
     SparkEx.Session.analyze_is_streaming(df.session, df.plan)
   end
+
+  @doc "Alias for `is_streaming/1`."
+  @spec is_streaming?(t()) :: {:ok, boolean()} | {:error, term()}
+  def is_streaming?(%__MODULE__{} = df), do: is_streaming(df)
 
   @doc """
   Returns the input files for the plan.

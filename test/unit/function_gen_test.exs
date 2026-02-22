@@ -207,6 +207,11 @@ defmodule SparkEx.Unit.FunctionGenTest do
                Functions.concat_ws(",", ["a", "b"])
     end
 
+    test "date_trunc/2 accepts positional column argument" do
+      assert %Column{expr: {:fn, "date_trunc", [{:lit, "month"}, {:col, "ts"}], false}} =
+               Functions.date_trunc("month", "ts")
+    end
+
     test "format_string/2" do
       assert %Column{
                expr: {:fn, "format_string", [{:lit, "%s=%d"}, {:col, "k"}, {:col, "v"}], false}
@@ -414,8 +419,8 @@ defmodule SparkEx.Unit.FunctionGenTest do
       assert Functions.some("x") == Functions.bool_or("x")
     end
 
-    test "size is alias for array_size" do
-      assert Functions.size("x") == Functions.array_size("x")
+    test "cardinality is alias for size" do
+      assert Functions.cardinality("x") == Functions.size("x")
     end
   end
 
@@ -446,6 +451,10 @@ defmodule SparkEx.Unit.FunctionGenTest do
 
     test "string: soundex" do
       assert %Column{expr: {:fn, "soundex", [{:col, "name"}], false}} = Functions.soundex("name")
+    end
+
+    test "collection: size uses generic size function" do
+      assert %Column{expr: {:fn, "size", [{:col, "x"}], false}} = Functions.size("x")
     end
 
     test "datetime: quarter" do

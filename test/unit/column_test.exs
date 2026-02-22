@@ -162,6 +162,16 @@ defmodule SparkEx.ColumnTest do
       assert %Column{expr: {:fn, "startsWith", [{:col, "name"}, {:lit, "pre"}], false}} = result
     end
 
+    test "startswith/2 aliases starts_with/2" do
+      result = Column.startswith(Functions.col("name"), Functions.lit("pre"))
+      assert %Column{expr: {:fn, "startsWith", [{:col, "name"}, {:lit, "pre"}], false}} = result
+    end
+
+    test "endswith/2 aliases ends_with/2" do
+      result = Column.endswith(Functions.col("name"), Functions.lit(".csv"))
+      assert %Column{expr: {:fn, "endsWith", [{:col, "name"}, {:lit, ".csv"}], false}} = result
+    end
+
     test "like/2" do
       result = Column.like(Functions.col("name"), Functions.lit("%test%"))
       assert %Column{expr: {:fn, "like", [{:col, "name"}, {:lit, "%test%"}], false}} = result

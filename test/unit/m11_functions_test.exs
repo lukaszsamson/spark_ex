@@ -449,9 +449,9 @@ defmodule SparkEx.M11.FunctionsTest do
       assert %Column{expr: {:fn, "stddev", [{:col, "x"}], false}} = result
     end
 
-    test "cardinality is alias for array_size" do
+    test "cardinality is alias for size" do
       result = Functions.cardinality(Functions.col("arr"))
-      assert %Column{expr: {:fn, "array_size", [{:col, "arr"}], false}} = result
+      assert %Column{expr: {:fn, "size", [{:col, "arr"}], false}} = result
     end
 
     test "xpath_number is alias for xpath_double" do

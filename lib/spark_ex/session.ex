@@ -1575,11 +1575,19 @@ defmodule SparkEx.Session do
   end
 
   defp prepare_list_data_with_schema(data, schema_ddl, opts) when is_binary(schema_ddl) do
-    try do
-      explorer_df = list_of_maps_to_explorer(data)
-      prepare_local_data(explorer_df, Keyword.put(opts, :schema, schema_ddl))
-    rescue
-      e -> {:error, {:data_conversion_error, Exception.message(e)}}
+    if normalize_local_relation_arrow?(opts) do
+      with {:ok, normalized_rows} <- normalize_rows_for_schema(data),
+           {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
+        query = json_rows_to_sql_query(length(row_json), schema_ddl)
+        {:ok, {:sql_relation, query, row_json}}
+      end
+    else
+      try do
+        explorer_df = list_of_maps_to_explorer(data)
+        prepare_local_data(explorer_df, Keyword.put(opts, :schema, schema_ddl))
+      rescue
+        e -> {:error, {:data_conversion_error, Exception.message(e)}}
+      end
     end
   end
 
@@ -1630,6 +1638,42 @@ defmodule SparkEx.Session do
     Explorer.DataFrame.new(columns)
   end
 
+  defp normalize_rows_for_schema(rows) when is_list(rows) do
+    Enum.reduce_while(rows, {:ok, []}, fn
+      row, {:ok, acc} when is_map(row) and not is_struct(row) ->
+        normalized =
+          row
+          |> Enum.map(fn {key, value} ->
+            {to_string(key), normalize_json_value(value)}
+          end)
+          |> Map.new()
+
+        {:cont, {:ok, [normalized | acc]}}
+
+      row, _acc ->
+        {:halt,
+         {:error,
+          {:invalid_data,
+           "expected list of maps for schema-based create_dataframe, got: #{inspect(row)}"}}}
+    end)
+    |> case do
+      {:ok, rows_rev} -> {:ok, Enum.reverse(rows_rev)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp normalize_json_value(value) when is_map(value) and not is_struct(value) do
+    value
+    |> Enum.map(fn {k, v} -> {to_string(k), normalize_json_value(v)} end)
+    |> Map.new()
+  end
+
+  defp normalize_json_value(value) when is_list(value) do
+    Enum.map(value, &normalize_json_value/1)
+  end
+
+  defp normalize_json_value(value), do: value
+
   defp explorer_to_ddl(explorer_df) do
     dtypes = Explorer.DataFrame.dtypes(explorer_df)
 
@@ -1668,7 +1712,9 @@ defmodule SparkEx.Session do
 
     """
     SELECT parsed.*
-    FROM (SELECT from_json(NULL, '#{escaped_schema}') AS parsed) _spark_ex_parsed
+    FROM (
+      SELECT from_json(NULL, '#{escaped_schema}', map('mode', 'FAILFAST')) AS parsed
+    ) _spark_ex_parsed
     WHERE 1 = 0
     """
     |> String.trim()
@@ -1685,7 +1731,7 @@ defmodule SparkEx.Session do
     """
     SELECT parsed.*
     FROM (
-      SELECT from_json(_spark_ex_json, '#{escaped_schema}') AS parsed
+      SELECT from_json(_spark_ex_json, '#{escaped_schema}', map('mode', 'FAILFAST')) AS parsed
       FROM VALUES #{placeholders} AS _spark_ex_input(_spark_ex_json)
     ) _spark_ex_parsed
     """

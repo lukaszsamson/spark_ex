@@ -66,6 +66,29 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
     assert length(rows) == 5
   end
 
+  test "create_dataframe with explicit schema ignores map key order", %{session: session} do
+    rows = [%{"active" => true, "id" => 1, "name" => "Alice"}]
+
+    {:ok, df} =
+      SparkEx.create_dataframe(session, rows, schema: "id INT, name STRING, active BOOLEAN")
+
+    assert {:ok, [row]} = DataFrame.collect(df)
+    assert row["id"] == 1
+    assert row["name"] == "Alice"
+    assert row["active"] == true
+  end
+
+  test "create_dataframe with MAP schema supports varying key sets", %{session: session} do
+    rows = [
+      %{"id" => 1, "meta" => %{"k1" => "v1", "k2" => "v2"}},
+      %{"id" => 2, "meta" => %{"k3" => "v3"}}
+    ]
+
+    {:ok, df} = SparkEx.create_dataframe(session, rows, schema: "id INT, meta MAP<STRING, STRING>")
+    assert {:ok, data} = DataFrame.collect(df)
+    assert length(data) == 2
+  end
+
   test "create_dataframe can disable local Arrow normalization", %{session: session} do
     data = [%{"id" => 1, "tags" => ["a", "b"], "meta" => %{"k" => "v"}}]
 

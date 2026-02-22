@@ -370,8 +370,9 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :collection, doc: "Returns max element of array."},
       {:array_min, "array_min", :one_col,
        group: :collection, doc: "Returns min element of array."},
-      {:array_size, "array_size", :one_col,
-       group: :collection, doc: "Returns array size.", aliases: [:size, :cardinality]},
+      {:array_size, "array_size", :one_col, group: :collection, doc: "Returns array size."},
+      {:size, "size", :one_col,
+       group: :collection, doc: "Returns size of array or map.", aliases: [:cardinality]},
       # array_sort hand-written in functions.ex to support comparator function
       # {:array_sort, ...} — see Functions.array_sort/1,2
       {:array_union, "array_union", :two_col,

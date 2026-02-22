@@ -90,6 +90,14 @@ defmodule SparkEx.Column do
     end
   end
 
+  @doc "Alias for `starts_with/2`."
+  @spec startswith(t(), t() | term()) :: t()
+  def startswith(%__MODULE__{} = left, right), do: starts_with(left, right)
+
+  @doc "Alias for `ends_with/2`."
+  @spec endswith(t(), t() | term()) :: t()
+  def endswith(%__MODULE__{} = left, right), do: ends_with(left, right)
+
   @doc "Not equal: `col != other`. Encodes as `not(==(a, b))` matching PySpark."
   @spec neq(t(), t() | term()) :: t()
   def neq(%__MODULE__{} = left, right) do

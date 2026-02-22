@@ -1117,6 +1117,23 @@ defmodule SparkEx.DataFrameTest do
     end
   end
 
+  describe "is_empty?/1 and is_streaming?/1 aliases" do
+    test "is_empty?/1 delegates to is_empty/1" do
+      {:ok, session} = SparkEx.DataFrameTest.TakeSession.start_link(self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, false} = DataFrame.is_empty?(df)
+      assert_receive {:take_limit, 1}
+    end
+
+    test "is_streaming?/1 delegates to is_streaming/1" do
+      {:ok, session} = ObserveSession.start_link(true)
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert {:ok, true} = DataFrame.is_streaming?(df)
+    end
+  end
+
   describe "execution_info/1" do
     defmodule ExecutionMetricsSession do
       use GenServer

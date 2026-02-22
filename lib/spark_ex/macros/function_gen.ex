@@ -181,9 +181,14 @@ defmodule SparkEx.Macros.FunctionGen do
   defp generate_function(name, spark_name, {:lit_then_cols, 1}, is_distinct, doc) do
     quote do
       @doc unquote(doc)
-      @spec unquote(name)(term(), [Column.t() | String.t()]) :: Column.t()
+      @spec unquote(name)(term(), Column.t() | String.t() | [Column.t() | String.t()]) :: Column.t()
       def unquote(name)(lit_arg, cols) when is_list(cols) do
         args = [lit_expr(lit_arg) | Enum.map(cols, &to_expr/1)]
+        %Column{expr: {:fn, unquote(spark_name), args, unquote(is_distinct)}}
+      end
+
+      def unquote(name)(lit_arg, col) do
+        args = [lit_expr(lit_arg), to_expr(col)]
         %Column{expr: {:fn, unquote(spark_name), args, unquote(is_distinct)}}
       end
     end
@@ -335,7 +340,8 @@ defmodule SparkEx.Macros.FunctionGen do
   defp generate_alias(alias_name, primary_name, {:lit_then_cols, 1}) do
     quote do
       @doc "Alias for `#{unquote(primary_name)}/2`."
-      @spec unquote(alias_name)(term(), [Column.t() | String.t()]) :: Column.t()
+      @spec unquote(alias_name)(term(), Column.t() | String.t() | [Column.t() | String.t()]) ::
+              Column.t()
       def unquote(alias_name)(a, cols), do: unquote(primary_name)(a, cols)
     end
   end
