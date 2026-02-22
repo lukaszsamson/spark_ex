@@ -164,6 +164,25 @@ defmodule SparkEx.Connect.TypeMapperTest do
     end
   end
 
+  describe "complex Explorer dtype to DDL" do
+    test "maps list/struct/map dtypes recursively" do
+      assert TypeMapper.to_spark_ddl_type({:list, :string}) == "ARRAY<STRING>"
+
+      assert TypeMapper.to_spark_ddl_type({:struct, [{"age", {:s, 64}}, {"name", :string}]}) ==
+               "STRUCT<age: LONG, name: STRING>"
+
+      assert TypeMapper.to_spark_ddl_type({:map, :string, {:list, {:s, 32}}}) ==
+               "MAP<STRING, ARRAY<INT>>"
+    end
+
+    test "builds schema DDL with complex nested fields" do
+      dtypes = [{"id", {:s, 64}}, {"tags", {:list, :string}}, {"info", {:struct, [{"age", {:s, 32}}]}}]
+
+      assert TypeMapper.explorer_schema_to_ddl(dtypes) ==
+               "id LONG, tags ARRAY<STRING>, info STRUCT<age: INT>"
+    end
+  end
+
   defp interval_module(:calendar_interval), do: DataType.CalendarInterval
   defp interval_module(:year_month_interval), do: DataType.YearMonthInterval
   defp interval_module(:day_time_interval), do: DataType.DayTimeInterval

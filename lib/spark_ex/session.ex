@@ -831,6 +831,18 @@ defmodule SparkEx.Session do
             SparkEx.Observation.store_observed_metrics(result.observed_metrics)
             {:reply, {:ok, result.rows}, state}
 
+          {:error, {:arrow_decode_failed, _reason}} = error ->
+            case retry_collect_with_unique_columns(state, plan, proto_plan, opts) do
+              {:ok, result, state} ->
+                state = maybe_update_server_session(state, result.server_side_session_id)
+                state = %{state | last_execution_metrics: result.execution_metrics}
+                SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+                {:reply, {:ok, result.rows}, state}
+
+              {:error, state} ->
+                {:reply, error, state}
+            end
+
           {:error, _} = error ->
             {:reply, error, state}
         end
@@ -1464,6 +1476,121 @@ defmodule SparkEx.Session do
 
   # --- Private ---
 
+  defp retry_collect_with_unique_columns(state, plan, proto_plan, opts) do
+    with {:ok, schema, server_side_session_id} <- Client.analyze_schema(state, proto_plan) do
+      state = maybe_update_server_session(state, server_side_session_id)
+
+      case unique_schema_column_names(schema) do
+        unique_names when is_list(unique_names) ->
+          case execute_retry_plan(state, {:to_df, plan, unique_names}, opts) do
+            {:ok, result, state} ->
+              {:ok, result, state}
+
+            {:error, state} ->
+              maybe_retry_collect_with_json_projection(state, plan, schema, opts)
+          end
+
+        _ ->
+          maybe_retry_collect_with_json_projection(state, plan, schema, opts)
+      end
+    else
+      _ ->
+        {:error, state}
+    end
+  end
+
+  defp execute_retry_plan(state, retry_plan, opts) do
+    with {{retry_proto_plan, counter}, nil} <- safe_encode(retry_plan, state.plan_id_counter),
+         state <- %{state | plan_id_counter: counter},
+         {:ok, result} <- Client.execute_plan(state, retry_proto_plan, opts) do
+      {:ok, result, state}
+    else
+      _ -> {:error, state}
+    end
+  end
+
+  defp maybe_retry_collect_with_json_projection(state, plan, schema, opts) do
+    case json_fallback_projection_plan(plan, schema) do
+      nil -> {:error, state}
+      retry_plan -> execute_retry_plan(state, retry_plan, opts)
+    end
+  end
+
+  defp json_fallback_projection_plan(
+         plan,
+         %Spark.Connect.DataType{kind: {:struct, %{fields: fields}}}
+       ) do
+    has_complex? =
+      Enum.any?(fields, fn field ->
+        complex_field_type?(field.data_type)
+      end)
+
+    if has_complex? do
+      expressions =
+        Enum.map(fields, fn field ->
+          name = field.name
+
+          expr =
+            if complex_field_type?(field.data_type) do
+              {:fn, "to_json", [{:col, name}], false}
+            else
+              {:col, name}
+            end
+
+          {:alias, expr, name}
+        end)
+
+      {:project, plan, expressions}
+    else
+      nil
+    end
+  end
+
+  defp json_fallback_projection_plan(_plan, _schema), do: nil
+
+  defp complex_field_type?(%Spark.Connect.DataType{kind: {tag, _}}),
+    do: tag in [:array, :struct, :map]
+
+  defp complex_field_type?(_), do: false
+
+  defp unique_schema_column_names(%Spark.Connect.DataType{kind: {:struct, struct}}) do
+    names = Enum.map(struct.fields, & &1.name)
+    unique_names = dedupe_column_names(names)
+
+    if unique_names == names do
+      :no_duplicates
+    else
+      unique_names
+    end
+  end
+
+  defp unique_schema_column_names(_), do: :no_duplicates
+
+  defp dedupe_column_names(names) when is_list(names) do
+    {unique_names, _used} =
+      Enum.map_reduce(names, MapSet.new(), fn name, used ->
+        candidate = next_unique_column_name(name, used, 0)
+        {candidate, MapSet.put(used, candidate)}
+      end)
+
+    unique_names
+  end
+
+  defp next_unique_column_name(name, used, attempt) do
+    candidate =
+      if attempt == 0 do
+        name
+      else
+        "#{name}_#{attempt}"
+      end
+
+    if MapSet.member?(used, candidate) do
+      next_unique_column_name(name, used, attempt + 1)
+    else
+      candidate
+    end
+  end
+
   defp safe_encode(plan, counter) do
     {PlanEncoder.encode(plan, counter), nil}
   rescue
@@ -1533,7 +1660,7 @@ defmodule SparkEx.Session do
   defp prepare_local_data(data, opts) when is_struct(data, Explorer.DataFrame) do
     schema_ddl = Keyword.get(opts, :schema, nil) || explorer_to_ddl(data)
 
-    if normalize_local_relation_arrow?(opts) and dataframe_contains_list_dtype?(data) do
+    if normalize_local_relation_arrow?(opts) and dataframe_contains_complex_dtype?(data) do
       prepare_sql_json_relation(data, schema_ddl)
     else
       case Explorer.DataFrame.dump_ipc_stream(data) do
@@ -1746,31 +1873,22 @@ defmodule SparkEx.Session do
     Keyword.get(opts, :normalize_local_relation_arrow, true)
   end
 
-  defp dataframe_contains_list_dtype?(explorer_df) do
+  defp dataframe_contains_complex_dtype?(explorer_df) do
     explorer_df
     |> Explorer.DataFrame.dtypes()
     |> Map.values()
-    |> Enum.any?(&dtype_contains_list?/1)
+    |> Enum.any?(&dtype_requires_json_relation?/1)
   end
 
-  defp dtype_contains_list?({:list, _inner}), do: true
+  defp dtype_requires_json_relation?({:list, _inner}), do: true
+  defp dtype_requires_json_relation?({:struct, _fields}), do: true
+  defp dtype_requires_json_relation?({:map, _key_dtype, _value_dtype}), do: true
 
-  defp dtype_contains_list?({:struct, fields}) when is_list(fields) do
-    Enum.any?(fields, fn
-      {_name, field_dtype} -> dtype_contains_list?(field_dtype)
-      _other -> false
-    end)
+  defp dtype_requires_json_relation?({_tag, inner}) do
+    dtype_requires_json_relation?(inner)
   end
 
-  defp dtype_contains_list?({:map, key_dtype, value_dtype}) do
-    dtype_contains_list?(key_dtype) or dtype_contains_list?(value_dtype)
-  end
-
-  defp dtype_contains_list?({_tag, inner}) do
-    dtype_contains_list?(inner)
-  end
-
-  defp dtype_contains_list?(_other), do: false
+  defp dtype_requires_json_relation?(_other), do: false
 
   defp read_local_file(local_path) do
     case File.read(local_path) do

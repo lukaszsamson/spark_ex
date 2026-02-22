@@ -348,6 +348,36 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert Enum.map(struct_type.fields, & &1.name) == ["col1", "col2"]
     end
 
+    test "encodes plain Elixir list/map literals" do
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:array,
+                       %Expression.Literal.Array{
+                         element_type: %Spark.Connect.DataType{kind: {:integer, _}},
+                         elements: [_ | _]
+                       }}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, [1, 2, 3]})
+
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:map,
+                       %Expression.Literal.Map{
+                         key_type: %Spark.Connect.DataType{kind: {:string, _}},
+                         value_type: %Spark.Connect.DataType{kind: {:integer, _}},
+                         keys: [_ | _],
+                         values: [_ | _]
+                       }}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, %{"k" => 1}})
+    end
+
     test "encodes empty complex literals with null type defaults" do
       assert %Expression{
                expr_type:

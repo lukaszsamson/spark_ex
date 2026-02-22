@@ -198,6 +198,21 @@ defmodule SparkEx.Connect.TypeMapper do
   def to_spark_ddl_type({:time, _}), do: "TIME"
   def to_spark_ddl_type({:duration, _}), do: "STRING"
   def to_spark_ddl_type(:category), do: "STRING"
+  def to_spark_ddl_type({:list, element}), do: "ARRAY<#{to_spark_ddl_type(element)}>"
+
+  def to_spark_ddl_type({:struct, fields}) when is_list(fields) do
+    inner =
+      fields
+      |> Enum.map_join(", ", fn {name, dtype} ->
+        "#{name}: #{to_spark_ddl_type(dtype)}"
+      end)
+
+    "STRUCT<#{inner}>"
+  end
+
+  def to_spark_ddl_type({:map, key_dtype, value_dtype}),
+    do: "MAP<#{to_spark_ddl_type(key_dtype)}, #{to_spark_ddl_type(value_dtype)}>"
+
   def to_spark_ddl_type(_other), do: "STRING"
 
   @doc """

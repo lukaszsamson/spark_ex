@@ -1024,14 +1024,24 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
-  Returns the last `n` rows.
+  Returns the last `n` rows as a list of maps.
 
-  ## Examples
-
-      df |> DataFrame.tail(5)
+  Mirrors PySpark `tail(n)` eager behavior.
   """
-  @spec tail(t(), non_neg_integer()) :: t()
+  @spec tail(t(), non_neg_integer()) :: {:ok, [map()]} | {:error, term()}
   def tail(%__MODULE__{} = df, n) when is_integer(n) and n >= 0 do
+    df
+    |> tail_df(n)
+    |> collect()
+  end
+
+  @doc """
+  Returns a lazy DataFrame relation for the last `n` rows.
+
+  This preserves the previous lazy `tail` behavior when needed.
+  """
+  @spec tail_df(t(), non_neg_integer()) :: t()
+  def tail_df(%__MODULE__{} = df, n) when is_integer(n) and n >= 0 do
     %__MODULE__{df | plan: {:tail, df.plan, n}}
   end
 

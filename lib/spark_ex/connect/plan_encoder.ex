@@ -3315,6 +3315,14 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.Literal{literal_type: {:day_time_interval, microseconds}}
   end
 
+  defp encode_literal(v) when is_list(v) do
+    encode_literal({:array, v})
+  end
+
+  defp encode_literal(v) when is_map(v) and not is_struct(v) do
+    encode_literal({:map, v})
+  end
+
   defp encode_literal({:array, elements}) when is_list(elements) do
     element_type = infer_collection_element_type(elements)
 

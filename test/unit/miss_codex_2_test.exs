@@ -550,12 +550,22 @@ defmodule SparkEx.MissCodex2Test do
 
   describe "#23 tail(0)" do
     test "accepts 0" do
-      result = DataFrame.tail(make_df(), 0)
-      assert %DataFrame{plan: {:tail, _, 0}} = result
+      assert catch_exit(DataFrame.tail(make_df(), 0))
     end
 
     test "still accepts positive" do
-      result = DataFrame.tail(make_df(), 5)
+      assert catch_exit(DataFrame.tail(make_df(), 5))
+    end
+  end
+
+  describe "#23 tail_df(0)" do
+    test "builds lazy tail relation for 0" do
+      result = DataFrame.tail_df(make_df(), 0)
+      assert %DataFrame{plan: {:tail, _, 0}} = result
+    end
+
+    test "still builds lazy relation for positive" do
+      result = DataFrame.tail_df(make_df(), 5)
       assert %DataFrame{plan: {:tail, _, 5}} = result
     end
   end

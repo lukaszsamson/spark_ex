@@ -84,15 +84,12 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
   # ── duplicated column names ──
 
   describe "duplicated column names" do
-    @tag :skip
-    @tag :explorer_limitation
     test "DataFrame with duplicate column names can be collected", %{session: session} do
-      # SKIP: Explorer/Polars NIF panics on duplicate column names in Arrow IPC.
-      # See EXPLORER_TODO.md for details.
       df = SparkEx.sql(session, "SELECT 1 AS x, 2 AS x")
 
       assert {:ok, [row]} = DataFrame.collect(df)
-      assert map_size(row) >= 1
+      assert row["x"] == 1
+      assert row["x_1"] == 2
     end
   end
 
@@ -165,7 +162,7 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
     test "returns last N rows", %{session: session} do
       df = SparkEx.range(session, 10) |> DataFrame.order_by(["id"])
 
-      assert {:ok, rows} = DataFrame.tail(df, 3) |> DataFrame.collect()
+      assert {:ok, rows} = DataFrame.tail(df, 3)
       ids = Enum.map(rows, & &1["id"])
       assert ids == [7, 8, 9]
     end
@@ -357,6 +354,20 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
 
       assert {:ok, rows} = DataFrame.collect(df)
       assert length(rows) == 4
+    end
+
+    test "auto-renames duplicate columns in collected result", %{session: session} do
+      source = SparkEx.sql(session, "SELECT 1 AS id, 'Alice' AS name")
+      left = DataFrame.alias_(source, "a")
+      right = DataFrame.alias_(source, "b")
+
+      assert {:ok, [row]} =
+               DataFrame.cross_join(left, right) |> DataFrame.limit(1) |> DataFrame.collect()
+
+      assert row["id"] == 1
+      assert row["name"] == "Alice"
+      assert row["id_1"] == 1
+      assert row["name_1"] == "Alice"
     end
   end
 

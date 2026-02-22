@@ -182,15 +182,14 @@ defmodule SparkEx.Integration.ObservationCollectionGapsTest do
   # ── collect with duplicated column names ──
 
   describe "collect with duplicated column names" do
-    @tag :skip
-    @tag :explorer_limitation
     test "handles duplicate column names in result", %{session: session} do
-      # SKIP: Explorer/Polars NIF panics on duplicate column names in Arrow IPC.
-      # See EXPLORER_TODO.md for details.
       df = SparkEx.sql(session, "SELECT 1 AS x, 2 AS x, 3 AS y")
 
       assert {:ok, [row]} = DataFrame.collect(df)
       assert Map.has_key?(row, "y")
+      assert Map.has_key?(row, "x_1")
+      assert row["x"] == 1
+      assert row["x_1"] == 2
       assert row["y"] == 3
     end
   end

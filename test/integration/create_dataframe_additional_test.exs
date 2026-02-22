@@ -89,6 +89,29 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
     assert length(data) == 2
   end
 
+  test "create_dataframe infers nested struct from list of maps", %{session: session} do
+    rows = [
+      %{"id" => 1, "info" => %{"name" => "Alice", "age" => 30}},
+      %{"id" => 2, "info" => %{"name" => "Bob", "age" => 25}}
+    ]
+
+    {:ok, df} = SparkEx.create_dataframe(session, rows)
+    assert {:ok, data} = DataFrame.collect(df)
+    assert length(data) == 2
+    assert Enum.any?(data, &(&1["info"]["name"] == "Alice" and &1["info"]["age"] == 30))
+  end
+
+  test "create_dataframe infers array from Elixir lists", %{session: session} do
+    rows = [
+      %{"id" => 1, "tags" => ["eng", "lead"]},
+      %{"id" => 2, "tags" => ["sales"]}
+    ]
+
+    {:ok, df} = SparkEx.create_dataframe(session, rows)
+    assert {:ok, data} = DataFrame.collect(df)
+    assert Enum.find(data, &(&1["id"] == 1))["tags"] == ["eng", "lead"]
+  end
+
   test "create_dataframe can disable local Arrow normalization", %{session: session} do
     data = [%{"id" => 1, "tags" => ["a", "b"], "meta" => %{"k" => "v"}}]
 

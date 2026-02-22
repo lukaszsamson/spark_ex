@@ -114,9 +114,9 @@ defmodule SparkEx.Unit.DataFrameM10Test do
 
       assert %DataFrame{
                plan:
-                  {:set_operation, _, _, :union, true,
-                   [by_name: true, allow_missing_columns: true]}
-              } = result
+                 {:set_operation, _, _, :union, true,
+                  [by_name: true, allow_missing_columns: true]}
+             } = result
     end
 
     test "supports allow_missing_columns option (PySpark parity)" do
@@ -275,8 +275,14 @@ defmodule SparkEx.Unit.DataFrameM10Test do
   end
 
   describe "tail/2" do
+    test "returns eager rows via collect-compatible tuple" do
+      assert catch_exit(DataFrame.tail(df(), 5))
+    end
+  end
+
+  describe "tail_df/2" do
     test "creates tail plan" do
-      result = DataFrame.tail(df(), 5)
+      result = DataFrame.tail_df(df(), 5)
       assert %DataFrame{plan: {:tail, @base_plan, 5}} = result
     end
   end
@@ -371,8 +377,8 @@ defmodule SparkEx.Unit.DataFrameM10Test do
       result = DataFrame.unpivot(df(), ["id"], nil, "var", "val")
 
       assert %DataFrame{
-              plan: {:unpivot, @base_plan, [{:col, "id"}], nil, "var", "val"}
-              } = result
+               plan: {:unpivot, @base_plan, [{:col, "id"}], nil, "var", "val"}
+             } = result
     end
 
     test "accepts tuple values and normalizes to source columns" do
