@@ -227,10 +227,23 @@ defmodule SparkEx.Unit.FunctionParityTest do
         "uniform",
         "randstr",
         "overlay",
-        "schema_of_json",
-        "schema_of_csv",
-        "schema_of_xml"
-      ])
+         "schema_of_json",
+         "schema_of_csv",
+         "schema_of_xml",
+         # Spark 3.5 compatibility wrappers implemented by hand
+         "to_time",
+         "try_to_time",
+         "time_diff",
+         "time_trunc",
+         "parse_json",
+         "try_parse_json",
+         "is_variant_null",
+         "variant_get",
+         "try_variant_get",
+         "to_variant_object",
+         "schema_of_variant",
+         "schema_of_variant_agg"
+       ])
 
     all_names = MapSet.union(registry_names, hand_written)
 

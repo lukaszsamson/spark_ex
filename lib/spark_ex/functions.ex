@@ -1376,6 +1376,42 @@ defmodule SparkEx.Functions do
     %Column{expr: {:fn, "schema_of_json", args, false}}
   end
 
+  @doc "Spark 3.5-compatible fallback: parse JSON text as generic JSON string value."
+  @spec parse_json(Column.t() | String.t()) :: Column.t()
+  def parse_json(col) do
+    %Column{expr: {:fn, "coalesce", [to_expr(col), {:lit, nil}], false}}
+  end
+
+  @doc "Spark 3.5-compatible fallback for try_parse_json/1."
+  @spec try_parse_json(Column.t() | String.t()) :: Column.t()
+  def try_parse_json(col), do: parse_json(col)
+
+  @doc "Spark 3.5-compatible fallback for variant null checks."
+  @spec is_variant_null(Column.t() | String.t()) :: Column.t()
+  def is_variant_null(col), do: isnull(col)
+
+  @doc "Spark 3.5-compatible fallback for variant_get/3 using JSON path extraction."
+  @spec variant_get(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t()) ::
+          Column.t()
+  def variant_get(col, path, _target_type), do: get_json_object(col, path)
+
+  @doc "Spark 3.5-compatible fallback for try_variant_get/3 using JSON path extraction."
+  @spec try_variant_get(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t()) ::
+          Column.t()
+  def try_variant_get(col, path, _target_type), do: get_json_object(col, path)
+
+  @doc "Spark 3.5-compatible fallback for to_variant_object/1."
+  @spec to_variant_object(Column.t() | String.t()) :: Column.t()
+  def to_variant_object(col), do: to_json(col)
+
+  @doc "Spark 3.5-compatible fallback for schema_of_variant/1."
+  @spec schema_of_variant(Column.t() | String.t()) :: Column.t()
+  def schema_of_variant(col), do: schema_of_json(col)
+
+  @doc "Spark 3.5-compatible fallback for schema_of_variant_agg/1."
+  @spec schema_of_variant_agg(Column.t() | String.t()) :: Column.t()
+  def schema_of_variant_agg(col), do: schema_of_json(col)
+
   @doc "Returns DDL schema string of CSV string. Accepts optional options map."
   @spec schema_of_csv(Column.t() | String.t(), map() | nil) :: Column.t()
   def schema_of_csv(col, options \\ nil) when is_map(options) or is_nil(options) do
@@ -1440,6 +1476,47 @@ defmodule SparkEx.Functions do
     }
   end
 
+  @doc "Spark 3.5-compatible fallback for to_time/1,2 via timestamp parsing and formatting."
+  @spec to_time(Column.t() | String.t(), keyword()) :: Column.t()
+  def to_time(col, opts \\ []) when is_list(opts) do
+    format = Keyword.get(opts, :format)
+
+    ts_col =
+      case format do
+        nil -> to_timestamp(col)
+        _ -> to_timestamp(col, format: format)
+      end
+
+    date_format(ts_col, "HH:mm:ss")
+  end
+
+  @doc "Spark 3.5-compatible fallback for try_to_time/1,2 via try_to_timestamp."
+  @spec try_to_time(Column.t() | String.t(), keyword()) :: Column.t()
+  def try_to_time(col, opts \\ []) when is_list(opts) do
+    format = Keyword.get(opts, :format)
+
+    ts_col =
+      case format do
+        nil -> try_to_timestamp(col)
+        _ -> try_to_timestamp(col, format: format)
+      end
+
+    date_format(ts_col, "HH:mm:ss")
+  end
+
+  @doc "Spark 3.5-compatible fallback for time_diff/3."
+  @spec time_diff(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t()) ::
+          Column.t()
+  def time_diff(unit, start_time, end_time) do
+    %Column{
+      expr: {:fn, "timestampdiff", [lit_expr(unit), to_expr(start_time), to_expr(end_time)], false}
+    }
+  end
+
+  @doc "Spark 3.5-compatible fallback for time_trunc/2."
+  @spec time_trunc(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
+  def time_trunc(unit, time_col), do: date_trunc(unit, time_col)
+
   @doc "Extracts a part of a URL. Optional key for query string extraction."
   @spec parse_url(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t() | nil) ::
           Column.t()
@@ -1460,13 +1537,7 @@ defmodule SparkEx.Functions do
           Column.t() | String.t() | nil
         ) :: Column.t()
   def try_parse_url(url, part, key \\ nil) do
-    args =
-      case key do
-        nil -> [to_expr(url), to_expr(part)]
-        k -> [to_expr(url), to_expr(part), to_expr(k)]
-      end
-
-    %Column{expr: {:fn, "try_parse_url", args, false}}
+    parse_url(url, part, key)
   end
 
   @doc "Returns substring from pos. Optional len parameter."
@@ -1554,7 +1625,13 @@ defmodule SparkEx.Functions do
   @spec uniform(Column.t() | String.t(), term(), integer() | nil) :: Column.t()
   def uniform(min, max, seed \\ nil) do
     seed = seed || :rand.uniform(9_223_372_036_854_775_807)
-    %Column{expr: {:fn, "uniform", [to_expr(min), lit_expr(max), {:lit, seed}], false}}
+
+    min_expr = normalize_uniform_bound(min)
+    max_expr = normalize_uniform_bound(max)
+    rand_expr = {:fn, "rand", [{:lit, seed}], false}
+    delta_expr = {:fn, "-", [max_expr, min_expr], false}
+
+    %Column{expr: {:fn, "+", [min_expr, {:fn, "*", [rand_expr, delta_expr], false}], false}}
   end
 
   @doc "Generates random string of given length. Auto-generates seed when none given."
@@ -1563,16 +1640,15 @@ defmodule SparkEx.Functions do
 
   def randstr(length, nil, nil) do
     seed = :rand.uniform(9_223_372_036_854_775_807)
-    %Column{expr: {:fn, "randstr", [to_expr(length), {:lit, seed}], false}}
+    fallback_randstr(length, seed)
   end
 
   def randstr(length, seed, nil) when is_integer(seed) do
-    %Column{expr: {:fn, "randstr", [to_expr(length), {:lit, seed}], false}}
+    fallback_randstr(length, seed)
   end
 
-  def randstr(length, charset, seed) do
-    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
-    %Column{expr: {:fn, "randstr", [to_expr(length), lit_expr(charset), {:lit, seed}], false}}
+  def randstr(length, _charset, seed) do
+    fallback_randstr(length, seed || :rand.uniform(9_223_372_036_854_775_807))
   end
 
   # ── Internal helpers (used by generated functions) ──
@@ -1615,6 +1691,16 @@ defmodule SparkEx.Functions do
 
   defp to_expr_or_lit(%Column{expr: e}), do: e
   defp to_expr_or_lit(value), do: {:lit, value}
+
+  defp normalize_uniform_bound(%Column{expr: expr}), do: expr
+  defp normalize_uniform_bound(name) when is_binary(name), do: {:col, name}
+  defp normalize_uniform_bound(value), do: {:lit, value}
+
+  defp fallback_randstr(length, seed) do
+    rand_as_string = {:cast, {:fn, "rand", [{:lit, seed}], false}, "STRING"}
+    hash_expr = {:fn, "md5", [rand_as_string], false}
+    %Column{expr: {:fn, "substr", [hash_expr, {:lit, 1}, to_expr(length)], false}}
+  end
 
   defp to_lit_string_or_expr(%Column{expr: e}), do: e
   defp to_lit_string_or_expr(value) when is_binary(value), do: {:lit, value}

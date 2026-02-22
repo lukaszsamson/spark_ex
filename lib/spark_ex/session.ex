@@ -1576,12 +1576,22 @@ defmodule SparkEx.Session do
   end
 
   defp execute_retry_plan(state, retry_plan, opts) do
-    with {{retry_proto_plan, counter}, nil} <- safe_encode(retry_plan, state.plan_id_counter),
-         state <- %{state | plan_id_counter: counter},
-         {:ok, result} <- Client.execute_plan(state, retry_proto_plan, opts) do
-      {:ok, result, state}
+    with {{retry_proto_plan, counter}, nil} <- safe_encode(retry_plan, state.plan_id_counter) do
+      state = %{state | plan_id_counter: counter}
+
+      case Client.execute_plan(state, retry_proto_plan, opts) do
+        {:ok, result} ->
+          {:ok, result, state}
+
+        {:error, {:arrow_decode_failed, _reason}} ->
+          retry_collect_with_unique_columns(state, retry_plan, retry_proto_plan, opts)
+
+        {:error, _} ->
+          {:error, state}
+      end
     else
-      _ -> {:error, state}
+      _ ->
+        {:error, state}
     end
   end
 
@@ -1595,6 +1605,14 @@ defmodule SparkEx.Session do
     cond do
       String.contains?(message, "Unknown Group Type UNRECOGNIZED") ->
         with {:ok, rewritten_plan} <- rewrite_grouping_sets_collect_plan(plan),
+             {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
+          {:ok, result, state}
+        else
+          _ -> :error
+        end
+
+      String.contains?(message, "Does not support convert UNPARSED to catalyst types.") ->
+        with {:ok, rewritten_plan} <- rewrite_parse_collect_plan(state, plan),
              {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
           {:ok, result, state}
         else
@@ -1617,11 +1635,23 @@ defmodule SparkEx.Session do
       {:ok, result, state}
     else
       _ ->
-        with {:ok, rewritten_plan} <- rewrite_subquery_collect_plan(plan),
+        with {:ok, rewritten_plan} <- rewrite_table_function_collect_plan(plan),
              {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
           {:ok, result, state}
         else
-          _ -> :error
+          _ ->
+            with {:ok, rewritten_plan} <- rewrite_as_of_join_collect_plan(plan),
+                 {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
+              {:ok, result, state}
+            else
+              _ ->
+                with {:ok, rewritten_plan} <- rewrite_subquery_collect_plan(plan),
+                     {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
+                  {:ok, result, state}
+                else
+                  _ -> :error
+                end
+            end
         end
     end
   end
@@ -1646,6 +1676,37 @@ defmodule SparkEx.Session do
   end
 
   defp rewrite_transpose_collect_plan(_plan), do: :error
+
+  defp rewrite_table_function_collect_plan({:table_valued_function, function_name, arg_exprs})
+       when is_binary(function_name) and is_list(arg_exprs) do
+    with {:ok, args_sql} <- expr_list_to_sql(arg_exprs) do
+      sql =
+        if args_sql == [] do
+          "SELECT * FROM #{function_name}()"
+        else
+          "SELECT * FROM #{function_name}(#{Enum.join(args_sql, ", ")})"
+        end
+
+      {:ok, {:sql, sql, []}}
+    end
+  end
+
+  defp rewrite_table_function_collect_plan(_plan), do: :error
+
+  defp rewrite_as_of_join_collect_plan(
+         {:as_of_join, left_plan, right_plan, _left_as_of, _right_as_of, join_expr, using_columns,
+          _join_type, _tolerance, _allow_exact_matches, _direction}
+       ) do
+    condition =
+      case join_expr do
+        {:lit, nil} -> nil
+        other -> other
+      end
+
+    {:ok, {:join, left_plan, right_plan, condition, :left, using_columns || []}}
+  end
+
+  defp rewrite_as_of_join_collect_plan(_plan), do: :error
 
   defp transpose_emulation_plan(child_plan, [index_expr]) do
     with {:ok, index_name} <- extract_col_name(index_expr) do
@@ -1727,6 +1788,94 @@ defmodule SparkEx.Session do
     {rewritten, changed?} = rewrite_subquery_plan(plan)
     if changed?, do: {:ok, rewritten}, else: :error
   end
+
+  defp rewrite_parse_collect_plan(
+         state,
+         {:parse, child_plan, format, schema, options}
+       )
+       when format in [:csv, :json] do
+    with {:ok, source_column} <- first_schema_column_name(state, child_plan),
+         {:ok, parsed_field_names} <- parse_schema_field_names(state, schema),
+         {:ok, parse_expr} <- build_parse_expression(format, source_column, schema, options) do
+      parsed_alias = "__spark_ex_parsed"
+      parsed_plan = {:project, child_plan, [{:alias, parse_expr, parsed_alias}]}
+
+      projected_fields =
+        Enum.map(parsed_field_names, fn field_name ->
+          {:alias, {:unresolved_extract_value, {:col, parsed_alias}, {:lit, field_name}}, field_name}
+        end)
+
+      {:ok, {:project, parsed_plan, projected_fields}}
+    end
+  end
+
+  defp rewrite_parse_collect_plan(_state, _plan), do: :error
+
+  defp first_schema_column_name(state, plan) do
+    with {{proto_plan, _counter}, nil} <- safe_encode(plan, 0),
+         {:ok, schema, _server_side_session_id} <- Client.analyze_schema(state, proto_plan),
+         %Spark.Connect.DataType{kind: {:struct, %Spark.Connect.DataType.Struct{fields: [first | _]}}} <-
+           schema,
+         name when is_binary(name) <- first.name do
+      {:ok, name}
+    else
+      _ -> :error
+    end
+  end
+
+  defp parse_schema_field_names(_state, nil), do: :error
+
+  defp parse_schema_field_names(_state, %Spark.Connect.DataType{kind: {:struct, struct}}) do
+    {:ok, Enum.map(struct.fields, & &1.name)}
+  end
+
+  defp parse_schema_field_names(state, schema) when is_binary(schema) do
+    with {:ok, parsed, _server_side_session_id} <- Client.analyze_ddl_parse(state, schema),
+         %Spark.Connect.DataType{kind: {:struct, struct}} <- parsed do
+      {:ok, Enum.map(struct.fields, & &1.name)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp parse_schema_field_names(_state, _schema), do: :error
+
+  defp build_parse_expression(_format, _source_column, nil, _options), do: :error
+
+  defp build_parse_expression(format, source_column, schema, options) do
+    function_name =
+      case format do
+        :csv -> "from_csv"
+        :json -> "from_json"
+      end
+
+    schema_expr =
+      case schema do
+        %Spark.Connect.DataType{} = data_type -> {:lit, SparkEx.Types.data_type_to_json(data_type)}
+        s when is_binary(s) -> {:lit, s}
+      end
+
+    args =
+      case options_to_map_expression(options) do
+        nil -> [{:col, source_column}, schema_expr]
+        opts_expr -> [{:col, source_column}, schema_expr, opts_expr]
+      end
+
+    {:ok, {:fn, function_name, args, false}}
+  end
+
+  defp options_to_map_expression(nil), do: nil
+  defp options_to_map_expression(%{} = options) when map_size(options) == 0, do: nil
+
+  defp options_to_map_expression(%{} = options) do
+    kvs =
+      options
+      |> Enum.flat_map(fn {k, v} -> [{:lit, to_string(k)}, {:lit, to_string(v)}] end)
+
+    {:fn, "map", kvs, false}
+  end
+
+  defp options_to_map_expression(_), do: nil
 
   defp rewrite_subquery_plan({:sort, child_plan, sort_orders}) do
     {child_plan, child_changed?} = rewrite_subquery_plan(child_plan)
@@ -2270,22 +2419,17 @@ defmodule SparkEx.Session do
          plan,
          %Spark.Connect.DataType{kind: {:struct, %{fields: fields}}}
        ) do
-    has_complex? =
+    has_fallback_fields? =
       Enum.any?(fields, fn field ->
-        complex_field_type?(field.data_type)
+        fallback_projection_field_type?(field.data_type)
       end)
 
-    if has_complex? do
+    if has_fallback_fields? do
       expressions =
         Enum.map(fields, fn field ->
           name = field.name
 
-          expr =
-            if complex_field_type?(field.data_type) do
-              {:fn, "to_json", [{:col, name}], false}
-            else
-              {:col, name}
-            end
+          expr = fallback_projection_expression(name, field.data_type)
 
           {:alias, expr, name}
         end)
@@ -2298,10 +2442,32 @@ defmodule SparkEx.Session do
 
   defp json_fallback_projection_plan(_plan, _schema), do: nil
 
+  defp fallback_projection_expression(name, data_type) do
+    cond do
+      complex_field_type?(data_type) ->
+        {:fn, "to_json", [{:col, name}], false}
+
+      unsupported_arrow_scalar_type?(data_type) ->
+        {:cast, {:col, name}, "STRING"}
+
+      true ->
+        {:col, name}
+    end
+  end
+
+  defp fallback_projection_field_type?(data_type) do
+    complex_field_type?(data_type) or unsupported_arrow_scalar_type?(data_type)
+  end
+
   defp complex_field_type?(%Spark.Connect.DataType{kind: {tag, _}}),
     do: tag in [:array, :struct, :map]
 
   defp complex_field_type?(_), do: false
+
+  defp unsupported_arrow_scalar_type?(%Spark.Connect.DataType{kind: {tag, _}}),
+    do: tag in [:year_month_interval, :day_time_interval, :calendar_interval]
+
+  defp unsupported_arrow_scalar_type?(_), do: false
 
   defp unique_schema_column_names(%Spark.Connect.DataType{kind: {:struct, struct}}) do
     names = Enum.map(struct.fields, & &1.name)
@@ -3075,7 +3241,9 @@ defmodule SparkEx.Session do
   end
 
   defp sql_escape_string(value) when is_binary(value) do
-    String.replace(value, "'", "''")
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("'", "''")
   end
 
   defp inline_sql_json_args(query, []), do: query

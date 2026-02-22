@@ -98,6 +98,37 @@ defmodule SparkEx.CatalogTest do
     end
 
     def handle_call(
+          {:execute_collect, {:catalog, {:function_exists, function_name, db_name}}, _opts},
+          _from,
+          state
+        ) do
+      send(state.test_pid, {:function_exists_called, function_name, db_name})
+      {:reply, {:ok, [%{"function_exists" => true}]}, state}
+    end
+
+    def handle_call({:analyze_ddl_parse, ddl}, _from, state) do
+      send(state.test_pid, {:analyze_ddl_parse_called, ddl})
+
+      parsed =
+        %Spark.Connect.DataType{
+          kind: {:struct, %Spark.Connect.DataType.Struct{fields: []}}
+        }
+
+      {:reply, {:ok, parsed}, state}
+    end
+
+    def handle_call(
+          {:execute_collect,
+           {:catalog, {:create_table, _table_name, _path, _source, _description, schema, _options}},
+           _opts},
+          _from,
+          state
+        ) do
+      send(state.test_pid, {:create_table_called, schema})
+      {:reply, {:ok, []}, state}
+    end
+
+    def handle_call(
           {:execute_collect, {:catalog, {:list_databases, _pattern}}, _opts},
           _from,
           state
@@ -159,5 +190,35 @@ defmodule SparkEx.CatalogTest do
              Catalog.list_columns(session, "orders", "sfx_dev_warehouse")
 
     assert_receive {:list_columns_called, "sfx.sfx_dev_warehouse.orders", nil}
+  end
+
+  test "function_exists?/3 passes provided db_name to catalog RPC" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "sfx_dev_warehouse", ["sfx_dev_warehouse"], "sfx")
+
+    assert {:ok, true} = Catalog.function_exists?(session, "concat", "sfx_dev_warehouse")
+    assert_receive {:function_exists_called, "concat", "sfx_dev_warehouse"}
+  end
+
+  test "build_drop_table_sql quotes dotted identifiers by parts" do
+    sql = Catalog.build_drop_table_sql("sfx.sfx_dev_warehouse.my_table", if_exists: true, purge: true)
+    assert sql == "DROP TABLE IF EXISTS `sfx`.`sfx_dev_warehouse`.`my_table` PURGE"
+  end
+
+  test "build_alter_table_sql quotes dotted identifiers by parts" do
+    sql =
+      Catalog.build_alter_table_sql("sfx.sfx_dev_warehouse.old_name",
+        rename_to: "sfx.sfx_dev_warehouse.new_name"
+      )
+
+    assert sql ==
+             "ALTER TABLE `sfx`.`sfx_dev_warehouse`.`old_name` RENAME TO `sfx`.`sfx_dev_warehouse`.`new_name`"
+  end
+
+  test "create_table/3 parses DDL schema into DataType before encode" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:ok, _df} = Catalog.create_table(session, "my_table", schema: "id INT, name STRING")
+    assert_receive {:analyze_ddl_parse_called, "id INT, name STRING"}
+    assert_receive {:create_table_called, %Spark.Connect.DataType{}}
   end
 end

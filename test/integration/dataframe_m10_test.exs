@@ -82,7 +82,7 @@ defmodule SparkEx.Integration.DataFrameM10Test do
     assert {:ok, sample2} = df |> DataFrame.sample(0.2, seed: 123) |> DataFrame.collect()
     assert sample1 == sample2
 
-    [a, b, c] = DataFrame.random_split(df, [1.0, 2.0, 3.0], 11)
+    assert {:ok, [a, b, c]} = DataFrame.random_split(df, [1.0, 2.0, 3.0], 11)
     assert {:ok, ac} = DataFrame.count(a)
     assert {:ok, bc} = DataFrame.count(b)
     assert {:ok, cc} = DataFrame.count(c)

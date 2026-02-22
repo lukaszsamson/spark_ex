@@ -969,7 +969,7 @@ defmodule SparkEx.DataFrame do
   @doc """
   Randomly splits the DataFrame into multiple DataFrames using normalized weights.
   """
-  @spec random_split(t(), [number()], integer() | nil | keyword()) :: [t()]
+  @spec random_split(t(), [number()], integer() | nil | keyword()) :: {:ok, [t()]}
   def random_split(df, weights, seed_or_opts \\ nil)
 
   def random_split(%__MODULE__{} = df, weights, opts)
@@ -1015,7 +1015,7 @@ defmodule SparkEx.DataFrame do
         {split, upper}
       end)
 
-    splits
+    {:ok, splits}
   end
 
   # ── M10: Row Operations ──

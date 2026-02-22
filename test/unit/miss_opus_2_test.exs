@@ -1042,8 +1042,8 @@ defmodule SparkEx.MissOpus2Test do
       result = Functions.try_parse_url(Functions.col("url"), Functions.col("part"))
 
       assert %Column{
-               expr: {:fn, "try_parse_url", [{:col, "url"}, {:col, "part"}], false}
-             } = result
+               expr: {:fn, "parse_url", [{:col, "url"}, {:col, "part"}], false}
+              } = result
     end
   end
 
@@ -1165,8 +1165,16 @@ defmodule SparkEx.MissOpus2Test do
       result = Functions.uniform(Functions.col("min"), 100)
 
       assert %Column{
-               expr: {:fn, "uniform", [{:col, "min"}, {:lit, 100}, {:lit, seed}], false}
-             } = result
+               expr:
+                 {:fn, "+",
+                  [
+                    {:col, "min"},
+                    {:fn,
+                     "*",
+                     [{:fn, "rand", [{:lit, seed}], false}, {:fn, "-", [{:lit, 100}, {:col, "min"}], false}],
+                     false}
+                  ], false}
+              } = result
 
       assert is_integer(seed)
     end
@@ -1175,19 +1183,46 @@ defmodule SparkEx.MissOpus2Test do
       result = Functions.uniform(Functions.col("min"), 100, 42)
 
       assert %Column{
-               expr: {:fn, "uniform", [{:col, "min"}, {:lit, 100}, {:lit, 42}], false}
-             } = result
+               expr:
+                 {:fn, "+",
+                  [
+                    {:col, "min"},
+                    {:fn,
+                     "*",
+                     [{:fn, "rand", [{:lit, 42}], false}, {:fn, "-", [{:lit, 100}, {:col, "min"}], false}],
+                     false}
+                  ], false}
+              } = result
     end
 
     test "randstr auto-generates seed" do
       result = Functions.randstr(Functions.col("len"))
-      assert %Column{expr: {:fn, "randstr", [{:col, "len"}, {:lit, seed}], false}} = result
+
+      assert %Column{
+               expr:
+                 {:fn, "substr",
+                  [
+                    {:fn, "md5", [{:cast, {:fn, "rand", [{:lit, seed}], false}, "STRING"}], false},
+                    {:lit, 1},
+                    {:col, "len"}
+                  ], false}
+             } = result
+
       assert is_integer(seed)
     end
 
     test "randstr with explicit seed" do
       result = Functions.randstr(Functions.col("len"), 42)
-      assert %Column{expr: {:fn, "randstr", [{:col, "len"}, {:lit, 42}], false}} = result
+
+      assert %Column{
+               expr:
+                 {:fn, "substr",
+                  [
+                    {:fn, "md5", [{:cast, {:fn, "rand", [{:lit, 42}], false}, "STRING"}], false},
+                    {:lit, 1},
+                    {:col, "len"}
+                  ], false}
+             } = result
     end
   end
 

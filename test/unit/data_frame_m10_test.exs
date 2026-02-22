@@ -246,7 +246,7 @@ defmodule SparkEx.Unit.DataFrameM10Test do
 
   describe "random_split/3" do
     test "creates deterministic sample ranges from weights" do
-      [s1, s2, s3] = DataFrame.random_split(df(), [1.0, 2.0, 3.0], 7)
+      assert {:ok, [s1, s2, s3]} = DataFrame.random_split(df(), [1.0, 2.0, 3.0], 7)
 
       assert %DataFrame{plan: {:sample, @base_plan, l1, u1, false, 7, true}} = s1
       assert %DataFrame{plan: {:sample, @base_plan, l2, u2, false, 7, true}} = s2
@@ -259,7 +259,7 @@ defmodule SparkEx.Unit.DataFrameM10Test do
     end
 
     test "accepts seed keyword option" do
-      [split] = DataFrame.random_split(df(), [1.0], seed: 42)
+      assert {:ok, [split]} = DataFrame.random_split(df(), [1.0], seed: 42)
       assert %DataFrame{plan: {:sample, @base_plan, +0.0, 1.0, false, 42, true}} = split
     end
   end

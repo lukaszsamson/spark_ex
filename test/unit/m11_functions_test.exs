@@ -415,6 +415,34 @@ defmodule SparkEx.M11.FunctionsTest do
     end
   end
 
+  describe "spark 3.5 compatibility fallbacks" do
+    test "to_time/1 composes to_timestamp + date_format" do
+      assert %Column{
+               expr:
+                 {:fn, "date_format",
+                  [{:fn, "to_timestamp", [{:col, "ts"}], false}, {:lit, "HH:mm:ss"}], false}
+             } = Functions.to_time("ts")
+    end
+
+    test "time_diff/3 maps to timestampdiff" do
+      assert %Column{
+               expr: {:fn, "timestampdiff", [{:lit, "HOUR"}, {:col, "start_ts"}, {:col, "end_ts"}], false}
+             } = Functions.time_diff("HOUR", "start_ts", "end_ts")
+    end
+
+    test "parse_json/1 uses local fallback expression" do
+      assert %Column{
+               expr: {:fn, "coalesce", [{:col, "js"}, {:lit, nil}], false}
+             } = Functions.parse_json("js")
+    end
+
+    test "variant_get/3 maps to get_json_object" do
+      assert %Column{
+               expr: {:fn, "get_json_object", [{:col, "js"}, {:lit, "$.a"}], false}
+             } = Functions.variant_get("js", "$.a", "int")
+    end
+  end
+
   # ── Aliases ──
 
   describe "function aliases" do

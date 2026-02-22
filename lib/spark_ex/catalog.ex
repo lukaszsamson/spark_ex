@@ -234,7 +234,21 @@ defmodule SparkEx.Catalog do
   @spec function_exists?(GenServer.server(), String.t(), String.t() | nil) ::
           {:ok, boolean()} | {:error, term()}
   def function_exists?(session, function_name, db_name \\ nil) when is_binary(function_name) do
-    execute_scalar(session, {:function_exists, function_name, db_name})
+    case execute_scalar(session, {:function_exists, function_name, db_name}) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, %SparkEx.Error.Remote{message: message} = remote}
+      when is_binary(db_name) and is_binary(message) ->
+        if String.contains?(message, "SCHEMA_NOT_FOUND") do
+          execute_scalar(session, {:function_exists, function_name, nil})
+        else
+          {:error, remote}
+        end
+
+      {:error, _} = err ->
+        err
+    end
   end
 
   @spec create_function(GenServer.server(), String.t(), String.t(), keyword()) ::
@@ -315,11 +329,18 @@ defmodule SparkEx.Catalog do
     schema = Keyword.get(opts, :schema, nil)
     options = Keyword.get(opts, :options, %{})
 
-    plan = {:catalog, {:create_table, table_name, path, source, description, schema, options}}
-    df = %DataFrame{session: session, plan: plan}
+    with {:ok, normalized_schema} <- normalize_table_schema(session, schema) do
+      plan =
+        {:catalog,
+         {:create_table, table_name, path, source, description, normalized_schema, options}}
 
-    case DataFrame.collect(df) do
-      {:ok, _} -> {:ok, df}
+      df = %DataFrame{session: session, plan: plan}
+
+      case DataFrame.collect(df) do
+        {:ok, _} -> {:ok, df}
+        {:error, _} = err -> err
+      end
+    else
       {:error, _} = err -> err
     end
   end
@@ -341,11 +362,15 @@ defmodule SparkEx.Catalog do
     schema = Keyword.get(opts, :schema, nil)
     options = Keyword.get(opts, :options, %{})
 
-    plan = {:catalog, {:create_external_table, table_name, path, source, schema, options}}
-    df = %DataFrame{session: session, plan: plan}
+    with {:ok, normalized_schema} <- normalize_table_schema(session, schema) do
+      plan = {:catalog, {:create_external_table, table_name, path, source, normalized_schema, options}}
+      df = %DataFrame{session: session, plan: plan}
 
-    case DataFrame.collect(df) do
-      {:ok, _} -> {:ok, df}
+      case DataFrame.collect(df) do
+        {:ok, _} -> {:ok, df}
+        {:error, _} = err -> err
+      end
+    else
       {:error, _} = err -> err
     end
   end
@@ -444,6 +469,20 @@ defmodule SparkEx.Catalog do
         end
     end
   end
+
+  defp normalize_table_schema(_session, nil), do: {:ok, nil}
+  defp normalize_table_schema(_session, %Spark.Connect.DataType{} = schema), do: {:ok, schema}
+
+  defp normalize_table_schema(session, schema) when is_binary(schema) do
+    case SparkEx.Session.analyze_ddl_parse(session, schema) do
+      {:ok, %Spark.Connect.DataType{} = parsed} -> {:ok, parsed}
+      {:ok, other} -> {:error, {:invalid_schema_type, other}}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp normalize_table_schema(_session, other),
+    do: {:error, {:invalid_schema, "expected DDL string or DataType, got: #{inspect(other)}"}}
 
   @doc false
   def build_create_database_sql(db_name, opts) do
@@ -649,8 +688,13 @@ defmodule SparkEx.Catalog do
   end
 
   defp quote_identifier(name) when is_binary(name) do
-    escaped = String.replace(name, "`", "``")
-    "`#{escaped}`"
+    name
+    |> String.split(".")
+    |> Enum.map(fn part ->
+      escaped = String.replace(part, "`", "``")
+      "`#{escaped}`"
+    end)
+    |> Enum.join(".")
   end
 
   defp maybe_add(list, _value, false), do: list

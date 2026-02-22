@@ -329,18 +329,14 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :datetime, doc: "Returns difference between timestamps in given unit."},
       {:timestamp_add, "timestampadd", {:lit_then_cols, 1},
        group: :datetime, doc: "Adds interval to timestamp."},
-      {:time_diff, "time_diff", {:lit_then_cols, 1},
-       group: :datetime, doc: "Returns difference between times in given unit."},
-      {:time_trunc, "time_trunc", {:lit_then_cols, 1},
-       group: :datetime, doc: "Truncates time to specified unit."},
+      # time_diff/time_trunc hand-written in functions.ex for Spark 3.5-compatible fallbacks
+      # {:time_diff, ...} / {:time_trunc, ...} — see Functions.time_diff/3 and time_trunc/2
       {:make_date, "make_date", :three_col,
        group: :datetime, doc: "Creates date from year, month, day."},
       # convert_timezone hand-written in functions.ex to support 2-arg form
       # {:convert_timezone, ...} — see Functions.convert_timezone/2,3
-      {:to_time, "to_time", {:col_opt, [format: nil]},
-       group: :datetime, doc: "Converts to time type."},
-      {:try_to_time, "try_to_time", {:col_opt, [format: nil]},
-       group: :datetime, doc: "Try to convert to time, returns null on failure."},
+      # to_time/try_to_time hand-written in functions.ex for Spark 3.5-compatible fallbacks
+      # {:to_time, ...} / {:try_to_time, ...} — see Functions.to_time/1,2 and try_to_time/1,2
       {:make_time, "make_time", :three_col,
        group: :datetime, doc: "Creates time from hour, minute, second."},
       {:window_time, "window_time", :one_col,
@@ -590,22 +586,10 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:json_object_keys, "json_object_keys", :one_col,
        group: :json, doc: "Returns keys of outermost JSON object."},
       # schema_of_json: hand-written in functions.ex (needs options parameter)
-      {:parse_json, "parse_json", :one_col,
-       group: :json, doc: "Parses JSON string to variant type."},
-      {:try_parse_json, "try_parse_json", :one_col,
-       group: :json, doc: "Try parse JSON, returns null on failure."},
-      {:is_variant_null, "is_variant_null", :one_col,
-       group: :json, doc: "Returns true if variant value is null."},
-      {:variant_get, "variant_get", {:col_lit, 2},
-       group: :json, doc: "Gets variant value at path with type."},
-      {:try_variant_get, "try_variant_get", {:col_lit, 2},
-       group: :json, doc: "Try get variant value, returns null on failure."},
-      {:to_variant_object, "to_variant_object", :one_col,
-       group: :json, doc: "Converts map to variant object."},
-      {:schema_of_variant, "schema_of_variant", :one_col,
-       group: :json, doc: "Returns schema string of variant."},
-      {:schema_of_variant_agg, "schema_of_variant_agg", :one_col,
-       group: :json, doc: "Returns merged schema string of variant column."}
+      # variant/time parser wrappers hand-written in functions.ex for Spark 3.5-compatible fallbacks
+      # {:parse_json, ...} / {:try_parse_json, ...}
+      # {:is_variant_null, ...} / {:variant_get, ...} / {:try_variant_get, ...}
+      # {:to_variant_object, ...} / {:schema_of_variant, ...} / {:schema_of_variant_agg, ...}
     ]
   end
 
