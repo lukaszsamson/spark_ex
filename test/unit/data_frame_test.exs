@@ -122,6 +122,27 @@ defmodule SparkEx.DataFrameTest do
     end
   end
 
+  defmodule CollectAsMapSession do
+    use GenServer
+
+    def start_link(schema, rows) do
+      GenServer.start_link(__MODULE__, %{schema: schema, rows: rows}, [])
+    end
+
+    @impl true
+    def init(state), do: {:ok, state}
+
+    @impl true
+    def handle_call({:analyze_schema, _plan}, _from, state) do
+      {:reply, {:ok, state.schema}, state}
+    end
+
+    @impl true
+    def handle_call({:execute_collect, _plan, _opts}, _from, state) do
+      {:reply, {:ok, state.rows}, state}
+    end
+  end
+
   defmodule ObserveSession do
     use GenServer
 
@@ -190,6 +211,49 @@ defmodule SparkEx.DataFrameTest do
       df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
 
       assert {:ok, [{"id", "LONG"}]} = DataFrame.dtypes({:ok, df})
+    end
+  end
+
+  describe "collect_as_map/1" do
+    test "collects 2-column dataframe into map" do
+      schema = %Spark.Connect.DataType.Struct{
+        fields: [
+          %Spark.Connect.DataType.StructField{
+            name: "key",
+            data_type: %Spark.Connect.DataType{kind: {:string, %Spark.Connect.DataType.String{}}},
+            nullable: false
+          },
+          %Spark.Connect.DataType.StructField{
+            name: "value",
+            data_type: %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}},
+            nullable: true
+          }
+        ]
+      }
+
+      rows = [%{"key" => "a", "value" => 1}, %{"key" => "b", "value" => 2}]
+
+      {:ok, session} = CollectAsMapSession.start_link(schema, rows)
+      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      assert {:ok, %{"a" => 1, "b" => 2}} = DataFrame.collect_as_map(df)
+    end
+
+    test "returns error when dataframe does not have exactly two columns" do
+      schema = %Spark.Connect.DataType.Struct{
+        fields: [
+          %Spark.Connect.DataType.StructField{
+            name: "a",
+            data_type: %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}},
+            nullable: true
+          }
+        ]
+      }
+
+      {:ok, session} = CollectAsMapSession.start_link(schema, [%{"a" => 1}])
+      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      assert {:error, :collect_as_map_requires_two_columns} = DataFrame.collect_as_map(df)
     end
   end
 

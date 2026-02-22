@@ -1793,16 +1793,21 @@ defmodule SparkEx.Session do
   defp prepare_list_data_with_schema(data, schema_ddl, opts) when is_binary(schema_ddl) do
     if normalize_local_relation_arrow?(opts) do
       non_string_map_fields = non_string_top_level_map_fields(schema_ddl)
+      binary_fields = binary_top_level_fields(schema_ddl)
 
       with {:ok, normalized_rows} <-
              normalize_rows_for_schema(
                data,
-               Enum.map(non_string_map_fields, & &1.name)
+               Enum.map(non_string_map_fields, & &1.name),
+               binary_fields
              ),
            {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
         if non_string_map_fields == [] do
-          query = json_rows_to_sql_query(length(row_json), schema_ddl)
-          {:ok, {:sql_relation, query, row_json}}
+          query =
+            json_rows_to_sql_query(length(row_json), schema_ddl)
+            |> inline_sql_json_args(row_json)
+
+          {:ok, {:sql_relation, query, nil}}
         else
           query =
             json_rows_to_sql_query_with_projection(
@@ -1810,8 +1815,9 @@ defmodule SparkEx.Session do
               helper_schema_for_non_string_map_fields(schema_ddl, non_string_map_fields),
               projected_select_list_for_non_string_map_fields(schema_ddl, non_string_map_fields)
             )
+            |> inline_sql_json_args(row_json)
 
-          {:ok, {:sql_relation, query, row_json}}
+          {:ok, {:sql_relation, query, nil}}
         end
       end
     else
@@ -1837,8 +1843,11 @@ defmodule SparkEx.Session do
             with {:ok, normalized_rows} <- normalize_rows_for_schema(data),
                  {:ok, inferred_schema_ddl} <- infer_schema_ddl_from_rows(normalized_rows),
                  {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
-              query = json_rows_to_sql_query(length(row_json), inferred_schema_ddl)
-              {:ok, {:sql_relation, query, row_json}}
+              query =
+                json_rows_to_sql_query(length(row_json), inferred_schema_ddl)
+                |> inline_sql_json_args(row_json)
+
+              {:ok, {:sql_relation, query, nil}}
             else
               {:error, _} = error -> error
             end
@@ -1883,9 +1892,10 @@ defmodule SparkEx.Session do
     Explorer.DataFrame.new(columns)
   end
 
-  defp normalize_rows_for_schema(rows, non_string_map_fields \\ [])
+  defp normalize_rows_for_schema(rows, non_string_map_fields \\ [], binary_fields \\ [])
        when is_list(rows) do
     non_string_map_fields_map = Map.new(non_string_map_fields, &{&1, true})
+    binary_fields_map = Map.new(binary_fields, &{&1, true})
 
     Enum.reduce_while(rows, {:ok, []}, fn
       row, {:ok, acc} when is_map(row) and not is_struct(row) ->
@@ -1898,7 +1908,11 @@ defmodule SparkEx.Session do
               if Map.has_key?(non_string_map_fields_map, key_string) do
                 normalize_non_string_map_value(value)
               else
-                normalize_json_value(value)
+                if Map.has_key?(binary_fields_map, key_string) do
+                  normalize_binary_field_value(value)
+                else
+                  normalize_json_value(value)
+                end
               end
 
             {key_string, value}
@@ -1928,6 +1942,24 @@ defmodule SparkEx.Session do
   end
 
   defp normalize_non_string_map_value(value), do: normalize_json_value(value)
+
+  defp normalize_binary_field_value(nil), do: nil
+  defp normalize_binary_field_value(value) when is_binary(value), do: Base.encode64(value)
+  defp normalize_binary_field_value(value), do: normalize_json_value(value)
+
+  defp binary_top_level_fields(schema_ddl) do
+    schema_ddl
+    |> split_top_level_schema_fields()
+    |> Enum.flat_map(fn field ->
+      case parse_schema_field(field) do
+        {name, type} ->
+          if String.upcase(String.trim(type)) == "BINARY", do: [name], else: []
+
+        :error ->
+          []
+      end
+    end)
+  end
 
   defp non_string_top_level_map_fields(schema_ddl) do
     schema_ddl
@@ -2220,8 +2252,11 @@ defmodule SparkEx.Session do
     rows = Explorer.DataFrame.to_rows(explorer_df)
 
     with {:ok, row_json} <- encode_rows_as_json(rows) do
-      query = json_rows_to_sql_query(length(row_json), schema_ddl)
-      {:ok, {:sql_relation, query, row_json}}
+      query =
+        json_rows_to_sql_query(length(row_json), schema_ddl)
+        |> inline_sql_json_args(row_json)
+
+      {:ok, {:sql_relation, query, nil}}
     end
   end
 
@@ -2303,6 +2338,15 @@ defmodule SparkEx.Session do
 
   defp sql_escape_string(value) when is_binary(value) do
     String.replace(value, "'", "''")
+  end
+
+  defp inline_sql_json_args(query, []), do: query
+
+  defp inline_sql_json_args(query, json_rows) when is_list(json_rows) do
+    Enum.reduce(json_rows, query, fn json, acc ->
+      escaped = sql_escape_string(json)
+      String.replace(acc, "(?)", "('#{escaped}')", global: false)
+    end)
   end
 
   defp normalize_local_relation_arrow?(opts) do

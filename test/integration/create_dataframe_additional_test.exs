@@ -202,6 +202,90 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
     assert profile_json =~ "\"attrs\":{\"x\":\"1\"}"
   end
 
+  test "lit map with array values no longer fails", %{session: session} do
+    df =
+      SparkEx.sql(session, "SELECT 1 AS id")
+      |> DataFrame.with_column(
+        "data",
+        SparkEx.Functions.lit(%{"scores" => [1, 2, 3], "tags" => ["a", "b"]})
+      )
+
+    assert {:ok, [%{"data" => data}]} = DataFrame.select(df, ["data"]) |> DataFrame.collect()
+
+    by_key = Map.new(data, fn %{"key" => key, "value" => value} -> {key, value} end)
+    assert by_key["tags"] == ["a", "b"]
+    assert by_key["scores"] == ["1", "2", "3"]
+  end
+
+  test "lit nested map keeps inner map payload", %{session: session} do
+    df =
+      SparkEx.sql(session, "SELECT 1 AS id")
+      |> DataFrame.with_column(
+        "profile",
+        SparkEx.Functions.lit(%{"name" => "Alice", "addr" => %{"city" => "NYC"}})
+      )
+
+    assert {:ok, [%{"profile" => profile}]} = DataFrame.select(df, ["profile"]) |> DataFrame.collect()
+    by_key = Map.new(profile, fn %{"key" => key, "value" => value} -> {key, value} end)
+
+    assert by_key["name"] == "Alice"
+    assert by_key["addr"] == "{\"city\":\"NYC\"}"
+  end
+
+  test "create_dataframe complex dtypes preserve declared schema", %{session: session} do
+    rows = [%{"id" => 1, "tags" => ["a"], "meta" => %{"k" => "v"}, "info" => %{"name" => "test"}}]
+
+    assert {:ok, df} =
+             SparkEx.create_dataframe(session, rows,
+               schema: "id INT, tags ARRAY<STRING>, meta MAP<STRING, STRING>, info STRUCT<name: STRING>"
+             )
+
+    assert {:ok, dtypes} = DataFrame.dtypes(df)
+    assert {"tags", "ARRAY<STRING>"} in dtypes
+    assert {"meta", "MAP<STRING, STRING>"} in dtypes
+    assert {"info", "STRUCT<name: STRING>"} in dtypes
+  end
+
+  test "create_dataframe supports binary payloads", %{session: session} do
+    assert {:ok, df} =
+             SparkEx.create_dataframe(session, [%{"id" => 1, "data" => <<0xDE, 0xAD, 0xBE, 0xEF>>}],
+               schema: "id INT, data BINARY"
+             )
+
+    assert {:ok, [%{"data" => data}]} = DataFrame.select(df, ["data"]) |> DataFrame.collect()
+    assert data == <<0xDE, 0xAD, 0xBE, 0xEF>>
+  end
+
+  test "joining two create_dataframe results works", %{session: session} do
+    assert {:ok, left} =
+             SparkEx.create_dataframe(session, [%{"id" => 1, "name" => "Alice"}, %{"id" => 2, "name" => "Bob"}],
+               schema: "id INT, name STRING"
+             )
+
+    assert {:ok, right} =
+             SparkEx.create_dataframe(session, [%{"id" => 1, "score" => 95.5}, %{"id" => 2, "score" => 87.3}],
+               schema: "id INT, score DOUBLE"
+             )
+
+    assert {:ok, rows} = DataFrame.join(left, right, ["id"]) |> DataFrame.collect()
+    assert Enum.find(rows, &(&1["id"] == 1))["score"] == 95.5
+  end
+
+  test "to_explorer keeps complex columns as native containers", %{session: session} do
+    df =
+      SparkEx.sql(
+        session,
+        "SELECT array(1,2,3) AS arr, map('a',1,'b',2) AS m, named_struct('name','alice','age',30) AS st"
+      )
+
+    assert {:ok, explorer_df} = DataFrame.to_explorer(df)
+    dtypes = Explorer.DataFrame.dtypes(explorer_df)
+
+    assert dtypes["arr"] != :string
+    assert dtypes["m"] != :string
+    assert dtypes["st"] != :string
+  end
+
   test "lit nested arrays preserves inner values", %{session: session} do
     df =
       SparkEx.sql(session, "SELECT 1 AS id")

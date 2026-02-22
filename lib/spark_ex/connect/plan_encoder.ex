@@ -1329,6 +1329,10 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
+  def encode_expression({:lit, value}) when is_map(value) and not is_struct(value) do
+    encode_map_literal_expression(value)
+  end
+
   def encode_expression({:lit, value}) do
     encode_literal_expression(value)
   end
@@ -3405,6 +3409,67 @@ defmodule SparkEx.Connect.PlanEncoder do
       literal_type: {:time, %Expression.Literal.Time{nano: time_to_nanos(time), precision: 6}}
     }
   end
+
+  defp encode_map_literal_expression(map) when map_size(map) == 0 do
+    encode_literal_expression(map)
+  end
+
+  defp encode_map_literal_expression(map) do
+    if mixed_complex_scalar_map_values?(Map.values(map)) do
+      map_args =
+        map
+        |> Enum.flat_map(fn {k, v} ->
+          [{:lit, to_string(k)}, {:lit, map_value_to_string_literal(v)}]
+        end)
+
+      encode_expression({:fn, "map", map_args, false})
+    else
+      map_args =
+        map
+        |> Enum.flat_map(fn {k, v} -> [{:lit, k}, {:lit, v}] end)
+
+      encode_expression({:fn, "map", map_args, false})
+    end
+  end
+
+  defp mixed_complex_scalar_map_values?(values) do
+    has_complex = Enum.any?(values, &complex_literal_value?/1)
+    has_scalar = Enum.any?(values, &(not complex_literal_value?(&1)))
+    has_complex and has_scalar
+  end
+
+  defp complex_literal_value?(value) do
+    (is_map(value) and not is_struct(value)) or is_list(value) or is_tuple(value)
+  end
+
+  defp map_value_to_string_literal(nil), do: nil
+  defp map_value_to_string_literal(value) when is_binary(value), do: value
+
+  defp map_value_to_string_literal(value)
+       when is_map(value) and not is_struct(value) or is_list(value) or is_tuple(value) do
+    value
+    |> normalize_json_literal_value()
+    |> Jason.encode!()
+  end
+
+  defp map_value_to_string_literal(value), do: to_string(value)
+
+  defp normalize_json_literal_value(value) when is_list(value) do
+    Enum.map(value, &normalize_json_literal_value/1)
+  end
+
+  defp normalize_json_literal_value(value) when is_tuple(value) do
+    value
+    |> Tuple.to_list()
+    |> Enum.map(&normalize_json_literal_value/1)
+  end
+
+  defp normalize_json_literal_value(value) when is_map(value) do
+    value
+    |> Map.new(fn {k, v} -> {to_string(k), normalize_json_literal_value(v)} end)
+  end
+
+  defp normalize_json_literal_value(value), do: value
 
   defp maybe_encode_update_value(nil), do: nil
   defp maybe_encode_update_value(expr), do: encode_expression(expr)

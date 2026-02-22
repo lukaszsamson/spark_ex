@@ -183,6 +183,55 @@ defmodule SparkEx.Connect.TypeMapperTest do
     end
   end
 
+  describe "data_type_to_ddl/1" do
+    test "preserves complex Spark types" do
+      array_dt =
+        %DataType{
+          kind:
+            {:array,
+             %DataType.Array{
+               element_type: %DataType{kind: {:integer, %DataType.Integer{}}},
+               contains_null: false
+             }}
+        }
+
+      map_dt =
+        %DataType{
+          kind:
+            {:map,
+             %DataType.Map{
+               key_type: %DataType{kind: {:string, %DataType.String{}}},
+               value_type: %DataType{kind: {:double, %DataType.Double{}}},
+               value_contains_null: true
+             }}
+        }
+
+      struct_dt =
+        %DataType{
+          kind:
+            {:struct,
+             %DataType.Struct{
+               fields: [
+                 %DataType.StructField{
+                   name: "tags",
+                   data_type: array_dt,
+                   nullable: true
+                 },
+                 %DataType.StructField{
+                   name: "meta",
+                   data_type: map_dt,
+                   nullable: true
+                 }
+               ]
+             }}
+        }
+
+      assert TypeMapper.data_type_to_ddl(array_dt) == "ARRAY<INT>"
+      assert TypeMapper.data_type_to_ddl(map_dt) == "MAP<STRING, DOUBLE>"
+      assert TypeMapper.data_type_to_ddl(struct_dt) == "STRUCT<tags: ARRAY<INT>, meta: MAP<STRING, DOUBLE>>"
+    end
+  end
+
   defp interval_module(:calendar_interval), do: DataType.CalendarInterval
   defp interval_module(:year_month_interval), do: DataType.YearMonthInterval
   defp interval_module(:day_time_interval), do: DataType.DayTimeInterval

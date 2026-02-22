@@ -360,22 +360,14 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                          elements: [_ | _]
                        }}
                   }}
-             } = PlanEncoder.encode_expression({:lit, [1, 2, 3]})
+              } = PlanEncoder.encode_expression({:lit, [1, 2, 3]})
 
       assert %Expression{
-               expr_type:
-                 {:literal,
-                  %Expression.Literal{
-                    literal_type:
-                      {:map,
-                       %Expression.Literal.Map{
-                         key_type: %Spark.Connect.DataType{kind: {:string, _}},
-                         value_type: %Spark.Connect.DataType{kind: {:integer, _}},
-                         keys: [_ | _],
-                         values: [_ | _]
-                       }}
-                  }}
-             } = PlanEncoder.encode_expression({:lit, %{"k" => 1}})
+               expr_type: {:unresolved_function, unresolved_fn}
+              } = PlanEncoder.encode_expression({:lit, %{"k" => 1}})
+
+      assert unresolved_fn.function_name == "map"
+      assert length(unresolved_fn.arguments) == 2
 
       assert %Expression{
                expr_type:
@@ -388,7 +380,36 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                          elements: [_ | _]
                        }}
                   }}
-             } = PlanEncoder.encode_expression({:lit, [[1, 2], [3, 4]]})
+              } = PlanEncoder.encode_expression({:lit, [[1, 2], [3, 4]]})
+    end
+
+    test "encodes map literals with array values via map function" do
+      assert %Expression{expr_type: {:unresolved_function, unresolved_fn}} =
+               PlanEncoder.encode_expression({:lit, %{"scores" => [1, 2], "tags" => ["a", "b"]}})
+
+      assert unresolved_fn.function_name == "map"
+      assert length(unresolved_fn.arguments) == 4
+    end
+
+    test "encodes mixed scalar/nested map values as string map literals" do
+      assert %Expression{expr_type: {:unresolved_function, unresolved_fn}} =
+               PlanEncoder.encode_expression(
+                 {:lit, %{"name" => "Alice", "addr" => %{"city" => "NYC"}}}
+               )
+
+      values =
+        unresolved_fn.arguments
+        |> Enum.chunk_every(2)
+        |> Enum.map(fn
+          [_key_expr, %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:string, value}}}}] ->
+            value
+
+          _ ->
+            nil
+        end)
+
+      assert Enum.any?(values, &(&1 == "Alice"))
+      assert Enum.any?(values, &(&1 == "{\"city\":\"NYC\"}"))
     end
 
     test "encodes empty complex literals with null type defaults" do

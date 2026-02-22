@@ -1841,6 +1841,30 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
+  Collects rows into a map using the first column as key and second column as value.
+
+  The DataFrame must have exactly two columns.
+  """
+  @spec collect_as_map(t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def collect_as_map(%__MODULE__{} = df, opts \\ []) do
+    with {:ok, columns} <- columns(df),
+         {:ok, [key_col, value_col]} <- collect_as_map_columns(columns),
+         {:ok, rows} <- collect(df, opts) do
+      as_map =
+        Enum.reduce(rows, %{}, fn row, acc ->
+          Map.put(acc, Map.get(row, key_col), Map.get(row, value_col))
+        end)
+
+      {:ok, as_map}
+    else
+      {:error, _} = error -> error
+    end
+  end
+
+  defp collect_as_map_columns([key_col, value_col]), do: {:ok, [key_col, value_col]}
+  defp collect_as_map_columns(_), do: {:error, :collect_as_map_requires_two_columns}
+
+  @doc """
   Applies a function to each row on the driver.
   """
   @spec foreach(t(), (map() -> term()), keyword()) :: :ok | {:error, term()}
