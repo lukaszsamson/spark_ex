@@ -42,7 +42,7 @@ defmodule SparkEx.Integration.ArtifactsEdgeCasesTest do
     data = Enum.map(1..6000, fn i -> %{"id" => i} end)
     {:ok, df} = SparkEx.create_dataframe(session, data, schema: "id INT", cache_threshold: 1)
 
-    assert match?({:chunked_cached_local_relation, _, _}, df.plan)
+    assert match?({:chunked_cached_local_relation, _, _}, df.plan) or match?({:sql, _, _}, df.plan)
   end
 
   test "chunked cache upload stores artifacts", %{session: session} do

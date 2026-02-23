@@ -76,7 +76,7 @@ defmodule SparkEx.M13.StatTest do
 
       assert %DataFrame{
                plan: {:stat_sample_by, :test_plan, {:col, "label"}, [{0, 0.1}], 42}
-              } = df
+             } = df
     end
 
     test "accepts keyword seed option" do

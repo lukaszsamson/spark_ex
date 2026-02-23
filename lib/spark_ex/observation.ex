@@ -51,7 +51,8 @@ defmodule SparkEx.Observation do
 
   @doc false
   @spec register_metric_aliases(String.t(), [term()]) :: :ok
-  def register_metric_aliases(name, metric_exprs) when is_binary(name) and is_list(metric_exprs) do
+  def register_metric_aliases(name, metric_exprs)
+      when is_binary(name) and is_list(metric_exprs) do
     aliases =
       Enum.map(metric_exprs, fn
         {:alias, _, alias_name} when is_binary(alias_name) -> alias_name
@@ -118,8 +119,8 @@ defmodule SparkEx.Observation do
   end
 
   def decode_literal(%Expression.Literal{
-         literal_type: {:struct, %Expression.Literal.Struct{elements: elems}}
-       }) do
+        literal_type: {:struct, %Expression.Literal.Struct{elements: elems}}
+      }) do
     Enum.map(elems, &decode_literal/1)
   end
 

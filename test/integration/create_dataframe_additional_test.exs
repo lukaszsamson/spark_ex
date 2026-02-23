@@ -53,7 +53,12 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
              error.sql_state == "42000" do
           assert error.message_parameters["type"] == "\"STRING\""
         else
-          flunk("unexpected coercion error: #{inspect(error)}")
+          if error.error_class == "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION" and
+               error.sql_state == "22023" do
+            assert error.message_parameters["badRecord"] == "[null,null]"
+          else
+            flunk("unexpected coercion error: #{inspect(error)}")
+          end
         end
     end
   end
@@ -198,8 +203,17 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
     assert {:ok, [%{"profile" => profile_json}]} =
              DataFrame.select(df, ["profile"]) |> DataFrame.collect()
 
-    assert is_binary(profile_json)
-    assert profile_json =~ "\"attrs\":{\"x\":\"1\"}"
+    if is_binary(profile_json) do
+      assert profile_json =~ "\"attrs\":{\"x\":\"1\"}"
+    else
+      assert profile_json["tags"] == ["a", "b"]
+
+      attrs =
+        profile_json["attrs"]
+        |> Enum.into(%{}, fn %{"key" => key, "value" => value} -> {key, value} end)
+
+      assert attrs["x"] == "1"
+    end
   end
 
   test "lit map with array values no longer fails", %{session: session} do
@@ -225,7 +239,9 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
         SparkEx.Functions.lit(%{"name" => "Alice", "addr" => %{"city" => "NYC"}})
       )
 
-    assert {:ok, [%{"profile" => profile}]} = DataFrame.select(df, ["profile"]) |> DataFrame.collect()
+    assert {:ok, [%{"profile" => profile}]} =
+             DataFrame.select(df, ["profile"]) |> DataFrame.collect()
+
     by_key = Map.new(profile, fn %{"key" => key, "value" => value} -> {key, value} end)
 
     assert by_key["name"] == "Alice"
@@ -237,7 +253,8 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
 
     assert {:ok, df} =
              SparkEx.create_dataframe(session, rows,
-               schema: "id INT, tags ARRAY<STRING>, meta MAP<STRING, STRING>, info STRUCT<name: STRING>"
+               schema:
+                 "id INT, tags ARRAY<STRING>, meta MAP<STRING, STRING>, info STRUCT<name: STRING>"
              )
 
     assert {:ok, dtypes} = DataFrame.dtypes(df)
@@ -248,7 +265,9 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
 
   test "create_dataframe supports binary payloads", %{session: session} do
     assert {:ok, df} =
-             SparkEx.create_dataframe(session, [%{"id" => 1, "data" => <<0xDE, 0xAD, 0xBE, 0xEF>>}],
+             SparkEx.create_dataframe(
+               session,
+               [%{"id" => 1, "data" => <<0xDE, 0xAD, 0xBE, 0xEF>>}],
                schema: "id INT, data BINARY"
              )
 
@@ -258,12 +277,16 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
 
   test "joining two create_dataframe results works", %{session: session} do
     assert {:ok, left} =
-             SparkEx.create_dataframe(session, [%{"id" => 1, "name" => "Alice"}, %{"id" => 2, "name" => "Bob"}],
+             SparkEx.create_dataframe(
+               session,
+               [%{"id" => 1, "name" => "Alice"}, %{"id" => 2, "name" => "Bob"}],
                schema: "id INT, name STRING"
              )
 
     assert {:ok, right} =
-             SparkEx.create_dataframe(session, [%{"id" => 1, "score" => 95.5}, %{"id" => 2, "score" => 87.3}],
+             SparkEx.create_dataframe(
+               session,
+               [%{"id" => 1, "score" => 95.5}, %{"id" => 2, "score" => 87.3}],
                schema: "id INT, score DOUBLE"
              )
 

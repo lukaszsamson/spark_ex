@@ -181,7 +181,8 @@ defmodule SparkEx.Macros.FunctionGen do
   defp generate_function(name, spark_name, {:lit_then_cols, 1}, is_distinct, doc) do
     quote do
       @doc unquote(doc)
-      @spec unquote(name)(term(), Column.t() | String.t() | [Column.t() | String.t()]) :: Column.t()
+      @spec unquote(name)(term(), Column.t() | String.t() | [Column.t() | String.t()]) ::
+              Column.t()
       def unquote(name)(lit_arg, cols) when is_list(cols) do
         args = [lit_expr(lit_arg) | Enum.map(cols, &to_expr/1)]
         %Column{expr: {:fn, unquote(spark_name), args, unquote(is_distinct)}}

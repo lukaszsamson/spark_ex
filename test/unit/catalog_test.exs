@@ -6,7 +6,12 @@ defmodule SparkEx.CatalogTest do
   defmodule FakeCatalogSession do
     use GenServer
 
-    def start_link(test_pid, current_db, databases \\ ["analytics"], current_catalog \\ "spark_catalog") do
+    def start_link(
+          test_pid,
+          current_db,
+          databases \\ ["analytics"],
+          current_catalog \\ "spark_catalog"
+        ) do
       GenServer.start_link(__MODULE__, {test_pid, current_db, databases, current_catalog})
     end
 
@@ -15,11 +20,11 @@ defmodule SparkEx.CatalogTest do
       do:
         {:ok,
          %{
-            test_pid: test_pid,
-            current_db: current_db,
-            databases: databases,
-            current_catalog: current_catalog
-          }}
+           test_pid: test_pid,
+           current_db: current_db,
+           databases: databases,
+           current_catalog: current_catalog
+         }}
 
     @impl true
     def handle_call({:execute_collect, {:catalog, {:current_catalog}}, _opts}, _from, state) do
@@ -119,8 +124,8 @@ defmodule SparkEx.CatalogTest do
 
     def handle_call(
           {:execute_collect,
-           {:catalog, {:create_table, _table_name, _path, _source, _description, schema, options}},
-           _opts},
+           {:catalog,
+            {:create_table, _table_name, _path, _source, _description, schema, options}}, _opts},
           _from,
           state
         ) do
@@ -195,7 +200,8 @@ defmodule SparkEx.CatalogTest do
   end
 
   test "get_table/3 qualifies db_name with current catalog" do
-    {:ok, session} = FakeCatalogSession.start_link(self(), "sfx_dev_warehouse", ["sfx_dev_warehouse"], "sfx")
+    {:ok, session} =
+      FakeCatalogSession.start_link(self(), "sfx_dev_warehouse", ["sfx_dev_warehouse"], "sfx")
 
     assert {:ok, %Catalog.Table{name: "orders"}} =
              Catalog.get_table(session, "orders", "sfx_dev_warehouse")
@@ -204,7 +210,8 @@ defmodule SparkEx.CatalogTest do
   end
 
   test "list_columns/3 qualifies db_name with current catalog" do
-    {:ok, session} = FakeCatalogSession.start_link(self(), "sfx_dev_warehouse", ["sfx_dev_warehouse"], "sfx")
+    {:ok, session} =
+      FakeCatalogSession.start_link(self(), "sfx_dev_warehouse", ["sfx_dev_warehouse"], "sfx")
 
     assert {:ok, [%Catalog.ColumnInfo{name: "id"}]} =
              Catalog.list_columns(session, "orders", "sfx_dev_warehouse")
@@ -213,14 +220,17 @@ defmodule SparkEx.CatalogTest do
   end
 
   test "function_exists?/3 passes provided db_name to catalog RPC" do
-    {:ok, session} = FakeCatalogSession.start_link(self(), "sfx_dev_warehouse", ["sfx_dev_warehouse"], "sfx")
+    {:ok, session} =
+      FakeCatalogSession.start_link(self(), "sfx_dev_warehouse", ["sfx_dev_warehouse"], "sfx")
 
     assert {:ok, true} = Catalog.function_exists?(session, "concat", "sfx_dev_warehouse")
     assert_receive {:function_exists_called, "concat", "sfx_dev_warehouse"}
   end
 
   test "build_drop_table_sql quotes dotted identifiers by parts" do
-    sql = Catalog.build_drop_table_sql("sfx.sfx_dev_warehouse.my_table", if_exists: true, purge: true)
+    sql =
+      Catalog.build_drop_table_sql("sfx.sfx_dev_warehouse.my_table", if_exists: true, purge: true)
+
     assert sql == "DROP TABLE IF EXISTS `sfx`.`sfx_dev_warehouse`.`my_table` PURGE"
   end
 
@@ -272,7 +282,9 @@ defmodule SparkEx.CatalogTest do
 
     assert :ok = Catalog.cache_table(session, "my_table", storage_level: "MEMORY_ONLY")
 
-    assert_receive {:cache_table_called, "my_table", %Spark.Connect.StorageLevel{} = storage_level}
+    assert_receive {:cache_table_called, "my_table",
+                    %Spark.Connect.StorageLevel{} = storage_level}
+
     assert storage_level.use_memory
     assert storage_level.deserialized
   end

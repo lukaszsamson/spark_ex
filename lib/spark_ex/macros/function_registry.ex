@@ -160,11 +160,12 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:substring_index, "substring_index", {:col_lit, 2},
        group: :string, doc: "Returns substring before count occurrences of delimiter."},
       {:translate, "translate", {:col_lit, 2}, group: :string, doc: "Translates characters."},
-      {:instr, "instr", {:col_lit, 1}, group: :string, doc: "Position of first occurrence of substr."},
+      {:instr, "instr", {:col_lit, 1},
+       group: :string, doc: "Position of first occurrence of substr."},
       {:regexp_extract, "regexp_extract", {:col_lit, 2},
        group: :string, doc: "Extracts regex group."},
       {:regexp_replace, "regexp_replace", {:col_lit, 2},
-        group: :string, doc: "Replaces regex matches."},
+       group: :string, doc: "Replaces regex matches."},
       {:regexp_count, "regexp_count", :two_col,
        group: :string, doc: "Counts regex pattern occurrences."},
       {:regexp_extract_all, "regexp_extract_all", {:col_lit, 2},
@@ -584,7 +585,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:json_array_length, "json_array_length", :one_col,
        group: :json, doc: "Returns length of outermost JSON array."},
       {:json_object_keys, "json_object_keys", :one_col,
-       group: :json, doc: "Returns keys of outermost JSON object."},
+       group: :json, doc: "Returns keys of outermost JSON object."}
       # schema_of_json: hand-written in functions.ex (needs options parameter)
       # variant/time parser wrappers hand-written in functions.ex for Spark 3.5-compatible fallbacks
       # {:parse_json, ...} / {:try_parse_json, ...}

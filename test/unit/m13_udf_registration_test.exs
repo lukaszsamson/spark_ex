@@ -77,7 +77,8 @@ defmodule SparkEx.M13.UDFRegistrationTest do
       assert_receive {:analyze_ddl_parse_called, "DOUBLE"}
 
       assert_receive {:execute_command_called,
-                      {:register_java_udf, "my_udf", "java.lang.Math", %Spark.Connect.DataType{}, false}}
+                      {:register_java_udf, "my_udf", "java.lang.Math", %Spark.Connect.DataType{},
+                       false}}
     end
 
     test "returns error for invalid return_type value" do
@@ -108,8 +109,8 @@ defmodule SparkEx.M13.UDFRegistrationTest do
       assert_receive {:analyze_ddl_parse_called, "id INT"}
 
       assert_receive {:execute_command_called,
-                      {:register_udtf, "my_udtf", <<1, 2, 3>>, %Spark.Connect.DataType{}, 0, "3.11",
-                       true}}
+                      {:register_udtf, "my_udtf", <<1, 2, 3>>, %Spark.Connect.DataType{}, 0,
+                       "3.11", true}}
     end
 
     test "register_udtf returns error for invalid deterministic value" do

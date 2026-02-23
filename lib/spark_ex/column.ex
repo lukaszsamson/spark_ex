@@ -295,7 +295,11 @@ defmodule SparkEx.Column do
   Appends another condition/value branch to an existing `when` chain.
   """
   @spec when_(t(), t(), t() | term()) :: t()
-  def when_(%__MODULE__{expr: {:fn, "when", args, false}}, %__MODULE__{} = condition, %__MODULE__{} = value) do
+  def when_(
+        %__MODULE__{expr: {:fn, "when", args, false}},
+        %__MODULE__{} = condition,
+        %__MODULE__{} = value
+      ) do
     if rem(length(args), 2) == 1 do
       raise ArgumentError, "otherwise() has already been called on this when() expression"
     end

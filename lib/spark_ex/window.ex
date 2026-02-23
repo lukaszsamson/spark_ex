@@ -43,7 +43,8 @@ defmodule SparkEx.Window do
   end
 
   @doc "Adds a row-based frame to an existing window spec."
-  @spec rows_between(WindowSpec.t(), WindowSpec.boundary(), WindowSpec.boundary()) :: WindowSpec.t()
+  @spec rows_between(WindowSpec.t(), WindowSpec.boundary(), WindowSpec.boundary()) ::
+          WindowSpec.t()
   def rows_between(%WindowSpec{} = spec, start, end_) do
     WindowSpec.rows_between(spec, start, end_)
   end
@@ -55,7 +56,8 @@ defmodule SparkEx.Window do
   end
 
   @doc "Adds a range-based frame to an existing window spec."
-  @spec range_between(WindowSpec.t(), WindowSpec.boundary(), WindowSpec.boundary()) :: WindowSpec.t()
+  @spec range_between(WindowSpec.t(), WindowSpec.boundary(), WindowSpec.boundary()) ::
+          WindowSpec.t()
   def range_between(%WindowSpec{} = spec, start, end_) do
     WindowSpec.range_between(spec, start, end_)
   end

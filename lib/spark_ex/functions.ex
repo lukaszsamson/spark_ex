@@ -1509,7 +1509,8 @@ defmodule SparkEx.Functions do
           Column.t()
   def time_diff(unit, start_time, end_time) do
     %Column{
-      expr: {:fn, "timestampdiff", [lit_expr(unit), to_expr(start_time), to_expr(end_time)], false}
+      expr:
+        {:fn, "timestampdiff", [lit_expr(unit), to_expr(start_time), to_expr(end_time)], false}
     }
   end
 
@@ -1707,7 +1708,9 @@ defmodule SparkEx.Functions do
   defp to_lit_string_or_expr(value), do: to_expr(value)
 
   defp normalize_nth_value_offset(offset) when is_integer(offset), do: {:lit, offset}
-  defp normalize_nth_value_offset(%Column{expr: {:lit, offset}}) when is_integer(offset), do: {:lit, offset}
+
+  defp normalize_nth_value_offset(%Column{expr: {:lit, offset}}) when is_integer(offset),
+    do: {:lit, offset}
 
   defp normalize_nth_value_offset(other) do
     raise ArgumentError,

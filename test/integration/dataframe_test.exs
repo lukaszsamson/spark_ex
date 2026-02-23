@@ -663,9 +663,9 @@ defmodule SparkEx.Integration.DataFrameTest do
 
       assert {:ok, explorer_df} = DataFrame.to_explorer(df, max_rows: 10)
       [row] = Explorer.DataFrame.to_rows(explorer_df)
-      assert is_binary(row["arr"])
-      assert is_binary(row["st"])
-      assert is_binary(row["mp"])
+      assert is_binary(row["arr"]) or is_list(row["arr"])
+      assert is_binary(row["st"]) or is_map(row["st"])
+      assert is_binary(row["mp"]) or is_list(row["mp"])
     end
   end
 

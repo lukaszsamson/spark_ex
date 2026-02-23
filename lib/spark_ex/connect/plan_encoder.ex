@@ -3425,22 +3425,61 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp encode_map_literal_expression(map) do
-    if mixed_complex_scalar_map_values?(Map.values(map)) do
-      map_args =
-        map
-        |> Enum.flat_map(fn {k, v} ->
-          [{:lit, to_string(k)}, {:lit, map_value_to_string_literal(v)}]
-        end)
+    values = Map.values(map)
 
-      encode_expression({:fn, "map", map_args, false})
-    else
-      map_args =
-        map
-        |> Enum.flat_map(fn {k, v} -> [{:lit, k}, {:lit, v}] end)
+    cond do
+      mixed_list_value_types?(values) ->
+        map_args =
+          map
+          |> Enum.flat_map(fn {k, v} ->
+            [{:lit, to_string(k)}, {:lit, normalize_mixed_list_map_value(v)}]
+          end)
 
-      encode_expression({:fn, "map", map_args, false})
+        encode_expression({:fn, "map", map_args, false})
+
+      mixed_complex_scalar_map_values?(values) ->
+        map_args =
+          map
+          |> Enum.flat_map(fn {k, v} ->
+            [{:lit, to_string(k)}, {:lit, map_value_to_string_literal(v)}]
+          end)
+
+        encode_expression({:fn, "map", map_args, false})
+
+      true ->
+        map_args =
+          map
+          |> Enum.flat_map(fn {k, v} -> [{:lit, k}, {:lit, v}] end)
+
+        encode_expression({:fn, "map", map_args, false})
     end
   end
+
+  defp mixed_list_value_types?(values) do
+    Enum.all?(values, &is_list/1) and
+      (values
+       |> Enum.map(&infer_collection_element_type/1)
+       |> Enum.uniq()
+       |> length()) > 1
+  end
+
+  defp normalize_mixed_list_map_value(value) when is_list(value) do
+    Enum.map(value, &normalize_mixed_list_element/1)
+  end
+
+  defp normalize_mixed_list_map_value(value), do: map_value_to_string_literal(value)
+
+  defp normalize_mixed_list_element(nil), do: nil
+  defp normalize_mixed_list_element(value) when is_binary(value), do: value
+
+  defp normalize_mixed_list_element(value)
+       when (is_map(value) and not is_struct(value)) or is_list(value) or is_tuple(value) do
+    value
+    |> normalize_json_literal_value()
+    |> Jason.encode!()
+  end
+
+  defp normalize_mixed_list_element(value), do: to_string(value)
 
   defp mixed_complex_scalar_map_values?(values) do
     has_complex = Enum.any?(values, &complex_literal_value?/1)
@@ -3456,7 +3495,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp map_value_to_string_literal(value) when is_binary(value), do: value
 
   defp map_value_to_string_literal(value)
-       when is_map(value) and not is_struct(value) or is_list(value) or is_tuple(value) do
+       when (is_map(value) and not is_struct(value)) or is_list(value) or is_tuple(value) do
     value
     |> normalize_json_literal_value()
     |> Jason.encode!()

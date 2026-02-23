@@ -225,7 +225,9 @@ defmodule SparkEx.DataFrameTest do
           },
           %Spark.Connect.DataType.StructField{
             name: "value",
-            data_type: %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}},
+            data_type: %Spark.Connect.DataType{
+              kind: {:integer, %Spark.Connect.DataType.Integer{}}
+            },
             nullable: true
           }
         ]
@@ -244,7 +246,9 @@ defmodule SparkEx.DataFrameTest do
         fields: [
           %Spark.Connect.DataType.StructField{
             name: "a",
-            data_type: %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}},
+            data_type: %Spark.Connect.DataType{
+              kind: {:integer, %Spark.Connect.DataType.Integer{}}
+            },
             nullable: true
           }
         ]
@@ -776,7 +780,7 @@ defmodule SparkEx.DataFrameTest do
                plan:
                  {:as_of_join, {:sql, _, _}, {:sql, _, _}, {:col, "t1"}, {:col, "t2"},
                   {:col, "id"}, [], "inner", {:lit, 5}, false, "forward"}
-              } = result
+             } = result
     end
 
     test "raises on invalid allow_exact_matches option type" do
@@ -806,9 +810,7 @@ defmodule SparkEx.DataFrameTest do
       df2 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t2", nil}}
 
       assert_raise ArgumentError, ~r/invalid join type/, fn ->
-        DataFrame.as_of_join(df1, df2, Functions.col("t1"), Functions.col("t2"),
-          join_type: 123
-        )
+        DataFrame.as_of_join(df1, df2, Functions.col("t1"), Functions.col("t2"), join_type: 123)
       end
     end
   end

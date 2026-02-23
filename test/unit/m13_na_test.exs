@@ -103,10 +103,19 @@ defmodule SparkEx.M13.NATest do
 
     test "replace map with subset" do
       df = NA.replace(make_df(), %{"N/A" => "unknown"}, nil, subset: ["name"])
+
       assert %DataFrame{
                plan:
                  {:with_columns, :test_plan,
-                  [{:alias, {:fn, "when", [{:fn, "<=>", [{:col, "name"}, {:lit, "N/A"}], false}, {:lit, "unknown"}, {:col, "name"}], false}, "name"}]}
+                  [
+                    {:alias,
+                     {:fn, "when",
+                      [
+                        {:fn, "<=>", [{:col, "name"}, {:lit, "N/A"}], false},
+                        {:lit, "unknown"},
+                        {:col, "name"}
+                      ], false}, "name"}
+                  ]}
              } = df
     end
 
@@ -116,7 +125,12 @@ defmodule SparkEx.M13.NATest do
       assert %DataFrame{
                plan:
                  {:with_columns, :test_plan,
-                  [{:alias, {:fn, "when", [{:fn, "<=>", [{:col, "a"}, {:lit, 1}], false}, {:lit, 100}, {:col, "a"}], false}, "a"}]}
+                  [
+                    {:alias,
+                     {:fn, "when",
+                      [{:fn, "<=>", [{:col, "a"}, {:lit, 1}], false}, {:lit, 100}, {:col, "a"}],
+                      false}, "a"}
+                  ]}
              } = df
     end
   end
@@ -176,10 +190,19 @@ defmodule SparkEx.M13.NATest do
 
     test "replace/3 treats keyword third argument as opts" do
       df = DataFrame.replace(make_df(), %{"a" => "b"}, subset: ["col1"])
+
       assert %DataFrame{
                plan:
                  {:with_columns, :test_plan,
-                  [{:alias, {:fn, "when", [{:fn, "<=>", [{:col, "col1"}, {:lit, "a"}], false}, {:lit, "b"}, {:col, "col1"}], false}, "col1"}]}
+                  [
+                    {:alias,
+                     {:fn, "when",
+                      [
+                        {:fn, "<=>", [{:col, "col1"}, {:lit, "a"}], false},
+                        {:lit, "b"},
+                        {:col, "col1"}
+                      ], false}, "col1"}
+                  ]}
              } = df
     end
 

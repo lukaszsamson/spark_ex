@@ -135,8 +135,7 @@ defmodule SparkEx.MissCodex2Test do
 
       assert %DataFrame{
                plan:
-                 {:with_columns, {:with_columns, _, [{:alias, _, "col1"}]},
-                  [{:alias, _, "col2"}]}
+                 {:with_columns, {:with_columns, _, [{:alias, _, "col1"}]}, [{:alias, _, "col2"}]}
              } = result
     end
 

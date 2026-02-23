@@ -131,7 +131,9 @@ defmodule SparkEx.UDFRegistration do
   end
 
   defp normalize_return_type(_session, nil), do: {:ok, nil}
-  defp normalize_return_type(_session, %Spark.Connect.DataType{} = return_type), do: {:ok, return_type}
+
+  defp normalize_return_type(_session, %Spark.Connect.DataType{} = return_type),
+    do: {:ok, return_type}
 
   defp normalize_return_type(session, return_type) when is_binary(return_type) do
     case SparkEx.Session.analyze_ddl_parse(session, return_type) do

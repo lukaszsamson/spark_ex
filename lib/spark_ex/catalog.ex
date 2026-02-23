@@ -121,7 +121,8 @@ defmodule SparkEx.Catalog do
 
   def list_databases(_session, opts) when is_list(opts) do
     if Keyword.keyword?(opts) do
-      {:error, {:invalid_options, "list_databases/2 accepts only a pattern string, not keyword opts"}}
+      {:error,
+       {:invalid_options, "list_databases/2 accepts only a pattern string, not keyword opts"}}
     else
       {:error, {:invalid_pattern, opts}}
     end
@@ -298,7 +299,8 @@ defmodule SparkEx.Catalog do
 
   @spec cache_table(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
   def cache_table(session, table_name, opts \\ []) when is_binary(table_name) and is_list(opts) do
-    with {:ok, storage_level} <- normalize_cache_storage_level(Keyword.get(opts, :storage_level, nil)) do
+    with {:ok, storage_level} <-
+           normalize_cache_storage_level(Keyword.get(opts, :storage_level, nil)) do
       execute_void(session, {:cache_table, table_name, storage_level})
     end
   end
@@ -514,11 +516,14 @@ defmodule SparkEx.Catalog do
   end
 
   defp normalize_table_options(other) do
-    {:error, {:invalid_options, "expected :options to be a map or keyword list, got: #{inspect(other)}"}}
+    {:error,
+     {:invalid_options, "expected :options to be a map or keyword list, got: #{inspect(other)}"}}
   end
 
   defp normalize_cache_storage_level(nil), do: {:ok, nil}
-  defp normalize_cache_storage_level(%Spark.Connect.StorageLevel{} = storage_level), do: {:ok, storage_level}
+
+  defp normalize_cache_storage_level(%Spark.Connect.StorageLevel{} = storage_level),
+    do: {:ok, storage_level}
 
   defp normalize_cache_storage_level(storage_level) when is_atom(storage_level) do
     normalize_cache_storage_level(storage_level |> Atom.to_string() |> String.upcase())

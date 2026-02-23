@@ -156,6 +156,7 @@ defmodule SparkEx.Connect.TypeMapper do
   defp direct_ddl(:calendar_interval, _), do: "STRING"
   defp direct_ddl(:year_month_interval, _), do: "STRING"
   defp direct_ddl(:day_time_interval, _), do: "STRING"
+
   defp direct_ddl(:array, %DataType.Array{element_type: element_type}) do
     "ARRAY<#{data_type_to_ddl(element_type)}>"
   end
@@ -173,6 +174,7 @@ defmodule SparkEx.Connect.TypeMapper do
   defp direct_ddl(:map, %DataType.Map{key_type: key_type, value_type: value_type}) do
     "MAP<#{data_type_to_ddl(key_type)}, #{data_type_to_ddl(value_type)}>"
   end
+
   defp direct_ddl(_, _), do: "STRING"
 
   # --- Reverse mapping: Explorer dtype → Spark DDL type string ---

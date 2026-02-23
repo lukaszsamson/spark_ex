@@ -176,7 +176,11 @@ defmodule SparkEx.Connect.TypeMapperTest do
     end
 
     test "builds schema DDL with complex nested fields" do
-      dtypes = [{"id", {:s, 64}}, {"tags", {:list, :string}}, {"info", {:struct, [{"age", {:s, 32}}]}}]
+      dtypes = [
+        {"id", {:s, 64}},
+        {"tags", {:list, :string}},
+        {"info", {:struct, [{"age", {:s, 32}}]}}
+      ]
 
       assert TypeMapper.explorer_schema_to_ddl(dtypes) ==
                "id LONG, tags ARRAY<STRING>, info STRUCT<age: INT>"
@@ -228,7 +232,9 @@ defmodule SparkEx.Connect.TypeMapperTest do
 
       assert TypeMapper.data_type_to_ddl(array_dt) == "ARRAY<INT>"
       assert TypeMapper.data_type_to_ddl(map_dt) == "MAP<STRING, DOUBLE>"
-      assert TypeMapper.data_type_to_ddl(struct_dt) == "STRUCT<tags: ARRAY<INT>, meta: MAP<STRING, DOUBLE>>"
+
+      assert TypeMapper.data_type_to_ddl(struct_dt) ==
+               "STRUCT<tags: ARRAY<INT>, meta: MAP<STRING, DOUBLE>>"
     end
   end
 

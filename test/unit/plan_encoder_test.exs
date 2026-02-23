@@ -360,11 +360,11 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                          elements: [_ | _]
                        }}
                   }}
-              } = PlanEncoder.encode_expression({:lit, [1, 2, 3]})
+             } = PlanEncoder.encode_expression({:lit, [1, 2, 3]})
 
       assert %Expression{
                expr_type: {:unresolved_function, unresolved_fn}
-              } = PlanEncoder.encode_expression({:lit, %{"k" => 1}})
+             } = PlanEncoder.encode_expression({:lit, %{"k" => 1}})
 
       assert unresolved_fn.function_name == "map"
       assert length(unresolved_fn.arguments) == 2
@@ -380,7 +380,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                          elements: [_ | _]
                        }}
                   }}
-              } = PlanEncoder.encode_expression({:lit, [[1, 2], [3, 4]]})
+             } = PlanEncoder.encode_expression({:lit, [[1, 2], [3, 4]]})
     end
 
     test "encodes map literals with array values via map function" do
@@ -415,7 +415,12 @@ defmodule SparkEx.Connect.PlanEncoderTest do
         unresolved_fn.arguments
         |> Enum.chunk_every(2)
         |> Enum.map(fn
-          [_key_expr, %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:string, value}}}}] ->
+          [
+            _key_expr,
+            %Expression{
+              expr_type: {:literal, %Expression.Literal{literal_type: {:string, value}}}
+            }
+          ] ->
             value
 
           _ ->

@@ -315,5 +315,6 @@ defmodule SparkEx.DataFrame.Stat do
     end
   end
 
-  defp normalize_seed(other), do: raise(ArgumentError, "seed must be an integer, got: #{inspect(other)}")
+  defp normalize_seed(other),
+    do: raise(ArgumentError, "seed must be an integer, got: #{inspect(other)}")
 end

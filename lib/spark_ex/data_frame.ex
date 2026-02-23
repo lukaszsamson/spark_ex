@@ -1632,7 +1632,8 @@ defmodule SparkEx.DataFrame do
   @doc """
   Drops a global temporary view by name.
   """
-  @spec drop_global_temp_view(GenServer.server(), String.t()) :: {:ok, boolean()} | {:error, term()}
+  @spec drop_global_temp_view(GenServer.server(), String.t()) ::
+          {:ok, boolean()} | {:error, term()}
   def drop_global_temp_view(session, name) when is_binary(name) do
     SparkEx.Catalog.drop_global_temp_view(session, name)
   end
@@ -1727,7 +1728,8 @@ defmodule SparkEx.DataFrame do
   @spec local_checkpoint(t(), keyword()) :: t() | {:error, term()}
   def local_checkpoint(%__MODULE__{} = df, opts) do
     with {:ok, eager} <- fetch_boolean_option(opts, :eager, true),
-         {:ok, storage_level} <- normalize_storage_level_option(Keyword.get(opts, :storage_level, nil)) do
+         {:ok, storage_level} <-
+           normalize_storage_level_option(Keyword.get(opts, :storage_level, nil)) do
       case SparkEx.Session.execute_command_with_result(
              df.session,
              {:checkpoint, df.plan, true, eager, storage_level},
@@ -2152,7 +2154,8 @@ defmodule SparkEx.DataFrame do
   """
   @spec persist(t(), keyword()) :: t() | {:error, term()}
   def persist(%__MODULE__{} = df, opts \\ []) do
-    with {:ok, storage_level} <- normalize_storage_level_option(Keyword.get(opts, :storage_level, nil)) do
+    with {:ok, storage_level} <-
+           normalize_storage_level_option(Keyword.get(opts, :storage_level, nil)) do
       opts =
         case storage_level do
           nil -> opts
@@ -2411,9 +2414,15 @@ defmodule SparkEx.DataFrame do
 
   defp normalize_transpose_index_columns(cols) when is_list(cols) do
     Enum.map(cols, fn
-      %Column{expr: e} -> e
-      col when is_binary(col) -> {:col, col}
-      other -> raise ArgumentError, "index_column list must contain only strings or Columns, got: #{inspect(other)}"
+      %Column{expr: e} ->
+        e
+
+      col when is_binary(col) ->
+        {:col, col}
+
+      other ->
+        raise ArgumentError,
+              "index_column list must contain only strings or Columns, got: #{inspect(other)}"
     end)
   end
 
@@ -2476,10 +2485,17 @@ defmodule SparkEx.DataFrame do
 
   defp normalize_show_truncate_option(opts) do
     case Keyword.get(opts, :truncate, 20) do
-      true -> {:ok, 20}
-      false -> {:ok, 0}
-      value when is_integer(value) and value >= 0 -> {:ok, value}
-      other -> {:error, ":truncate must be a non-negative integer or boolean, got: #{inspect(other)}"}
+      true ->
+        {:ok, 20}
+
+      false ->
+        {:ok, 0}
+
+      value when is_integer(value) and value >= 0 ->
+        {:ok, value}
+
+      other ->
+        {:error, ":truncate must be a non-negative integer or boolean, got: #{inspect(other)}"}
     end
   end
 
@@ -2535,12 +2551,14 @@ defmodule SparkEx.DataFrame do
          }}
 
       _ ->
-        {:error, ":storage_level must be a StorageLevel struct or supported atom, got: #{inspect(level)}"}
+        {:error,
+         ":storage_level must be a StorageLevel struct or supported atom, got: #{inspect(level)}"}
     end
   end
 
   defp normalize_storage_level_option(other) do
-    {:error, ":storage_level must be a StorageLevel struct or supported atom, got: #{inspect(other)}"}
+    {:error,
+     ":storage_level must be a StorageLevel struct or supported atom, got: #{inspect(other)}"}
   end
 
   defp ensure_same_session!(%__MODULE__{session: left}, %__MODULE__{session: right}, _op)

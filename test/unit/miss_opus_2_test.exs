@@ -831,7 +831,7 @@ defmodule SparkEx.MissOpus2Test do
       result = Functions.locate("abc", Functions.col("s"), 5)
 
       assert %Column{expr: {:fn, "locate", [{:lit, "abc"}, {:col, "s"}, {:lit, 5}], false}} =
-                result
+               result
     end
 
     test "locate/2 accepts literal-column substring" do
@@ -1040,7 +1040,10 @@ defmodule SparkEx.MissOpus2Test do
 
     test "parse_url treats raw string args as literals" do
       result = Functions.parse_url(Functions.col("url"), "HOST", "x")
-      assert %Column{expr: {:fn, "parse_url", [{:col, "url"}, {:lit, "HOST"}, {:lit, "x"}], false}} = result
+
+      assert %Column{
+               expr: {:fn, "parse_url", [{:col, "url"}, {:lit, "HOST"}, {:lit, "x"}], false}
+             } = result
     end
 
     test "try_parse_url without key" do
@@ -1048,7 +1051,7 @@ defmodule SparkEx.MissOpus2Test do
 
       assert %Column{
                expr: {:fn, "parse_url", [{:col, "url"}, {:col, "part"}], false}
-              } = result
+             } = result
     end
   end
 
@@ -1184,12 +1187,13 @@ defmodule SparkEx.MissOpus2Test do
                  {:fn, "+",
                   [
                     {:col, "min"},
-                    {:fn,
-                     "*",
-                     [{:fn, "rand", [{:lit, seed}], false}, {:fn, "-", [{:lit, 100}, {:col, "min"}], false}],
-                     false}
+                    {:fn, "*",
+                     [
+                       {:fn, "rand", [{:lit, seed}], false},
+                       {:fn, "-", [{:lit, 100}, {:col, "min"}], false}
+                     ], false}
                   ], false}
-              } = result
+             } = result
 
       assert is_integer(seed)
     end
@@ -1202,12 +1206,13 @@ defmodule SparkEx.MissOpus2Test do
                  {:fn, "+",
                   [
                     {:col, "min"},
-                    {:fn,
-                     "*",
-                     [{:fn, "rand", [{:lit, 42}], false}, {:fn, "-", [{:lit, 100}, {:col, "min"}], false}],
-                     false}
+                    {:fn, "*",
+                     [
+                       {:fn, "rand", [{:lit, 42}], false},
+                       {:fn, "-", [{:lit, 100}, {:col, "min"}], false}
+                     ], false}
                   ], false}
-              } = result
+             } = result
     end
 
     test "randstr auto-generates seed" do
@@ -1217,7 +1222,8 @@ defmodule SparkEx.MissOpus2Test do
                expr:
                  {:fn, "substr",
                   [
-                    {:fn, "md5", [{:cast, {:fn, "rand", [{:lit, seed}], false}, "STRING"}], false},
+                    {:fn, "md5", [{:cast, {:fn, "rand", [{:lit, seed}], false}, "STRING"}],
+                     false},
                     {:lit, 1},
                     {:col, "len"}
                   ], false}
@@ -1475,7 +1481,7 @@ defmodule SparkEx.MissOpus2Test do
       result = Column.neq(Functions.col("a"), 5)
 
       assert %Column{expr: {:fn, "not", [{:fn, "==", [{:col, "a"}, {:lit, 5}], false}], false}} =
-                result
+               result
     end
 
     test "from_unixtime/2 accepts literal-column format" do

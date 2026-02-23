@@ -1823,7 +1823,8 @@ defmodule SparkEx.Session do
 
       projected_fields =
         Enum.map(parsed_field_names, fn field_name ->
-          {:alias, {:unresolved_extract_value, {:col, parsed_alias}, {:lit, field_name}}, field_name}
+          {:alias, {:unresolved_extract_value, {:col, parsed_alias}, {:lit, field_name}},
+           field_name}
         end)
 
       {:ok, {:project, parsed_plan, projected_fields}}
@@ -1835,7 +1836,9 @@ defmodule SparkEx.Session do
   defp first_schema_column_name(state, plan) do
     with {{proto_plan, _counter}, nil} <- safe_encode(plan, 0),
          {:ok, schema, _server_side_session_id} <- Client.analyze_schema(state, proto_plan),
-         %Spark.Connect.DataType{kind: {:struct, %Spark.Connect.DataType.Struct{fields: [first | _]}}} <-
+         %Spark.Connect.DataType{
+           kind: {:struct, %Spark.Connect.DataType.Struct{fields: [first | _]}}
+         } <-
            schema,
          name when is_binary(name) <- first.name do
       {:ok, name}
@@ -1872,8 +1875,11 @@ defmodule SparkEx.Session do
 
     schema_expr =
       case schema do
-        %Spark.Connect.DataType{} = data_type -> {:lit, SparkEx.Types.data_type_to_json(data_type)}
-        s when is_binary(s) -> {:lit, s}
+        %Spark.Connect.DataType{} = data_type ->
+          {:lit, SparkEx.Types.data_type_to_json(data_type)}
+
+        s when is_binary(s) ->
+          {:lit, s}
       end
 
     args =
@@ -2024,7 +2030,10 @@ defmodule SparkEx.Session do
        do: true
 
   defp explicit_subquery_reference_plan?({plan_id, _plan}) when is_integer(plan_id), do: true
-  defp explicit_subquery_reference_plan?({:plan_id, plan_id, _plan}) when is_integer(plan_id), do: true
+
+  defp explicit_subquery_reference_plan?({:plan_id, plan_id, _plan}) when is_integer(plan_id),
+    do: true
+
   defp explicit_subquery_reference_plan?(_), do: false
 
   defp normalize_subquery_reference_plan({:plan_id, _plan_id, plan}), do: plan
@@ -2273,9 +2282,7 @@ defmodule SparkEx.Session do
 
   defp nested_map_type?(
          %Spark.Connect.DataType{
-           kind:
-             {:map,
-              %Spark.Connect.DataType.Map{key_type: key_type, value_type: value_type}}
+           kind: {:map, %Spark.Connect.DataType.Map{key_type: key_type, value_type: value_type}}
          },
          depth
        ) do
@@ -2379,7 +2386,9 @@ defmodule SparkEx.Session do
 
   defp coerce_complex_decoded_value(
          value,
-         %Spark.Connect.DataType{kind: {:array, %Spark.Connect.DataType.Array{element_type: element_type}}}
+         %Spark.Connect.DataType{
+           kind: {:array, %Spark.Connect.DataType.Array{element_type: element_type}}
+         }
        )
        when is_list(value) do
     Enum.map(value, &coerce_complex_decoded_value(&1, element_type))
@@ -2388,9 +2397,7 @@ defmodule SparkEx.Session do
   defp coerce_complex_decoded_value(
          value,
          %Spark.Connect.DataType{
-           kind:
-             {:map,
-              %Spark.Connect.DataType.Map{key_type: key_type, value_type: value_type}}
+           kind: {:map, %Spark.Connect.DataType.Map{key_type: key_type, value_type: value_type}}
          }
        )
        when is_map(value) do
@@ -2866,7 +2873,9 @@ defmodule SparkEx.Session do
       row when is_map(row) and not is_struct(row) ->
         Enum.any?(row, fn {key, value} ->
           key_string = to_string(key)
-          not MapSet.member?(binary_fields_set, key_string) and value_contains_null_byte_text?(value)
+
+          not MapSet.member?(binary_fields_set, key_string) and
+            value_contains_null_byte_text?(value)
         end)
 
       _ ->
@@ -3045,12 +3054,23 @@ defmodule SparkEx.Session do
       inner
       |> String.graphemes()
       |> Enum.reduce({"", "", 0, 0, false}, fn
-        "<", {k, v, a, p, s} -> {append_part(k, v, s, "<"), v_if_needed(v, s, "<"), a + 1, p, s}
-        ">", {k, v, a, p, s} -> {append_part(k, v, s, ">"), v_if_needed(v, s, ">"), max(a - 1, 0), p, s}
-        "(", {k, v, a, p, s} -> {append_part(k, v, s, "("), v_if_needed(v, s, "("), a, p + 1, s}
-        ")", {k, v, a, p, s} -> {append_part(k, v, s, ")"), v_if_needed(v, s, ")"), a, max(p - 1, 0), s}
-        ",", {k, v, 0, 0, false} -> {k, v, 0, 0, true}
-        ch, {k, v, a, p, s} -> {append_part(k, v, s, ch), v_if_needed(v, s, ch), a, p, s}
+        "<", {k, v, a, p, s} ->
+          {append_part(k, v, s, "<"), v_if_needed(v, s, "<"), a + 1, p, s}
+
+        ">", {k, v, a, p, s} ->
+          {append_part(k, v, s, ">"), v_if_needed(v, s, ">"), max(a - 1, 0), p, s}
+
+        "(", {k, v, a, p, s} ->
+          {append_part(k, v, s, "("), v_if_needed(v, s, "("), a, p + 1, s}
+
+        ")", {k, v, a, p, s} ->
+          {append_part(k, v, s, ")"), v_if_needed(v, s, ")"), a, max(p - 1, 0), s}
+
+        ",", {k, v, 0, 0, false} ->
+          {k, v, 0, 0, true}
+
+        ch, {k, v, a, p, s} ->
+          {append_part(k, v, s, ch), v_if_needed(v, s, ch), a, p, s}
       end)
 
     cond do

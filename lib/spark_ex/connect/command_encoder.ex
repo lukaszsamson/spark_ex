@@ -154,20 +154,20 @@ defmodule SparkEx.Connect.CommandEncoder do
       command_type:
         {:merge_into_table_command,
          %MergeIntoTableCommand{
-            target_table_name: target_table,
-            source_table_plan: source_relation,
-            merge_condition: merge_condition,
-            match_actions:
-              Enum.map(match_actions, &encode_merge_action(&1, source_plan, source_plan_id)),
-            not_matched_actions:
-              Enum.map(not_matched_actions, &encode_merge_action(&1, source_plan, source_plan_id)),
-            not_matched_by_source_actions:
-              Enum.map(
-                not_matched_by_source_actions,
-                &encode_merge_action(&1, source_plan, source_plan_id)
-              ),
-            with_schema_evolution: schema_evolution
-          }}
+           target_table_name: target_table,
+           source_table_plan: source_relation,
+           merge_condition: merge_condition,
+           match_actions:
+             Enum.map(match_actions, &encode_merge_action(&1, source_plan, source_plan_id)),
+           not_matched_actions:
+             Enum.map(not_matched_actions, &encode_merge_action(&1, source_plan, source_plan_id)),
+           not_matched_by_source_actions:
+             Enum.map(
+               not_matched_by_source_actions,
+               &encode_merge_action(&1, source_plan, source_plan_id)
+             ),
+           with_schema_evolution: schema_evolution
+         }}
     }
 
     {command, counter}
@@ -364,7 +364,11 @@ defmodule SparkEx.Connect.CommandEncoder do
 
   # --- Private helpers ---
 
-  defp encode_merge_action({action_type, condition_expr, assignments}, source_plan, source_plan_id) do
+  defp encode_merge_action(
+         {action_type, condition_expr, assignments},
+         source_plan,
+         source_plan_id
+       ) do
     action_type_enum =
       case action_type do
         :delete -> :ACTION_TYPE_DELETE
@@ -376,7 +380,9 @@ defmodule SparkEx.Connect.CommandEncoder do
 
     condition =
       case condition_expr do
-        nil -> nil
+        nil ->
+          nil
+
         expr ->
           expr
           |> rewrite_merge_expr(source_plan, source_plan_id)
