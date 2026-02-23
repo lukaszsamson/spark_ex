@@ -103,7 +103,21 @@ defmodule SparkEx.M13.NATest do
 
     test "replace map with subset" do
       df = NA.replace(make_df(), %{"N/A" => "unknown"}, nil, subset: ["name"])
-      assert %DataFrame{plan: {:na_replace, :test_plan, ["name"], [{"N/A", "unknown"}]}} = df
+      assert %DataFrame{
+               plan:
+                 {:with_columns, :test_plan,
+                  [{:alias, {:fn, "when", [{:fn, "<=>", [{:col, "name"}, {:lit, "N/A"}], false}, {:lit, "unknown"}, {:col, "name"}], false}, "name"}]}
+             } = df
+    end
+
+    test "replace map supports keyword subset in 3-arg call" do
+      df = NA.replace(make_df(), %{1 => 100}, subset: ["a"])
+
+      assert %DataFrame{
+               plan:
+                 {:with_columns, :test_plan,
+                  [{:alias, {:fn, "when", [{:fn, "<=>", [{:col, "a"}, {:lit, 1}], false}, {:lit, 100}, {:col, "a"}], false}, "a"}]}
+             } = df
     end
   end
 
@@ -162,7 +176,17 @@ defmodule SparkEx.M13.NATest do
 
     test "replace/3 treats keyword third argument as opts" do
       df = DataFrame.replace(make_df(), %{"a" => "b"}, subset: ["col1"])
-      assert %DataFrame{plan: {:na_replace, :test_plan, ["col1"], [{"a", "b"}]}} = df
+      assert %DataFrame{
+               plan:
+                 {:with_columns, :test_plan,
+                  [{:alias, {:fn, "when", [{:fn, "<=>", [{:col, "col1"}, {:lit, "a"}], false}, {:lit, "b"}, {:col, "col1"}], false}, "col1"}]}
+             } = df
+    end
+
+    test "replace raises when subset list contains non-string elements" do
+      assert_raise ArgumentError, ~r/list of column name strings/, fn ->
+        DataFrame.replace(make_df(), 1, 2, subset: [123])
+      end
     end
   end
 end

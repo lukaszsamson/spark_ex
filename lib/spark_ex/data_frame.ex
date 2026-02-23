@@ -232,6 +232,7 @@ defmodule SparkEx.DataFrame do
 
           Enum.zip(columns, asc_list)
           |> Enum.map(fn {col, asc} ->
+            asc = normalize_ascending_flag!(asc)
             direction = if asc, do: :asc, else: :desc
             null_order = if asc, do: :nulls_first, else: :nulls_last
 
@@ -448,18 +449,14 @@ defmodule SparkEx.DataFrame do
     ensure_same_session!(left, right, :as_of_join)
 
     {join_expr, using_columns} = normalize_join_on(Keyword.get(opts, :on, []))
-    join_type = Keyword.get(opts, :join_type, "inner")
+    join_type = opts |> Keyword.get(:join_type, "inner") |> normalize_as_of_join_type()
     tolerance = Keyword.get(opts, :tolerance, {:lit, nil})
     allow_exact_matches = Keyword.get(opts, :allow_exact_matches, true)
-    direction = Keyword.get(opts, :direction, "backward")
+    direction = opts |> Keyword.get(:direction, "backward") |> normalize_as_of_direction()
 
     unless is_boolean(allow_exact_matches) do
       raise ArgumentError,
             "expected :allow_exact_matches to be a boolean, got: #{inspect(allow_exact_matches)}"
-    end
-
-    unless is_binary(direction) do
-      raise ArgumentError, "expected :direction to be a string, got: #{inspect(direction)}"
     end
 
     join_expr =
@@ -900,6 +897,7 @@ defmodule SparkEx.DataFrame do
 
           Enum.zip(columns, asc_list)
           |> Enum.map(fn {col, asc} ->
+            asc = normalize_ascending_flag!(asc)
             direction = if asc, do: :asc, else: :desc
             null_order = if asc, do: :nulls_first, else: :nulls_last
 
@@ -1071,6 +1069,7 @@ defmodule SparkEx.DataFrame do
 
     ensure_observe_supported!(df)
     metric_exprs = Enum.map(exprs, &normalize_column_expr/1)
+    SparkEx.Observation.register_metric_aliases(name, metric_exprs)
     %__MODULE__{df | plan: {:collect_metrics, df.plan, name, metric_exprs}}
   end
 
@@ -1305,10 +1304,10 @@ defmodule SparkEx.DataFrame do
 
   def transpose(%__MODULE__{} = df, opts) when is_list(opts) do
     index_columns =
-      case Keyword.get(opts, :index_column) do
-        nil -> []
-        %Column{expr: e} -> [e]
-        col when is_binary(col) -> [{:col, col}]
+      if Keyword.keyword?(opts) do
+        normalize_transpose_index_columns(Keyword.get(opts, :index_column))
+      else
+        normalize_transpose_index_columns(opts)
       end
 
     %__MODULE__{df | plan: {:transpose, df.plan, index_columns}}
@@ -2406,6 +2405,28 @@ defmodule SparkEx.DataFrame do
     {:sort_order, {:col, "_c#{idx}"}, :asc, :nulls_first}
   end
 
+  defp normalize_transpose_index_columns(nil), do: []
+  defp normalize_transpose_index_columns(%Column{expr: e}), do: [e]
+  defp normalize_transpose_index_columns(col) when is_binary(col), do: [{:col, col}]
+
+  defp normalize_transpose_index_columns(cols) when is_list(cols) do
+    Enum.map(cols, fn
+      %Column{expr: e} -> e
+      col when is_binary(col) -> {:col, col}
+      other -> raise ArgumentError, "index_column list must contain only strings or Columns, got: #{inspect(other)}"
+    end)
+  end
+
+  defp normalize_transpose_index_columns(other) do
+    raise ArgumentError, "index_column must be a string, Column, or list, got: #{inspect(other)}"
+  end
+
+  defp normalize_ascending_flag!(value) when is_boolean(value), do: value
+
+  defp normalize_ascending_flag!(value) do
+    raise ArgumentError, "ascending list values must be booleans, got: #{inspect(value)}"
+  end
+
   defp normalize_sample_seed!(nil), do: :rand.uniform(9_223_372_036_854_775_807)
   defp normalize_sample_seed!(seed) when is_integer(seed), do: seed
 
@@ -2596,5 +2617,36 @@ defmodule SparkEx.DataFrame do
       "cross" -> :cross
       _ -> raise ArgumentError, "invalid join type: #{inspect(join_type)}"
     end
+  end
+
+  defp normalize_as_of_join_type(join_type) do
+    case normalize_join_type(join_type) do
+      type when type in [:inner, :left, :right, :full] ->
+        Atom.to_string(type)
+
+      _other ->
+        raise ArgumentError,
+              "invalid as_of_join :join_type: #{inspect(join_type)}. Expected one of: \"inner\", \"left\", \"right\", \"full\""
+    end
+  end
+
+  defp normalize_as_of_direction(direction) when is_atom(direction) do
+    direction |> Atom.to_string() |> normalize_as_of_direction()
+  end
+
+  defp normalize_as_of_direction(direction) when is_binary(direction) do
+    normalized = String.downcase(direction)
+
+    if normalized in ["backward", "forward", "nearest"] do
+      normalized
+    else
+      raise ArgumentError,
+            "invalid as_of_join :direction: #{inspect(direction)}. Expected one of: \"backward\", \"forward\", \"nearest\""
+    end
+  end
+
+  defp normalize_as_of_direction(other) do
+    raise ArgumentError,
+          "expected :direction to be a string or atom, got: #{inspect(other)}"
   end
 end

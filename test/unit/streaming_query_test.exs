@@ -16,4 +16,12 @@ defmodule SparkEx.Unit.StreamingQueryTest do
     assert {:module, StreamingQueryManager} = Code.ensure_loaded(StreamingQueryManager)
     assert function_exported?(StreamingQueryManager, :list_active, 1)
   end
+
+  test "explain/2 raises on non-boolean extended option" do
+    query = %StreamingQuery{session: self(), query_id: "qid", run_id: "rid", name: "qname"}
+
+    assert_raise ArgumentError, ~r/expected :extended to be a boolean/, fn ->
+      StreamingQuery.explain(query, extended: "yes")
+    end
+  end
 end

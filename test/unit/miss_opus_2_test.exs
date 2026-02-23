@@ -420,17 +420,17 @@ defmodule SparkEx.MissOpus2Test do
 
     test "ltrim/2 trims specified character" do
       result = Functions.ltrim("s", "x")
-      assert %Column{expr: {:fn, "ltrim", [{:col, "s"}, {:lit, "x"}], false}} = result
+      assert %Column{expr: {:fn, "ltrim", [{:lit, "x"}, {:col, "s"}], false}} = result
     end
 
     test "rtrim/2 trims specified character" do
       result = Functions.rtrim("s", "x")
-      assert %Column{expr: {:fn, "rtrim", [{:col, "s"}, {:lit, "x"}], false}} = result
+      assert %Column{expr: {:fn, "rtrim", [{:lit, "x"}, {:col, "s"}], false}} = result
     end
 
     test "trim/2 trims specified character" do
       result = Functions.trim("s", "x")
-      assert %Column{expr: {:fn, "trim", [{:col, "s"}, {:lit, "x"}], false}} = result
+      assert %Column{expr: {:fn, "trim", [{:lit, "x"}, {:col, "s"}], false}} = result
     end
   end
 
@@ -1038,6 +1038,11 @@ defmodule SparkEx.MissOpus2Test do
              } = result
     end
 
+    test "parse_url treats raw string args as literals" do
+      result = Functions.parse_url(Functions.col("url"), "HOST", "x")
+      assert %Column{expr: {:fn, "parse_url", [{:col, "url"}, {:lit, "HOST"}, {:lit, "x"}], false}} = result
+    end
+
     test "try_parse_url without key" do
       result = Functions.try_parse_url(Functions.col("url"), Functions.col("part"))
 
@@ -1073,6 +1078,11 @@ defmodule SparkEx.MissOpus2Test do
       assert %Column{expr: {:fn, "like", [{:col, "s"}, {:col, "pat"}], false}} = result
     end
 
+    test "like_ treats raw string pattern as literal" do
+      result = Functions.like_(Functions.col("s"), "%abc%")
+      assert %Column{expr: {:fn, "like", [{:col, "s"}, {:lit, "%abc%"}], false}} = result
+    end
+
     test "like_ with escape" do
       result = Functions.like_(Functions.col("s"), Functions.col("pat"), Functions.col("esc"))
 
@@ -1084,6 +1094,11 @@ defmodule SparkEx.MissOpus2Test do
     test "ilike_ without escape" do
       result = Functions.ilike_(Functions.col("s"), Functions.col("pat"))
       assert %Column{expr: {:fn, "ilike", [{:col, "s"}, {:col, "pat"}], false}} = result
+    end
+
+    test "ilike_ treats raw string pattern as literal" do
+      result = Functions.ilike_(Functions.col("s"), "%abc%")
+      assert %Column{expr: {:fn, "ilike", [{:col, "s"}, {:lit, "%abc%"}], false}} = result
     end
 
     test "ilike_ with escape" do

@@ -29,14 +29,34 @@ defmodule SparkEx.UDFRegistration do
         aggregate: true
       )
   """
-  @spec register_java(GenServer.server(), String.t(), String.t(), keyword()) ::
+  @spec register_java(
+          GenServer.server(),
+          String.t(),
+          String.t(),
+          Spark.Connect.DataType.t() | String.t() | keyword()
+        ) ::
           :ok | {:error, term()}
   def register_java(session, name, class_name, opts \\ [])
+
+  def register_java(session, name, class_name, %Spark.Connect.DataType{} = return_type)
       when is_binary(name) and is_binary(class_name) do
+    register_java(session, name, class_name, return_type: return_type)
+  end
+
+  def register_java(session, name, class_name, return_type)
+      when is_binary(name) and is_binary(class_name) and is_binary(return_type) do
+    register_java(session, name, class_name, return_type: return_type)
+  end
+
+  def register_java(session, name, class_name, opts)
+      when is_binary(name) and is_binary(class_name) and is_list(opts) do
     return_type = Keyword.get(opts, :return_type, nil)
     aggregate = Keyword.get(opts, :aggregate, false)
-    command = {:register_java_udf, name, class_name, return_type, aggregate}
-    SparkEx.Session.execute_command(session, command)
+
+    with {:ok, normalized_return_type} <- normalize_return_type(session, return_type) do
+      command = {:register_java_udf, name, class_name, normalized_return_type, aggregate}
+      SparkEx.Session.execute_command(session, command)
+    end
   end
 
   @doc """
@@ -73,10 +93,15 @@ defmodule SparkEx.UDFRegistration do
     python_ver = Keyword.get(opts, :python_ver, "3.11")
     deterministic = Keyword.get(opts, :deterministic, true)
 
-    command =
-      {:register_udtf, name, python_command, return_type, eval_type, python_ver, deterministic}
+    with {:ok, normalized_return_type} <- normalize_return_type(session, return_type),
+         {:ok, normalized_python_ver} <- normalize_python_ver(python_ver),
+         {:ok, normalized_deterministic} <- normalize_deterministic(deterministic) do
+      command =
+        {:register_udtf, name, python_command, normalized_return_type, eval_type,
+         normalized_python_ver, normalized_deterministic}
 
-    SparkEx.Session.execute_command(session, command)
+      SparkEx.Session.execute_command(session, command)
+    end
   end
 
   @doc """
@@ -98,7 +123,32 @@ defmodule SparkEx.UDFRegistration do
   def register_data_source(session, name, python_command, opts \\ [])
       when is_binary(name) and is_binary(python_command) do
     python_ver = Keyword.get(opts, :python_ver, "3.11")
-    command = {:register_data_source, name, python_command, python_ver}
-    SparkEx.Session.execute_command(session, command)
+
+    with {:ok, normalized_python_ver} <- normalize_python_ver(python_ver) do
+      command = {:register_data_source, name, python_command, normalized_python_ver}
+      SparkEx.Session.execute_command(session, command)
+    end
   end
+
+  defp normalize_return_type(_session, nil), do: {:ok, nil}
+  defp normalize_return_type(_session, %Spark.Connect.DataType{} = return_type), do: {:ok, return_type}
+
+  defp normalize_return_type(session, return_type) when is_binary(return_type) do
+    case SparkEx.Session.analyze_ddl_parse(session, return_type) do
+      {:ok, %Spark.Connect.DataType{} = parsed} -> {:ok, parsed}
+      {:ok, other} -> {:error, {:invalid_return_type, other}}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp normalize_return_type(_session, other),
+    do: {:error, {:invalid_return_type, other}}
+
+  defp normalize_python_ver(python_ver) when is_binary(python_ver), do: {:ok, python_ver}
+  defp normalize_python_ver(other), do: {:error, {:invalid_python_ver, other}}
+
+  defp normalize_deterministic(deterministic) when is_boolean(deterministic),
+    do: {:ok, deterministic}
+
+  defp normalize_deterministic(other), do: {:error, {:invalid_deterministic, other}}
 end

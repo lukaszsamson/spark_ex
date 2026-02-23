@@ -262,6 +262,58 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
     end
   end
 
+  describe "Session.config_is_modifiable/2 input normalization" do
+    defmodule ConfigSession do
+      use GenServer
+
+      def start_link(parent) do
+        GenServer.start_link(__MODULE__, parent, [])
+      end
+
+      @impl true
+      def init(parent), do: {:ok, parent}
+
+      @impl true
+      def handle_call({:config_is_modifiable, keys}, _from, parent) do
+        send(parent, {:config_is_modifiable_called, keys})
+        {:reply, {:ok, [{"spark.sql.shuffle.partitions", "true"}]}, parent}
+      end
+    end
+
+    test "wraps bare string key in list" do
+      {:ok, session} = ConfigSession.start_link(self())
+
+      assert {:ok, [{"spark.sql.shuffle.partitions", "true"}]} =
+               SparkEx.Session.config_is_modifiable(session, "spark.sql.shuffle.partitions")
+
+      assert_receive {:config_is_modifiable_called, ["spark.sql.shuffle.partitions"]}
+    end
+
+    test "raises for non-string key list elements" do
+      {:ok, session} = ConfigSession.start_link(self())
+
+      assert_raise ArgumentError, ~r/keys must be a list of strings/, fn ->
+        SparkEx.Session.config_is_modifiable(session, ["spark.sql.shuffle.partitions", 123])
+      end
+    end
+  end
+
+  describe "Session.create_dataframe schema normalization" do
+    test "normalizes SparkEx.Types struct schema to DDL string" do
+      schema =
+        SparkEx.Types.struct_type([
+          SparkEx.Types.struct_field("id", :long)
+        ])
+
+      request = {:create_dataframe, [%{"id" => 1}], [schema: schema]}
+
+      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, nil}}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+
+      assert query =~ "from_json(_spark_ex_json, 'id LONG'"
+    end
+  end
+
   describe "Session.is_stopped" do
     test "reflects released flag" do
       session = %SparkEx.Session{session_id: "sess-1", released: false}

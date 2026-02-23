@@ -91,6 +91,28 @@ defmodule SparkEx.Connect.ResultDecoderTest do
       assert result.observed_metrics == %{"obs1" => %{"total" => 5}}
     end
 
+    test "captures positional observed metrics when keys are absent" do
+      metrics =
+        %ExecutePlanResponse.ObservedMetrics{
+          name: "obs1",
+          values: [
+            %Spark.Connect.Expression.Literal{literal_type: {:long, 5}},
+            %Spark.Connect.Expression.Literal{literal_type: {:long, 15}}
+          ]
+        }
+
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           observed_metrics: [metrics],
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      assert {:ok, result} = ResultDecoder.decode_stream(stream)
+      assert result.observed_metrics == %{"obs1" => %{"_1" => 5, "_2" => 15}}
+    end
+
     test "returns error for incomplete chunked arrow batch" do
       stream = [
         {:ok,

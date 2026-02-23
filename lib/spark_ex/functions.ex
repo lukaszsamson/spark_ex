@@ -501,7 +501,7 @@ defmodule SparkEx.Functions do
     args =
       case trim_string do
         nil -> [to_expr(col)]
-        s -> [to_expr(col), lit_expr(s)]
+        s -> [lit_expr(s), to_expr(col)]
       end
 
     %Column{expr: {:fn, "ltrim", args, false}}
@@ -513,7 +513,7 @@ defmodule SparkEx.Functions do
     args =
       case trim_string do
         nil -> [to_expr(col)]
-        s -> [to_expr(col), lit_expr(s)]
+        s -> [lit_expr(s), to_expr(col)]
       end
 
     %Column{expr: {:fn, "rtrim", args, false}}
@@ -525,7 +525,7 @@ defmodule SparkEx.Functions do
     args =
       case trim_string do
         nil -> [to_expr(col)]
-        s -> [to_expr(col), lit_expr(s)]
+        s -> [lit_expr(s), to_expr(col)]
       end
 
     %Column{expr: {:fn, "trim", args, false}}
@@ -1523,8 +1523,8 @@ defmodule SparkEx.Functions do
   def parse_url(url, part, key \\ nil) do
     args =
       case key do
-        nil -> [to_expr(url), to_expr(part)]
-        k -> [to_expr(url), to_expr(part), to_expr(k)]
+        nil -> [to_expr(url), to_lit_string_or_expr(part)]
+        k -> [to_expr(url), to_lit_string_or_expr(part), to_lit_string_or_expr(k)]
       end
 
     %Column{expr: {:fn, "parse_url", args, false}}
@@ -1559,8 +1559,8 @@ defmodule SparkEx.Functions do
   def like_(col, pattern, escape \\ nil) do
     args =
       case escape do
-        nil -> [to_expr(col), to_expr(pattern)]
-        e -> [to_expr(col), to_expr(pattern), to_expr(e)]
+        nil -> [to_expr(col), to_lit_string_or_expr(pattern)]
+        e -> [to_expr(col), to_lit_string_or_expr(pattern), to_lit_string_or_expr(e)]
       end
 
     %Column{expr: {:fn, "like", args, false}}
@@ -1572,8 +1572,8 @@ defmodule SparkEx.Functions do
   def ilike_(col, pattern, escape \\ nil) do
     args =
       case escape do
-        nil -> [to_expr(col), to_expr(pattern)]
-        e -> [to_expr(col), to_expr(pattern), to_expr(e)]
+        nil -> [to_expr(col), to_lit_string_or_expr(pattern)]
+        e -> [to_expr(col), to_lit_string_or_expr(pattern), to_lit_string_or_expr(e)]
       end
 
     %Column{expr: {:fn, "ilike", args, false}}

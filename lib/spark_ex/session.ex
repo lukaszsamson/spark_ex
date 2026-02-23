@@ -342,9 +342,17 @@ defmodule SparkEx.Session do
   @doc """
   Checks whether configuration keys are modifiable at runtime.
   """
-  @spec config_is_modifiable(GenServer.server(), [String.t()]) ::
+  @spec config_is_modifiable(GenServer.server(), String.t() | [String.t()]) ::
           {:ok, [{String.t(), String.t()}]} | {:error, term()}
-  def config_is_modifiable(session, keys) do
+  def config_is_modifiable(session, key) when is_binary(key) do
+    config_is_modifiable(session, [key])
+  end
+
+  def config_is_modifiable(session, keys) when is_list(keys) do
+    unless Enum.all?(keys, &is_binary/1) do
+      raise ArgumentError, "keys must be a list of strings"
+    end
+
     GenServer.call(session, {:config_is_modifiable, keys})
   end
 
@@ -1695,7 +1703,7 @@ defmodule SparkEx.Session do
 
   defp rewrite_as_of_join_collect_plan(
          {:as_of_join, left_plan, right_plan, _left_as_of, _right_as_of, join_expr, using_columns,
-          _join_type, _tolerance, _allow_exact_matches, _direction}
+          join_type, _tolerance, _allow_exact_matches, _direction}
        ) do
     condition =
       case join_expr do
@@ -1703,10 +1711,23 @@ defmodule SparkEx.Session do
         other -> other
       end
 
-    {:ok, {:join, left_plan, right_plan, condition, :left, using_columns || []}}
+    {:ok,
+     {:join, left_plan, right_plan, condition, normalize_as_of_fallback_join_type(join_type),
+      using_columns || []}}
   end
 
   defp rewrite_as_of_join_collect_plan(_plan), do: :error
+
+  defp normalize_as_of_fallback_join_type(nil), do: :inner
+  defp normalize_as_of_fallback_join_type("inner"), do: :inner
+  defp normalize_as_of_fallback_join_type("left"), do: :left
+  defp normalize_as_of_fallback_join_type("right"), do: :right
+  defp normalize_as_of_fallback_join_type("full"), do: :full
+  defp normalize_as_of_fallback_join_type(:inner), do: :inner
+  defp normalize_as_of_fallback_join_type(:left), do: :left
+  defp normalize_as_of_fallback_join_type(:right), do: :right
+  defp normalize_as_of_fallback_join_type(:full), do: :full
+  defp normalize_as_of_fallback_join_type(_), do: :inner
 
   defp transpose_emulation_plan(child_plan, [index_expr]) do
     with {:ok, index_name} <- extract_col_name(index_expr) do
@@ -2574,47 +2595,67 @@ defmodule SparkEx.Session do
   # --- Local data preparation ---
 
   defp prepare_local_data(data, opts) when is_struct(data, Explorer.DataFrame) do
-    schema_ddl = Keyword.get(opts, :schema, nil) || explorer_to_ddl(data)
+    with {:ok, schema_ddl} <- normalize_create_dataframe_schema(opts) do
+      schema_ddl = schema_ddl || explorer_to_ddl(data)
 
-    if normalize_local_relation_arrow?(opts) and dataframe_contains_complex_dtype?(data) do
-      prepare_sql_json_relation(data, schema_ddl)
-    else
-      case Explorer.DataFrame.dump_ipc_stream(data) do
-        {:ok, ipc_bytes} -> {:ok, {:local_relation, ipc_bytes, schema_ddl}}
-        {:error, reason} -> {:error, {:arrow_encode_error, reason}}
+      if normalize_local_relation_arrow?(opts) and dataframe_contains_complex_dtype?(data) do
+        prepare_sql_json_relation(data, schema_ddl)
+      else
+        case Explorer.DataFrame.dump_ipc_stream(data) do
+          {:ok, ipc_bytes} -> {:ok, {:local_relation, ipc_bytes, schema_ddl}}
+          {:error, reason} -> {:error, {:arrow_encode_error, reason}}
+        end
       end
     end
   end
 
   defp prepare_local_data(data, opts) when is_list(data) do
-    schema = Keyword.get(opts, :schema, nil)
+    with {:ok, schema} <- normalize_create_dataframe_schema(opts) do
+      cond do
+        is_binary(schema) ->
+          # User provided DDL schema string — convert list of maps to Explorer.DataFrame
+          prepare_list_data_with_schema(data, schema, opts)
 
-    cond do
-      is_binary(schema) ->
-        # User provided DDL schema string — convert list of maps to Explorer.DataFrame
-        prepare_list_data_with_schema(data, schema, opts)
-
-      true ->
-        # No schema — try to infer from data
-        prepare_list_data_inferred(data, opts)
+        true ->
+          # No schema — try to infer from data
+          prepare_list_data_inferred(data, opts)
+      end
     end
   end
 
   defp prepare_local_data(data, opts) when is_map(data) and not is_struct(data) do
-    # Column-oriented data: %{"col1" => [1,2,3], "col2" => ["a","b","c"]}
-    schema_ddl = Keyword.get(opts, :schema, nil)
-
-    try do
-      explorer_df = Explorer.DataFrame.new(data)
-      effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
-      prepare_local_data(explorer_df, Keyword.put(opts, :schema, effective_schema))
-    rescue
-      e -> {:error, {:data_conversion_error, Exception.message(e)}}
+    with {:ok, schema_ddl} <- normalize_create_dataframe_schema(opts) do
+      # Column-oriented data: %{"col1" => [1,2,3], "col2" => ["a","b","c"]}
+      try do
+        explorer_df = Explorer.DataFrame.new(data)
+        effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
+        prepare_local_data(explorer_df, Keyword.put(opts, :schema, effective_schema))
+      rescue
+        e -> {:error, {:data_conversion_error, Exception.message(e)}}
+      end
     end
   end
 
   defp prepare_local_data(_data, _opts) do
     {:error, {:invalid_data, "expected Explorer.DataFrame, list of maps, or column map"}}
+  end
+
+  defp normalize_create_dataframe_schema(opts) do
+    case Keyword.get(opts, :schema, nil) do
+      nil ->
+        {:ok, nil}
+
+      schema when is_binary(schema) ->
+        {:ok, schema}
+
+      {:struct, _} = schema ->
+        {:ok, SparkEx.Types.schema_to_string(schema)}
+
+      other ->
+        {:error,
+         {:invalid_schema,
+          "expected schema as DDL string or SparkEx.Types struct schema, got: #{inspect(other)}"}}
+    end
   end
 
   defp prepare_list_data_with_schema(data, schema_ddl, opts) when is_binary(schema_ddl) do

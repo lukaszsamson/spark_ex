@@ -9,7 +9,7 @@ defmodule SparkEx.DataFrame.NA do
   `SparkEx.DataFrame.replace/3`, or directly.
   """
 
-  alias SparkEx.DataFrame
+  alias SparkEx.{Column, DataFrame}
 
   @doc """
   Fills null values with the given replacement.
@@ -157,15 +157,17 @@ defmodule SparkEx.DataFrame.NA do
   @spec replace(DataFrame.t(), term(), term(), keyword()) :: DataFrame.t()
   def replace(df, to_replace, value \\ nil, opts \\ [])
 
-  def replace(%DataFrame{} = df, to_replace, _value, opts) when is_map(to_replace) do
-    cols = normalize_subset(Keyword.get(opts, :subset, nil))
+  def replace(%DataFrame{} = df, to_replace, value_or_opts, opts) when is_map(to_replace) do
+    {_value, effective_opts} = extract_replace_value_and_opts(value_or_opts, opts)
+    cols = normalize_subset(Keyword.get(effective_opts, :subset, nil))
     replacements = Enum.map(to_replace, fn {old, new} -> {old, new} end)
     validate_replace_types!(replacements)
-    %DataFrame{df | plan: {:na_replace, df.plan, cols, replacements}}
+    build_replace_df(df, cols, replacements)
   end
 
-  def replace(%DataFrame{} = df, to_replace, value, opts) when is_list(to_replace) do
-    cols = normalize_subset(Keyword.get(opts, :subset, nil))
+  def replace(%DataFrame{} = df, to_replace, value_or_opts, opts) when is_list(to_replace) do
+    {value, effective_opts} = extract_replace_value_and_opts(value_or_opts, opts)
+    cols = normalize_subset(Keyword.get(effective_opts, :subset, nil))
 
     values =
       cond do
@@ -182,18 +184,57 @@ defmodule SparkEx.DataFrame.NA do
 
     replacements = Enum.zip(to_replace, values)
     validate_replace_types!(replacements)
-    %DataFrame{df | plan: {:na_replace, df.plan, cols, replacements}}
+    build_replace_df(df, cols, replacements)
   end
 
-  def replace(%DataFrame{} = df, to_replace, value, opts) do
-    cols = normalize_subset(Keyword.get(opts, :subset, nil))
+  def replace(%DataFrame{} = df, to_replace, value_or_opts, opts) do
+    {value, effective_opts} = extract_replace_value_and_opts(value_or_opts, opts)
+    cols = normalize_subset(Keyword.get(effective_opts, :subset, nil))
     validate_replace_types!([{to_replace, value}])
-    %DataFrame{df | plan: {:na_replace, df.plan, cols, [{to_replace, value}]}}
+    build_replace_df(df, cols, [{to_replace, value}])
   end
 
   defp normalize_subset(nil), do: []
   defp normalize_subset(col) when is_binary(col), do: [col]
-  defp normalize_subset(cols) when is_list(cols), do: cols
+
+  defp normalize_subset(cols) when is_list(cols) do
+    unless Enum.all?(cols, &is_binary/1) do
+      raise ArgumentError, "expected subset to be a list of column name strings"
+    end
+
+    cols
+  end
+
+  defp extract_replace_value_and_opts(value_or_opts, opts) do
+    if opts == [] and is_list(value_or_opts) and Keyword.keyword?(value_or_opts) do
+      {nil, value_or_opts}
+    else
+      {value_or_opts, opts}
+    end
+  end
+
+  defp build_replace_df(%DataFrame{} = df, [], replacements) do
+    %DataFrame{df | plan: {:na_replace, df.plan, [], replacements}}
+  end
+
+  defp build_replace_df(%DataFrame{} = df, cols, replacements) do
+    Enum.reduce(cols, df, fn col_name, acc_df ->
+      DataFrame.with_column(acc_df, col_name, subset_replace_expr(col_name, replacements))
+    end)
+  end
+
+  defp subset_replace_expr(col_name, replacements) do
+    base_expr = {:col, col_name}
+
+    args =
+      replacements
+      |> Enum.flat_map(fn {old, new} ->
+        [{:fn, "<=>", [base_expr, {:lit, old}], false}, {:lit, new}]
+      end)
+      |> Kernel.++([base_expr])
+
+    %Column{expr: {:fn, "when", args, false}}
+  end
 
   defp validate_fill_values!(values) do
     Enum.each(values, fn v ->

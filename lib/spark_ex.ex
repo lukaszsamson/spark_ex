@@ -331,7 +331,7 @@ defmodule SparkEx do
   @doc """
   Checks whether configuration keys are modifiable at runtime.
   """
-  @spec config_is_modifiable(GenServer.server(), [String.t()]) ::
+  @spec config_is_modifiable(GenServer.server(), String.t() | [String.t()]) ::
           {:ok, [{String.t(), String.t()}]} | {:error, term()}
   def config_is_modifiable(session, keys) do
     SparkEx.Session.config_is_modifiable(session, keys)

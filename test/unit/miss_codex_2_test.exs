@@ -127,12 +127,17 @@ defmodule SparkEx.MissCodex2Test do
   describe "#13 NA.replace string subset normalization" do
     test "replace normalizes string subset to list" do
       result = DataFrame.NA.replace(make_df(), %{0 => 1}, nil, subset: "col1")
-      assert %DataFrame{plan: {:na_replace, _, ["col1"], _}} = result
+      assert %DataFrame{plan: {:with_columns, _, [{:alias, _, "col1"}]}} = result
     end
 
     test "replace with list subset still works" do
       result = DataFrame.NA.replace(make_df(), %{0 => 1}, nil, subset: ["col1", "col2"])
-      assert %DataFrame{plan: {:na_replace, _, ["col1", "col2"], _}} = result
+
+      assert %DataFrame{
+               plan:
+                 {:with_columns, {:with_columns, _, [{:alias, _, "col1"}]},
+                  [{:alias, _, "col2"}]}
+             } = result
     end
 
     test "replace with nil subset uses empty list" do

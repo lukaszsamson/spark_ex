@@ -119,12 +119,23 @@ defmodule SparkEx.CatalogTest do
 
     def handle_call(
           {:execute_collect,
-           {:catalog, {:create_table, _table_name, _path, _source, _description, schema, _options}},
+           {:catalog, {:create_table, _table_name, _path, _source, _description, schema, options}},
            _opts},
           _from,
           state
         ) do
-      send(state.test_pid, {:create_table_called, schema})
+      send(state.test_pid, {:create_table_called, schema, options})
+      {:reply, {:ok, []}, state}
+    end
+
+    def handle_call(
+          {:execute_collect,
+           {:catalog, {:create_external_table, _table_name, _path, _source, schema, options}},
+           _opts},
+          _from,
+          state
+        ) do
+      send(state.test_pid, {:create_external_table_called, schema, options})
       {:reply, {:ok, []}, state}
     end
 
@@ -135,6 +146,15 @@ defmodule SparkEx.CatalogTest do
         ) do
       rows = Enum.map(state.databases, fn db_name -> %{"name" => db_name} end)
       {:reply, {:ok, rows}, state}
+    end
+
+    def handle_call(
+          {:execute_collect, {:catalog, {:cache_table, table_name, storage_level}}, _opts},
+          _from,
+          state
+        ) do
+      send(state.test_pid, {:cache_table_called, table_name, storage_level})
+      {:reply, {:ok, []}, state}
     end
   end
 
@@ -219,6 +239,54 @@ defmodule SparkEx.CatalogTest do
 
     assert {:ok, _df} = Catalog.create_table(session, "my_table", schema: "id INT, name STRING")
     assert_receive {:analyze_ddl_parse_called, "id INT, name STRING"}
-    assert_receive {:create_table_called, %Spark.Connect.DataType{}}
+    assert_receive {:create_table_called, %Spark.Connect.DataType{}, %{}}
+  end
+
+  test "create_table/3 stringifies keyword options" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:ok, _df} =
+             Catalog.create_table(session, "my_table",
+               schema: "id INT",
+               options: [path: "/tmp/x", retries: 2]
+             )
+
+    assert_receive {:create_table_called, %Spark.Connect.DataType{},
+                    %{"path" => "/tmp/x", "retries" => "2"}}
+  end
+
+  test "create_external_table/4 stringifies keyword options" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:ok, _df} =
+             Catalog.create_external_table(session, "my_external_table", "/tmp/x",
+               schema: "id INT",
+               options: [a: 1]
+             )
+
+    assert_receive {:create_external_table_called, %Spark.Connect.DataType{}, %{"a" => "1"}}
+  end
+
+  test "cache_table/3 normalizes storage_level string" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert :ok = Catalog.cache_table(session, "my_table", storage_level: "MEMORY_ONLY")
+
+    assert_receive {:cache_table_called, "my_table", %Spark.Connect.StorageLevel{} = storage_level}
+    assert storage_level.use_memory
+    assert storage_level.deserialized
+  end
+
+  test "cache_table/3 returns error for invalid storage_level" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:error, {:invalid_storage_level, "BAD_LEVEL"}} =
+             Catalog.cache_table(session, "my_table", storage_level: "BAD_LEVEL")
+  end
+
+  test "list_databases/2 returns error for keyword opts argument" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:error, {:invalid_options, _}} = Catalog.list_databases(session, catalog: "sfx")
   end
 end

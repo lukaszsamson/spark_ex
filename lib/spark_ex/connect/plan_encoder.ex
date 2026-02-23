@@ -3271,8 +3271,13 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.Literal{literal_type: {:integer, v}}
   end
 
-  defp encode_literal(v) when is_integer(v) do
+  defp encode_literal(v)
+       when is_integer(v) and v >= -9_223_372_036_854_775_808 and v <= 9_223_372_036_854_775_807 do
     %Expression.Literal{literal_type: {:long, v}}
+  end
+
+  defp encode_literal(v) when is_integer(v) do
+    encode_literal({:decimal, Integer.to_string(v)})
   end
 
   defp encode_literal(v) when is_float(v) do

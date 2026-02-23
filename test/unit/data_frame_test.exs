@@ -485,6 +485,14 @@ defmodule SparkEx.DataFrameTest do
                plan: {:sort, {:sql, _, _}, [{:sort_order, {:col, "name"}, :asc, :nulls_first}]}
              } = result
     end
+
+    test "raises when ascending list includes non-boolean values" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert_raise ArgumentError, ~r/ascending list values must be booleans/, fn ->
+        DataFrame.order_by(df, ["name"], ascending: ["oops"])
+      end
+    end
   end
 
   describe "sort/2" do
@@ -517,6 +525,33 @@ defmodule SparkEx.DataFrameTest do
       assert_raise ArgumentError, ~r/Streaming DataFrame with Observation is not supported/, fn ->
         DataFrame.observe(df, "obs", [Functions.col("value")])
       end
+    end
+
+    test "registers metric aliases for positional observed metric payloads" do
+      {:ok, session} = ObserveSession.start_link(false)
+      obs = SparkEx.Observation.new("obs_#{System.unique_integer([:positive])}")
+      df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+
+      _observed =
+        DataFrame.observe(df, obs, [
+          Functions.count(Functions.col("value")) |> Column.alias_("cnt"),
+          Functions.sum(Functions.col("value")) |> Column.alias_("total")
+        ])
+
+      :ok =
+        SparkEx.Observation.store_observed_metrics(%{
+          obs.name => %{"_1" => 5, "_2" => 15}
+        })
+
+      assert SparkEx.Observation.get(obs) == %{"cnt" => 5, "total" => 15}
+    end
+  end
+
+  describe "transpose/2" do
+    test "accepts list index_column option" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      result = DataFrame.transpose(df, index_column: ["id"])
+      assert %DataFrame{plan: {:transpose, {:sql, _, _}, [{:col, "id"}]}} = result
     end
   end
 
@@ -751,6 +786,28 @@ defmodule SparkEx.DataFrameTest do
       assert_raise ArgumentError, ~r/allow_exact_matches/, fn ->
         DataFrame.as_of_join(df1, df2, Functions.col("t1"), Functions.col("t2"),
           allow_exact_matches: "oops"
+        )
+      end
+    end
+
+    test "raises on invalid direction option value" do
+      df1 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t1", nil}}
+      df2 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t2", nil}}
+
+      assert_raise ArgumentError, ~r/invalid as_of_join :direction/, fn ->
+        DataFrame.as_of_join(df1, df2, Functions.col("t1"), Functions.col("t2"),
+          direction: "sideways"
+        )
+      end
+    end
+
+    test "raises on invalid join_type option value" do
+      df1 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t1", nil}}
+      df2 = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t2", nil}}
+
+      assert_raise ArgumentError, ~r/invalid join type/, fn ->
+        DataFrame.as_of_join(df1, df2, Functions.col("t1"), Functions.col("t2"),
+          join_type: 123
         )
       end
     end

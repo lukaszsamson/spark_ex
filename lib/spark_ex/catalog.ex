@@ -10,6 +10,7 @@ defmodule SparkEx.Catalog do
   """
 
   alias SparkEx.DataFrame
+  alias SparkEx.Internal.OptionUtils
 
   # ── Result Structs ──
 
@@ -109,10 +110,20 @@ defmodule SparkEx.Catalog do
 
   @spec list_databases(GenServer.server(), String.t() | nil) ::
           {:ok, [Database.t()]} | {:error, term()}
-  def list_databases(session, pattern \\ nil) do
+  def list_databases(session, pattern \\ nil)
+
+  def list_databases(session, pattern) when is_nil(pattern) or is_binary(pattern) do
     case execute_catalog(session, {:list_databases, pattern}) do
       {:ok, rows} -> {:ok, Enum.map(rows, &parse_database/1)}
       {:error, _} = err -> err
+    end
+  end
+
+  def list_databases(_session, opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      {:error, {:invalid_options, "list_databases/2 accepts only a pattern string, not keyword opts"}}
+    else
+      {:error, {:invalid_pattern, opts}}
     end
   end
 
@@ -286,9 +297,10 @@ defmodule SparkEx.Catalog do
   end
 
   @spec cache_table(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
-  def cache_table(session, table_name, opts \\ []) when is_binary(table_name) do
-    storage_level = Keyword.get(opts, :storage_level, nil)
-    execute_void(session, {:cache_table, table_name, storage_level})
+  def cache_table(session, table_name, opts \\ []) when is_binary(table_name) and is_list(opts) do
+    with {:ok, storage_level} <- normalize_cache_storage_level(Keyword.get(opts, :storage_level, nil)) do
+      execute_void(session, {:cache_table, table_name, storage_level})
+    end
   end
 
   @spec uncache_table(GenServer.server(), String.t()) :: :ok | {:error, term()}
@@ -329,10 +341,12 @@ defmodule SparkEx.Catalog do
     schema = Keyword.get(opts, :schema, nil)
     options = Keyword.get(opts, :options, %{})
 
-    with {:ok, normalized_schema} <- normalize_table_schema(session, schema) do
+    with {:ok, normalized_schema} <- normalize_table_schema(session, schema),
+         {:ok, normalized_options} <- normalize_table_options(options) do
       plan =
         {:catalog,
-         {:create_table, table_name, path, source, description, normalized_schema, options}}
+         {:create_table, table_name, path, source, description, normalized_schema,
+          normalized_options}}
 
       df = %DataFrame{session: session, plan: plan}
 
@@ -362,8 +376,12 @@ defmodule SparkEx.Catalog do
     schema = Keyword.get(opts, :schema, nil)
     options = Keyword.get(opts, :options, %{})
 
-    with {:ok, normalized_schema} <- normalize_table_schema(session, schema) do
-      plan = {:catalog, {:create_external_table, table_name, path, source, normalized_schema, options}}
+    with {:ok, normalized_schema} <- normalize_table_schema(session, schema),
+         {:ok, normalized_options} <- normalize_table_options(options) do
+      plan =
+        {:catalog,
+         {:create_external_table, table_name, path, source, normalized_schema, normalized_options}}
+
       df = %DataFrame{session: session, plan: plan}
 
       case DataFrame.collect(df) do
@@ -483,6 +501,81 @@ defmodule SparkEx.Catalog do
 
   defp normalize_table_schema(_session, other),
     do: {:error, {:invalid_schema, "expected DDL string or DataType, got: #{inspect(other)}"}}
+
+  defp normalize_table_options(nil), do: {:ok, %{}}
+
+  defp normalize_table_options(options) when is_list(options) or is_map(options) do
+    try do
+      {:ok, OptionUtils.stringify_options(options)}
+    rescue
+      e in ArgumentError ->
+        {:error, {:invalid_options, Exception.message(e)}}
+    end
+  end
+
+  defp normalize_table_options(other) do
+    {:error, {:invalid_options, "expected :options to be a map or keyword list, got: #{inspect(other)}"}}
+  end
+
+  defp normalize_cache_storage_level(nil), do: {:ok, nil}
+  defp normalize_cache_storage_level(%Spark.Connect.StorageLevel{} = storage_level), do: {:ok, storage_level}
+
+  defp normalize_cache_storage_level(storage_level) when is_atom(storage_level) do
+    normalize_cache_storage_level(storage_level |> Atom.to_string() |> String.upcase())
+  end
+
+  defp normalize_cache_storage_level(storage_level) when is_binary(storage_level) do
+    case String.upcase(storage_level) do
+      "NONE" ->
+        {:ok, %Spark.Connect.StorageLevel{}}
+
+      "DISK_ONLY" ->
+        {:ok, %Spark.Connect.StorageLevel{use_disk: true, replication: 1}}
+
+      "DISK_ONLY_2" ->
+        {:ok, %Spark.Connect.StorageLevel{use_disk: true, replication: 2}}
+
+      "MEMORY_ONLY" ->
+        {:ok, %Spark.Connect.StorageLevel{use_memory: true, deserialized: true, replication: 1}}
+
+      "MEMORY_ONLY_2" ->
+        {:ok, %Spark.Connect.StorageLevel{use_memory: true, deserialized: true, replication: 2}}
+
+      "MEMORY_AND_DISK" ->
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: true,
+           deserialized: true,
+           replication: 1
+         }}
+
+      "MEMORY_AND_DISK_2" ->
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: true,
+           deserialized: true,
+           replication: 2
+         }}
+
+      "OFF_HEAP" ->
+        {:ok, %Spark.Connect.StorageLevel{use_off_heap: true, replication: 1}}
+
+      "MEMORY_AND_DISK_DESER" ->
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: true,
+           use_off_heap: true,
+           deserialized: false,
+           replication: 1
+         }}
+
+      _ ->
+        {:error, {:invalid_storage_level, storage_level}}
+    end
+  end
 
   @doc false
   def build_create_database_sql(db_name, opts) do

@@ -1132,7 +1132,11 @@ defmodule SparkEx.Connect.ResultDecoder do
 
     entry =
       if keys == [] do
-        %{"_1" => SparkEx.Observation.decode_literal(Enum.at(values, 0))}
+        values
+        |> Enum.with_index(1)
+        |> Map.new(fn {value, index} ->
+          {"_#{index}", SparkEx.Observation.decode_literal(value)}
+        end)
       else
         keys
         |> Enum.with_index()

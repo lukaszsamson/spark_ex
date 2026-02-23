@@ -181,6 +181,10 @@ defmodule SparkEx.StreamingQuery do
   def explain(%__MODULE__{} = query, opts \\ []) do
     extended = Keyword.get(opts, :extended, false)
 
+    unless is_boolean(extended) do
+      raise ArgumentError, "expected :extended to be a boolean, got: #{inspect(extended)}"
+    end
+
     case execute_command(query, {:explain, extended}) do
       {:ok, {:streaming_query, result}} ->
         case result.result_type do

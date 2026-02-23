@@ -508,6 +508,20 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                expr_type: {:literal, %Expression.Literal{literal_type: {:float, 3.5}}}
              } = PlanEncoder.encode_expression({:lit, {:float, 3.5}})
     end
+
+    test "encodes integers outside int64 range as decimal literals" do
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:decimal,
+                       %Expression.Literal.Decimal{
+                         value: "9999999999999999999"
+                       }}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, 9_999_999_999_999_999_999})
+    end
   end
 
   describe "subquery in encoding" do
