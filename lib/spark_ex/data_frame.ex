@@ -465,7 +465,7 @@ defmodule SparkEx.DataFrame do
 
     {join_expr, using_columns} = normalize_join_on(Keyword.get(opts, :on, []))
     join_type = opts |> Keyword.get(:join_type, "inner") |> normalize_as_of_join_type()
-    tolerance = Keyword.get(opts, :tolerance, {:lit, nil})
+    tolerance = Keyword.get(opts, :tolerance, nil)
     allow_exact_matches = Keyword.get(opts, :allow_exact_matches, true)
     direction = opts |> Keyword.get(:direction, "backward") |> normalize_as_of_direction()
 
@@ -482,6 +482,7 @@ defmodule SparkEx.DataFrame do
 
     tolerance_expr =
       case tolerance do
+        nil -> {:lit, nil}
         %Column{expr: expr} -> expr
         {:lit, _} = expr -> expr
         other -> normalize_column_expr(other)
@@ -659,7 +660,9 @@ defmodule SparkEx.DataFrame do
 
   def with_columns(%__MODULE__{} = df, columns) when is_map(columns) do
     aliases =
-      Enum.map(columns, fn
+      columns
+      |> Enum.sort_by(fn {name, _} -> name end)
+      |> Enum.map(fn
         {name, %Column{} = col} when is_binary(name) -> {:alias, col.expr, name}
         {name, value} when is_binary(name) -> {:alias, {:lit, value}, name}
       end)

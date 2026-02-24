@@ -242,7 +242,7 @@ defmodule SparkEx.Connect.TypeMapper do
   @spec explorer_schema_to_ddl(map() | [{String.t(), atom() | {atom(), term()}}]) :: String.t()
   def explorer_schema_to_ddl(dtypes) when is_map(dtypes) do
     dtypes
-    |> Map.to_list()
+    |> Enum.sort_by(fn {name, _} -> name end)
     |> explorer_schema_to_ddl()
   end
 

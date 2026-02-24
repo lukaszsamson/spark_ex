@@ -33,7 +33,8 @@ defmodule SparkEx.UserContextExtensions do
   @spec clear_user_context_extensions() :: :ok
   def clear_user_context_extensions() do
     SparkEx.EtsTableOwner.ensure_table!(@table, :set)
-    :ets.delete_all_objects(@table)
+    :ets.match_delete(@table, {{:global, :_}, :_})
+    :ets.match_delete(@table, {{thread_scope(self()), :_}, :_})
     :ok
   end
 
@@ -72,22 +73,16 @@ defmodule SparkEx.UserContextExtensions do
     SparkEx.EtsTableOwner.ensure_table!(@table, :set)
 
     @table
-    |> :ets.tab2list()
-    |> Enum.reduce(%{}, fn
-      {{:global, id}, extension}, acc -> Map.put(acc, id, extension)
-      _, acc -> acc
-    end)
+    |> :ets.match_object({{:global, :_}, :_})
+    |> Map.new(fn {{:global, id}, extension} -> {id, extension} end)
   end
 
   defp threadlocal_extensions(pid) when is_pid(pid) do
     scope = thread_scope(pid)
 
     @table
-    |> :ets.tab2list()
-    |> Enum.reduce(%{}, fn
-      {{^scope, id}, extension}, acc -> Map.put(acc, id, extension)
-      _, acc -> acc
-    end)
+    |> :ets.match_object({{scope, :_}, :_})
+    |> Map.new(fn {{^scope, id}, extension} -> {id, extension} end)
   end
 
   defp thread_scope(pid), do: {:pid, pid}

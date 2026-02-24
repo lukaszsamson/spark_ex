@@ -1516,13 +1516,22 @@ defmodule SparkEx.Functions do
     date_format(ts_col, "HH:mm:ss")
   end
 
-  @doc "Spark 3.5-compatible fallback for time_diff/3."
+  @doc """
+  Returns the difference between two times measured in the specified units.
+
+  Spark 4.1+. Unit is passed as a column expression (use `lit/1` for string literals).
+  Supported units: "HOUR", "MINUTE", "SECOND", "MILLISECOND", "MICROSECOND".
+
+  ## Examples
+
+      time_diff(lit("HOUR"), col("start_time"), col("end_time"))
+  """
   @spec time_diff(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t()) ::
           Column.t()
   def time_diff(unit, start_time, end_time) do
     %Column{
       expr:
-        {:fn, "timestampdiff", [lit_expr(unit), to_expr(start_time), to_expr(end_time)], false}
+        {:fn, "time_diff", [to_expr(unit), to_expr(start_time), to_expr(end_time)], false}
     }
   end
 

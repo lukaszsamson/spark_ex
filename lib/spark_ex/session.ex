@@ -2807,11 +2807,11 @@ defmodule SparkEx.Session do
     {encode_fn.(plan, counter), nil}
   rescue
     e ->
-      Logger.error(
-        "Plan encoding failed: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
-      )
+      formatted = Exception.format(:error, e, __STACKTRACE__)
 
-      {nil, {:error, {:plan_encode_error, Exception.message(e)}}}
+      Logger.error("Plan encoding failed: #{formatted}")
+
+      {nil, {:error, {:plan_encode_error, formatted}}}
   end
 
   defp maybe_update_server_session(state, nil), do: state
@@ -2899,12 +2899,13 @@ defmodule SparkEx.Session do
   defp prepare_local_data(data, opts) when is_map(data) and not is_struct(data) do
     with {:ok, schema_ddl} <- normalize_create_dataframe_schema(opts) do
       # Column-oriented data: %{"col1" => [1,2,3], "col2" => ["a","b","c"]}
-      try do
-        explorer_df = Explorer.DataFrame.new(data)
-        effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
-        prepare_local_data(explorer_df, Keyword.put(opts, :schema, effective_schema))
-      rescue
-        e -> {:error, {:data_conversion_error, Exception.message(e)}}
+      case safe_explorer_new(data) do
+        {:ok, explorer_df} ->
+          effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
+          prepare_local_data(explorer_df, Keyword.put(opts, :schema, effective_schema))
+
+        {:error, reason} ->
+          {:error, {:data_conversion_error, reason}}
       end
     end
   end
@@ -2958,11 +2959,12 @@ defmodule SparkEx.Session do
         )
       end
     else
-      try do
-        explorer_df = list_of_maps_to_explorer(data)
-        prepare_local_data(explorer_df, Keyword.put(opts, :schema, schema_ddl))
-      rescue
-        e -> {:error, {:data_conversion_error, Exception.message(e)}}
+      case safe_list_of_maps_to_explorer(data) do
+        {:ok, explorer_df} ->
+          prepare_local_data(explorer_df, Keyword.put(opts, :schema, schema_ddl))
+
+        {:error, reason} ->
+          {:error, {:data_conversion_error, reason}}
       end
     end
   end
@@ -3001,17 +3003,17 @@ defmodule SparkEx.Session do
   end
 
   defp prepare_list_data_with_schema_arrow_fallback(data, schema_ddl, opts) do
-    try do
-      explorer_df = list_of_maps_to_explorer(data)
+    case safe_list_of_maps_to_explorer(data) do
+      {:ok, explorer_df} ->
+        prepare_local_data(
+          explorer_df,
+          opts
+          |> Keyword.put(:schema, schema_ddl)
+          |> Keyword.put(:normalize_local_relation_arrow, false)
+        )
 
-      prepare_local_data(
-        explorer_df,
-        opts
-        |> Keyword.put(:schema, schema_ddl)
-        |> Keyword.put(:normalize_local_relation_arrow, false)
-      )
-    rescue
-      _ -> {:error, :arrow_fallback_failed}
+      {:error, _} ->
+        {:error, :arrow_fallback_failed}
     end
   end
 
@@ -3019,11 +3021,11 @@ defmodule SparkEx.Session do
     if Enum.empty?(data) do
       {:error, {:invalid_data, "cannot infer schema from empty list"}}
     else
-      try do
-        explorer_df = list_of_maps_to_explorer(data)
-        prepare_local_data(explorer_df, opts)
-      rescue
-        e ->
+      case safe_list_of_maps_to_explorer(data) do
+        {:ok, explorer_df} ->
+          prepare_local_data(explorer_df, opts)
+
+        {:error, reason} ->
           if normalize_local_relation_arrow?(opts) do
             with {:ok, normalized_rows} <- normalize_rows_for_schema(data),
                  {:ok, inferred_schema_ddl} <- infer_schema_ddl_from_rows(normalized_rows),
@@ -3037,10 +3039,22 @@ defmodule SparkEx.Session do
               {:error, _} = error -> error
             end
           else
-            {:error, {:data_conversion_error, Exception.message(e)}}
+            {:error, {:data_conversion_error, reason}}
           end
       end
     end
+  end
+
+  defp safe_list_of_maps_to_explorer(data) do
+    {:ok, list_of_maps_to_explorer(data)}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp safe_explorer_new(data) do
+    {:ok, Explorer.DataFrame.new(data)}
+  rescue
+    e -> {:error, Exception.message(e)}
   end
 
   defp list_of_maps_to_explorer([]) do

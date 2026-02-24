@@ -1241,6 +1241,11 @@ defmodule SparkEx.Connect.PlanEncoder do
     {relation, counter}
   end
 
+  def encode_relation(unknown, _counter) do
+    raise ArgumentError,
+          "unknown plan type: #{inspect(unknown, limit: 200)}"
+  end
+
   @doc """
   Wraps a plan in an aggregate count(*) relation.
 

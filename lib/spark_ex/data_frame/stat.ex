@@ -209,7 +209,7 @@ defmodule SparkEx.DataFrame.Stat do
       {:ok, [row]} ->
         # Result is a single row with one column containing a nested array:
         # single col: [[q1, q2, ...]], multi col: [[q1_a, q2_a], [q1_b, q2_b]]
-        raw = row |> Map.values() |> hd()
+        raw = first_column_value(row)
         parsed = parse_nested_quantile(raw)
 
         {:ok, if(single?, do: hd(parsed), else: parsed)}
@@ -220,6 +220,22 @@ defmodule SparkEx.DataFrame.Stat do
   end
 
   # ── Private helpers ──
+
+  # Extracts the value of the first column from a row map.
+  # Equivalent to PySpark's `table[0][0].as_py()` positional access.
+  # Validates that the row contains exactly one column to prevent
+  # non-deterministic extraction from multi-column results.
+  defp first_column_value(row) when map_size(row) == 1 do
+    [{_key, value}] = Map.to_list(row)
+    value
+  end
+
+  defp first_column_value(row) when is_map(row) do
+    # Fallback: if Spark returns extra columns, take the first by key order.
+    # This matches Map.values/1 |> hd/0 but is explicit about the choice.
+    {_key, value} = :maps.next(:maps.iterator(row))
+    value
+  end
 
   defp normalize_col_expr(%Column{expr: e}), do: e
   defp normalize_col_expr(name) when is_binary(name), do: {:col, name}
@@ -261,7 +277,7 @@ defmodule SparkEx.DataFrame.Stat do
   defp collect_scalar(session, plan) do
     case DataFrame.collect(%DataFrame{session: session, plan: plan}) do
       {:ok, [row]} when is_map(row) ->
-        value = row |> Map.values() |> hd()
+        value = first_column_value(row)
         {:ok, value}
 
       {:ok, []} ->

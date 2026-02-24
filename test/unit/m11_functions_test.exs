@@ -424,10 +424,10 @@ defmodule SparkEx.M11.FunctionsTest do
              } = Functions.to_time("ts")
     end
 
-    test "time_diff/3 maps to timestampdiff" do
+    test "time_diff/3 maps to time_diff" do
       assert %Column{
                expr:
-                 {:fn, "timestampdiff", [{:lit, "HOUR"}, {:col, "start_ts"}, {:col, "end_ts"}],
+                 {:fn, "time_diff", [{:col, "HOUR"}, {:col, "start_ts"}, {:col, "end_ts"}],
                   false}
              } = Functions.time_diff("HOUR", "start_ts", "end_ts")
     end

@@ -506,12 +506,16 @@ defmodule SparkEx.Writer do
     exec_opts = Keyword.delete(opts, :overwrite)
 
     normalized_writer =
-      cond do
-        is_boolean(overwrite) ->
-          mode(writer, if(overwrite, do: :overwrite, else: :append))
-
-        true ->
+      case overwrite do
+        nil ->
           writer
+
+        v when is_boolean(v) ->
+          mode(writer, if(v, do: :overwrite, else: :append))
+
+        other ->
+          raise ArgumentError,
+                "expected :overwrite to be a boolean, got: #{inspect(other)}"
       end
 
     {normalized_writer, exec_opts}
