@@ -92,6 +92,18 @@ defmodule SparkEx.M13.UDFRegistrationTest do
                  return_type: 123
                )
     end
+
+    test "returns error for invalid aggregate value" do
+      {:ok, session} = FakeUDFSession.start_link(self())
+
+      assert {:error, {:invalid_aggregate, "yes"}} =
+               SparkEx.UDFRegistration.register_java(
+                 session,
+                 "my_udf",
+                 "java.lang.Math",
+                 aggregate: "yes"
+               )
+    end
   end
 
   describe "register_udtf/4 and register_data_source/4 validation" do
@@ -122,6 +134,18 @@ defmodule SparkEx.M13.UDFRegistrationTest do
                  "my_udtf",
                  <<1, 2, 3>>,
                  deterministic: "yes"
+               )
+    end
+
+    test "register_udtf returns error for invalid eval_type value" do
+      {:ok, session} = FakeUDFSession.start_link(self())
+
+      assert {:error, {:invalid_eval_type, "oops"}} =
+               SparkEx.UDFRegistration.register_udtf(
+                 session,
+                 "my_udtf",
+                 <<1, 2, 3>>,
+                 eval_type: "oops"
                )
     end
 

@@ -27,6 +27,7 @@ defmodule SparkEx.DataFrame.Stat do
   def describe(df, cols \\ [])
 
   def describe(%DataFrame{} = df, cols) when is_list(cols) do
+    validate_string_list!(cols, "column names")
     %DataFrame{df | plan: {:stat_describe, df.plan, cols}}
   end
 
@@ -49,6 +50,7 @@ defmodule SparkEx.DataFrame.Stat do
   def summary(df, statistics \\ [])
 
   def summary(%DataFrame{} = df, statistics) when is_list(statistics) do
+    validate_string_list!(statistics, "statistics")
     %DataFrame{df | plan: {:stat_summary, df.plan, statistics}}
   end
 
@@ -82,11 +84,14 @@ defmodule SparkEx.DataFrame.Stat do
   def freq_items(df, cols, support \\ 0.01)
 
   def freq_items(%DataFrame{} = df, cols, support) when is_list(cols) and is_number(support) do
+    validate_string_list!(cols, "column names")
     validate_support!(support)
     %DataFrame{df | plan: {:stat_freq_items, df.plan, cols, support}}
   end
 
   def freq_items(%DataFrame{} = df, cols, opts) when is_list(cols) and is_list(opts) do
+    validate_string_list!(cols, "column names")
+
     unless Keyword.keyword?(opts) do
       raise ArgumentError, "expected options as keyword list, got: #{inspect(opts)}"
     end
@@ -291,6 +296,12 @@ defmodule SparkEx.DataFrame.Stat do
               "each probability must be a number between 0 and 1, got: #{inspect(p)}"
       end
     end)
+  end
+
+  defp validate_string_list!(values, label) do
+    unless Enum.all?(values, &is_binary/1) do
+      raise ArgumentError, "#{label} must all be strings"
+    end
   end
 
   defp validate_support!(support) when is_number(support) do

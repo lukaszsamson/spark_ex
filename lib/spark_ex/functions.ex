@@ -17,6 +17,8 @@ defmodule SparkEx.Functions do
       |> SparkEx.DataFrame.filter(col("age") |> SparkEx.Column.gt(lit(18)))
   """
 
+  # Excluded Kernel functions are redefined as Spark SQL equivalents below.
+  # Note: Kernel.struct/1,2 is shadowed — use Kernel.struct/2 explicitly if needed in this module.
   import Kernel, except: [abs: 1, ceil: 1, floor: 1, round: 1, length: 1, struct: 1, struct: 2]
 
   alias SparkEx.Column
@@ -1149,7 +1151,17 @@ defmodule SparkEx.Functions do
       raise ArgumentError, "make_timestamp keyword form requires :date and :time"
     end
 
-    args = [to_expr(Keyword.fetch!(opts, :date)), to_expr(Keyword.fetch!(opts, :time))]
+    date_expr = to_expr(Keyword.fetch!(opts, :date))
+    time_expr = to_expr(Keyword.fetch!(opts, :time))
+
+    args = [
+      {:fn, "year", [date_expr], false},
+      {:fn, "month", [date_expr], false},
+      {:fn, "dayofmonth", [date_expr], false},
+      {:fn, "hour", [time_expr], false},
+      {:fn, "minute", [time_expr], false},
+      {:fn, "second", [time_expr], false}
+    ]
 
     args =
       if Keyword.has_key?(opts, :timezone) do

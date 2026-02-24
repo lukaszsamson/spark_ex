@@ -278,6 +278,36 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
         send(parent, {:config_is_modifiable_called, keys})
         {:reply, {:ok, [{"spark.sql.shuffle.partitions", "true"}]}, parent}
       end
+
+      def handle_call({:config_set, pairs}, _from, parent) do
+        send(parent, {:config_set_called, pairs})
+        {:reply, :ok, parent}
+      end
+
+      def handle_call({:config_get, keys}, _from, parent) do
+        send(parent, {:config_get_called, keys})
+        {:reply, {:ok, [{"k", "v"}]}, parent}
+      end
+
+      def handle_call({:config_get_option, keys}, _from, parent) do
+        send(parent, {:config_get_option_called, keys})
+        {:reply, {:ok, [{"k", nil}]}, parent}
+      end
+
+      def handle_call({:config_get_with_default, pairs}, _from, parent) do
+        send(parent, {:config_get_with_default_called, pairs})
+        {:reply, {:ok, pairs}, parent}
+      end
+
+      def handle_call({:config_get_all, prefix}, _from, parent) do
+        send(parent, {:config_get_all_called, prefix})
+        {:reply, {:ok, []}, parent}
+      end
+
+      def handle_call({:config_unset, keys}, _from, parent) do
+        send(parent, {:config_unset_called, keys})
+        {:reply, :ok, parent}
+      end
     end
 
     test "wraps bare string key in list" do
@@ -294,6 +324,62 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
 
       assert_raise ArgumentError, ~r/keys must be a list of strings/, fn ->
         SparkEx.Session.config_is_modifiable(session, ["spark.sql.shuffle.partitions", 123])
+      end
+    end
+
+    test "validates config_set key-value types" do
+      {:ok, session} = ConfigSession.start_link(self())
+      assert :ok = SparkEx.Session.config_set(session, [{"k", "v"}])
+      assert_receive {:config_set_called, [{"k", "v"}]}
+
+      assert_raise ArgumentError, ~r/pairs must be \{string_key, string_value\}/, fn ->
+        SparkEx.Session.config_set(session, [{42, "v"}])
+      end
+    end
+
+    test "validates config_get and config_get_option keys" do
+      {:ok, session} = ConfigSession.start_link(self())
+      assert {:ok, _} = SparkEx.Session.config_get(session, ["k"])
+      assert_receive {:config_get_called, ["k"]}
+      assert {:ok, _} = SparkEx.Session.config_get_option(session, ["k"])
+      assert_receive {:config_get_option_called, ["k"]}
+
+      assert_raise ArgumentError, ~r/config keys must be strings/, fn ->
+        SparkEx.Session.config_get(session, [42])
+      end
+
+      assert_raise ArgumentError, ~r/config_get_option\/2 expects a list of string keys/, fn ->
+        SparkEx.Session.config_get_option(session, 42)
+      end
+    end
+
+    test "validates config_get_with_default pair shapes" do
+      {:ok, session} = ConfigSession.start_link(self())
+      assert {:ok, _} = SparkEx.Session.config_get_with_default(session, [{"k", "v"}])
+      assert_receive {:config_get_with_default_called, [{"k", "v"}]}
+
+      assert_raise ArgumentError,
+                   ~r/pairs must be \{string_key, string_value\}/,
+                   fn ->
+                     SparkEx.Session.config_get_with_default(session, [{"k", 42}])
+                   end
+    end
+
+    test "validates config_get_all prefix and config_unset keys" do
+      {:ok, session} = ConfigSession.start_link(self())
+      assert {:ok, _} = SparkEx.Session.config_get_all(session, "spark")
+      assert_receive {:config_get_all_called, "spark"}
+      assert :ok = SparkEx.Session.config_unset(session, ["k"])
+      assert_receive {:config_unset_called, ["k"]}
+
+      assert_raise ArgumentError,
+                   ~r/config_get_all\/2 expects prefix to be a string or nil/,
+                   fn ->
+                     SparkEx.Session.config_get_all(session, prefix: "spark")
+                   end
+
+      assert_raise ArgumentError, ~r/config_unset\/2 expects a list of string keys/, fn ->
+        SparkEx.Session.config_unset(session, 42)
       end
     end
   end

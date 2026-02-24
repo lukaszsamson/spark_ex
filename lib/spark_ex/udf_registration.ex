@@ -53,8 +53,11 @@ defmodule SparkEx.UDFRegistration do
     return_type = Keyword.get(opts, :return_type, nil)
     aggregate = Keyword.get(opts, :aggregate, false)
 
-    with {:ok, normalized_return_type} <- normalize_return_type(session, return_type) do
-      command = {:register_java_udf, name, class_name, normalized_return_type, aggregate}
+    with {:ok, normalized_return_type} <- normalize_return_type(session, return_type),
+         {:ok, normalized_aggregate} <- normalize_aggregate(aggregate) do
+      command =
+        {:register_java_udf, name, class_name, normalized_return_type, normalized_aggregate}
+
       SparkEx.Session.execute_command(session, command)
     end
   end
@@ -94,10 +97,11 @@ defmodule SparkEx.UDFRegistration do
     deterministic = Keyword.get(opts, :deterministic, true)
 
     with {:ok, normalized_return_type} <- normalize_return_type(session, return_type),
+         {:ok, normalized_eval_type} <- normalize_eval_type(eval_type),
          {:ok, normalized_python_ver} <- normalize_python_ver(python_ver),
          {:ok, normalized_deterministic} <- normalize_deterministic(deterministic) do
       command =
-        {:register_udtf, name, python_command, normalized_return_type, eval_type,
+        {:register_udtf, name, python_command, normalized_return_type, normalized_eval_type,
          normalized_python_ver, normalized_deterministic}
 
       SparkEx.Session.execute_command(session, command)
@@ -149,8 +153,14 @@ defmodule SparkEx.UDFRegistration do
   defp normalize_python_ver(python_ver) when is_binary(python_ver), do: {:ok, python_ver}
   defp normalize_python_ver(other), do: {:error, {:invalid_python_ver, other}}
 
+  defp normalize_eval_type(eval_type) when is_integer(eval_type), do: {:ok, eval_type}
+  defp normalize_eval_type(other), do: {:error, {:invalid_eval_type, other}}
+
   defp normalize_deterministic(deterministic) when is_boolean(deterministic),
     do: {:ok, deterministic}
 
   defp normalize_deterministic(other), do: {:error, {:invalid_deterministic, other}}
+
+  defp normalize_aggregate(aggregate) when is_boolean(aggregate), do: {:ok, aggregate}
+  defp normalize_aggregate(other), do: {:error, {:invalid_aggregate, other}}
 end

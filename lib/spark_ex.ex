@@ -33,6 +33,7 @@ defmodule SparkEx do
   @spec connect(keyword()) :: {:ok, pid()} | {:error, term()}
   def connect(opts) do
     url = Keyword.fetch!(opts, :url)
+    validate_connect_identity_opts!(opts)
 
     with {:ok, _connect_opts} <- Channel.parse_uri(url) do
       SparkEx.Session.start_link(opts)
@@ -67,10 +68,16 @@ defmodule SparkEx do
       df = SparkEx.sql(session, "SELECT * FROM t WHERE id = :id", args: %{id: 42})
   """
   @spec sql(GenServer.server(), String.t(), keyword()) :: SparkEx.DataFrame.t()
-  def sql(session, query, opts \\ []) do
+  def sql(session, query, opts \\ [])
+
+  def sql(session, query, opts) when is_binary(query) do
     args = Keyword.get(opts, :args, nil)
     validate_sql_args!(args)
     %SparkEx.DataFrame{session: session, plan: {:sql, query, args}}
+  end
+
+  def sql(_session, query, _opts) do
+    raise ArgumentError, "expected query to be a string, got: #{inspect(query)}"
   end
 
   @doc """
@@ -545,5 +552,33 @@ defmodule SparkEx do
   defp validate_sql_args!(args) do
     raise ArgumentError,
           "expected :args to be a list, map, or nil, got: #{inspect(args)}"
+  end
+
+  defp validate_connect_identity_opts!(opts) do
+    validate_optional_string_opt!(opts, :user_id)
+    validate_optional_string_opt!(opts, :client_type)
+    validate_optional_string_opt!(opts, :session_id)
+    validate_optional_string_or_nil_opt!(opts, :server_side_session_id)
+  end
+
+  defp validate_optional_string_opt!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} when is_binary(value) -> :ok
+      {:ok, value} -> raise ArgumentError, "#{key} must be a string, got: #{inspect(value)}"
+      :error -> :ok
+    end
+  end
+
+  defp validate_optional_string_or_nil_opt!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} when is_nil(value) or is_binary(value) ->
+        :ok
+
+      {:ok, value} ->
+        raise ArgumentError, "#{key} must be a string or nil, got: #{inspect(value)}"
+
+      :error ->
+        :ok
+    end
   end
 end

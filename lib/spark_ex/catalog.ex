@@ -89,12 +89,25 @@ defmodule SparkEx.Catalog do
 
   @spec list_catalogs(GenServer.server(), String.t() | nil) ::
           {:ok, [CatalogMetadata.t()]} | {:error, term()}
-  def list_catalogs(session, pattern \\ nil) do
+  def list_catalogs(session, pattern \\ nil)
+
+  def list_catalogs(session, pattern) when is_nil(pattern) or is_binary(pattern) do
     case execute_catalog(session, {:list_catalogs, pattern}) do
       {:ok, rows} -> {:ok, Enum.map(rows, &parse_catalog_metadata/1)}
       {:error, _} = err -> err
     end
   end
+
+  def list_catalogs(_session, opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      {:error,
+       {:invalid_options, "list_catalogs/2 accepts only a pattern string, not keyword opts"}}
+    else
+      {:error, {:invalid_pattern, opts}}
+    end
+  end
+
+  def list_catalogs(_session, pattern), do: {:error, {:invalid_pattern, pattern}}
 
   # ── Database Management ──
 
@@ -143,9 +156,11 @@ defmodule SparkEx.Catalog do
   end
 
   @spec create_database(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
-  def create_database(session, db_name, opts \\ []) when is_binary(db_name) do
-    sql = build_create_database_sql(db_name, opts)
-    execute_sql_void(session, sql)
+  def create_database(session, db_name, opts \\ []) when is_binary(db_name) and is_list(opts) do
+    with :ok <- validate_create_database_opts(opts) do
+      sql = build_create_database_sql(db_name, opts)
+      execute_sql_void(session, sql)
+    end
   end
 
   @spec drop_database(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
@@ -166,6 +181,7 @@ defmodule SparkEx.Catalog do
           {:ok, [Table.t()]} | {:error, term()}
   def list_tables(session, db_name \\ nil, pattern \\ nil) do
     with {:ok, db_name} <- resolve_catalog_db_name(session, db_name),
+         {:ok, pattern} <- normalize_catalog_pattern(pattern),
          {:ok, rows} <- execute_catalog(session, {:list_tables, db_name, pattern}) do
       {:ok, Enum.map(rows, &parse_table/1)}
     else
@@ -195,7 +211,9 @@ defmodule SparkEx.Catalog do
   @spec table_exists?(GenServer.server(), String.t(), String.t() | nil) ::
           {:ok, boolean()} | {:error, term()}
   def table_exists?(session, table_name, db_name \\ nil) when is_binary(table_name) do
-    execute_scalar(session, {:table_exists, table_name, db_name})
+    with {:ok, db_name} <- normalize_optional_db_name(db_name) do
+      execute_scalar(session, {:table_exists, table_name, db_name})
+    end
   end
 
   @spec list_columns(GenServer.server(), String.t(), String.t() | nil) ::
@@ -227,6 +245,7 @@ defmodule SparkEx.Catalog do
           {:ok, [Function.t()]} | {:error, term()}
   def list_functions(session, db_name \\ nil, pattern \\ nil) do
     with {:ok, db_name} <- resolve_catalog_db_name(session, db_name),
+         {:ok, pattern} <- normalize_catalog_pattern(pattern),
          {:ok, rows} <- execute_catalog(session, {:list_functions, db_name, pattern}) do
       {:ok, Enum.map(rows, &parse_function/1)}
     else
@@ -246,20 +265,22 @@ defmodule SparkEx.Catalog do
   @spec function_exists?(GenServer.server(), String.t(), String.t() | nil) ::
           {:ok, boolean()} | {:error, term()}
   def function_exists?(session, function_name, db_name \\ nil) when is_binary(function_name) do
-    case execute_scalar(session, {:function_exists, function_name, db_name}) do
-      {:ok, _} = ok ->
-        ok
+    with {:ok, db_name} <- normalize_optional_db_name(db_name) do
+      case execute_scalar(session, {:function_exists, function_name, db_name}) do
+        {:ok, _} = ok ->
+          ok
 
-      {:error, %SparkEx.Error.Remote{message: message} = remote}
-      when is_binary(db_name) and is_binary(message) ->
-        if String.contains?(message, "SCHEMA_NOT_FOUND") do
-          execute_scalar(session, {:function_exists, function_name, nil})
-        else
-          {:error, remote}
-        end
+        {:error, %SparkEx.Error.Remote{message: message} = remote}
+        when is_binary(db_name) and is_binary(message) ->
+          if String.contains?(message, "SCHEMA_NOT_FOUND") do
+            execute_scalar(session, {:function_exists, function_name, nil})
+          else
+            {:error, remote}
+          end
 
-      {:error, _} = err ->
-        err
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
@@ -446,6 +467,8 @@ defmodule SparkEx.Catalog do
     end
   end
 
+  defp resolve_catalog_db_name(_session, db_name), do: {:error, {:invalid_db_name, db_name}}
+
   defp resolve_fallback_catalog_db_name(session) do
     case execute_catalog(session, {:list_databases, nil}) do
       {:ok, [first | _]} when is_map(first) ->
@@ -459,6 +482,67 @@ defmodule SparkEx.Catalog do
 
       {:error, _} = err ->
         err
+    end
+  end
+
+  defp normalize_catalog_pattern(pattern) when is_nil(pattern) or is_binary(pattern),
+    do: {:ok, pattern}
+
+  defp normalize_catalog_pattern(pattern) when is_list(pattern) do
+    if Keyword.keyword?(pattern) do
+      {:error, {:invalid_options, "expected pattern string, got keyword options"}}
+    else
+      {:error, {:invalid_pattern, pattern}}
+    end
+  end
+
+  defp normalize_catalog_pattern(pattern), do: {:error, {:invalid_pattern, pattern}}
+
+  defp normalize_optional_db_name(nil), do: {:ok, nil}
+  defp normalize_optional_db_name(db_name) when is_binary(db_name), do: {:ok, db_name}
+
+  defp normalize_optional_db_name(opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      case {Keyword.fetch(opts, :db_name), Keyword.fetch(opts, :db)} do
+        {{:ok, db_name}, :error} when is_binary(db_name) -> {:ok, db_name}
+        {:error, {:ok, db_name}} when is_binary(db_name) -> {:ok, db_name}
+        {{:ok, db_name}, :error} -> {:error, {:invalid_db_name, db_name}}
+        {:error, {:ok, db_name}} -> {:error, {:invalid_db_name, db_name}}
+        {{:ok, _}, {:ok, _}} -> {:error, {:invalid_db_name, opts}}
+        {:error, :error} -> {:error, {:invalid_db_name, opts}}
+      end
+    else
+      {:error, {:invalid_db_name, opts}}
+    end
+  end
+
+  defp normalize_optional_db_name(db_name), do: {:error, {:invalid_db_name, db_name}}
+
+  defp validate_create_database_opts(opts) do
+    allowed_keys = [:if_not_exists, :comment, :location]
+    invalid_keys = Keyword.keys(opts) -- allowed_keys
+
+    if invalid_keys != [] do
+      {:error,
+       {:invalid_options, "unsupported create_database options: #{inspect(invalid_keys)}"}}
+    else
+      if_not_exists = Keyword.get(opts, :if_not_exists, false)
+      comment = Keyword.get(opts, :comment, nil)
+      location = Keyword.get(opts, :location, nil)
+
+      cond do
+        not is_boolean(if_not_exists) ->
+          {:error, {:invalid_if_not_exists, if_not_exists}}
+
+        not (is_nil(comment) or is_binary(comment)) ->
+          {:error, {:invalid_comment, comment}}
+
+        not (is_nil(location) or is_binary(location)) ->
+          {:error, {:invalid_location, location}}
+
+        true ->
+          :ok
+      end
     end
   end
 

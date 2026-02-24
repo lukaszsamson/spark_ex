@@ -87,9 +87,8 @@ defmodule SparkEx.SqlFormatter do
     consume_string_literal(rest, [<<ch::utf8>> | acc])
   end
 
-  defp consume_string_literal(<<>>, acc) do
-    # Unterminated string literal — return what we have
-    {IO.iodata_to_binary(Enum.reverse(acc)), <<>>}
+  defp consume_string_literal(<<>>, _acc) do
+    raise ArgumentError, "unterminated string literal in SQL"
   end
 
   # Single-pass tokenizer for named args that skips string literals

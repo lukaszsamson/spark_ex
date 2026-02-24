@@ -165,6 +165,18 @@ defmodule SparkEx.M11.GroupedDataTest do
       assert gd.pivot_values == nil
     end
 
+    test "raises for non-string/non-Column pivot column" do
+      assert_raise ArgumentError, ~r/pivot column must be a string or SparkEx.Column/, fn ->
+        make_grouped() |> GroupedData.pivot(42)
+      end
+    end
+
+    test "raises for non-list pivot values" do
+      assert_raise ArgumentError, ~r/pivot values must be a list or nil/, fn ->
+        make_grouped() |> GroupedData.pivot("course", "bad")
+      end
+    end
+
     test "pivot + agg creates pivot aggregate plan" do
       result =
         make_grouped()

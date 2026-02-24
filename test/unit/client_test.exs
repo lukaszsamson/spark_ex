@@ -126,6 +126,17 @@ defmodule SparkEx.Connect.ClientTest do
     end
   end
 
+  test "clone_session/2 rejects non-string new_session_id" do
+    session = %SparkEx.Session{
+      channel: nil,
+      session_id: "test-session",
+      user_id: "test",
+      client_type: "test"
+    }
+
+    assert {:error, {:invalid_new_session_id, 123}} = Client.clone_session(session, 123)
+  end
+
   test "SqlFormatter formats positional args" do
     sql = "SELECT * FROM t WHERE id = ? AND name = ?"
 

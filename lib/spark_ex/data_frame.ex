@@ -604,6 +604,10 @@ defmodule SparkEx.DataFrame do
   """
   @spec select_expr(t(), String.t() | [String.t()]) :: t()
   def select_expr(%__MODULE__{} = df, exprs) when is_list(exprs) do
+    unless Enum.all?(exprs, &is_binary/1) do
+      raise ArgumentError, "exprs must all be strings"
+    end
+
     expr_nodes = Enum.map(exprs, fn e -> {:expr, e} end)
     %__MODULE__{df | plan: {:project, df.plan, expr_nodes}}
   end
@@ -1256,6 +1260,16 @@ defmodule SparkEx.DataFrame do
           String.t()
         ) :: t()
   def unpivot(%__MODULE__{} = df, ids, values, variable_column_name, value_column_name) do
+    unless is_binary(variable_column_name) do
+      raise ArgumentError,
+            "variable_column_name must be a string, got: #{inspect(variable_column_name)}"
+    end
+
+    unless is_binary(value_column_name) do
+      raise ArgumentError,
+            "value_column_name must be a string, got: #{inspect(value_column_name)}"
+    end
+
     ids = if is_list(ids), do: ids, else: [ids]
     id_exprs = Enum.map(ids, &normalize_column_expr/1)
 
@@ -1929,24 +1943,13 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
-  Returns a lazy enumerable of rows, fetched from the gRPC stream in Arrow batches.
+  Returns a lazy enumerable over collected rows.
   """
   @spec to_local_iterator(t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
   def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
-    case SparkEx.Session.execute_plan_stream(df.session, df.plan, merge_tags(df, opts)) do
-      {:ok, stream} ->
-        tracked_stream =
-          Stream.map(stream, fn
-            {:ok, %Spark.Connect.ExecutePlanResponse{server_side_session_id: id} = resp}
-            when is_binary(id) and id != "" ->
-              SparkEx.Session.update_server_side_session_id(df.session, id)
-              {:ok, resp}
-
-            other ->
-              other
-          end)
-
-        {:ok, SparkEx.Connect.ResultDecoder.rows_stream(tracked_stream)}
+    case SparkEx.Session.execute_collect(df.session, df.plan, merge_tags(df, opts)) do
+      {:ok, rows} ->
+        {:ok, Stream.map(rows, & &1)}
 
       {:error, _} = error ->
         error

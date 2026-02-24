@@ -182,8 +182,18 @@ defmodule SparkEx.Session do
   uses a new session ID unless one is explicitly provided.
   """
   @spec clone(GenServer.server(), String.t() | nil) :: {:ok, pid()} | {:error, term()}
-  def clone(session, new_session_id \\ nil) do
+  def clone(session, new_session_id \\ nil)
+
+  def clone(session, nil) do
+    GenServer.call(session, {:clone_session, nil})
+  end
+
+  def clone(session, new_session_id) when is_binary(new_session_id) do
     GenServer.call(session, {:clone_session, new_session_id})
+  end
+
+  def clone(_session, new_session_id) do
+    raise ArgumentError, "new_session_id must be a string or nil, got: #{inspect(new_session_id)}"
   end
 
   @doc """
@@ -204,32 +214,16 @@ defmodule SparkEx.Session do
   end
 
   @doc """
-  Executes a plan and returns a managed response stream handle.
+  Executes a plan and returns a raw response stream.
 
   Used by APIs that need incremental row consumption.
 
-  The returned stream handle is enumerable and also supports
-  `SparkEx.ManagedStream.close/1` for explicit early cleanup.
+  Used by APIs that need incremental row consumption.
   """
   @spec execute_plan_stream(GenServer.server(), term(), keyword()) ::
-          {:ok, SparkEx.ManagedStream.t()} | {:error, term()}
+          {:ok, Enumerable.t()} | {:error, term()}
   def execute_plan_stream(session, plan, opts \\ []) do
-    timeout = call_timeout(opts)
-
-    case safe_get_state(session, timeout) do
-      {:ok, %__MODULE__{} = state} ->
-        {proto_plan, _counter} = PlanEncoder.encode(plan, 0)
-        opts = merge_session_tags(opts, state.tags)
-
-        Client.execute_plan_managed_stream(
-          state,
-          proto_plan,
-          Keyword.put(opts, :stream_owner, self())
-        )
-
-      _ ->
-        GenServer.call(session, {:execute_plan_stream, plan, opts}, timeout)
-    end
+    GenServer.call(session, {:execute_plan_stream, plan, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -292,6 +286,7 @@ defmodule SparkEx.Session do
   @spec config_set(GenServer.server(), [{String.t(), String.t()}]) ::
           :ok | {:error, term()}
   def config_set(session, pairs) do
+    validate_config_pairs!(pairs, "config_set/2")
     GenServer.call(session, {:config_set, pairs})
   end
 
@@ -301,6 +296,7 @@ defmodule SparkEx.Session do
   @spec config_get(GenServer.server(), [String.t()]) ::
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get(session, keys) do
+    validate_config_keys!(keys, "config_get/2")
     GenServer.call(session, {:config_get, keys})
   end
 
@@ -310,6 +306,7 @@ defmodule SparkEx.Session do
   @spec config_get_with_default(GenServer.server(), [{String.t(), String.t()}]) ::
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get_with_default(session, pairs) do
+    validate_config_pairs!(pairs, "config_get_with_default/2")
     GenServer.call(session, {:config_get_with_default, pairs})
   end
 
@@ -319,6 +316,7 @@ defmodule SparkEx.Session do
   @spec config_get_option(GenServer.server(), [String.t()]) ::
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get_option(session, keys) do
+    validate_config_keys!(keys, "config_get_option/2")
     GenServer.call(session, {:config_get_option, keys})
   end
 
@@ -328,6 +326,7 @@ defmodule SparkEx.Session do
   @spec config_get_all(GenServer.server(), String.t() | nil) ::
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get_all(session, prefix \\ nil) do
+    validate_config_prefix!(prefix)
     GenServer.call(session, {:config_get_all, prefix})
   end
 
@@ -336,6 +335,7 @@ defmodule SparkEx.Session do
   """
   @spec config_unset(GenServer.server(), [String.t()]) :: :ok | {:error, term()}
   def config_unset(session, keys) do
+    validate_config_keys!(keys, "config_unset/2")
     GenServer.call(session, {:config_unset, keys})
   end
 
@@ -354,6 +354,44 @@ defmodule SparkEx.Session do
     end
 
     GenServer.call(session, {:config_is_modifiable, keys})
+  end
+
+  defp validate_config_pairs!(pairs, _fun_name) when is_list(pairs) do
+    if Enum.all?(pairs, fn
+         {k, v} when is_binary(k) and is_binary(v) -> true
+         _ -> false
+       end) do
+      :ok
+    else
+      raise ArgumentError,
+            "config_set/config_get_with_default pairs must be {string_key, string_value}, got: #{inspect(pairs, charlists: :as_lists)}"
+    end
+  end
+
+  defp validate_config_pairs!(pairs, fun_name) do
+    raise ArgumentError,
+          "#{fun_name} expects a list of {string_key, string_value} pairs, got: #{inspect(pairs)}"
+  end
+
+  defp validate_config_keys!(keys, _fun_name) when is_list(keys) do
+    if Enum.all?(keys, &is_binary/1) do
+      :ok
+    else
+      raise ArgumentError,
+            "config keys must be strings, got: #{inspect(keys, charlists: :as_lists)}"
+    end
+  end
+
+  defp validate_config_keys!(keys, fun_name) do
+    raise ArgumentError, "#{fun_name} expects a list of string keys, got: #{inspect(keys)}"
+  end
+
+  defp validate_config_prefix!(nil), do: :ok
+  defp validate_config_prefix!(prefix) when is_binary(prefix), do: :ok
+
+  defp validate_config_prefix!(prefix) do
+    raise ArgumentError,
+          "config_get_all/2 expects prefix to be a string or nil, got: #{inspect(prefix)}"
   end
 
   @doc """
@@ -825,178 +863,227 @@ defmodule SparkEx.Session do
     end
   end
 
+  # execute_collect retry cascade (in order of precedence):
+  #
+  # 1. Pre-execution: if the plan contains a JSON relation with nested maps,
+  #    proactively re-execute with JSON projection to avoid Arrow decode issues.
+  # 2. Normal execution via Client.execute_plan.
+  # 3. Post-execution: if the result has nested maps with decode loss,
+  #    retry with JSON projection.
+  # 4. Arrow decode failure: retry with unique column names, then JSON projection.
+  # 5. Remote error (SparkEx.Error.Remote): try legacy plan rewrites based on
+  #    error message patterns (grouping sets, UNPARSED types, empty relations).
+  # 6. Empty relation errors: cascade through transpose, table function,
+  #    as-of join, and subquery plan rewrites.
   def handle_call({:execute_collect, plan, opts}, _from, state) do
-    case safe_encode(plan, state.plan_id_counter) do
-      {{proto_plan, counter}, nil} ->
-        state = %{state | plan_id_counter: counter}
+    operation_telemetry_span(:execute_collect, state.session_id, fn ->
+      case safe_encode(plan, state.plan_id_counter) do
+        {{proto_plan, counter}, nil} ->
+          state = %{state | plan_id_counter: counter}
 
-        opts = merge_session_tags(opts, state.tags)
+          opts = merge_session_tags(opts, state.tags)
 
-        case Client.execute_plan(state, proto_plan, opts) do
-          {:ok, result} ->
-            state = maybe_update_server_session(state, result.server_side_session_id)
+          case maybe_execute_collect_with_json_projection(state, plan, proto_plan, opts) do
+            {:ok, result, state} ->
+              state = %{state | last_execution_metrics: result.execution_metrics}
+              SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+              {:reply, {:ok, result.rows}, state}
 
-            {:ok, result, state} =
-              maybe_retry_collect_with_json_projection(state, plan, proto_plan, opts, result)
+            {:no_fallback, state} ->
+              case Client.execute_plan(state, proto_plan, opts) do
+                {:ok, result} ->
+                  state = maybe_update_server_session(state, result.server_side_session_id)
 
-            state = %{state | last_execution_metrics: result.execution_metrics}
-            SparkEx.Observation.store_observed_metrics(result.observed_metrics)
-            {:reply, {:ok, result.rows}, state}
+                  {:ok, result, state} =
+                    maybe_retry_collect_with_json_projection(state, plan, proto_plan, opts, result)
 
-          {:error, {:arrow_decode_failed, _reason}} = error ->
-            case retry_collect_with_unique_columns(state, plan, proto_plan, opts) do
-              {:ok, result, state} ->
-                state = maybe_update_server_session(state, result.server_side_session_id)
-                {result, state} = maybe_decode_retry_result_rows(state, plan, proto_plan, result)
-                state = %{state | last_execution_metrics: result.execution_metrics}
-                SparkEx.Observation.store_observed_metrics(result.observed_metrics)
-                {:reply, {:ok, result.rows}, state}
+                  state = %{state | last_execution_metrics: result.execution_metrics}
+                  SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+                  {:reply, {:ok, result.rows}, state}
 
-              {:error, state} ->
-                {:reply, error, state}
-            end
+                {:error, {:arrow_decode_failed, _reason}} = error ->
+                  case retry_collect_with_unique_columns(state, plan, proto_plan, opts) do
+                    {:ok, result, state} ->
+                      state = maybe_update_server_session(state, result.server_side_session_id)
 
-          {:error, %SparkEx.Error.Remote{} = remote} = error ->
-            case retry_collect_with_legacy_fallbacks(state, plan, opts, remote) do
-              {:ok, result, state} ->
-                state = maybe_update_server_session(state, result.server_side_session_id)
-                state = %{state | last_execution_metrics: result.execution_metrics}
-                SparkEx.Observation.store_observed_metrics(result.observed_metrics)
-                {:reply, {:ok, result.rows}, state}
+                      {result, state} =
+                        maybe_decode_retry_result_rows(state, plan, proto_plan, result)
 
-              :error ->
-                {:reply, error, state}
-            end
+                      state = %{state | last_execution_metrics: result.execution_metrics}
+                      SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+                      {:reply, {:ok, result.rows}, state}
 
-          {:error, _} = error ->
-            {:reply, error, state}
-        end
+                    {:error, state} ->
+                      {:reply, error, state}
+                  end
 
-      {nil, error} ->
-        {:reply, error, state}
-    end
+                {:error, %SparkEx.Error.Remote{} = remote} = error ->
+                  case retry_collect_with_legacy_fallbacks(state, plan, opts, remote) do
+                    {:ok, result, state} ->
+                      state = maybe_update_server_session(state, result.server_side_session_id)
+                      state = %{state | last_execution_metrics: result.execution_metrics}
+                      SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+                      {:reply, {:ok, result.rows}, state}
+
+                    :error ->
+                      {:reply, error, state}
+                  end
+
+                {:error, _} = error ->
+                  {:reply, error, state}
+              end
+          end
+
+        {nil, error} ->
+          {:reply, error, state}
+      end
+    end)
   end
 
-  def handle_call({:execute_plan_stream, plan, opts}, {owner, _tag}, state) do
-    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+  def handle_call({:execute_plan_stream, plan, opts}, _from, state) do
+    operation_telemetry_span(:execute_plan_stream, state.session_id, fn ->
+      case safe_encode(plan, state.plan_id_counter) do
+        {{proto_plan, counter}, nil} ->
+          state = %{state | plan_id_counter: counter}
 
-    opts = merge_session_tags(opts, state.tags)
+          opts = merge_session_tags(opts, state.tags)
 
-    case Client.execute_plan_managed_stream(
-           state,
-           proto_plan,
-           Keyword.put(opts, :stream_owner, owner)
-         ) do
-      {:ok, stream} ->
-        {:reply, {:ok, stream}, state}
+          case Client.execute_plan_raw_stream(state, proto_plan, opts) do
+            {:ok, stream} ->
+              {:reply, {:ok, stream}, state}
 
-      {:error, _} = error ->
-        {:reply, error, state}
-    end
+            {:error, _} = error ->
+              {:reply, error, state}
+          end
+
+        {nil, error} ->
+          {:reply, error, state}
+      end
+    end)
   end
 
   def handle_call({:execute_explorer, plan, opts}, _from, state) do
-    max_rows = Keyword.get(opts, :max_rows, 10_000)
-    unsafe = Keyword.get(opts, :unsafe, false)
+    operation_telemetry_span(:execute_explorer, state.session_id, fn ->
+      max_rows = Keyword.get(opts, :max_rows, 10_000)
+      unsafe = Keyword.get(opts, :unsafe, false)
 
-    {effective_plan, decoder_opts} =
-      if unsafe do
-        # Skip remote LIMIT injection only; local decoder limits stay active unless overridden.
-        {plan, opts}
-      else
-        {{:limit, plan, max_rows}, opts}
-      end
-
-    case safe_encode(effective_plan, state.plan_id_counter) do
-      {{proto_plan, counter}, nil} ->
-        state = %{state | plan_id_counter: counter}
-
-        decoder_opts = merge_session_tags(decoder_opts, state.tags)
-
-        case Client.execute_plan_explorer(state, proto_plan, decoder_opts) do
-          {:ok, result} ->
-            state = maybe_update_server_session(state, result.server_side_session_id)
-            state = %{state | last_execution_metrics: result.execution_metrics}
-            SparkEx.Observation.store_observed_metrics(result.observed_metrics)
-            {:reply, {:ok, result.dataframe}, state}
-
-          {:error, _} = error ->
-            {:reply, error, state}
+      {effective_plan, decoder_opts} =
+        if unsafe do
+          # Skip remote LIMIT injection only; local decoder limits stay active unless overridden.
+          {plan, opts}
+        else
+          {{:limit, plan, max_rows}, opts}
         end
 
-      {nil, error} ->
-        {:reply, error, state}
-    end
+      case safe_encode(effective_plan, state.plan_id_counter) do
+        {{proto_plan, counter}, nil} ->
+          state = %{state | plan_id_counter: counter}
+
+          decoder_opts = merge_session_tags(decoder_opts, state.tags)
+
+          case Client.execute_plan_explorer(state, proto_plan, decoder_opts) do
+            {:ok, result} ->
+              state = maybe_update_server_session(state, result.server_side_session_id)
+              state = %{state | last_execution_metrics: result.execution_metrics}
+              SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+              {:reply, {:ok, result.dataframe}, state}
+
+            {:error, _} = error ->
+              {:reply, error, state}
+          end
+
+        {nil, error} ->
+          {:reply, error, state}
+      end
+    end)
   end
 
   def handle_call({:execute_arrow, plan, opts}, _from, state) do
+    operation_telemetry_span(:execute_arrow, state.session_id, fn ->
+      case safe_encode(plan, state.plan_id_counter) do
+        {{proto_plan, counter}, nil} ->
+          state = %{state | plan_id_counter: counter}
+
+          opts = merge_session_tags(opts, state.tags)
+
+          case Client.execute_plan_arrow(state, proto_plan, opts) do
+            {:ok, result} ->
+              state = maybe_update_server_session(state, result.server_side_session_id)
+              state = %{state | last_execution_metrics: result.execution_metrics}
+              SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+              {:reply, {:ok, result.arrow}, state}
+
+            {:error, _} = error ->
+              {:reply, error, state}
+          end
+
+        {nil, error} ->
+          {:reply, error, state}
+      end
+    end)
+  end
+
+  def handle_call({:execute_count, plan}, _from, state) do
+    operation_telemetry_span(:execute_count, state.session_id, fn ->
+      case safe_encode_count(plan, state.plan_id_counter) do
+        {{proto_plan, counter}, nil} ->
+          state = %{state | plan_id_counter: counter}
+
+          case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
+            {:ok, result} ->
+              state = maybe_update_server_session(state, result.server_side_session_id)
+              state = %{state | last_execution_metrics: result.execution_metrics}
+              SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+
+              case extract_count(result.rows) do
+                {:ok, count} -> {:reply, {:ok, count}, state}
+                {:error, _} = error -> {:reply, error, state}
+              end
+
+            {:error, _} = error ->
+              {:reply, error, state}
+          end
+
+        {nil, error} ->
+          {:reply, error, state}
+      end
+    end)
+  end
+
+  def handle_call({:analyze_schema, plan}, _from, state) do
     case safe_encode(plan, state.plan_id_counter) do
       {{proto_plan, counter}, nil} ->
         state = %{state | plan_id_counter: counter}
 
-        opts = merge_session_tags(opts, state.tags)
-
-        case Client.execute_plan_arrow(state, proto_plan, opts) do
-          {:ok, result} ->
-            state = maybe_update_server_session(state, result.server_side_session_id)
-            state = %{state | last_execution_metrics: result.execution_metrics}
-            SparkEx.Observation.store_observed_metrics(result.observed_metrics)
-            {:reply, {:ok, result.arrow}, state}
+        case Client.analyze_schema(state, proto_plan) do
+          {:ok, schema, server_side_session_id} ->
+            state = maybe_update_server_session(state, server_side_session_id)
+            {:reply, {:ok, schema}, state}
 
           {:error, _} = error ->
             {:reply, error, state}
         end
 
       {nil, error} ->
-        {:reply, error, state}
-    end
-  end
-
-  def handle_call({:execute_count, plan}, _from, state) do
-    {proto_plan, counter} = PlanEncoder.encode_count(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
-
-    case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
-      {:ok, result} ->
-        state = maybe_update_server_session(state, result.server_side_session_id)
-        state = %{state | last_execution_metrics: result.execution_metrics}
-        SparkEx.Observation.store_observed_metrics(result.observed_metrics)
-
-        case extract_count(result.rows) do
-          {:ok, count} -> {:reply, {:ok, count}, state}
-          {:error, _} = error -> {:reply, error, state}
-        end
-
-      {:error, _} = error ->
-        {:reply, error, state}
-    end
-  end
-
-  def handle_call({:analyze_schema, plan}, _from, state) do
-    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
-
-    case Client.analyze_schema(state, proto_plan) do
-      {:ok, schema, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        {:reply, {:ok, schema}, state}
-
-      {:error, _} = error ->
         {:reply, error, state}
     end
   end
 
   def handle_call({:analyze_explain, plan, mode}, _from, state) do
-    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode(plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    case Client.analyze_explain(state, proto_plan, mode) do
-      {:ok, explain_str, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        {:reply, {:ok, explain_str}, state}
+        case Client.analyze_explain(state, proto_plan, mode) do
+          {:ok, explain_str, server_side_session_id} ->
+            state = maybe_update_server_session(state, server_side_session_id)
+            {:reply, {:ok, explain_str}, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
@@ -1079,57 +1166,77 @@ defmodule SparkEx.Session do
   end
 
   def handle_call({:analyze_tree_string, plan, opts}, _from, state) do
-    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode(plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    case Client.analyze_tree_string(state, proto_plan, opts) do
-      {:ok, str, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        {:reply, {:ok, str}, state}
+        case Client.analyze_tree_string(state, proto_plan, opts) do
+          {:ok, str, server_side_session_id} ->
+            state = maybe_update_server_session(state, server_side_session_id)
+            {:reply, {:ok, str}, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
 
   def handle_call({:analyze_is_local, plan}, _from, state) do
-    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode(plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    case Client.analyze_is_local(state, proto_plan) do
-      {:ok, is_local, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        {:reply, {:ok, is_local}, state}
+        case Client.analyze_is_local(state, proto_plan) do
+          {:ok, is_local, server_side_session_id} ->
+            state = maybe_update_server_session(state, server_side_session_id)
+            {:reply, {:ok, is_local}, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
 
   def handle_call({:analyze_is_streaming, plan}, _from, state) do
-    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode(plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    case Client.analyze_is_streaming(state, proto_plan) do
-      {:ok, is_streaming, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        {:reply, {:ok, is_streaming}, state}
+        case Client.analyze_is_streaming(state, proto_plan) do
+          {:ok, is_streaming, server_side_session_id} ->
+            state = maybe_update_server_session(state, server_side_session_id)
+            {:reply, {:ok, is_streaming}, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
 
   def handle_call({:analyze_input_files, plan}, _from, state) do
-    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode(plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    case Client.analyze_input_files(state, proto_plan) do
-      {:ok, files, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        {:reply, {:ok, files}, state}
+        case Client.analyze_input_files(state, proto_plan) do
+          {:ok, files, server_side_session_id} ->
+            state = maybe_update_server_session(state, server_side_session_id)
+            {:reply, {:ok, files}, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
@@ -1157,72 +1264,102 @@ defmodule SparkEx.Session do
   end
 
   def handle_call({:analyze_same_semantics, plan1, plan2}, _from, state) do
-    {proto_plan1, counter} = PlanEncoder.encode(plan1, state.plan_id_counter)
-    {proto_plan2, counter} = PlanEncoder.encode(plan2, counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode(plan1, state.plan_id_counter) do
+      {{proto_plan1, counter}, nil} ->
+        case safe_encode(plan2, counter) do
+          {{proto_plan2, counter}, nil} ->
+            state = %{state | plan_id_counter: counter}
 
-    case Client.analyze_same_semantics(state, proto_plan1, proto_plan2) do
-      {:ok, result, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        {:reply, {:ok, result}, state}
+            case Client.analyze_same_semantics(state, proto_plan1, proto_plan2) do
+              {:ok, result, server_side_session_id} ->
+                state = maybe_update_server_session(state, server_side_session_id)
+                {:reply, {:ok, result}, state}
 
-      {:error, _} = error ->
+              {:error, _} = error ->
+                {:reply, error, state}
+            end
+
+          {nil, error} ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
 
   def handle_call({:analyze_semantic_hash, plan}, _from, state) do
-    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode(plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    case Client.analyze_semantic_hash(state, proto_plan) do
-      {:ok, hash, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        {:reply, {:ok, hash}, state}
+        case Client.analyze_semantic_hash(state, proto_plan) do
+          {:ok, hash, server_side_session_id} ->
+            state = maybe_update_server_session(state, server_side_session_id)
+            {:reply, {:ok, hash}, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
 
   def handle_call({:analyze_persist, plan, opts}, _from, state) do
-    {relation, counter} = PlanEncoder.encode_relation(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode_relation(plan, state.plan_id_counter) do
+      {{relation, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    case Client.analyze_persist(state, relation, opts) do
-      {:ok, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        {:reply, :ok, state}
+        case Client.analyze_persist(state, relation, opts) do
+          {:ok, server_side_session_id} ->
+            state = maybe_update_server_session(state, server_side_session_id)
+            {:reply, :ok, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
 
   def handle_call({:analyze_unpersist, plan, opts}, _from, state) do
-    {relation, counter} = PlanEncoder.encode_relation(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode_relation(plan, state.plan_id_counter) do
+      {{relation, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    case Client.analyze_unpersist(state, relation, opts) do
-      {:ok, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        {:reply, :ok, state}
+        case Client.analyze_unpersist(state, relation, opts) do
+          {:ok, server_side_session_id} ->
+            state = maybe_update_server_session(state, server_side_session_id)
+            {:reply, :ok, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
 
   def handle_call({:analyze_get_storage_level, plan}, _from, state) do
-    {relation, counter} = PlanEncoder.encode_relation(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    case safe_encode_relation(plan, state.plan_id_counter) do
+      {{relation, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    case Client.analyze_get_storage_level(state, relation) do
-      {:ok, storage_level, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
-        {:reply, {:ok, storage_level}, state}
+        case Client.analyze_get_storage_level(state, relation) do
+          {:ok, storage_level, server_side_session_id} ->
+            state = maybe_update_server_session(state, server_side_session_id)
+            {:reply, {:ok, storage_level}, state}
 
-      {:error, _} = error ->
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      {nil, error} ->
         {:reply, error, state}
     end
   end
@@ -1296,81 +1433,101 @@ defmodule SparkEx.Session do
   end
 
   def handle_call({:execute_command, command, opts}, _from, state) do
-    alias SparkEx.Connect.CommandEncoder
+    operation_telemetry_span(:execute_command, state.session_id, fn ->
+      case safe_encode_command(command, state.plan_id_counter) do
+        {{proto_plan, counter}, nil} ->
+          state = %{state | plan_id_counter: counter}
 
-    {proto_plan, counter} = CommandEncoder.encode(command, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+          opts = merge_session_tags(opts, state.tags)
 
-    opts = merge_session_tags(opts, state.tags)
+          case Client.execute_plan(state, proto_plan, opts) do
+            {:ok, result} ->
+              state = maybe_update_server_session(state, result.server_side_session_id)
+              state = %{state | last_execution_metrics: result.execution_metrics}
+              {:reply, :ok, state}
 
-    case Client.execute_plan(state, proto_plan, opts) do
-      {:ok, result} ->
-        state = maybe_update_server_session(state, result.server_side_session_id)
-        state = %{state | last_execution_metrics: result.execution_metrics}
-        {:reply, :ok, state}
+            {:error, _} = error ->
+              {:reply, error, state}
+          end
 
-      {:error, _} = error ->
-        {:reply, error, state}
-    end
+        {nil, error} ->
+          {:reply, error, state}
+      end
+    end)
   end
 
   def handle_call({:execute_command_with_result, command, opts}, _from, state) do
-    alias SparkEx.Connect.CommandEncoder
+    operation_telemetry_span(:execute_command_with_result, state.session_id, fn ->
+      case safe_encode_command(command, state.plan_id_counter) do
+        {{proto_plan, counter}, nil} ->
+          state = %{state | plan_id_counter: counter}
 
-    {proto_plan, counter} = CommandEncoder.encode(command, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+          opts = merge_session_tags(opts, state.tags)
 
-    opts = merge_session_tags(opts, state.tags)
+          case Client.execute_plan(state, proto_plan, opts) do
+            {:ok, result} ->
+              state = maybe_update_server_session(state, result.server_side_session_id)
+              state = %{state | last_execution_metrics: result.execution_metrics}
+              {:reply, {:ok, result.command_result}, state}
 
-    case Client.execute_plan(state, proto_plan, opts) do
-      {:ok, result} ->
-        state = maybe_update_server_session(state, result.server_side_session_id)
-        state = %{state | last_execution_metrics: result.execution_metrics}
-        {:reply, {:ok, result.command_result}, state}
+            {:error, _} = error ->
+              {:reply, error, state}
+          end
 
-      {:error, _} = error ->
-        {:reply, error, state}
-    end
+        {nil, error} ->
+          {:reply, error, state}
+      end
+    end)
   end
 
   def handle_call({:execute_command_stream, command, opts}, {owner, _tag}, state) do
-    alias SparkEx.Connect.CommandEncoder
+    case safe_encode_command(command, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-    {proto_plan, counter} = CommandEncoder.encode(command, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+        opts = merge_session_tags(opts, state.tags)
 
-    opts = merge_session_tags(opts, state.tags)
+        case Client.execute_plan_managed_stream(
+               state,
+               proto_plan,
+               Keyword.put(opts, :stream_owner, owner)
+             ) do
+          {:ok, stream} ->
+            {:reply, {:ok, stream}, state}
 
-    case Client.execute_plan_managed_stream(
-           state,
-           proto_plan,
-           Keyword.put(opts, :stream_owner, owner)
-         ) do
-      {:ok, stream} ->
-        {:reply, {:ok, stream}, state}
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
 
-      {:error, _} = error ->
+      {nil, error} ->
         {:reply, error, state}
     end
   end
 
   def handle_call({:execute_show, plan}, _from, state) do
-    {proto_plan, counter} = PlanEncoder.encode(plan, state.plan_id_counter)
-    state = %{state | plan_id_counter: counter}
+    operation_telemetry_span(:execute_show, state.session_id, fn ->
+      case safe_encode(plan, state.plan_id_counter) do
+        {{proto_plan, counter}, nil} ->
+          state = %{state | plan_id_counter: counter}
 
-    case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
-      {:ok, result} ->
-        state = maybe_update_server_session(state, result.server_side_session_id)
-        state = %{state | last_execution_metrics: result.execution_metrics}
+          case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
+            {:ok, result} ->
+              state = maybe_update_server_session(state, result.server_side_session_id)
+              state = %{state | last_execution_metrics: result.execution_metrics}
 
-        case extract_show_string(result.rows) do
-          {:ok, str} -> {:reply, {:ok, str}, state}
-          {:error, _} = error -> {:reply, error, state}
-        end
+              case extract_show_string(result.rows) do
+                {:ok, str} -> {:reply, {:ok, str}, state}
+                {:error, _} = error -> {:reply, error, state}
+              end
 
-      {:error, _} = error ->
-        {:reply, error, state}
-    end
+            {:error, _} = error ->
+              {:reply, error, state}
+          end
+
+        {nil, error} ->
+          {:reply, error, state}
+      end
+    end)
   end
 
   @impl true
@@ -1501,7 +1658,89 @@ defmodule SparkEx.Session do
 
   # --- Private ---
 
+  defp operation_telemetry_span(operation, session_id, fun) do
+    metadata = %{operation: operation, session_id: session_id}
+    start_time = System.monotonic_time()
+
+    :telemetry.execute(
+      [:spark_ex, :session, :operation, :start],
+      %{system_time: System.system_time()},
+      metadata
+    )
+
+    try do
+      result = fun.()
+      duration = System.monotonic_time() - start_time
+
+      result_status =
+        case result do
+          {:reply, {:ok, _}, _} -> :ok
+          {:reply, :ok, _} -> :ok
+          {:reply, {:error, _}, _} -> :error
+          _ -> :ok
+        end
+
+      :telemetry.execute(
+        [:spark_ex, :session, :operation, :stop],
+        %{duration: duration},
+        Map.put(metadata, :result, result_status)
+      )
+
+      result
+    rescue
+      e ->
+        duration = System.monotonic_time() - start_time
+
+        :telemetry.execute(
+          [:spark_ex, :session, :operation, :exception],
+          %{duration: duration},
+          Map.merge(metadata, %{kind: :error, reason: e, stacktrace: __STACKTRACE__})
+        )
+
+        reraise e, __STACKTRACE__
+    end
+  end
+
+  defp maybe_execute_collect_with_json_projection(state, plan, proto_plan, opts) do
+    if maybe_json_relation_plan?(plan) do
+      case Client.analyze_schema(state, proto_plan) do
+        {:ok, schema, server_side_session_id} ->
+          state = maybe_update_server_session(state, server_side_session_id)
+
+          if schema_has_nested_map?(schema) do
+            case retry_collect_with_json_projection(state, plan, schema, opts) do
+              {:ok, result, state} ->
+                :telemetry.execute(
+                  [:spark_ex, :session, :collect_retry],
+                  %{attempt: 1},
+                  %{session_id: state.session_id, strategy: :json_projection_pre}
+                )
+
+                result = Map.update!(result, :rows, &decode_rows_from_json_projection(&1, schema))
+                {:ok, result, state}
+
+              {:error, state} ->
+                {:no_fallback, state}
+            end
+          else
+            {:no_fallback, state}
+          end
+
+        _ ->
+          {:no_fallback, state}
+      end
+    else
+      {:no_fallback, state}
+    end
+  end
+
   defp retry_collect_with_unique_columns(state, plan, proto_plan, opts) do
+    :telemetry.execute(
+      [:spark_ex, :session, :collect_retry],
+      %{attempt: 1},
+      %{session_id: state.session_id, strategy: :unique_columns}
+    )
+
     with {:ok, schema, server_side_session_id} <- Client.analyze_schema(state, proto_plan) do
       state = maybe_update_server_session(state, server_side_session_id)
 
@@ -1530,22 +1769,20 @@ defmodule SparkEx.Session do
         state = maybe_update_server_session(state, server_side_session_id)
 
         primary_result =
-          if maybe_json_relation_plan?(plan) do
-            primary_result
-          else
-            Map.update!(primary_result, :rows, &decode_rows_from_json_projection(&1, schema))
-          end
+          Map.update!(primary_result, :rows, &decode_rows_from_json_projection(&1, schema))
 
         if schema_has_nested_map?(schema) and
              rows_show_nested_map_decode_loss?(primary_result.rows, schema) do
           case retry_collect_with_json_projection(state, plan, schema, opts) do
             {:ok, retry_result, state} ->
+              :telemetry.execute(
+                [:spark_ex, :session, :collect_retry],
+                %{attempt: 1},
+                %{session_id: state.session_id, strategy: :json_projection_post}
+              )
+
               retry_result =
-                if maybe_json_relation_plan?(plan) do
-                  retry_result
-                else
-                  Map.update!(retry_result, :rows, &decode_rows_from_json_projection(&1, schema))
-                end
+                Map.update!(retry_result, :rows, &decode_rows_from_json_projection(&1, schema))
 
               {:ok, retry_result, state}
 
@@ -1565,21 +1802,26 @@ defmodule SparkEx.Session do
     String.contains?(query, "from_json(_spark_ex_json")
   end
 
+  defp maybe_json_relation_plan?(plan) when is_tuple(plan) do
+    plan
+    |> Tuple.to_list()
+    |> Enum.any?(&maybe_json_relation_plan?/1)
+  end
+
+  defp maybe_json_relation_plan?(plan) when is_list(plan),
+    do: Enum.any?(plan, &maybe_json_relation_plan?/1)
+
   defp maybe_json_relation_plan?(_), do: false
 
-  defp maybe_decode_retry_result_rows(state, plan, proto_plan, result) do
-    if maybe_json_relation_plan?(plan) do
-      {result, state}
-    else
-      case Client.analyze_schema(state, proto_plan) do
-        {:ok, schema, server_side_session_id} ->
-          state = maybe_update_server_session(state, server_side_session_id)
-          result = Map.update!(result, :rows, &decode_rows_from_json_projection(&1, schema))
-          {result, state}
+  defp maybe_decode_retry_result_rows(state, _plan, proto_plan, result) do
+    case Client.analyze_schema(state, proto_plan) do
+      {:ok, schema, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        result = Map.update!(result, :rows, &decode_rows_from_json_projection(&1, schema))
+        {result, state}
 
-        _ ->
-          {result, state}
-      end
+      _ ->
+        {result, state}
     end
   end
 
@@ -1612,6 +1854,12 @@ defmodule SparkEx.Session do
        when is_binary(message) do
     cond do
       String.contains?(message, "Unknown Group Type UNRECOGNIZED") ->
+        :telemetry.execute(
+          [:spark_ex, :session, :collect_retry],
+          %{attempt: 1},
+          %{session_id: state.session_id, strategy: :legacy_grouping_sets}
+        )
+
         with {:ok, rewritten_plan} <- rewrite_grouping_sets_collect_plan(plan),
              {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
           {:ok, result, state}
@@ -1620,6 +1868,12 @@ defmodule SparkEx.Session do
         end
 
       String.contains?(message, "Does not support convert UNPARSED to catalyst types.") ->
+        :telemetry.execute(
+          [:spark_ex, :session, :collect_retry],
+          %{attempt: 1},
+          %{session_id: state.session_id, strategy: :legacy_unparsed}
+        )
+
         with {:ok, rewritten_plan} <- rewrite_parse_collect_plan(state, plan),
              {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
           {:ok, result, state}
@@ -1638,30 +1892,27 @@ defmodule SparkEx.Session do
   defp retry_collect_with_legacy_fallbacks(_state, _plan, _opts, _remote), do: :error
 
   defp retry_collect_for_empty_relation_errors(state, plan, opts) do
-    with {:ok, rewritten_plan} <- rewrite_transpose_collect_plan(plan),
-         {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
-      {:ok, result, state}
-    else
-      _ ->
-        with {:ok, rewritten_plan} <- rewrite_table_function_collect_plan(plan),
-             {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
-          {:ok, result, state}
-        else
-          _ ->
-            with {:ok, rewritten_plan} <- rewrite_as_of_join_collect_plan(plan),
-                 {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
-              {:ok, result, state}
-            else
-              _ ->
-                with {:ok, rewritten_plan} <- rewrite_subquery_collect_plan(plan),
-                     {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
-                  {:ok, result, state}
-                else
-                  _ -> :error
-                end
-            end
-        end
-    end
+    rewriters = [
+      &rewrite_transpose_collect_plan/1,
+      &rewrite_table_function_collect_plan/1,
+      &rewrite_as_of_join_collect_plan/1,
+      &rewrite_subquery_collect_plan/1
+    ]
+
+    Enum.reduce_while(rewriters, :error, fn rewriter, _acc ->
+      with {:ok, rewritten_plan} <- rewriter.(plan),
+           {:ok, result, state} <- execute_retry_plan(state, rewritten_plan, opts) do
+        :telemetry.execute(
+          [:spark_ex, :session, :collect_retry],
+          %{attempt: 1},
+          %{session_id: state.session_id, strategy: :empty_relation_rewrite}
+        )
+
+        {:halt, {:ok, result, state}}
+      else
+        _ -> {:cont, :error}
+      end
+    end)
   end
 
   defp rewrite_transpose_collect_plan({:transpose, child_plan, index_columns}) do
@@ -2536,9 +2787,31 @@ defmodule SparkEx.Session do
   end
 
   defp safe_encode(plan, counter) do
-    {PlanEncoder.encode(plan, counter), nil}
+    safe_encode_with(&PlanEncoder.encode/2, plan, counter)
+  end
+
+  defp safe_encode_count(plan, counter) do
+    safe_encode_with(&PlanEncoder.encode_count/2, plan, counter)
+  end
+
+  defp safe_encode_relation(plan, counter) do
+    safe_encode_with(&PlanEncoder.encode_relation/2, plan, counter)
+  end
+
+  defp safe_encode_command(command, counter) do
+    alias SparkEx.Connect.CommandEncoder
+    safe_encode_with(&CommandEncoder.encode/2, command, counter)
+  end
+
+  defp safe_encode_with(encode_fn, plan, counter) do
+    {encode_fn.(plan, counter), nil}
   rescue
-    e -> {nil, {:error, {:plan_encode_error, Exception.message(e)}}}
+    e ->
+      Logger.error(
+        "Plan encoding failed: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
+      )
+
+      {nil, {:error, {:plan_encode_error, Exception.message(e)}}}
   end
 
   defp maybe_update_server_session(state, nil), do: state
@@ -2555,8 +2828,6 @@ defmodule SparkEx.Session do
     "elixir/#{System.version()}/otp#{otp_release}/spark_ex/#{@spark_ex_version}"
   end
 
-  defp extract_count([%{"count(1)" => n}]) when is_integer(n) and n >= 0, do: {:ok, n}
-
   defp extract_count([row]) when is_map(row) and map_size(row) == 1 do
     case Map.values(row) do
       [n] when is_integer(n) and n >= 0 -> {:ok, n}
@@ -2565,8 +2836,6 @@ defmodule SparkEx.Session do
   end
 
   defp extract_count(rows), do: {:error, {:invalid_count_response, rows}}
-
-  defp extract_show_string([%{"show_string" => str}]) when is_binary(str), do: {:ok, str}
 
   defp extract_show_string([row]) when is_map(row) and map_size(row) == 1 do
     case Map.values(row) do
@@ -2577,6 +2846,9 @@ defmodule SparkEx.Session do
 
   defp extract_show_string(rows), do: {:error, {:invalid_show_response, rows}}
 
+  # Returns the GenServer call timeout for an operation. Adds a 5-second buffer
+  # over the user-specified gRPC timeout so the gRPC layer times out first and
+  # returns a proper error, rather than the GenServer call timing out with :exit.
   defp call_timeout(opts) do
     case Keyword.get(opts, :timeout, 60_000) do
       nil ->
@@ -2591,12 +2863,6 @@ defmodule SparkEx.Session do
       other ->
         raise ArgumentError, "timeout must be a positive integer or nil, got: #{inspect(other)}"
     end
-  end
-
-  defp safe_get_state(session, timeout) do
-    {:ok, GenServer.call(session, :get_state, timeout)}
-  catch
-    :exit, _ -> :error
   end
 
   # --- Local data preparation ---

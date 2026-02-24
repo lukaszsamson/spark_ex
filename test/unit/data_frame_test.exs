@@ -104,6 +104,18 @@ defmodule SparkEx.DataFrameTest do
         SparkEx.sql(self(), "SELECT ?", args: MapSet.new([1, 2, 3]))
       end
     end
+
+    test "raises for non-string query" do
+      assert_raise ArgumentError, ~r/expected query to be a string/, fn ->
+        SparkEx.sql(self(), 42)
+      end
+    end
+
+    test "raises for nil query" do
+      assert_raise ArgumentError, ~r/expected query to be a string/, fn ->
+        SparkEx.sql(self(), nil)
+      end
+    end
   end
 
   defmodule SchemaSession do
@@ -560,14 +572,14 @@ defmodule SparkEx.DataFrameTest do
   end
 
   describe "to_local_iterator/2" do
-    test "returns lazy rows enumerable from streaming execution" do
+    test "returns lazy rows enumerable from collected execution" do
       {:ok, session} = ArrowSession.start_link(self())
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
       assert {:ok, rows} = DataFrame.to_local_iterator(df)
       assert Enum.to_list(rows) == [%{"id" => 1}]
-      assert_receive :execute_plan_stream_called
-      refute_receive :execute_collect_called
+      assert_receive :execute_collect_called
+      refute_receive :execute_plan_stream_called
     end
   end
 

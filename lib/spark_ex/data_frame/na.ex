@@ -30,7 +30,12 @@ defmodule SparkEx.DataFrame.NA do
   @spec fill(DataFrame.t(), term(), keyword()) :: DataFrame.t()
   def fill(df, value, opts \\ [])
 
-  def fill(%DataFrame{} = df, value, _opts) when is_map(value) do
+  def fill(%DataFrame{} = df, value, opts) when is_map(value) do
+    if Keyword.has_key?(opts, :subset) do
+      raise ArgumentError,
+            ":subset is not supported when value is a map (map keys already specify columns)"
+    end
+
     if map_size(value) == 0 do
       raise ArgumentError, "value should not be empty"
     end
@@ -64,6 +69,10 @@ defmodule SparkEx.DataFrame.NA do
           end
 
           cols
+
+        other ->
+          raise ArgumentError,
+                "expected subset to be a column name string or list of column name strings, got: #{inspect(other)}"
       end
 
     # PySpark encodes a single literal value regardless of subset size
@@ -111,6 +120,10 @@ defmodule SparkEx.DataFrame.NA do
           end
 
           cols
+
+        other ->
+          raise ArgumentError,
+                "expected subset to be a column name string or list of column name strings, got: #{inspect(other)}"
       end
 
     min_non_nulls =

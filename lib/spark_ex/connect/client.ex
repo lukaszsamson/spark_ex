@@ -855,7 +855,16 @@ defmodule SparkEx.Connect.Client do
              source_server_side_session_id: String.t() | nil
            }}
           | {:error, term()}
-  def clone_session(session, new_session_id \\ nil) do
+  def clone_session(session, new_session_id \\ nil)
+  def clone_session(session, nil), do: do_clone_session(session, nil)
+
+  def clone_session(session, new_session_id) when is_binary(new_session_id),
+    do: do_clone_session(session, new_session_id)
+
+  def clone_session(_session, new_session_id),
+    do: {:error, {:invalid_new_session_id, new_session_id}}
+
+  defp do_clone_session(session, new_session_id) do
     request = %CloneSessionRequest{
       session_id: session.session_id,
       client_observed_server_side_session_id: session.server_side_session_id,

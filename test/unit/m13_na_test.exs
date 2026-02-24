@@ -85,6 +85,12 @@ defmodule SparkEx.M13.NATest do
       assert %DataFrame{plan: {:na_drop, :test_plan, ["a", "b"], nil}} = df
     end
 
+    test "raises when subset is neither string nor list of strings" do
+      assert_raise ArgumentError, ~r/column name string or list/, fn ->
+        NA.drop(make_df(), subset: 42)
+      end
+    end
+
     test "combined options" do
       df = NA.drop(make_df(), how: :all, thresh: 2, subset: ["x"])
       assert %DataFrame{plan: {:na_drop, :test_plan, ["x"], 2}} = df

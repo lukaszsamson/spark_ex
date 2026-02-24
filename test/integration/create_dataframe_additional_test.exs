@@ -203,17 +203,14 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
     assert {:ok, [%{"profile" => profile_json}]} =
              DataFrame.select(df, ["profile"]) |> DataFrame.collect()
 
-    if is_binary(profile_json) do
-      assert profile_json =~ "\"attrs\":{\"x\":\"1\"}"
-    else
-      assert profile_json["tags"] == ["a", "b"]
+    assert is_map(profile_json)
+    assert profile_json["tags"] == ["a", "b"]
 
-      attrs =
-        profile_json["attrs"]
-        |> Enum.into(%{}, fn %{"key" => key, "value" => value} -> {key, value} end)
+    attrs =
+      profile_json["attrs"]
+      |> Enum.into(%{}, fn %{"key" => key, "value" => value} -> {key, value} end)
 
-      assert attrs["x"] == "1"
-    end
+    assert attrs["x"] == "1"
   end
 
   test "lit map with array values no longer fails", %{session: session} do

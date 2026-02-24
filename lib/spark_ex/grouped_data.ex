@@ -8,7 +8,8 @@ defmodule SparkEx.GroupedData do
 
   Note: convenience numeric aggregation methods (`sum/1`, `avg/1`, `min/1`, `max/1`, `mean/1`)
   called without explicit columns make an eager schema RPC to discover numeric columns.
-  Each call triggers a separate round-trip. Pass explicit column names to avoid this.
+  The schema is cached per process so repeated calls on the same GroupedData avoid
+  redundant RPCs. Pass explicit column names to skip the schema lookup entirely.
   """
 
   alias SparkEx.Column
@@ -21,7 +22,8 @@ defmodule SparkEx.GroupedData do
     :group_type,
     :grouping_sets,
     :pivot_col,
-    :pivot_values
+    :pivot_values,
+    :cached_schema
   ]
 
   @type t :: %__MODULE__{
@@ -31,7 +33,8 @@ defmodule SparkEx.GroupedData do
           group_type: atom(),
           grouping_sets: [[Column.expr()]] | nil,
           pivot_col: Column.expr() | nil,
-          pivot_values: [term()] | nil
+          pivot_values: [term()] | nil,
+          cached_schema: term() | nil
         }
 
   @doc """
@@ -148,7 +151,7 @@ defmodule SparkEx.GroupedData do
   end
 
   defp numeric_agg(%__MODULE__{} = gd, spark_fn, cols) do
-    case fetch_schema(gd.session, gd.plan) do
+    case fetch_schema_cached(gd) do
       {:ok, schema} ->
         numeric_names = numeric_column_names(schema)
 
@@ -196,8 +199,27 @@ defmodule SparkEx.GroupedData do
     end)
   end
 
-  defp fetch_schema(session, plan) do
-    SparkEx.Session.analyze_schema(session, plan)
+  defp fetch_schema_cached(%__MODULE__{cached_schema: schema}) when not is_nil(schema) do
+    {:ok, schema}
+  end
+
+  defp fetch_schema_cached(%__MODULE__{session: session, plan: plan}) do
+    cache_key = {__MODULE__, :schema_cache, session, plan}
+
+    case Process.get(cache_key) do
+      nil ->
+        case SparkEx.Session.analyze_schema(session, plan) do
+          {:ok, schema} = result ->
+            Process.put(cache_key, schema)
+            result
+
+          error ->
+            error
+        end
+
+      cached ->
+        {:ok, cached}
+    end
   end
 
   defp numeric_column_names(%Spark.Connect.DataType{kind: {:struct, struct}}) do
@@ -237,7 +259,11 @@ defmodule SparkEx.GroupedData do
       raise ArgumentError, "repeated pivot is not supported"
     end
 
-    if values != nil do
+    if values != nil and not is_list(values) do
+      raise ArgumentError, "pivot values must be a list or nil, got: #{inspect(values)}"
+    end
+
+    if is_list(values) do
       Enum.each(values, fn v ->
         unless is_boolean(v) or is_number(v) or is_binary(v) do
           raise ArgumentError,
@@ -248,8 +274,15 @@ defmodule SparkEx.GroupedData do
 
     col_expr =
       case pivot_col do
-        %Column{expr: e} -> e
-        name when is_binary(name) -> {:col, name}
+        %Column{expr: e} ->
+          e
+
+        name when is_binary(name) ->
+          {:col, name}
+
+        other ->
+          raise ArgumentError,
+                "pivot column must be a string or SparkEx.Column, got: #{inspect(other)}"
       end
 
     %__MODULE__{gd | pivot_col: col_expr, pivot_values: values}

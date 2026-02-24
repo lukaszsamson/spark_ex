@@ -3457,10 +3457,10 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp mixed_list_value_types?(values) do
     Enum.all?(values, &is_list/1) and
-      (values
-       |> Enum.map(&infer_collection_element_type/1)
-       |> Enum.uniq()
-       |> length()) > 1
+      values
+      |> Enum.map(&infer_collection_element_type/1)
+      |> Enum.uniq()
+      |> length() > 1
   end
 
   defp normalize_mixed_list_map_value(value) when is_list(value) do

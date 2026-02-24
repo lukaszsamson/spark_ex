@@ -301,4 +301,56 @@ defmodule SparkEx.CatalogTest do
 
     assert {:error, {:invalid_options, _}} = Catalog.list_databases(session, catalog: "sfx")
   end
+
+  test "list_catalogs/2 returns error for keyword opts argument" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:error, {:invalid_options, _}} = Catalog.list_catalogs(session, pattern: "sfx*")
+  end
+
+  test "list_tables/3 returns error for keyword pattern argument" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:error, {:invalid_options, _}} =
+             Catalog.list_tables(session, "analytics", pattern: "emp*")
+  end
+
+  test "list_functions/3 returns error for non-string pattern argument" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:error, {:invalid_pattern, 123}} = Catalog.list_functions(session, "analytics", 123)
+  end
+
+  test "table_exists?/3 returns error for invalid db_name type" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:error, {:invalid_db_name, 123}} = Catalog.table_exists?(session, "orders", 123)
+  end
+
+  test "table_exists?/3 accepts keyword db_name option for compatibility" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:ok, false} = Catalog.table_exists?(session, "orders", db: "warehouse")
+    assert_receive {:table_exists_called, "orders", "warehouse"}
+  end
+
+  test "function_exists?/3 returns error for invalid db_name type" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:error, {:invalid_db_name, 123}} =
+             Catalog.function_exists?(session, "concat", db: 123)
+  end
+
+  test "create_database/3 validates option types" do
+    {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+    assert {:error, {:invalid_comment, 42}} =
+             Catalog.create_database(session, "my_db", comment: 42)
+
+    assert {:error, {:invalid_location, 42}} =
+             Catalog.create_database(session, "my_db", location: 42)
+
+    assert {:error, {:invalid_options, _}} =
+             Catalog.create_database(session, "my_db", set_properties: %{"a" => "b"})
+  end
 end

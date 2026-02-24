@@ -35,6 +35,12 @@ defmodule SparkEx.Unit.DataFrameM10Test do
                plan: {:project, @base_plan, [{:expr, "name"}, {:expr, "age + 1 AS age_plus"}]}
              } = result
     end
+
+    test "raises when list contains non-string expression" do
+      assert_raise ArgumentError, ~r/exprs must all be strings/, fn ->
+        DataFrame.select_expr(df(), ["name", 123])
+      end
+    end
   end
 
   describe "with_columns/2" do
@@ -401,6 +407,18 @@ defmodule SparkEx.Unit.DataFrameM10Test do
                  {:unpivot, @base_plan, [{:col, "id"}], [{:col, "col1"}, {:col, "col2"}], "var",
                   "val"}
              } = result
+    end
+
+    test "raises when variable_column_name is not a string" do
+      assert_raise ArgumentError, ~r/variable_column_name must be a string/, fn ->
+        DataFrame.unpivot(df(), ["id"], ["col1"], 42, "val")
+      end
+    end
+
+    test "raises when value_column_name is not a string" do
+      assert_raise ArgumentError, ~r/value_column_name must be a string/, fn ->
+        DataFrame.unpivot(df(), ["id"], ["col1"], "var", 42)
+      end
     end
   end
 

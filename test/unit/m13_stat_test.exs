@@ -20,6 +20,12 @@ defmodule SparkEx.M13.StatTest do
       df = Stat.describe(make_df(), ["age", "salary"])
       assert %DataFrame{plan: {:stat_describe, :test_plan, ["age", "salary"]}} = df
     end
+
+    test "raises when cols contain non-strings" do
+      assert_raise ArgumentError, ~r/column names must all be strings/, fn ->
+        Stat.describe(make_df(), ["age", 1])
+      end
+    end
   end
 
   describe "summary/1" do
@@ -31,6 +37,12 @@ defmodule SparkEx.M13.StatTest do
     test "with specific statistics" do
       df = Stat.summary(make_df(), ["count", "min", "max"])
       assert %DataFrame{plan: {:stat_summary, :test_plan, ["count", "min", "max"]}} = df
+    end
+
+    test "raises when statistics contain non-strings" do
+      assert_raise ArgumentError, ~r/statistics must all be strings/, fn ->
+        Stat.summary(make_df(), ["count", 50])
+      end
     end
   end
 
@@ -55,6 +67,12 @@ defmodule SparkEx.M13.StatTest do
     test "accepts keyword support option" do
       df = Stat.freq_items(make_df(), ["category"], support: 0.5)
       assert %DataFrame{plan: {:stat_freq_items, :test_plan, ["category"], 0.5}} = df
+    end
+
+    test "raises when cols contain non-strings" do
+      assert_raise ArgumentError, ~r/column names must all be strings/, fn ->
+        Stat.freq_items(make_df(), ["category", :status], 0.5)
+      end
     end
   end
 
