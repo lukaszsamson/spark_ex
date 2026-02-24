@@ -70,6 +70,7 @@ defmodule SparkEx.StreamingQueryManager do
           {:ok, boolean() | nil} | {:error, term()}
   def await_any_termination(session, opts \\ []) do
     timeout_ms = Keyword.get(opts, :timeout, nil)
+    opts = Keyword.put_new(opts, :reattach_policy, :streaming)
 
     case execute_command(session, {:await_any_termination, timeout_ms}, opts) do
       {:ok, {:streaming_query_manager, result}} ->

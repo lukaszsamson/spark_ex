@@ -195,8 +195,19 @@ defmodule SparkEx.DataFrame do
       df |> SparkEx.DataFrame.order_by([col("age") |> SparkEx.Column.desc()])
       df |> SparkEx.DataFrame.order_by(["name"])
   """
-  @spec order_by(t(), [Column.t() | String.t() | atom()], keyword()) :: t()
-  def order_by(%__MODULE__{} = df, columns, opts \\ []) when is_list(columns) do
+  @spec order_by(
+          t(),
+          Column.t() | String.t() | atom() | [Column.t() | String.t() | atom()],
+          keyword()
+        ) :: t()
+  def order_by(df, column_or_columns, opts \\ [])
+
+  def order_by(%__MODULE__{} = df, column, opts)
+      when is_binary(column) or is_atom(column) or is_struct(column, Column) do
+    order_by(df, [column], opts)
+  end
+
+  def order_by(%__MODULE__{} = df, columns, opts) when is_list(columns) do
     if columns == [] do
       raise ArgumentError, "cols should not be empty for order_by"
     end
@@ -1350,9 +1361,17 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.agg([Functions.count(Functions.col("id"))])
   """
-  @spec agg(t() | SparkEx.GroupedData.t(), [Column.t()] | map()) :: t()
+  @spec agg(t() | SparkEx.GroupedData.t(), Column.t() | [Column.t()] | map()) :: t()
+  def agg(%SparkEx.GroupedData{} = grouped, %Column{} = expr) do
+    SparkEx.GroupedData.agg(grouped, [expr])
+  end
+
   def agg(%SparkEx.GroupedData{} = grouped, exprs) when is_list(exprs) or is_map(exprs) do
     SparkEx.GroupedData.agg(grouped, exprs)
+  end
+
+  def agg(%__MODULE__{} = df, %Column{} = expr) do
+    df |> group_by([]) |> SparkEx.GroupedData.agg([expr])
   end
 
   def agg(%__MODULE__{} = df, exprs) when is_list(exprs) do

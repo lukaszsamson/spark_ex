@@ -103,6 +103,7 @@ defmodule SparkEx.StreamingQuery do
   @spec await_termination(t(), keyword()) :: {:ok, boolean() | nil} | {:error, term()}
   def await_termination(%__MODULE__{} = query, opts \\ []) do
     timeout_ms = Keyword.get(opts, :timeout, nil)
+    opts = Keyword.put_new(opts, :reattach_policy, :streaming)
 
     case execute_command(query, {:await_termination, timeout_ms}, opts) do
       {:ok, {:streaming_query, result}} ->
@@ -121,7 +122,7 @@ defmodule SparkEx.StreamingQuery do
   """
   @spec process_all_available(t()) :: :ok | {:error, term()}
   def process_all_available(%__MODULE__{} = query) do
-    case execute_command(query, {:process_all_available}) do
+    case execute_command(query, {:process_all_available}, reattach_policy: :streaming) do
       {:ok, _result} -> :ok
       {:error, _} = error -> error
     end

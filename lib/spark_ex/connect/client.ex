@@ -46,6 +46,7 @@ defmodule SparkEx.Connect.Client do
   # gRPC status codes considered transient (eligible for retry)
   @status_unavailable 14
   @status_deadline_exceeded 4
+  @status_internal 13
   @status_not_found 5
 
   @artifact_chunk_size 32 * 1024
@@ -1196,8 +1197,14 @@ defmodule SparkEx.Connect.Client do
   # --- Reattachable execution helpers ---
 
   defp execute_reattachable(session, request, operation_id, timeout, opts, decode_fn) do
-    default_policy = RetryPolicyRegistry.policy(:reattach)
-    max_retries = Keyword.get(opts, :reattach_retries, default_policy.max_retries)
+    policy_type = Keyword.get(opts, :reattach_policy, :reattach)
+    policy = RetryPolicyRegistry.policy(policy_type)
+
+    policy =
+      case Keyword.fetch(opts, :reattach_retries) do
+        {:ok, retries} -> %{policy | max_retries: retries}
+        :error -> policy
+      end
 
     release_execute_timeout =
       Keyword.get(opts, :release_execute_timeout, @release_execute_timeout)
@@ -1228,7 +1235,7 @@ defmodule SparkEx.Connect.Client do
                release_execute_fun,
                operation_id,
                timeout,
-               max_retries,
+               policy,
                [],
                nil,
                0
@@ -1263,7 +1270,7 @@ defmodule SparkEx.Connect.Client do
          release_execute_fun,
          operation_id,
          timeout,
-         max_retries,
+         policy,
          acc,
          last_response_id,
          attempt
@@ -1286,7 +1293,7 @@ defmodule SparkEx.Connect.Client do
             release_execute_fun,
             operation_id,
             timeout,
-            max_retries,
+            policy,
             all_items,
             final_last_id,
             attempt,
@@ -1311,12 +1318,33 @@ defmodule SparkEx.Connect.Client do
               release_execute_fun,
               operation_id,
               timeout,
-              max_retries,
+              policy,
               all_items,
               final_last_id,
               attempt,
               {:transient_error, error}
             )
+
+          %GRPC.RPCError{status: @status_internal, message: message}
+          when is_binary(message) ->
+            if String.contains?(message, "INVALID_CURSOR.DISCONNECTED") do
+              retry_reattach(
+                session,
+                request,
+                execute_stream_fun,
+                reattach_stream_fun,
+                release_execute_fun,
+                operation_id,
+                timeout,
+                policy,
+                all_items,
+                final_last_id,
+                attempt,
+                {:transient_error, error}
+              )
+            else
+              {:error, Errors.from_grpc_error(error, session)}
+            end
 
           %GRPC.RPCError{} = grpc_error ->
             {:error, Errors.from_grpc_error(grpc_error, session)}
@@ -1611,7 +1639,7 @@ defmodule SparkEx.Connect.Client do
          _release_execute_fun,
          _operation_id,
          _timeout,
-         max_retries,
+         %{max_retries: max_retries},
          all_items,
          final_last_id,
          attempt,
@@ -1635,29 +1663,31 @@ defmodule SparkEx.Connect.Client do
          release_execute_fun,
          operation_id,
          timeout,
-         max_retries,
+         policy,
          all_items,
          final_last_id,
          attempt,
          reason
        ) do
-    telemetry_metadata =
+    {telemetry_metadata, server_retry_delay_ms} =
       case reason do
         {:transient_error, %GRPC.RPCError{status: status} = error} ->
-          %{
-            operation_id: operation_id,
-            last_response_id: final_last_id,
-            grpc_status: status,
-            error: error,
-            reason: :transient_error
-          }
+          delay = extract_server_retry_delay(error)
+
+          {%{
+             operation_id: operation_id,
+             last_response_id: final_last_id,
+             grpc_status: status,
+             error: error,
+             reason: :transient_error
+           }, delay}
 
         {:graceful_eof, _} ->
-          %{
-            operation_id: operation_id,
-            last_response_id: final_last_id,
-            reason: :graceful_eof
-          }
+          {%{
+             operation_id: operation_id,
+             last_response_id: final_last_id,
+             reason: :graceful_eof
+           }, nil}
       end
 
     :telemetry.execute(
@@ -1666,17 +1696,25 @@ defmodule SparkEx.Connect.Client do
       telemetry_metadata
     )
 
-    default_policy = RetryPolicyRegistry.policy(:reattach)
-
-    sleep_ms =
+    computed_backoff =
       backoff_ms(
         attempt,
-        default_policy.initial_backoff_ms,
-        default_policy.max_backoff_ms,
-        default_policy.jitter_fun
+        policy.initial_backoff_ms,
+        policy.max_backoff_ms,
+        policy.jitter_fun
       )
 
-    default_policy.sleep_fun.(sleep_ms)
+    sleep_ms =
+      case server_retry_delay_ms do
+        delay when is_integer(delay) and delay > 0 ->
+          capped = min(delay, policy.max_server_retry_delay)
+          max(computed_backoff, capped)
+
+        _ ->
+          computed_backoff
+      end
+
+    policy.sleep_fun.(sleep_ms)
 
     case reattach_stream_fun.(final_last_id) do
       {:ok, new_stream} ->
@@ -1689,7 +1727,7 @@ defmodule SparkEx.Connect.Client do
           release_execute_fun,
           operation_id,
           timeout,
-          max_retries,
+          policy,
           all_items,
           final_last_id,
           attempt + 1
@@ -1712,7 +1750,7 @@ defmodule SparkEx.Connect.Client do
               release_execute_fun,
               operation_id,
               timeout,
-              max_retries,
+              policy,
               all_items,
               final_last_id,
               attempt + 1
@@ -1861,6 +1899,28 @@ defmodule SparkEx.Connect.Client do
     capped = Kernel.min(base, max_backoff)
     jitter_fun.(capped)
   end
+
+  @retry_info_type_url "type.googleapis.com/google.rpc.RetryInfo"
+
+  defp extract_server_retry_delay(%GRPC.RPCError{details: details}) when is_list(details) do
+    Enum.find_value(details, nil, fn
+      %Google.Protobuf.Any{type_url: @retry_info_type_url, value: value} ->
+        info = Protobuf.decode(value, Google.Rpc.RetryInfo)
+
+        case info.retry_delay do
+          %Google.Protobuf.Duration{seconds: seconds, nanos: nanos} ->
+            seconds * 1000 + div(nanos, 1_000_000)
+
+          nil ->
+            0
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp extract_server_retry_delay(_), do: nil
 
   defp prepend_items(acc, items) do
     Enum.reduce(items, acc, fn item, rev_acc ->

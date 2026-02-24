@@ -5,7 +5,7 @@ defmodule SparkEx.RetryPolicyRegistry do
 
   @table :spark_ex_retry_policies
 
-  @type policy_type :: :retry | :reattach
+  @type policy_type :: :retry | :reattach | :streaming
 
   @spec set_policies(map() | keyword()) :: :ok
   def set_policies(policies) when is_list(policies) or is_map(policies) do
@@ -33,14 +33,15 @@ defmodule SparkEx.RetryPolicyRegistry do
   end
 
   @spec policy(policy_type()) :: map()
-  def policy(type) when type in [:retry, :reattach] do
+  def policy(type) when type in [:retry, :reattach, :streaming] do
     Map.get(get_policies(), type)
   end
 
   defp default_policies() do
     %{
       retry: default_policy(),
-      reattach: default_policy()
+      reattach: default_policy(),
+      streaming: streaming_policy()
     }
   end
 
@@ -55,11 +56,24 @@ defmodule SparkEx.RetryPolicyRegistry do
     }
   end
 
+  # Matches PySpark's DefaultPolicy: 15 retries, 4x multiplier, 60s max backoff,
+  # tolerating at least 10 minutes of repeated ALB/proxy disconnections.
+  defp streaming_policy() do
+    %{
+      max_retries: 15,
+      initial_backoff_ms: 50,
+      max_backoff_ms: 60_000,
+      max_server_retry_delay: 10 * 60 * 1000,
+      jitter_fun: &default_jitter/1,
+      sleep_fun: &Process.sleep/1
+    }
+  end
+
   defp normalize_policies(policies) do
     map = if is_list(policies), do: Map.new(policies), else: policies
 
     Enum.reduce(map, %{}, fn
-      {type, policy}, acc when type in [:retry, :reattach] ->
+      {type, policy}, acc when type in [:retry, :reattach, :streaming] ->
         Map.put(acc, type, normalize_policy(policy))
 
       {_type, _policy}, acc ->
