@@ -138,8 +138,20 @@ defmodule SparkEx.ManagedStream.Controller do
       {:error, reason} ->
         Logger.debug("managed stream release failed: #{inspect(reason)}")
 
+        :telemetry.execute(
+          [:spark_ex, :managed_stream, :release_failed],
+          %{},
+          %{reason: reason}
+        )
+
       other ->
         Logger.debug("managed stream release returned: #{inspect(other)}")
+
+        :telemetry.execute(
+          [:spark_ex, :managed_stream, :release_failed],
+          %{},
+          %{reason: other}
+        )
     end
 
     Process.demonitor(state.owner_ref, [:flush])

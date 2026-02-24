@@ -3,8 +3,9 @@ defmodule SparkEx.SqlFormatter do
   Formats SQL strings with auto-quoting of parameters.
 
   Performs token-aware replacement that respects SQL string literals
-  (single-quoted strings). Placeholders inside string literals are
-  left untouched.
+  (single-quoted strings), double-quoted identifiers, backtick-quoted
+  identifiers, line comments (`--`), and block comments (`/* ... */`).
+  Placeholders inside these lexical contexts are left untouched.
 
   ## Positional parameters
 
@@ -15,6 +16,8 @@ defmodule SparkEx.SqlFormatter do
 
       SparkEx.SqlFormatter.format("SELECT :id AS id", %{id: 42})
       #=> "SELECT 42 AS id"
+
+  Cast syntax (`::type`) is recognized and not treated as a named parameter.
 
   Raises `ArgumentError` when:
   - There are more `?` placeholders than positional args
@@ -45,7 +48,8 @@ defmodule SparkEx.SqlFormatter do
           "expected sql as string and args as list, map, or nil, got: #{inspect({sql, args})}"
   end
 
-  # Single-pass tokenizer for positional args that skips string literals
+  # Single-pass tokenizer for positional args that skips string literals,
+  # quoted identifiers, and comments
   defp format_positional(sql, args) do
     do_format_positional(sql, args, [])
   end
@@ -54,9 +58,33 @@ defmodule SparkEx.SqlFormatter do
     {Enum.reverse(acc), args}
   end
 
+  # Line comment -- skip to end of line
+  defp do_format_positional(<<"--", rest::binary>>, args, acc) do
+    {comment, remaining} = consume_line_comment(rest, ["--"])
+    do_format_positional(remaining, args, [comment | acc])
+  end
+
+  # Block comment /* ... */
+  defp do_format_positional(<<"/*", rest::binary>>, args, acc) do
+    {comment, remaining} = consume_block_comment(rest, ["/*"])
+    do_format_positional(remaining, args, [comment | acc])
+  end
+
   # Single-quoted string literal — skip contents
   defp do_format_positional(<<"'", rest::binary>>, args, acc) do
     {literal, remaining} = consume_string_literal(rest, ["'"])
+    do_format_positional(remaining, args, [literal | acc])
+  end
+
+  # Double-quoted identifier — skip contents
+  defp do_format_positional(<<"\"", rest::binary>>, args, acc) do
+    {literal, remaining} = consume_double_quoted(rest, ["\""])
+    do_format_positional(remaining, args, [literal | acc])
+  end
+
+  # Backtick-quoted identifier — skip contents
+  defp do_format_positional(<<"`", rest::binary>>, args, acc) do
+    {literal, remaining} = consume_backtick_quoted(rest, ["`"])
     do_format_positional(remaining, args, [literal | acc])
   end
 
@@ -91,7 +119,64 @@ defmodule SparkEx.SqlFormatter do
     raise ArgumentError, "unterminated string literal in SQL"
   end
 
-  # Single-pass tokenizer for named args that skips string literals
+  # Consume a double-quoted identifier (handling escaped "" inside)
+  defp consume_double_quoted(<<"\"\"", rest::binary>>, acc) do
+    consume_double_quoted(rest, ["\"\"" | acc])
+  end
+
+  defp consume_double_quoted(<<"\"", rest::binary>>, acc) do
+    {IO.iodata_to_binary(Enum.reverse(["\"" | acc])), rest}
+  end
+
+  defp consume_double_quoted(<<ch::utf8, rest::binary>>, acc) do
+    consume_double_quoted(rest, [<<ch::utf8>> | acc])
+  end
+
+  defp consume_double_quoted(<<>>, _acc) do
+    raise ArgumentError, "unterminated double-quoted identifier in SQL"
+  end
+
+  # Consume a backtick-quoted identifier
+  defp consume_backtick_quoted(<<"`", rest::binary>>, acc) do
+    {IO.iodata_to_binary(Enum.reverse(["`" | acc])), rest}
+  end
+
+  defp consume_backtick_quoted(<<ch::utf8, rest::binary>>, acc) do
+    consume_backtick_quoted(rest, [<<ch::utf8>> | acc])
+  end
+
+  defp consume_backtick_quoted(<<>>, _acc) do
+    raise ArgumentError, "unterminated backtick-quoted identifier in SQL"
+  end
+
+  # Consume a line comment (until newline or EOF)
+  defp consume_line_comment(<<"\n", rest::binary>>, acc) do
+    {IO.iodata_to_binary(Enum.reverse(["\n" | acc])), rest}
+  end
+
+  defp consume_line_comment(<<ch::utf8, rest::binary>>, acc) do
+    consume_line_comment(rest, [<<ch::utf8>> | acc])
+  end
+
+  defp consume_line_comment(<<>>, acc) do
+    {IO.iodata_to_binary(Enum.reverse(acc)), <<>>}
+  end
+
+  # Consume a block comment (until */ or EOF)
+  defp consume_block_comment(<<"*/", rest::binary>>, acc) do
+    {IO.iodata_to_binary(Enum.reverse(["*/" | acc])), rest}
+  end
+
+  defp consume_block_comment(<<ch::utf8, rest::binary>>, acc) do
+    consume_block_comment(rest, [<<ch::utf8>> | acc])
+  end
+
+  defp consume_block_comment(<<>>, acc) do
+    {IO.iodata_to_binary(Enum.reverse(acc)), <<>>}
+  end
+
+  # Single-pass tokenizer for named args that skips string literals,
+  # quoted identifiers, comments, and cast operators
   defp format_named(sql, args) do
     string_keys = Map.new(args, fn {k, v} -> {to_string(k), v} end)
     {result, used_keys} = do_format_named(sql, string_keys, [], %{})
@@ -121,10 +206,39 @@ defmodule SparkEx.SqlFormatter do
     {acc, used}
   end
 
+  # Line comment — skip to end of line
+  defp do_format_named(<<"--", rest::binary>>, args, acc, used) do
+    {comment, remaining} = consume_line_comment(rest, ["--"])
+    do_format_named(remaining, args, [comment | acc], used)
+  end
+
+  # Block comment — skip contents
+  defp do_format_named(<<"/*", rest::binary>>, args, acc, used) do
+    {comment, remaining} = consume_block_comment(rest, ["/*"])
+    do_format_named(remaining, args, [comment | acc], used)
+  end
+
   # Single-quoted string literal — skip contents
   defp do_format_named(<<"'", rest::binary>>, args, acc, used) do
     {literal, remaining} = consume_string_literal(rest, ["'"])
     do_format_named(remaining, args, [literal | acc], used)
+  end
+
+  # Double-quoted identifier — skip contents
+  defp do_format_named(<<"\"", rest::binary>>, args, acc, used) do
+    {literal, remaining} = consume_double_quoted(rest, ["\""])
+    do_format_named(remaining, args, [literal | acc], used)
+  end
+
+  # Backtick-quoted identifier — skip contents
+  defp do_format_named(<<"`", rest::binary>>, args, acc, used) do
+    {literal, remaining} = consume_backtick_quoted(rest, ["`"])
+    do_format_named(remaining, args, [literal | acc], used)
+  end
+
+  # Cast operator :: — pass through, not a named parameter
+  defp do_format_named(<<"::", rest::binary>>, args, acc, used) do
+    do_format_named(rest, args, ["::" | acc], used)
   end
 
   # Named parameter — :word_chars
@@ -144,14 +258,44 @@ defmodule SparkEx.SqlFormatter do
     do_format_named(rest, args, [<<ch::utf8>> | acc], used)
   end
 
-  # Scans for unresolved :name placeholders, skipping string literals
+  # Scans for unresolved :name placeholders, skipping string literals,
+  # quoted identifiers, comments, and cast operators
   defp scan_unresolved_placeholders(sql), do: do_scan_unresolved(sql, [])
 
   defp do_scan_unresolved(<<>>, acc), do: Enum.reverse(acc)
 
+  # Line comment
+  defp do_scan_unresolved(<<"--", rest::binary>>, acc) do
+    {_comment, remaining} = consume_line_comment(rest, ["--"])
+    do_scan_unresolved(remaining, acc)
+  end
+
+  # Block comment
+  defp do_scan_unresolved(<<"/*", rest::binary>>, acc) do
+    {_comment, remaining} = consume_block_comment(rest, ["/*"])
+    do_scan_unresolved(remaining, acc)
+  end
+
   defp do_scan_unresolved(<<"'", rest::binary>>, acc) do
     {_literal, remaining} = consume_string_literal(rest, ["'"])
     do_scan_unresolved(remaining, acc)
+  end
+
+  # Double-quoted identifier
+  defp do_scan_unresolved(<<"\"", rest::binary>>, acc) do
+    {_literal, remaining} = consume_double_quoted(rest, ["\""])
+    do_scan_unresolved(remaining, acc)
+  end
+
+  # Backtick-quoted identifier
+  defp do_scan_unresolved(<<"`", rest::binary>>, acc) do
+    {_literal, remaining} = consume_backtick_quoted(rest, ["`"])
+    do_scan_unresolved(remaining, acc)
+  end
+
+  # Cast operator :: — skip
+  defp do_scan_unresolved(<<"::", rest::binary>>, acc) do
+    do_scan_unresolved(rest, acc)
   end
 
   defp do_scan_unresolved(<<":", rest::binary>>, acc) do
