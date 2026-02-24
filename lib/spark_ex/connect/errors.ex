@@ -145,8 +145,10 @@ defmodule SparkEx.Connect.Errors do
   defp extract_error_info(%GRPC.RPCError{details: details}) when is_list(details) do
     Enum.find_value(details, :no_error_info, fn
       %Google.Protobuf.Any{type_url: @error_info_type_url, value: value} ->
-        info = Protobuf.decode(value, Google.Rpc.ErrorInfo)
-        {:ok, info}
+        case safe_decode(value, Google.Rpc.ErrorInfo) do
+          {:ok, info} -> {:ok, info}
+          :error -> nil
+        end
 
       _ ->
         nil
@@ -159,8 +161,10 @@ defmodule SparkEx.Connect.Errors do
     details
     |> Enum.find_value(nil, fn
       %Google.Protobuf.Any{type_url: @retry_info_type_url, value: value} ->
-        info = Protobuf.decode(value, Google.Rpc.RetryInfo)
-        retry_info_to_ms(info)
+        case safe_decode(value, Google.Rpc.RetryInfo) do
+          {:ok, info} -> retry_info_to_ms(info)
+          :error -> nil
+        end
 
       _ ->
         nil
@@ -168,6 +172,12 @@ defmodule SparkEx.Connect.Errors do
   end
 
   defp extract_retry_delay_ms(_), do: nil
+
+  defp safe_decode(value, module) do
+    {:ok, Protobuf.decode(value, module)}
+  rescue
+    _ -> :error
+  end
 
   defp retry_info_to_ms(%Google.Rpc.RetryInfo{retry_delay: nil}), do: 0
 

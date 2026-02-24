@@ -208,7 +208,11 @@ defmodule SparkEx.StreamReader do
   defp normalize_schema(nil), do: nil
   defp normalize_schema(schema) when is_binary(schema), do: schema
   defp normalize_schema({:struct, _} = schema), do: SparkEx.Types.to_json(schema)
-  defp normalize_schema(schema), do: schema
+
+  defp normalize_schema(schema) do
+    raise ArgumentError,
+          "schema must be a string or {:struct, fields} tuple, got: #{inspect(schema)}"
+  end
 
   defp normalize_options(opts) when is_list(opts) do
     SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)

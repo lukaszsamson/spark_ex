@@ -385,7 +385,10 @@ defmodule SparkEx.Reader do
   defp normalize_schema(%Spark.Connect.DataType{} = schema),
     do: SparkEx.Types.data_type_to_json(schema)
 
-  defp normalize_schema(schema), do: schema
+  defp normalize_schema(schema) do
+    raise ArgumentError,
+          "schema must be a string, {:struct, fields} tuple, or Spark.Connect.DataType, got: #{inspect(schema)}"
+  end
 
   defp normalize_options(opts) when is_list(opts) do
     SparkEx.Internal.OptionUtils.stringify_options(opts)

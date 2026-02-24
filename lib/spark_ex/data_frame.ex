@@ -257,6 +257,10 @@ defmodule SparkEx.DataFrame do
 
             {:sort_order, expr, direction, null_order}
           end)
+
+        other ->
+          raise ArgumentError,
+                "ascending must be a boolean, a list of booleans, or nil, got: #{inspect(other)}"
       end
 
     %__MODULE__{df | plan: {:sort, df.plan, sort_exprs}}
@@ -927,6 +931,10 @@ defmodule SparkEx.DataFrame do
 
             {:sort_order, expr, direction, null_order}
           end)
+
+        other ->
+          raise ArgumentError,
+                "ascending must be a boolean, a list of booleans, or nil, got: #{inspect(other)}"
       end
 
     %__MODULE__{df | plan: {:sort, df.plan, sort_exprs, false}}

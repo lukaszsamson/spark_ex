@@ -211,7 +211,10 @@ defmodule SparkEx.Writer do
   @doc """
   Inserts the DataFrame into an existing table.
 
-  The save mode is automatically set to `:append` unless explicitly overridden.
+  When `overwrite: true` is passed, mode is set to `:overwrite`.
+  When `overwrite: false` is passed, mode is set to `:append`.
+  When no `:overwrite` option is given, the writer's current mode is used unchanged
+  (matching PySpark's `insertInto` behavior where mode defaults to server-side handling).
   """
   @spec insert_into(t(), String.t(), boolean() | keyword()) :: :ok | {:error, term()}
   def insert_into(%__MODULE__{} = writer, table_name, overwrite_or_opts \\ [])
