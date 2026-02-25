@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit:
+    name: Unit (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.15"
+            otp: "26"
+          # - elixir: "1.16"
+          #   otp: "27"
+          - elixir: "1.17"
+            otp: "27"
+          # - elixir: "1.18"
+          #   otp: "27"
+          - elixir: "1.19"
+            otp: "28"
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
+          restore-keys: mix-${{ matrix.elixir }}-${{ matrix.otp }}-
+
+      - run: mix deps.get
+      - run: mix compile --warnings-as-errors
+      - run: mix test
+
+  format:
+    name: Format & Dialyzer
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19"
+          otp-version: "28"
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: mix-1.19-28-${{ hashFiles('mix.lock') }}
+          restore-keys: mix-1.19-28-
+
+      - uses: actions/cache@v5
+        with:
+          path: priv/plts
+          key: dialyzer-1.19-28-${{ hashFiles('mix.lock') }}
+          restore-keys: dialyzer-1.19-28-
+
+      - run: mix deps.get
+      - run: mix compile
+      - run: mix format --check-formatted
+      - run: mix dialyzer
+
+  integration:
+    name: Integration (Elixir ${{ matrix.elixir }} / Spark ${{ matrix.spark }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        elixir: [
+          "1.15",
+          # "1.16",
+          "1.17",
+          # "1.18",
+          "1.19"
+          ]
+        spark: ["3.4", "3.5", "4.0", "4.1"]
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine versions
+        id: versions
+        run: |
+          case "${{ matrix.elixir }}" in
+            1.15) echo "otp=26" >> "$GITHUB_OUTPUT" ;;
+            1.19) echo "otp=28" >> "$GITHUB_OUTPUT" ;;
+            *)    echo "otp=27" >> "$GITHUB_OUTPUT" ;;
+          esac
+          case "${{ matrix.spark }}" in
+            3.4) echo "spark_full=3.4.4" >> "$GITHUB_OUTPUT"
+                 echo "spark_dist=spark-3.4.4-bin-hadoop3" >> "$GITHUB_OUTPUT" ;;
+            3.5) echo "spark_full=3.5.4" >> "$GITHUB_OUTPUT"
+                 echo "spark_dist=spark-3.5.4-bin-hadoop3" >> "$GITHUB_OUTPUT" ;;
+            4.0) echo "spark_full=4.0.0" >> "$GITHUB_OUTPUT"
+                 echo "spark_dist=spark-4.0.0-bin-hadoop3" >> "$GITHUB_OUTPUT" ;;
+            4.1) echo "spark_full=4.1.1" >> "$GITHUB_OUTPUT"
+                 echo "spark_dist=spark-4.1.1-bin-hadoop3" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ steps.versions.outputs.otp }}
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ matrix.elixir }}-${{ steps.versions.outputs.otp }}-${{ hashFiles('mix.lock') }}
+          restore-keys: mix-${{ matrix.elixir }}-${{ steps.versions.outputs.otp }}-
+
+      - name: Cache Spark distribution
+        id: cache-spark
+        uses: actions/cache@v5
+        with:
+          path: spark-dist
+          key: spark-${{ steps.versions.outputs.spark_full }}
+
+      - name: Download Spark
+        if: steps.cache-spark.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p spark-dist
+          curl -fsSL \
+            "https://archive.apache.org/dist/spark/spark-${{ steps.versions.outputs.spark_full }}/${{ steps.versions.outputs.spark_dist }}.tgz" \
+            | tar -xz -C spark-dist --strip-components=1
+
+      - run: mix deps.get
+      - run: mix compile
+
+      - name: Start Spark Connect server
+        run: |
+          export SPARK_HOME="${{ github.workspace }}/spark-dist"
+          bash "$SPARK_HOME/sbin/start-connect-server.sh" \
+            --conf spark.connect.grpc.binding.port=15002
+          echo -n "Waiting for Spark Connect server"
+          for i in $(seq 1 60); do
+            if nc -z localhost 15002 2>/dev/null; then
+              echo " ready (${i}s)"
+              break
+            fi
+            echo -n "."
+            sleep 1
+          done
+
+      - name: Run integration tests
+        run: mix test --include integration
+
+      - name: Stop Spark Connect server
+        if: always()
+        run: |
+          export SPARK_HOME="${{ github.workspace }}/spark-dist"
+          bash "$SPARK_HOME/sbin/stop-connect-server.sh" 2>/dev/null || true

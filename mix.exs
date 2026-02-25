@@ -1,15 +1,25 @@
 defmodule SparkEx.MixProject do
   use Mix.Project
 
+  @version "0.1.0"
+  @source_url "https://github.com/lukaszsamson/spark_ex"
+
   def project do
     [
       app: :spark_ex,
-      version: "0.1.0",
-      elixir: "~> 1.19",
+      version: @version,
+      elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
-      aliases: aliases()
+      aliases: aliases(),
+      name: "SparkEx",
+      description: "Native Elixir client for Apache Spark via the Spark Connect protocol",
+      package: package(),
+      docs: docs(),
+      dialyzer: [plt_local_path: "priv/plts"],
+      source_url: @source_url,
+      homepage_url: @source_url
     ]
   end
 
@@ -41,7 +51,24 @@ defmodule SparkEx.MixProject do
       {:kino, "~> 0.14", optional: true},
 
       # Dev/test
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.35", only: :dev, runtime: false}
+    ]
+  end
+
+  defp package do
+    [
+      licenses: ["Apache-2.0"],
+      links: %{"GitHub" => @source_url},
+      files: ~w(lib priv/proto .formatter.exs mix.exs README.md LICENSE)
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      source_ref: "v#{@version}",
+      extras: ["README.md", "LICENSE"]
     ]
   end
 

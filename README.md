@@ -10,7 +10,7 @@ protobuf contract, giving Elixir and Livebook first-class access to
 distributed Spark SQL, DataFrames, streaming, and the catalog &mdash; without
 a JVM in your application.
 
-Targets **Spark 4.1.1**. 890 unit tests + 260 integration tests passing.
+Targets **Spark 3.4 - 4.1**.
 
 ## Features
 
@@ -294,8 +294,9 @@ attach to for logging, metrics, or tracing:
 
 | Requirement         | Notes                                                                 |
 | ------------------- | --------------------------------------------------------------------- |
-| Elixir >= 1.19      |                                                                       |
-| Java 17 or 21       | For running the Spark Connect server. Spark 4.1.1 does **not** support Java 25+. |
+| Elixir >= 1.15      |                                                                       |
+| Java 17 or 21       | For running the Spark Connect server                                  |
+| Spark >= 3.4 with spark-connect       | For running the Spark Connect server                |
 | Explorer (optional) | Arrow IPC decoding and `to_explorer/2`                                |
 | Kino (optional)     | Livebook rendering                                                    |
 
@@ -323,7 +324,7 @@ default.
 
 **Manual setup:**
 
-1. Download Spark 4.1.1:
+1. Download Spark:
 
 ```bash
 curl -L -o /tmp/spark.tgz \
@@ -419,6 +420,6 @@ protocol introduced in Apache Spark 3.4 and stabilized in Spark 4.x.
 
 ## License
 
-Copyright (c) 2025, SparkEx contributors.
+Copyright (c) 2026 Łukasz Samson
 
-See [LICENSE](LICENSE) for details.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
