@@ -517,10 +517,14 @@ defmodule SparkEx.DataFrame do
         %Column{expr: e} -> e
       end
 
-    %__MODULE__{
-      left
-      | plan: {:lateral_join, left.plan, right.plan, cond_expr, canonical}
-    }
+    join_plan =
+      if tvf_plan?(right.plan) do
+        {:join, left.plan, right.plan, cond_expr, canonical, []}
+      else
+        {:lateral_join, left.plan, right.plan, cond_expr, canonical}
+      end
+
+    %__MODULE__{left | plan: join_plan}
   end
 
   @doc """
@@ -1439,7 +1443,7 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
-  Repartitions by partition ID using `DirectShufflePartitionID`.
+  Repartitions by partition ID.
 
   ## Examples
 
@@ -1448,8 +1452,7 @@ defmodule SparkEx.DataFrame do
   @spec repartition_by_id(t(), pos_integer() | nil, Column.t() | String.t() | atom()) :: t()
   def repartition_by_id(%__MODULE__{} = df, num_partitions \\ nil, col) do
     col_expr = normalize_column_expr(col)
-    shuffle_expr = {:direct_shuffle_partition_id, col_expr}
-    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, [shuffle_expr], num_partitions}}
+    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, [col_expr], num_partitions}}
   end
 
   @doc "Alias for `filter/2`."
@@ -2369,6 +2372,8 @@ defmodule SparkEx.DataFrame do
 
   defp merge_tags(%__MODULE__{tags: []}, opts), do: opts
   defp merge_tags(%__MODULE__{tags: tags}, opts), do: Keyword.put(opts, :tags, tags)
+  defp tvf_plan?({:table_valued_function, _, _}), do: true
+  defp tvf_plan?(_), do: false
 
   defp normalize_hint_parameters(parameters) do
     parameters

@@ -210,7 +210,10 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
       tag = "interrupt-long-running"
 
       df =
-        SparkEx.sql(session, "SELECT sleep(30) AS s")
+        SparkEx.sql(
+          session,
+          "SELECT count(*) AS c FROM range(0, 20000000) a CROSS JOIN range(0, 20000000) b"
+        )
         |> SparkEx.DataFrame.tag(tag)
 
       task = Task.async(fn -> SparkEx.DataFrame.collect(df, timeout: 120_000) end)

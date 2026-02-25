@@ -747,6 +747,14 @@ defmodule SparkEx.M14.StreamingTest do
       end
     end
 
+    test "load with list raises on empty list" do
+      reader = SparkEx.StreamReader.new(:s) |> SparkEx.StreamReader.format("json")
+
+      assert_raise ArgumentError, ~r/must not be empty/, fn ->
+        SparkEx.StreamReader.load(reader, [])
+      end
+    end
+
     test "convenience methods raise on nil path" do
       assert_raise ArgumentError, ~r/non-empty string/, fn ->
         SparkEx.StreamReader.json(:s, nil)

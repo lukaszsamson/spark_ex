@@ -895,7 +895,13 @@ defmodule SparkEx.Session do
                   state = maybe_update_server_session(state, result.server_side_session_id)
 
                   {:ok, result, state} =
-                    maybe_retry_collect_with_json_projection(state, plan, proto_plan, opts, result)
+                    maybe_retry_collect_with_json_projection(
+                      state,
+                      plan,
+                      proto_plan,
+                      opts,
+                      result
+                    )
 
                   state = %{state | last_execution_metrics: result.execution_metrics}
                   SparkEx.Observation.store_observed_metrics(result.observed_metrics)
@@ -1702,28 +1708,26 @@ defmodule SparkEx.Session do
   end
 
   defp maybe_execute_collect_with_json_projection(state, plan, proto_plan, opts) do
-    if maybe_json_relation_plan?(plan) do
+    if maybe_preflight_collect_retry?(plan) do
       case Client.analyze_schema(state, proto_plan) do
         {:ok, schema, server_side_session_id} ->
           state = maybe_update_server_session(state, server_side_session_id)
 
-          if schema_has_nested_map?(schema) do
-            case retry_collect_with_json_projection(state, plan, schema, opts) do
-              {:ok, result, state} ->
-                :telemetry.execute(
-                  [:spark_ex, :session, :collect_retry],
-                  %{attempt: 1},
-                  %{session_id: state.session_id, strategy: :json_projection_pre}
-                )
+          case unique_schema_column_names(schema) do
+            unique_names when is_list(unique_names) ->
+              :telemetry.execute(
+                [:spark_ex, :session, :collect_retry],
+                %{attempt: 1},
+                %{session_id: state.session_id, strategy: :unique_columns_pre}
+              )
 
-                result = Map.update!(result, :rows, &decode_rows_from_json_projection(&1, schema))
-                {:ok, result, state}
+              case execute_retry_plan(state, {:to_df, plan, unique_names}, opts) do
+                {:ok, result, state} -> {:ok, result, state}
+                {:error, state} -> {:no_fallback, state}
+              end
 
-              {:error, state} ->
-                {:no_fallback, state}
-            end
-          else
-            {:no_fallback, state}
+            _ ->
+              maybe_execute_collect_with_json_projection_schema_retry(state, plan, schema, opts)
           end
 
         _ ->
@@ -1733,6 +1737,82 @@ defmodule SparkEx.Session do
       {:no_fallback, state}
     end
   end
+
+  defp maybe_execute_collect_with_json_projection_schema_retry(state, plan, schema, opts) do
+    if schema_has_nested_map?(schema) or schema_has_struct_and_map?(schema) do
+      case retry_collect_with_json_projection(state, plan, schema, opts) do
+        {:ok, result, state} ->
+          :telemetry.execute(
+            [:spark_ex, :session, :collect_retry],
+            %{attempt: 1},
+            %{session_id: state.session_id, strategy: :json_projection_pre}
+          )
+
+          result = Map.update!(result, :rows, &decode_rows_from_json_projection(&1, schema))
+          {:ok, result, state}
+
+        {:error, state} ->
+          {:no_fallback, state}
+      end
+    else
+      {:no_fallback, state}
+    end
+  end
+
+  defp maybe_preflight_collect_retry?(plan) do
+    maybe_json_relation_plan?(plan) or maybe_sql_plan?(plan)
+  end
+
+  defp maybe_sql_plan?({:sql, query, _args}) when is_binary(query) do
+    lowered =
+      query
+      |> String.trim_leading()
+      |> String.downcase()
+
+    String.starts_with?(lowered, "select") or
+      String.starts_with?(lowered, "with") or
+      String.starts_with?(lowered, "values")
+  end
+
+  defp maybe_sql_plan?(plan) when is_tuple(plan) do
+    plan
+    |> Tuple.to_list()
+    |> Enum.any?(&maybe_sql_plan?/1)
+  end
+
+  defp maybe_sql_plan?(plan) when is_list(plan),
+    do: Enum.any?(plan, &maybe_sql_plan?/1)
+
+  defp maybe_sql_plan?(_), do: false
+
+  defp schema_has_struct_and_map?(%Spark.Connect.DataType{kind: {:struct, struct}}) do
+    has_struct? = Enum.any?(struct.fields, &schema_contains_kind?(&1.data_type, :struct))
+    has_map? = Enum.any?(struct.fields, &schema_contains_kind?(&1.data_type, :map))
+    has_struct? and has_map?
+  end
+
+  defp schema_has_struct_and_map?(_), do: false
+
+  defp schema_contains_kind?(%Spark.Connect.DataType{kind: {kind, _}}, kind), do: true
+
+  defp schema_contains_kind?(%Spark.Connect.DataType{kind: {:array, array}}, kind) do
+    schema_contains_kind?(array.element_type, kind)
+  end
+
+  defp schema_contains_kind?(
+         %Spark.Connect.DataType{
+           kind: {:map, %Spark.Connect.DataType.Map{key_type: key_type, value_type: value_type}}
+         },
+         kind
+       ) do
+    schema_contains_kind?(key_type, kind) or schema_contains_kind?(value_type, kind)
+  end
+
+  defp schema_contains_kind?(%Spark.Connect.DataType{kind: {:struct, struct}}, kind) do
+    Enum.any?(struct.fields, &schema_contains_kind?(&1.data_type, kind))
+  end
+
+  defp schema_contains_kind?(_data_type, _kind), do: false
 
   defp retry_collect_with_unique_columns(state, plan, proto_plan, opts) do
     :telemetry.execute(

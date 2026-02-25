@@ -43,4 +43,12 @@ defmodule SparkEx.Unit.TableValuedFunctionTest do
                 [{:lit, 2}, {:lit, 1}, {:lit, 2}, {:lit, 3}, {:lit, 4}]}
            } = df
   end
+
+  test "stack/3 raises when num_rows is non-positive" do
+    tvf = TableValuedFunction.new(self())
+
+    assert_raise ArgumentError, ~r/positive integer/, fn ->
+      TableValuedFunction.stack(tvf, 0, [1, 2])
+    end
+  end
 end

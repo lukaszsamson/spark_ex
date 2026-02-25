@@ -4,6 +4,7 @@ defmodule SparkEx.DataFrameTest do
   alias SparkEx.DataFrame
   alias SparkEx.Column
   alias SparkEx.Functions
+  alias SparkEx.TableValuedFunction
   alias Spark.Connect.ExecutePlanResponse
 
   defmodule ArrowSession do
@@ -836,6 +837,17 @@ defmodule SparkEx.DataFrameTest do
       result = DataFrame.lateral_join(df1, df2, condition, :left)
 
       assert %DataFrame{plan: {:lateral_join, {:sql, _, _}, {:sql, _, _}, _, :left}} = result
+    end
+
+    test "uses regular join plan when rhs is a TVF relation" do
+      left = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t1", nil}}
+      right = TableValuedFunction.new(self()) |> TableValuedFunction.call("range", [1, 3])
+
+      result = DataFrame.lateral_join(left, right, nil, :inner)
+
+      assert %DataFrame{
+               plan: {:join, {:sql, _, _}, {:table_valued_function, "range", _}, nil, :inner, []}
+             } = result
     end
   end
 

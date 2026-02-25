@@ -723,14 +723,12 @@ defmodule SparkEx.MissingFeaturesTest do
   # ── DataFrame.repartition_by_id ──
 
   describe "DataFrame.repartition_by_id/2" do
-    test "creates repartition with DirectShufflePartitionID" do
+    test "creates repartition by expression on partition column" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
       result = DataFrame.repartition_by_id(df, Functions.col("part"))
 
       assert %DataFrame{
-               plan:
-                 {:repartition_by_expression, _, [{:direct_shuffle_partition_id, {:col, "part"}}],
-                  nil}
+               plan: {:repartition_by_expression, _, [{:col, "part"}], nil}
              } = result
     end
   end

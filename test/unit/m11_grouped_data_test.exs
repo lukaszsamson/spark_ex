@@ -81,6 +81,14 @@ defmodule SparkEx.M11.GroupedDataTest do
              } = result
     end
 
+    test "count with single column string" do
+      result = make_grouped() |> GroupedData.count("salary")
+
+      assert %DataFrame{
+               plan: {:aggregate, _, :groupby, _, [{:fn, "count", [{:col, "salary"}], false}]}
+             } = result
+    end
+
     test "count with Column structs" do
       result = make_grouped() |> GroupedData.count([Functions.col("salary")])
 
@@ -118,6 +126,15 @@ defmodule SparkEx.M11.GroupedDataTest do
 
       assert %DataFrame{plan: {:aggregate, _, :groupby, _, agg_exprs}} = result
       assert length(agg_exprs) == 2
+    end
+
+    test "sum with single string column" do
+      {:ok, session} = FakeSession.start_link(schema: numeric_schema())
+      result = make_grouped(["dept"], session) |> GroupedData.sum("salary")
+
+      assert %DataFrame{
+               plan: {:aggregate, _, :groupby, _, [{:fn, "sum", [{:col, "salary"}], false}]}
+             } = result
     end
   end
 

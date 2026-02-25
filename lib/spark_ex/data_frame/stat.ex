@@ -233,7 +233,7 @@ defmodule SparkEx.DataFrame.Stat do
   defp first_column_value(row) when is_map(row) do
     # Fallback: if Spark returns extra columns, take the first by key order.
     # This matches Map.values/1 |> hd/0 but is explicit about the choice.
-    {_key, value} = :maps.next(:maps.iterator(row))
+    {_key, value, _iterator} = :maps.next(:maps.iterator(row))
     value
   end
 

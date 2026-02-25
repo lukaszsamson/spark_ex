@@ -97,6 +97,10 @@ defmodule SparkEx.StreamReader do
   end
 
   def load(%__MODULE__{} = reader, paths) when is_list(paths) do
+    if paths == [] do
+      raise ArgumentError, "stream load paths must not be empty"
+    end
+
     Enum.each(paths, &validate_path!/1)
 
     %DataFrame{

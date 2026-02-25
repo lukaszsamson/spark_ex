@@ -1530,8 +1530,7 @@ defmodule SparkEx.Functions do
           Column.t()
   def time_diff(unit, start_time, end_time) do
     %Column{
-      expr:
-        {:fn, "time_diff", [to_expr(unit), to_expr(start_time), to_expr(end_time)], false}
+      expr: {:fn, "time_diff", [to_expr(unit), to_expr(start_time), to_expr(end_time)], false}
     }
   end
 

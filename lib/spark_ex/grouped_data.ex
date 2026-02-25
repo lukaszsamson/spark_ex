@@ -121,7 +121,7 @@ defmodule SparkEx.GroupedData do
 
   for {name, spark_fn, doc} <- @grouped_agg_shortcuts do
     @doc doc
-    @spec unquote(name)(t(), [Column.t() | String.t()]) :: DataFrame.t()
+    @spec unquote(name)(t(), Column.t() | String.t() | [Column.t() | String.t()]) :: DataFrame.t()
     def unquote(name)(gd, cols \\ [])
 
     if name == :count do
@@ -130,6 +130,12 @@ defmodule SparkEx.GroupedData do
           case cols do
             [] ->
               [%Column{expr: {:alias, {:fn, "count", [{:lit, 1}], false}, "count"}}]
+
+            col when is_binary(col) ->
+              [%Column{expr: {:fn, "count", [{:col, col}], false}}]
+
+            %Column{} = c ->
+              [%Column{expr: {:fn, "count", [c.expr], false}}]
 
             cols ->
               Enum.map(cols, fn
@@ -151,39 +157,53 @@ defmodule SparkEx.GroupedData do
   end
 
   defp numeric_agg(%__MODULE__{} = gd, spark_fn, cols) do
-    case fetch_schema_cached(gd) do
-      {:ok, schema} ->
-        numeric_names = numeric_column_names(schema)
+    {agg_names, numeric_names} =
+      case cols do
+        [] ->
+          case fetch_schema_cached(gd) do
+            {:ok, schema} ->
+              names = numeric_column_names(schema)
+              {names, names}
 
-        agg_names =
-          case cols do
-            [] ->
-              numeric_names
-
-            cols when is_list(cols) ->
-              normalize_string_columns(cols)
+            {:error, reason} ->
+              raise ArgumentError, "failed to fetch schema: #{inspect(reason)}"
           end
 
-        invalid = Enum.reject(agg_names, &(&1 in numeric_names))
+        col when is_binary(col) ->
+          {[col], nil}
 
-        if invalid != [] do
-          raise ArgumentError, "expected numeric columns, got: #{inspect(invalid)}"
-        end
+        %Column{expr: {:col, name}} when is_binary(name) ->
+          {[name], nil}
 
-        if agg_names == [] do
-          raise ArgumentError, "expected at least one numeric column"
-        end
+        %Column{} ->
+          raise ArgumentError, "expected column names when aggregating numeric columns"
 
-        agg_exprs =
-          Enum.map(agg_names, fn name ->
-            %Column{expr: {:fn, spark_fn, [{:col, name}], false}}
-          end)
+        cols when is_list(cols) ->
+          {normalize_string_columns(cols), nil}
 
-        agg(gd, agg_exprs)
+        other ->
+          raise ArgumentError,
+                "expected columns as string or list of strings, got: #{inspect(other)}"
+      end
 
-      {:error, reason} ->
-        raise ArgumentError, "failed to fetch schema: #{inspect(reason)}"
+    if is_list(numeric_names) do
+      invalid = Enum.reject(agg_names, &(&1 in numeric_names))
+
+      if invalid != [] do
+        raise ArgumentError, "expected numeric columns, got: #{inspect(invalid)}"
+      end
     end
+
+    if agg_names == [] do
+      raise ArgumentError, "expected at least one numeric column"
+    end
+
+    agg_exprs =
+      Enum.map(agg_names, fn name ->
+        %Column{expr: {:fn, spark_fn, [{:col, name}], false}}
+      end)
+
+    agg(gd, agg_exprs)
   end
 
   defp normalize_string_columns(cols) do

@@ -43,7 +43,12 @@ defmodule SparkEx.TableValuedFunction do
   `num_rows` is the number of rows in the stacked output.
   """
   @spec stack(t(), pos_integer(), [SparkEx.Column.t() | term()]) :: SparkEx.DataFrame.t()
-  def stack(%__MODULE__{} = tvf, num_rows, args) when is_integer(num_rows) and is_list(args) do
+  def stack(%__MODULE__{} = tvf, num_rows, args)
+      when is_integer(num_rows) and num_rows > 0 and is_list(args) do
     call(tvf, "stack", [num_rows | args])
+  end
+
+  def stack(%__MODULE__{}, num_rows, _args) do
+    raise ArgumentError, "num_rows must be a positive integer, got: #{inspect(num_rows)}"
   end
 end
