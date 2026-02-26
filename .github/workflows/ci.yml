@@ -94,6 +94,7 @@ jobs:
         spark: ["3.4", "3.5", "4.0", "4.1"]
     env:
       MIX_ENV: test
+      SPARK_HOME: ${{ github.workspace }}/spark-dist
     steps:
       - uses: actions/checkout@v4
 
@@ -107,13 +108,17 @@ jobs:
           esac
           case "${{ matrix.spark }}" in
             3.4) echo "spark_full=3.4.4" >> "$GITHUB_OUTPUT"
-                 echo "spark_dist=spark-3.4.4-bin-hadoop3" >> "$GITHUB_OUTPUT" ;;
+                 echo "spark_dist=spark-3.4.4-bin-hadoop3" >> "$GITHUB_OUTPUT"
+                 echo "spark_packages=org.apache.spark:spark-connect_2.12:3.4.4" >> "$GITHUB_OUTPUT" ;;
             3.5) echo "spark_full=3.5.4" >> "$GITHUB_OUTPUT"
-                 echo "spark_dist=spark-3.5.4-bin-hadoop3" >> "$GITHUB_OUTPUT" ;;
+                 echo "spark_dist=spark-3.5.4-bin-hadoop3" >> "$GITHUB_OUTPUT"
+                 echo "spark_packages=org.apache.spark:spark-connect_2.12:3.5.4" >> "$GITHUB_OUTPUT" ;;
             4.0) echo "spark_full=4.0.0" >> "$GITHUB_OUTPUT"
-                 echo "spark_dist=spark-4.0.0-bin-hadoop3" >> "$GITHUB_OUTPUT" ;;
+                 echo "spark_dist=spark-4.0.0-bin-hadoop3" >> "$GITHUB_OUTPUT"
+                 echo "spark_packages=" >> "$GITHUB_OUTPUT" ;;
             4.1) echo "spark_full=4.1.1" >> "$GITHUB_OUTPUT"
-                 echo "spark_dist=spark-4.1.1-bin-hadoop3" >> "$GITHUB_OUTPUT" ;;
+                 echo "spark_dist=spark-4.1.1-bin-hadoop3" >> "$GITHUB_OUTPUT"
+                 echo "spark_packages=" >> "$GITHUB_OUTPUT" ;;
           esac
 
       - uses: erlef/setup-beam@v1
@@ -154,24 +159,29 @@ jobs:
 
       - name: Start Spark Connect server
         run: |
-          export SPARK_HOME="${{ github.workspace }}/spark-dist"
-          bash "$SPARK_HOME/sbin/start-connect-server.sh" \
-            --conf spark.connect.grpc.binding.port=15002
+          ARGS="--conf spark.connect.grpc.binding.port=15002"
+          PACKAGES="${{ steps.versions.outputs.spark_packages }}"
+          if [ -n "$PACKAGES" ]; then
+            ARGS="$ARGS --packages $PACKAGES"
+          fi
+          bash "$SPARK_HOME/sbin/start-connect-server.sh" $ARGS
           echo -n "Waiting for Spark Connect server"
-          for i in $(seq 1 60); do
+          for i in $(seq 1 120); do
             if nc -z localhost 15002 2>/dev/null; then
               echo " ready (${i}s)"
-              break
+              exit 0
             fi
             echo -n "."
             sleep 1
           done
+          echo ""
+          echo "ERROR: Spark Connect server did not start within 120s"
+          cat "$SPARK_HOME"/logs/*.out 2>/dev/null || true
+          exit 1
 
       - name: Run integration tests
         run: mix test --include integration
 
       - name: Stop Spark Connect server
         if: always()
-        run: |
-          export SPARK_HOME="${{ github.workspace }}/spark-dist"
-          bash "$SPARK_HOME/sbin/stop-connect-server.sh" 2>/dev/null || true
+        run: bash "$SPARK_HOME/sbin/stop-connect-server.sh" 2>/dev/null || true

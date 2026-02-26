@@ -212,6 +212,7 @@ defmodule SparkEx.Integration.CreateDataFrameTest do
   end
 
   describe "cached (large) local DataFrame" do
+    @describetag min_spark: "4.1"
     test "creates DataFrame from data exceeding cache threshold", %{session: session} do
       # Create data that exceeds a tiny cache threshold
       n = 1000
@@ -297,6 +298,7 @@ defmodule SparkEx.Integration.CreateDataFrameTest do
   end
 
   describe "chunked upload path" do
+    @describetag min_spark: "4.1"
     test "exercises chunked artifact upload for large payloads", %{session: session} do
       # Create enough data to trigger chunked artifact upload (> 32KB chunks)
       n = 5000

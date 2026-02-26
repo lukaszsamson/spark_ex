@@ -2,6 +2,7 @@ defmodule SparkEx.Integration.CloneSessionGapsTest do
   use ExUnit.Case
 
   @moduletag :integration
+  @moduletag min_spark: "4.1"
 
   alias SparkEx.DataFrame
 

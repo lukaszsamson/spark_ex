@@ -63,6 +63,7 @@ defmodule SparkEx.Integration.JoinAndSubqueryNewTypesTest do
     assert Enum.map(rows, & &1["id_l"]) == [1, 2]
   end
 
+  @tag min_spark: "4.1"
   test "in_subquery executes", %{session: session} do
     subquery = SparkEx.sql(session, "SELECT * FROM VALUES (1), (3) AS t(id)")
 
@@ -75,6 +76,7 @@ defmodule SparkEx.Integration.JoinAndSubqueryNewTypesTest do
     assert Enum.map(rows, & &1["id"]) == [1, 3]
   end
 
+  @tag min_spark: "4.1"
   test "isin with DataFrame subquery plans with subquery expression", %{session: session} do
     subquery = SparkEx.sql(session, "SELECT * FROM VALUES (1), (3) AS t(id)")
 

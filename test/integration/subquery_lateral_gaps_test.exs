@@ -97,6 +97,7 @@ defmodule SparkEx.Integration.SubqueryLateralGapsTest do
   # ── In subquery variants ──
 
   describe "in_subquery" do
+    @tag min_spark: "4.1"
     test "in_subquery with computed subquery", %{session: session} do
       subquery =
         SparkEx.sql(session, "SELECT * FROM VALUES (2), (4), (6) AS t(id)")

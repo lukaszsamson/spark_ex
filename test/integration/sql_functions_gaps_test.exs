@@ -202,6 +202,7 @@ defmodule SparkEx.Integration.SqlFunctionsGapsTest do
   end
 
   describe "make_timestamp keyword form" do
+    @describetag min_spark: "4.1"
     test "plans make_timestamp(date,time) from keyword args", %{session: session} do
       df = SparkEx.sql(session, "SELECT DATE '2024-06-15' AS d, TIME '10:30:45' AS t")
 

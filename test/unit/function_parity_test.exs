@@ -149,10 +149,8 @@ defmodule SparkEx.Unit.FunctionParityTest do
                     ])
 
   @tag :parity
+  @tag skip: unless(File.exists?(@pyspark_builtin_path), do: "missing PySpark source")
   test "registry covers PySpark builtin functions" do
-    unless File.exists?(@pyspark_builtin_path) do
-      flunk("missing PySpark source: #{@pyspark_builtin_path}")
-    end
 
     pyspark_fns = parse_pyspark_function_names(@pyspark_builtin_path)
 

@@ -44,6 +44,7 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
   end
 
   describe "clone_session/2" do
+    @describetag min_spark: "4.1"
     test "clones session config and keeps sessions independent" do
       {:ok, session} = SparkEx.connect(url: @spark_remote)
       Process.unlink(session)
