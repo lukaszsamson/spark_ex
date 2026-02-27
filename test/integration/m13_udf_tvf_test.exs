@@ -39,6 +39,7 @@ defmodule SparkEx.Integration.M13.UDFTVFTest do
       assert ids == [10, 12, 14, 16, 18]
     end
 
+    @tag min_spark: "4.0"
     test "explode TVF with SQL-created array", %{session: session} do
       # Create a df with an array column, then use SQL to explode it
       # (explode as TVF requires specific argument format)

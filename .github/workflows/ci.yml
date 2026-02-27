@@ -91,7 +91,7 @@ jobs:
           # "1.18",
           "1.19"
           ]
-        spark: ["3.4", "3.5", "4.0", "4.1"]
+        spark: ["3.5", "4.0", "4.1"]
     env:
       MIX_ENV: test
       SPARK_HOME: ${{ github.workspace }}/spark-dist
@@ -107,9 +107,6 @@ jobs:
             *)    echo "otp=27" >> "$GITHUB_OUTPUT" ;;
           esac
           case "${{ matrix.spark }}" in
-            3.4) echo "spark_full=3.4.4" >> "$GITHUB_OUTPUT"
-                 echo "spark_dist=spark-3.4.4-bin-hadoop3" >> "$GITHUB_OUTPUT"
-                 echo "spark_packages=org.apache.spark:spark-connect_2.12:3.4.4" >> "$GITHUB_OUTPUT" ;;
             3.5) echo "spark_full=3.5.4" >> "$GITHUB_OUTPUT"
                  echo "spark_dist=spark-3.5.4-bin-hadoop3" >> "$GITHUB_OUTPUT"
                  echo "spark_packages=org.apache.spark:spark-connect_2.12:3.5.4" >> "$GITHUB_OUTPUT" ;;

@@ -167,6 +167,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
   end
 
   describe "streamWriter.xml/2" do
+    @tag min_spark: "4.0"
     test "writes xml stream to path", %{session: session} do
       checkpoint = unique_checkpoint()
       output = "/tmp/spark_ex_stream_xml_#{System.unique_integer([:positive, :monotonic])}"

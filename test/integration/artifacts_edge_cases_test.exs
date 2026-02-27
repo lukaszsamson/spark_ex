@@ -53,6 +53,7 @@ defmodule SparkEx.Integration.ArtifactsEdgeCasesTest do
     assert {:ok, _} = SparkEx.DataFrame.collect(df)
   end
 
+  @tag min_spark: "4.0"
   test "duplicate artifact upload returns statuses", %{session: session} do
     tmp_dir = "/tmp/spark_ex_artifacts_dup_#{System.unique_integer([:positive])}"
     File.mkdir_p!(tmp_dir)
@@ -69,6 +70,7 @@ defmodule SparkEx.Integration.ArtifactsEdgeCasesTest do
     assert statuses == %{name => false}
   end
 
+  @tag min_spark: "4.0"
   test "uploading files with same basename reports duplicates", %{session: session} do
     tmp_dir = "/tmp/spark_ex_artifacts_dupname_#{System.unique_integer([:positive])}"
     dir_a = Path.join(tmp_dir, "a")

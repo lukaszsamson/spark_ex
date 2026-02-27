@@ -51,6 +51,7 @@ defmodule SparkEx.Integration.ArtifactHelpersTest do
   end
 
   describe "copy_from_local_to_fs/3" do
+    @tag min_spark: "4.0"
     test "uploads a local file to the server destination path", %{session: session} do
       src_path =
         Path.join(System.tmp_dir!(), "spark_ex_src_#{System.unique_integer([:positive])}.txt")

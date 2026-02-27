@@ -119,6 +119,7 @@ defmodule SparkEx.Integration.SubqueryLateralGapsTest do
   # ── Lateral join variants ──
 
   describe "lateral join" do
+    @describetag min_spark: "4.0"
     test "lateral join inner (default)", %{session: session} do
       left = SparkEx.sql(session, "SELECT * FROM VALUES (1), (2), (3) AS t(id)")
       right = SparkEx.sql(session, "SELECT * FROM VALUES (1), (2) AS t(rid)")
@@ -207,6 +208,7 @@ defmodule SparkEx.Integration.SubqueryLateralGapsTest do
       assert Enum.map(rows, & &1["name"]) == ["Alice", "Bob"]
     end
 
+    @tag min_spark: "4.0"
     test "subquery in with_columns expression", %{session: session} do
       base = SparkEx.sql(session, "SELECT * FROM VALUES (1), (2) AS t(id)")
 

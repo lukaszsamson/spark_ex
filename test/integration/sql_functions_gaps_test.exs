@@ -474,6 +474,7 @@ defmodule SparkEx.Integration.SqlFunctionsGapsTest do
   # ── variant expressions ──
 
   describe "variant expressions via SQL" do
+    @tag min_spark: "4.0"
     test "parse_json and variant_get", %{session: session} do
       df =
         SparkEx.sql(session, """
@@ -490,6 +491,7 @@ defmodule SparkEx.Integration.SqlFunctionsGapsTest do
       assert row["b_val"] == "hello"
     end
 
+    @tag min_spark: "4.0"
     test "is_variant_null and schema_of_variant", %{session: session} do
       df =
         SparkEx.sql(session, """

@@ -35,6 +35,7 @@ defmodule SparkEx.Integration.DataFrameCheckpointTest do
     end
   end
 
+  @tag min_spark: "4.0"
   test "checkpoint uses cached remote relation semantics", %{session: session} do
     df = SparkEx.range(session, 2)
 

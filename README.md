@@ -10,7 +10,7 @@ protobuf contract, giving Elixir and Livebook first-class access to
 distributed Spark SQL, DataFrames, streaming, and the catalog &mdash; without
 a JVM in your application.
 
-Targets **Spark 3.4 - 4.1**.
+Targets **Spark 3.5 - 4.1**.
 
 ## Features
 
@@ -296,7 +296,7 @@ attach to for logging, metrics, or tracing:
 | ------------------- | --------------------------------------------------------------------- |
 | Elixir >= 1.15      |                                                                       |
 | Java 17 or 21       | For running the Spark Connect server                                  |
-| Spark >= 3.4 with spark-connect       | For running the Spark Connect server                |
+| Spark >= 3.5 with spark-connect       | For running the Spark Connect server                |
 | Explorer (optional) | Arrow IPC decoding and `to_explorer/2`                                |
 | Kino (optional)     | Livebook rendering                                                    |
 

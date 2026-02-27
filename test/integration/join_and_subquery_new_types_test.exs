@@ -18,6 +18,7 @@ defmodule SparkEx.Integration.JoinAndSubqueryNewTypesTest do
     %{session: session}
   end
 
+  @tag min_spark: "4.0"
   test "as_of_join executes", %{session: session} do
     left =
       SparkEx.sql(
@@ -46,6 +47,7 @@ defmodule SparkEx.Integration.JoinAndSubqueryNewTypesTest do
     assert Enum.map(rows, & &1["id_l"]) == [1, 2, 3]
   end
 
+  @tag min_spark: "4.0"
   test "lateral_join executes", %{session: session} do
     left = SparkEx.sql(session, "SELECT * FROM VALUES (1), (2) AS t(id_l)")
     right = SparkEx.sql(session, "SELECT * FROM VALUES (1), (2), (3) AS t(id_r)")

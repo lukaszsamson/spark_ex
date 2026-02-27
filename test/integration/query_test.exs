@@ -53,6 +53,7 @@ defmodule SparkEx.Integration.QueryTest do
       assert [%{"id" => 9, "name" => "bob"}] = rows
     end
 
+    @tag min_spark: "4.0"
     test "SQL with named expression args", %{session: session} do
       df =
         SparkEx.sql(
@@ -64,6 +65,7 @@ defmodule SparkEx.Integration.QueryTest do
       assert {:ok, [%{"v" => 1}]} = SparkEx.DataFrame.collect(df)
     end
 
+    @tag min_spark: "4.0"
     test "SQL with positional expression args", %{session: session} do
       df =
         SparkEx.sql(
@@ -166,6 +168,7 @@ defmodule SparkEx.Integration.QueryTest do
       assert [{"spark.sql.shuffle.partitions", "10"}] = pairs
     end
 
+    @tag min_spark: "4.0"
     test "unknown key returns structured error", %{session: session} do
       key = "spark_ex.this.key.should.not.exist"
       assert {:error, %SparkEx.Error.Remote{} = error} = SparkEx.config_get(session, [key])
@@ -175,6 +178,7 @@ defmodule SparkEx.Integration.QueryTest do
   end
 
   describe "session continuity" do
+    @tag min_spark: "4.0"
     test "tracks server-side session id across requests", %{session: session} do
       state_before = SparkEx.Session.get_state(session)
       assert state_before.server_side_session_id in [nil, ""]

@@ -18,6 +18,7 @@ defmodule SparkEx.Integration.ColumnEdgeCasesTest do
     %{session: session}
   end
 
+  @tag min_spark: "4.0"
   test "invalid star usage returns structured error", %{session: session} do
     df = SparkEx.sql(session, "SELECT * FROM (SELECT 1 AS id) t WHERE * = 1")
 

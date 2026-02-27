@@ -16,6 +16,7 @@ defmodule SparkEx.Integration.ColumnResolutionEdgeCasesTest do
     %{session: session}
   end
 
+  @tag min_spark: "4.0"
   test "ambiguous column reference returns structured error", %{session: session} do
     df =
       SparkEx.sql(
@@ -31,6 +32,7 @@ defmodule SparkEx.Integration.ColumnResolutionEdgeCasesTest do
            ]
   end
 
+  @tag min_spark: "4.0"
   test "missing nested field returns structured error", %{session: session} do
     df = SparkEx.sql(session, "SELECT s.c FROM (SELECT named_struct('a', 1) AS s) t")
 
@@ -55,6 +57,7 @@ defmodule SparkEx.Integration.ColumnResolutionEdgeCasesTest do
     assert row["b"] == 2
   end
 
+  @tag min_spark: "4.0"
   test "ambiguous unqualified column in where returns structured error", %{session: session} do
     df =
       SparkEx.sql(
@@ -70,6 +73,7 @@ defmodule SparkEx.Integration.ColumnResolutionEdgeCasesTest do
            ]
   end
 
+  @tag min_spark: "4.0"
   test "missing column in order by returns structured error", %{session: session} do
     df = SparkEx.sql(session, "SELECT * FROM (SELECT 1 AS id) t ORDER BY missing")
 

@@ -19,6 +19,7 @@ defmodule SparkEx.Integration.ErrorHandlingTest do
   end
 
   describe "server error classes" do
+    @describetag min_spark: "4.0"
     test "analysis exception includes class and parameters", %{session: session} do
       df = SparkEx.sql(session, "SELECT missing_column FROM range(1)")
 

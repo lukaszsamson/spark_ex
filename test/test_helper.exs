@@ -22,7 +22,8 @@ if run_integration? do
 
     if excludes != [] do
       IO.puts("Spark #{vsn} detected — excluding tests requiring: #{inspect(excludes)}")
-      ExUnit.configure(exclude: excludes)
+      existing = ExUnit.configuration()[:exclude] || []
+      ExUnit.configure(exclude: existing ++ excludes)
     else
       IO.puts("Spark #{vsn} detected — all version gates satisfied")
     end

@@ -68,6 +68,7 @@ defmodule SparkEx.Integration.StreamingListenerGapsTest do
   # ── Progress event payload validation ──
 
   describe "progress event payload validation" do
+    @describetag min_spark: "4.0"
     test "progress event has expected fields", %{session: session} do
       ProgressListener.set_pid(self())
       on_exit(fn -> ProgressListener.clear_pid() end)
@@ -110,6 +111,7 @@ defmodule SparkEx.Integration.StreamingListenerGapsTest do
   # ── Multiple listeners ──
 
   describe "multiple listeners" do
+    @describetag min_spark: "4.0"
     test "both listeners receive the same event", %{session: session} do
       ProgressListener.set_pid(self())
       SecondListener.set_pid(self())
@@ -152,6 +154,7 @@ defmodule SparkEx.Integration.StreamingListenerGapsTest do
   # ── Listener add/remove lifecycle ──
 
   describe "listener add/remove lifecycle" do
+    @describetag min_spark: "4.0"
     test "removed listener does not receive subsequent events", %{session: session} do
       ProgressListener.set_pid(self())
       on_exit(fn -> ProgressListener.clear_pid() end)

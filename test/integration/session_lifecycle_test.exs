@@ -6,6 +6,7 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
   @spark_remote System.get_env("SPARK_REMOTE", "sc://localhost:15002")
 
   describe "release/1" do
+    @describetag min_spark: "4.0"
     test "releases session and rejects further RPCs" do
       {:ok, session} = SparkEx.connect(url: @spark_remote)
       Process.unlink(session)
@@ -92,6 +93,7 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
   end
 
   describe "is_stopped/1" do
+    @describetag min_spark: "4.0"
     test "reflects released state" do
       {:ok, session} = SparkEx.connect(url: @spark_remote)
       Process.unlink(session)
@@ -163,6 +165,7 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
       assert length(rows) == 5
     end
 
+    @tag min_spark: "4.0"
     test "multi-tagged DataFrame executes successfully" do
       {:ok, session} = SparkEx.connect(url: @spark_remote)
 
@@ -255,6 +258,7 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
   end
 
   describe "session-control telemetry" do
+    @describetag min_spark: "4.0"
     test "emits rpc telemetry for interrupt and release" do
       {:ok, session} = SparkEx.connect(url: @spark_remote)
       Process.unlink(session)

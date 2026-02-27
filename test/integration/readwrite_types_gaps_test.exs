@@ -251,6 +251,7 @@ defmodule SparkEx.Integration.ReadWriteTypesGapsTest do
   # ── variant type ──
 
   describe "variant type" do
+    @describetag min_spark: "4.0"
     test "parse_json returns variant and variant_get extracts values", %{session: session} do
       df =
         SparkEx.sql(session, """

@@ -324,7 +324,11 @@ defmodule SparkEx.Connect.ResultDecoderTest do
       assert result.execution_metrics[{"scan", 1}] == %{"numRows" => 10}
     end
 
-    @tag skip: unless(File.exists?(Path.expand("../../checklist/payloads/arrow_duplicate_columns.ipc", __DIR__)), do: "missing payload fixture")
+    @tag skip:
+           unless(
+             File.exists?(
+               Path.expand("../../checklist/payloads/arrow_duplicate_columns.ipc", __DIR__)
+             ), do: "missing payload fixture")
     test "returns arrow_decode_failed when Explorer to_rows panics on duplicate-field payload" do
       payload_path =
         Path.expand("../../checklist/payloads/arrow_duplicate_columns.ipc", __DIR__)

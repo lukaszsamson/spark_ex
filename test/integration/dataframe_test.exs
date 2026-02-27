@@ -9,7 +9,10 @@ defmodule SparkEx.Integration.DataFrameTest do
   alias SparkEx.Reader
 
   @spark_remote System.get_env("SPARK_REMOTE", "sc://localhost:15002")
-  @spark_home System.get_env("SPARK_HOME", Path.expand("../spark-4.1.1-bin-hadoop3-connect", __DIR__))
+  @spark_home System.get_env(
+                "SPARK_HOME",
+                Path.expand("../spark-4.1.1-bin-hadoop3-connect", __DIR__)
+              )
   @spark_test_support_sql Path.join(@spark_home, "python/test_support/sql")
   @spark_examples_resources Path.join(@spark_home, "examples/src/main/resources")
 

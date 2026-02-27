@@ -37,6 +37,7 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
     assert meta["k"] == "v"
   end
 
+  @tag min_spark: "4.0"
   test "create_dataframe nullability and coercion", %{session: session} do
     data = [%{"id" => "42", "note" => nil}]
 
@@ -119,6 +120,7 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
     assert Enum.find(data, &(&1["id"] == 1))["tags"] == ["eng", "lead"]
   end
 
+  @tag min_spark: "4.0"
   test "create_dataframe can disable local Arrow normalization", %{session: session} do
     data = [%{"id" => 1, "tags" => ["a", "b"], "meta" => %{"k" => "v"}}]
 

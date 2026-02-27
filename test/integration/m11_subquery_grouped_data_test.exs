@@ -52,6 +52,7 @@ defmodule SparkEx.Integration.M11SubqueryGroupedDataTest do
   end
 
   describe "subquery parity" do
+    @tag min_spark: "4.0"
     test "scalar subquery executes", %{session: session} do
       subquery =
         SparkEx.range(session, 1)
@@ -64,6 +65,7 @@ defmodule SparkEx.Integration.M11SubqueryGroupedDataTest do
       assert {:ok, [%{"b" => 1}]} = DataFrame.collect(df)
     end
 
+    @tag min_spark: "4.0"
     test "exists subquery executes", %{session: session} do
       has_rows = DataFrame.exists(SparkEx.range(session, 1))
 

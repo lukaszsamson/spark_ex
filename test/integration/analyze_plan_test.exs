@@ -91,6 +91,7 @@ defmodule SparkEx.Integration.AnalyzePlanTest do
   end
 
   describe "analyze_json_to_ddl" do
+    @tag min_spark: "4.0"
     test "converts JSON schema to DDL", %{session: session} do
       json =
         ~s({"type":"struct","fields":[{"name":"id","type":"integer","nullable":true,"metadata":{}}]})

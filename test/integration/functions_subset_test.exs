@@ -39,6 +39,7 @@ defmodule SparkEx.Integration.FunctionsSubsetTest do
     assert row["arr2"] == [2, 3, 4]
   end
 
+  @tag min_spark: "4.0"
   test "from_avro/to_avro roundtrip", %{session: session} do
     schema =
       ~s({"type":"record","name":"t","fields":[{"name":"id","type":"int"}]})
@@ -63,6 +64,7 @@ defmodule SparkEx.Integration.FunctionsSubsetTest do
     end
   end
 
+  @tag min_spark: "4.0"
   test "from_protobuf/to_protobuf roundtrip", %{session: session} do
     descriptor = build_descriptor_set()
 

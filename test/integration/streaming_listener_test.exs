@@ -82,6 +82,7 @@ defmodule SparkEx.Integration.StreamingListenerTest do
     end
   end
 
+  @tag min_spark: "4.0"
   test "listener bus lifecycle and progress events", %{session: session} do
     TestListener.set_listener_pid(self())
     on_exit(fn -> TestListener.clear_listener_pid() end)

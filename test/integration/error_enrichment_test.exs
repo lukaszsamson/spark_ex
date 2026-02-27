@@ -2,6 +2,7 @@ defmodule SparkEx.Integration.ErrorEnrichmentTest do
   use ExUnit.Case
 
   @moduletag :integration
+  @moduletag min_spark: "4.0"
 
   @spark_remote System.get_env("SPARK_REMOTE", "sc://localhost:15002")
 

@@ -40,6 +40,7 @@ defmodule SparkEx.Integration.ReaderWriterExtendedTest do
     assert Enum.sort(Enum.map(rows, & &1["tag"])) == ["x", "y"]
   end
 
+  @tag min_spark: "4.0"
   test "xml roundtrip via Writer/Reader", %{session: session} do
     df = SparkEx.sql(session, "SELECT * FROM VALUES (1, 'x'), (2, 'y') AS t(id, tag)")
     path = "/tmp/spark_ex_it_xml_#{System.unique_integer([:positive])}"

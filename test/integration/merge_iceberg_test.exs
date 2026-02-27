@@ -20,6 +20,8 @@ defmodule SparkEx.Integration.MergeIcebergTest do
     %{session: session}
   end
 
+  @tag :skip
+  @tag min_spark: "4.0"
   test "merge into iceberg table updates and inserts", %{session: session} do
     assert {:ok, _} =
              SparkEx.sql(
