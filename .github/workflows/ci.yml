@@ -177,7 +177,9 @@ jobs:
           exit 1
 
       - name: Run integration tests
-        run: mix test --include integration
+        run: mix test
+        env:
+          SPARK_REMOTE: sc://localhost:15002
 
       - name: Stop Spark Connect server
         if: always()

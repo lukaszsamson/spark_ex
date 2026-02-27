@@ -328,7 +328,9 @@ defmodule SparkEx.Connect.ResultDecoderTest do
            unless(
              File.exists?(
                Path.expand("../../checklist/payloads/arrow_duplicate_columns.ipc", __DIR__)
-             ), do: "missing payload fixture")
+             ),
+             do: "missing payload fixture"
+           )
     test "returns arrow_decode_failed when Explorer to_rows panics on duplicate-field payload" do
       payload_path =
         Path.expand("../../checklist/payloads/arrow_duplicate_columns.ipc", __DIR__)
