@@ -141,10 +141,11 @@ defmodule SparkEx.TelemetryTest do
       result = Client.rpc_telemetry_span(metadata, fn -> {:ok, %{rows: [%{"id" => 1}]}} end)
       assert {:ok, %{rows: [%{"id" => 1}]}} = result
 
-      assert_receive {:telemetry, ^ref, [:spark_ex, :rpc, :start], start_measurements, start_meta}
+      assert_receive {:telemetry, ^ref, [:spark_ex, :rpc, :start], start_measurements,
+                      %{session_id: "s-1"} = start_meta}
+
       assert is_integer(start_measurements.system_time)
       assert start_meta.rpc == :execute_plan
-      assert start_meta.session_id == "s-1"
 
       assert_receive {:telemetry, ^ref, [:spark_ex, :rpc, :stop], stop_measurements, stop_meta}
       assert is_integer(stop_measurements.duration)
