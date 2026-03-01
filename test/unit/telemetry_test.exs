@@ -1,5 +1,5 @@
 defmodule SparkEx.TelemetryTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias SparkEx.Connect.Client
   alias SparkEx.Connect.ResultDecoder

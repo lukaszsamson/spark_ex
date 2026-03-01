@@ -55,7 +55,7 @@ defmodule SparkEx.Integration.ArtifactHelpersTest do
       :ok =
         :erl_tar.create(
           to_charlist(tar_path),
-          [{to_charlist(content_path), to_charlist("file.txt")}],
+          [{to_charlist("file.txt"), to_charlist(content_path)}],
           []
         )
 
