@@ -1,10 +1,5 @@
 defmodule SparkEx.Connect.Client do
-  @moduledoc """
-  Low-level gRPC client for Spark Connect RPCs.
-
-  Builds request messages from session state and calls the generated
-  `Spark.Connect.SparkConnectService.Stub`.
-  """
+  @moduledoc false
 
   alias Spark.Connect.SparkConnectService.Stub
 

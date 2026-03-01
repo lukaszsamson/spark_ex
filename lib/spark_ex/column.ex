@@ -36,8 +36,8 @@ defmodule SparkEx.Column do
           | {:alias, expr(), String.t()}
           | {:alias, expr(), String.t(), String.t()}
           | {:sort_order, expr(), :asc | :desc, :nulls_first | :nulls_last | nil}
-          | {:cast, expr(), String.t() | Spark.Connect.DataType.t()}
-          | {:cast, expr(), String.t() | Spark.Connect.DataType.t(), :try}
+          | {:cast, expr(), String.t() | SparkEx.Types.data_type_proto()}
+          | {:cast, expr(), String.t() | SparkEx.Types.data_type_proto(), :try}
           | {:star}
           | {:star, String.t()}
           | {:star, String.t() | nil, term()}
@@ -129,9 +129,9 @@ defmodule SparkEx.Column do
   Casts the column to the given type.
 
   The type can be a Spark SQL type string (e.g. `"int"`, `"string"`, `"double"`)
-  or a `%Spark.Connect.DataType{}` protobuf value.
+  or a Spark Connect DataType protobuf struct.
   """
-  @spec cast(t(), String.t() | Spark.Connect.DataType.t()) :: t()
+  @spec cast(t(), String.t() | SparkEx.Types.data_type_proto()) :: t()
   def cast(%__MODULE__{} = col, type_str) when is_binary(type_str) do
     %__MODULE__{expr: {:cast, col.expr, type_str}}
   end
@@ -143,7 +143,7 @@ defmodule SparkEx.Column do
   @doc """
   Try-casts the column to the given type. Returns null on cast failure instead of error.
   """
-  @spec try_cast(t(), String.t() | Spark.Connect.DataType.t()) :: t()
+  @spec try_cast(t(), String.t() | SparkEx.Types.data_type_proto()) :: t()
   def try_cast(%__MODULE__{} = col, type_str) when is_binary(type_str) do
     %__MODULE__{expr: {:cast, col.expr, type_str, :try}}
   end
@@ -423,7 +423,7 @@ defmodule SparkEx.Column do
   end
 
   @doc "Alias for `cast/2`."
-  @spec astype(t(), String.t() | Spark.Connect.DataType.t()) :: t()
+  @spec astype(t(), String.t() | SparkEx.Types.data_type_proto()) :: t()
   def astype(%__MODULE__{} = col, type_str) when is_binary(type_str) do
     cast(col, type_str)
   end

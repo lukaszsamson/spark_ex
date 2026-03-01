@@ -17,7 +17,7 @@ defmodule SparkEx.UDFRegistration do
   - `name` — the SQL function name to register.
   - `class_name` — fully qualified Java class name (e.g. `"com.example.MyUDF"`).
   - `opts` — keyword options:
-    - `:return_type` — optional `Spark.Connect.DataType` struct. If omitted,
+    - `:return_type` — optional Spark DataType protobuf struct. If omitted,
       the server uses reflection to infer the return type.
     - `:aggregate` — boolean, set `true` for aggregate UDFs (UDAFs). Default: `false`.
 
@@ -33,7 +33,7 @@ defmodule SparkEx.UDFRegistration do
           GenServer.server(),
           String.t(),
           String.t(),
-          Spark.Connect.DataType.t() | String.t() | keyword()
+          SparkEx.Types.data_type_proto() | String.t() | keyword()
         ) ::
           :ok | {:error, term()}
   def register_java(session, name, class_name, opts \\ [])
@@ -75,7 +75,7 @@ defmodule SparkEx.UDFRegistration do
   - `name` — the SQL function name to register.
   - `python_command` — serialized Python UDTF command bytes.
   - `opts` — keyword options:
-    - `:return_type` — optional `Spark.Connect.DataType` struct for the UDTF output schema.
+    - `:return_type` — optional Spark DataType protobuf struct for the UDTF output schema.
     - `:eval_type` — integer eval type (default: `0`).
     - `:python_ver` — Python version string (default: `"3.11"`).
     - `:deterministic` — boolean (default: `true`).

@@ -1,10 +1,5 @@
 defmodule SparkEx.Connect.TypeMapper do
-  @moduledoc """
-  Maps Spark Connect `DataType` protobuf variants to Explorer dtypes.
-
-  Primitive types are mapped directly. Complex types (array, struct, map)
-  and unsupported types fall back to `:string` (JSON representation).
-  """
+  @moduledoc false
 
   alias Spark.Connect.DataType
 

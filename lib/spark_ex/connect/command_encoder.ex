@@ -1,11 +1,5 @@
 defmodule SparkEx.Connect.CommandEncoder do
-  @moduledoc """
-  Encodes SparkEx command representations into Spark Connect protobuf messages.
-
-  Commands use `Plan.op_type: {:command, command_proto}` and are executed via
-  the same `ExecutePlan` RPC as relation plans. They represent side-effecting
-  operations like writes and view creation.
-  """
+  @moduledoc false
 
   alias Spark.Connect.{
     Command,

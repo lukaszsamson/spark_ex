@@ -1,7 +1,5 @@
 defmodule SparkEx.UserContextExtensions do
-  @moduledoc """
-  Manages user context extensions attached to Spark Connect requests.
-  """
+  @moduledoc false
 
   alias Google.Protobuf.Any
   alias Spark.Connect.UserContext

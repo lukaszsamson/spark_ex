@@ -36,8 +36,8 @@ defmodule SparkEx.StreamWriter do
           trigger: term() | nil,
           path: String.t() | nil,
           table_name: String.t() | nil,
-          foreach_writer: Spark.Connect.StreamingForeachFunction.t() | nil,
-          foreach_batch: Spark.Connect.StreamingForeachFunction.t() | nil,
+          foreach_writer: SparkEx.Types.foreach_function() | nil,
+          foreach_batch: SparkEx.Types.foreach_function() | nil,
           options: %{String.t() => String.t()},
           partition_by: [String.t()],
           cluster_by: [String.t()]
@@ -193,7 +193,7 @@ defmodule SparkEx.StreamWriter do
   @doc """
   Sets a foreach writer function for row-level processing.
 
-  Accepts a `Spark.Connect.StreamingForeachFunction` proto struct.
+  Accepts a Spark Connect StreamingForeachFunction proto struct.
   Use this with Java/Scala UDF payloads.
 
   ## Example with Scala UDF
@@ -205,7 +205,7 @@ defmodule SparkEx.StreamWriter do
       }
       writer |> StreamWriter.foreach_writer(foreach_fn)
   """
-  @spec foreach_writer(t(), Spark.Connect.StreamingForeachFunction.t()) :: t()
+  @spec foreach_writer(t(), SparkEx.Types.foreach_function()) :: t()
   def foreach_writer(%__MODULE__{} = writer, %Spark.Connect.StreamingForeachFunction{} = func) do
     %{writer | foreach_writer: func}
   end
@@ -213,7 +213,7 @@ defmodule SparkEx.StreamWriter do
   @doc """
   Sets a foreach batch function for micro-batch processing.
 
-  Accepts a `Spark.Connect.StreamingForeachFunction` proto struct.
+  Accepts a Spark Connect StreamingForeachFunction proto struct.
   Use this with Java/Scala UDF payloads.
 
   ## Example with Scala UDF
@@ -225,7 +225,7 @@ defmodule SparkEx.StreamWriter do
       }
       writer |> StreamWriter.foreach_batch(foreach_fn)
   """
-  @spec foreach_batch(t(), Spark.Connect.StreamingForeachFunction.t()) :: t()
+  @spec foreach_batch(t(), SparkEx.Types.foreach_function()) :: t()
   def foreach_batch(%__MODULE__{} = writer, %Spark.Connect.StreamingForeachFunction{} = func) do
     %{writer | foreach_batch: func}
   end

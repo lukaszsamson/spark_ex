@@ -60,7 +60,7 @@ defmodule SparkEx.MixProject do
     [
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib priv/proto .formatter.exs mix.exs README.md LICENSE)
+      files: ~w(lib priv/proto notebooks .formatter.exs mix.exs README.md LICENSE)
     ]
   end
 
@@ -68,7 +68,7 @@ defmodule SparkEx.MixProject do
     [
       main: "readme",
       source_ref: "v#{@version}",
-      extras: ["README.md", "LICENSE"]
+      extras: ["README.md", "notebooks/spark_ex_demo.livemd", "LICENSE"]
     ]
   end
 

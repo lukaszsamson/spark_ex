@@ -1770,7 +1770,7 @@ defmodule SparkEx.DataFrame do
   ## Options
 
   - `:eager` — whether to checkpoint eagerly (default: true)
-  - `:storage_level` — optional `Spark.Connect.StorageLevel` struct
+  - `:storage_level` — optional storage level struct (see `t:SparkEx.Types.storage_level/0`)
   """
   @spec local_checkpoint(t(), keyword()) :: t() | {:error, term()}
   def local_checkpoint(%__MODULE__{} = df, opts) do
@@ -1813,7 +1813,7 @@ defmodule SparkEx.DataFrame do
 
   Accepts a Spark Connect `DataType`, a DDL string, or a `SparkEx.Types` struct type.
   """
-  @spec to(t(), Spark.Connect.DataType.t() | String.t() | SparkEx.Types.struct_type()) :: t()
+  @spec to(t(), SparkEx.Types.data_type_proto() | String.t() | SparkEx.Types.struct_type()) :: t()
   def to(%__MODULE__{} = df, schema) do
     unless is_binary(schema) or is_map(schema) or
              (is_tuple(schema) and elem(schema, 0) == :struct) do
@@ -2186,7 +2186,7 @@ defmodule SparkEx.DataFrame do
 
   ## Options
 
-  - `:storage_level` — a `Spark.Connect.StorageLevel` struct
+  - `:storage_level` — a storage level struct (see `t:SparkEx.Types.storage_level/0`)
   """
   @spec persist(t(), keyword()) :: t() | {:error, term()}
   def persist(%__MODULE__{} = df, opts \\ []) do
@@ -2231,7 +2231,7 @@ defmodule SparkEx.DataFrame do
   @doc """
   Returns the storage level of a persisted DataFrame.
   """
-  @spec storage_level(t()) :: {:ok, Spark.Connect.StorageLevel.t()} | {:error, term()}
+  @spec storage_level(t()) :: {:ok, SparkEx.Types.storage_level()} | {:error, term()}
   def storage_level(%__MODULE__{} = df) do
     SparkEx.Session.analyze_get_storage_level(df.session, df.plan)
   end

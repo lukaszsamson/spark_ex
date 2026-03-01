@@ -1,6 +1,6 @@
 # SparkEx
 
-[![CI](https://github.com/TODO/spark_ex/actions/workflows/ci.yml/badge.svg)](https://github.com/TODO/spark_ex/actions)
+[![CI](https://github.com/lukaszsamson/spark_ex/actions/workflows/ci.yml/badge.svg)](https://github.com/lukaszsamson/spark_ex/actions)
 
 Native Elixir client for [Apache Spark](https://spark.apache.org/) via the
 [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html) protocol.
@@ -16,7 +16,7 @@ Targets **Spark 3.5 - 4.1**.
 
 - **Lazy DataFrame API** &mdash; select, filter, join, group, window, set ops,
   reshape, sampling, and more
-- **900+ Spark SQL functions** &mdash; auto-generated from a declarative
+- **590+ Spark SQL functions** &mdash; auto-generated from a declarative
   registry, covering math, string, date/time, array, map, conditional, window,
   and aggregate families
 - **Reader/Writer** &mdash; Parquet, CSV, JSON, ORC, text, JDBC, plus generic
@@ -148,14 +148,14 @@ df |> DataFrame.write() |> Writer.mode("overwrite") |> Writer.save_as_table("res
 
 ```elixir
 # From a list of maps
-df = SparkEx.create_dataframe(session, [
+{:ok, df} = SparkEx.create_dataframe(session, [
   %{"name" => "Alice", "age" => 30},
   %{"name" => "Bob", "age" => 25}
 ])
 
 # From an Explorer.DataFrame
 explorer_df = Explorer.DataFrame.new(%{x: [1, 2, 3], y: ["a", "b", "c"]})
-df = SparkEx.create_dataframe(session, explorer_df)
+{:ok, df} = SparkEx.create_dataframe(session, explorer_df)
 ```
 
 ### Explorer integration
@@ -383,7 +383,7 @@ lib/
     data_frame/na.ex              # Null-value handling
     data_frame/stat.ex            # Statistical operations
     column.ex                     # Expression wrapper
-    functions.ex                  # 900+ auto-generated Spark SQL functions
+    functions.ex                  # 590+ auto-generated Spark SQL functions
     grouped_data.ex               # GroupedData (group_by + agg + pivot)
     window.ex                     # Window convenience constructors
     window_spec.ex                # WindowSpec (partition, order, frame)
@@ -409,8 +409,8 @@ lib/
 
 priv/proto/spark/connect/         # Vendored Spark Connect protos (v4.1.1)
 notebooks/spark_ex_demo.livemd    # Interactive Livebook demo
-test/unit/                        # Unit tests (890 tests)
-test/integration/                 # Integration tests (260 tests)
+test/unit/                        # Unit tests (~1090 tests)
+test/integration/                 # Integration tests (~625 tests)
 ```
 
 ## Acknowledgements

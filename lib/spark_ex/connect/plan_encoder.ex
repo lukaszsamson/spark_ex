@@ -1,11 +1,5 @@
 defmodule SparkEx.Connect.PlanEncoder do
-  @moduledoc """
-  Encodes SparkEx internal plan representations into Spark Connect protobuf messages.
-
-  All encode functions accept a `plan_id_counter` (integer) and return
-  `{encoded, new_counter}` to avoid GenServer call deadlocks when invoked
-  from within Session handle_call.
-  """
+  @moduledoc false
 
   alias Spark.Connect.{
     CachedLocalRelation,

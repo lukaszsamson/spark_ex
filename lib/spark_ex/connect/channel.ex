@@ -1,7 +1,5 @@
 defmodule SparkEx.Connect.Channel do
-  @moduledoc """
-  Parses Spark Connect URIs (`sc://host:port/;key=value`) and opens gRPC channels.
-  """
+  @moduledoc false
 
   @default_port 15002
 

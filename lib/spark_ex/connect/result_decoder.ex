@@ -1,10 +1,5 @@
 defmodule SparkEx.Connect.ResultDecoder do
-  @moduledoc """
-  Decodes ExecutePlan response streams into Elixir data.
-
-  Handles Arrow IPC batch reassembly from chunked gRPC responses
-  and converts to list of maps.
-  """
+  @moduledoc false
 
   @compile {:no_warn_undefined, Explorer.DataFrame}
 

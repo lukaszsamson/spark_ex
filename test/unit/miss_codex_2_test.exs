@@ -601,12 +601,12 @@ defmodule SparkEx.MissCodex2Test do
   describe "#31 sample overload" do
     test "accepts (with_replacement, fraction, seed) form" do
       result = DataFrame.sample(make_df(), true, 0.5, 42)
-      assert %DataFrame{plan: {:sample, _, 0.0, 0.5, true, 42, false}} = result
+      assert %DataFrame{plan: {:sample, _, +0.0, 0.5, true, 42, false}} = result
     end
 
     test "still accepts (fraction, opts) form" do
       result = DataFrame.sample(make_df(), 0.1, seed: 42)
-      assert %DataFrame{plan: {:sample, _, 0.0, 0.1, false, 42, false}} = result
+      assert %DataFrame{plan: {:sample, _, +0.0, 0.1, false, 42, false}} = result
     end
   end
 

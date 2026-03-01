@@ -18,6 +18,25 @@ defmodule SparkEx.Types do
       reader |> SparkEx.Reader.schema(schema) |> SparkEx.Reader.load("/data")
   """
 
+  @typedoc """
+  A Spark Connect `DataType` protobuf struct.
+
+  This is the low-level protobuf representation used internally by the Spark
+  Connect protocol. Most users should prefer `spark_type()` atoms and tuples
+  or DDL strings when specifying types.
+  """
+  @opaque data_type_proto :: Spark.Connect.DataType.t()
+
+  @typedoc """
+  A Spark Connect `StorageLevel` protobuf struct describing persistence settings.
+  """
+  @opaque storage_level :: Spark.Connect.StorageLevel.t()
+
+  @typedoc """
+  A Spark Connect `StreamingForeachFunction` protobuf struct for custom streaming sinks.
+  """
+  @opaque foreach_function :: Spark.Connect.StreamingForeachFunction.t()
+
   @type spark_type ::
           :null
           | :boolean
@@ -175,7 +194,7 @@ defmodule SparkEx.Types do
 
   This mirrors PySpark's `DataType.json()` output.
   """
-  @spec data_type_to_json(Spark.Connect.DataType.t()) :: String.t()
+  @spec data_type_to_json(data_type_proto()) :: String.t()
   def data_type_to_json(%Spark.Connect.DataType{} = data_type) do
     data_type
     |> proto_type_to_json()
@@ -187,7 +206,7 @@ defmodule SparkEx.Types do
 
   Preserves JSON-level fidelity (field nullability and metadata) for nested types.
   """
-  @spec to_proto(struct_type()) :: Spark.Connect.DataType.t()
+  @spec to_proto(struct_type()) :: data_type_proto()
   def to_proto({:struct, _} = schema), do: type_to_proto(schema)
 
   # --- DDL type conversion ---

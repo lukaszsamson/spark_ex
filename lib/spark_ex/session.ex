@@ -35,7 +35,7 @@ defmodule SparkEx.Session do
 
   @type t :: %__MODULE__{
           channel: GRPC.Channel.t() | nil,
-          connect_opts: SparkEx.Connect.Channel.connect_opts() | nil,
+          connect_opts: map() | nil,
           session_id: String.t(),
           server_side_session_id: String.t() | nil,
           user_id: String.t(),
@@ -483,7 +483,7 @@ defmodule SparkEx.Session do
   Returns the storage level of a persisted relation.
   """
   @spec analyze_get_storage_level(GenServer.server(), term()) ::
-          {:ok, Spark.Connect.StorageLevel.t()} | {:error, term()}
+          {:ok, SparkEx.Types.storage_level()} | {:error, term()}
   def analyze_get_storage_level(session, plan) do
     GenServer.call(session, {:analyze_get_storage_level, plan})
   end
