@@ -18,24 +18,14 @@ defmodule SparkEx.Types do
       reader |> SparkEx.Reader.schema(schema) |> SparkEx.Reader.load("/data")
   """
 
-  @typedoc """
-  A Spark Connect `DataType` protobuf struct.
+  @typedoc "A Spark Connect DataType protobuf struct."
+  @type data_type_proto :: Spark.Connect.DataType.t()
 
-  This is the low-level protobuf representation used internally by the Spark
-  Connect protocol. Most users should prefer `spark_type()` atoms and tuples
-  or DDL strings when specifying types.
-  """
-  @opaque data_type_proto :: Spark.Connect.DataType.t()
+  @typedoc "A Spark Connect StorageLevel protobuf struct."
+  @type storage_level :: Spark.Connect.StorageLevel.t()
 
-  @typedoc """
-  A Spark Connect `StorageLevel` protobuf struct describing persistence settings.
-  """
-  @opaque storage_level :: Spark.Connect.StorageLevel.t()
-
-  @typedoc """
-  A Spark Connect `StreamingForeachFunction` protobuf struct for custom streaming sinks.
-  """
-  @opaque foreach_function :: Spark.Connect.StreamingForeachFunction.t()
+  @typedoc "A Spark Connect StreamingForeachFunction protobuf struct."
+  @type foreach_function :: Spark.Connect.StreamingForeachFunction.t()
 
   @type spark_type ::
           :null
