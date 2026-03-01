@@ -42,9 +42,26 @@ defmodule SparkEx.Integration.ArtifactHelpersTest do
     @describetag min_spark: "4.1"
     test "uploads archive artifacts with archives/ prefix", %{session: session} do
       archive_name = "test-archive-#{System.unique_integer([:positive])}.tar.gz"
-      # Spark validates archive format (runs tar), so create a valid tar.gz
-      {:ok, tar_data} = :erl_tar.create("archive.tar", [{'file.txt', "content"}], [:memory])
-      data = :zlib.gzip(tar_data)
+      # Spark validates archive format (runs tar on extraction), so create a
+      # valid tar.gz: write a real tar to a temp file, then gzip the contents.
+      tar_path =
+        Path.join(System.tmp_dir!(), "spark_ex_test_#{System.unique_integer([:positive])}.tar")
+
+      content_path =
+        Path.join(System.tmp_dir!(), "spark_ex_test_#{System.unique_integer([:positive])}.txt")
+
+      File.write!(content_path, "archive content")
+
+      :ok =
+        :erl_tar.create(
+          to_charlist(tar_path),
+          [{to_charlist(content_path), to_charlist("file.txt")}],
+          []
+        )
+
+      data = tar_path |> File.read!() |> :zlib.gzip()
+      File.rm(tar_path)
+      File.rm(content_path)
 
       assert {:ok, summaries} = SparkEx.add_archives(session, [{archive_name, data}])
       assert [{prefixed_name, true}] = summaries

@@ -158,7 +158,11 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
       {:ok, session} = SparkEx.connect(url: @spark_remote)
 
       on_exit(fn ->
-        if Process.alive?(session), do: SparkEx.Session.stop(session)
+        try do
+          if Process.alive?(session), do: SparkEx.Session.stop(session)
+        catch
+          :exit, _ -> :ok
+        end
       end)
 
       df =
@@ -193,7 +197,11 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
       Process.unlink(session)
 
       on_exit(fn ->
-        if Process.alive?(session), do: SparkEx.Session.stop(session)
+        try do
+          if Process.alive?(session), do: SparkEx.Session.stop(session)
+        catch
+          :exit, _ -> :ok
+        end
       end)
 
       # Execute a query first
