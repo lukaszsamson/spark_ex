@@ -16,7 +16,7 @@ bash "$SPARK_HOME/sbin/start-connect-server.sh"
 
 ```elixir
 Mix.install([
-  {:spark_ex, path: Path.expand("..", __DIR__)},
+  {:spark_ex, "~> 0.1"},
   {:explorer, "~> 0.10"},
   {:kino, "~> 0.14"}
 ])
