@@ -65,6 +65,18 @@ defmodule SparkEx.Integration.StreamingListenerGapsTest do
     %{session: session}
   end
 
+  defp start_rate_query(session, query_name) do
+    df = StreamReader.rate(session, rows_per_second: 5)
+
+    df
+    |> DataFrame.write_stream()
+    |> StreamWriter.format("memory")
+    |> StreamWriter.output_mode("append")
+    |> StreamWriter.query_name(query_name)
+    |> StreamWriter.trigger(processing_time: "1 second")
+    |> StreamWriter.start()
+  end
+
   # ── Progress event payload validation ──
 
   describe "progress event payload validation" do
@@ -93,18 +105,18 @@ defmodule SparkEx.Integration.StreamingListenerGapsTest do
 
       :ok = StreamingQueryListenerBus.add_listener(bus, ProgressListener)
 
-      # Simulate a progress event
-      event_data = %{
-        type: :progress,
-        raw_json: ~s({"id":"test-id","runId":"test-run-id","name":"test-query"}),
-        data: %{"id" => "test-id", "runId" => "test-run-id", "name" => "test-query"}
-      }
+      {:ok, query} =
+        start_rate_query(session, "listener_progress_#{System.unique_integer([:positive])}")
 
-      send(bus, {:listener_event, event_data})
+      on_exit(fn -> StreamingQuery.stop(query) end)
 
       assert_receive {:progress, received_event}, 5_000
       assert received_event.type == :progress
       assert is_binary(received_event.raw_json)
+      assert is_map(received_event.data) or is_binary(received_event.data)
+
+      :ok = StreamingQuery.stop(query)
+      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
     end
   end
 
@@ -143,11 +155,16 @@ defmodule SparkEx.Integration.StreamingListenerGapsTest do
       :ok = StreamingQueryListenerBus.add_listener(bus, ProgressListener)
       :ok = StreamingQueryListenerBus.add_listener(bus, SecondListener)
 
-      event = %{type: :progress, raw_json: "{}", data: %{}}
-      send(bus, {:listener_event, event})
+      {:ok, query} =
+        start_rate_query(session, "listener_multi_#{System.unique_integer([:positive])}")
+
+      on_exit(fn -> StreamingQuery.stop(query) end)
 
       assert_receive {:progress, _}, 5_000
       assert_receive {:progress2, _}, 5_000
+
+      :ok = StreamingQuery.stop(query)
+      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
     end
   end
 
@@ -174,9 +191,15 @@ defmodule SparkEx.Integration.StreamingListenerGapsTest do
       :ok = StreamingQueryListenerBus.add_listener(bus, ProgressListener)
       :ok = StreamingQueryListenerBus.remove_listener(bus, ProgressListener)
 
-      send(bus, {:listener_event, %{type: :progress, raw_json: "{}", data: %{}}})
+      {:ok, query} =
+        start_rate_query(session, "listener_removed_#{System.unique_integer([:positive])}")
 
-      refute_receive {:progress, _}, 1_000
+      on_exit(fn -> StreamingQuery.stop(query) end)
+
+      refute_receive {:progress, _}, 5_000
+
+      :ok = StreamingQuery.stop(query)
+      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
     end
   end
 

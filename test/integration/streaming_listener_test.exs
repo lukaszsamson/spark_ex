@@ -110,8 +110,6 @@ defmodule SparkEx.Integration.StreamingListenerTest do
     end)
 
     :ok = StreamingQueryListenerBus.add_listener(bus, TestListener)
-    send(bus, {:listener_event, %{type: :progress, raw_json: "{}", data: %{}}})
-    assert_receive {:listener_progress, %{type: :progress, raw_json: "{}"}}, 5_000
 
     df = StreamReader.rate(session, rows_per_second: 5)
 
@@ -128,8 +126,11 @@ defmodule SparkEx.Integration.StreamingListenerTest do
 
     assert_receive {:listener_started, %{type: :started}}, 5_000
     assert_query_eventually_active(query, 5_000)
+    assert_receive {:listener_progress, %{type: :progress, raw_json: raw_json}}, 15_000
+    assert is_binary(raw_json)
     :ok = StreamingQuery.stop(query)
     assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
+    assert_receive {:listener_terminated, %{type: :terminated}}, 15_000
 
     assert {:ok, listeners} = StreamingQueryManager.list_listeners(session)
     assert is_list(listeners)

@@ -144,13 +144,18 @@ defmodule SparkEx.StreamingQueryListenerBus do
   defstruct [
     :session,
     :stream_task,
-    listeners: []
+    listeners: [],
+    registered?: false,
+    pending_register_waiters: [],
+    closing_stream?: false
   ]
 
   # --- Public API ---
 
   @doc """
-  Starts the listener bus process and opens the server-side event stream.
+  Starts the listener bus process.
+
+  The server-side event stream is opened lazily when the first listener is added.
   """
   @spec start_link(GenServer.server(), keyword()) :: GenServer.on_start()
   def start_link(session, opts \\ []) do
@@ -160,7 +165,7 @@ defmodule SparkEx.StreamingQueryListenerBus do
   @doc """
   Adds a listener module to receive event callbacks.
   """
-  @spec add_listener(GenServer.server(), module()) :: :ok
+  @spec add_listener(GenServer.server(), module()) :: :ok | {:error, term()}
   def add_listener(bus, listener_module) when is_atom(listener_module) do
     GenServer.call(bus, {:add_listener, listener_module})
   end
@@ -216,30 +221,52 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   @impl true
   def init({session, _opts}) do
-    state = %__MODULE__{session: session}
-
-    case start_event_stream(session) do
-      {:ok, stream} ->
-        register_bus(session, self())
-        task = start_reader_task(stream)
-        {:ok, %{state | stream_task: task}}
-
-      {:error, reason} ->
-        {:stop, reason}
-    end
+    register_bus(session, self())
+    {:ok, %__MODULE__{session: session}}
   end
 
   @impl true
-  def handle_call({:add_listener, module}, _from, state) do
-    if module in state.listeners do
+  def handle_call({:add_listener, module}, from, state) do
+    if module in state.listeners and state.registered? do
       {:reply, :ok, state}
     else
-      {:reply, :ok, %{state | listeners: [module | state.listeners]}}
+      listeners =
+        if module in state.listeners, do: state.listeners, else: [module | state.listeners]
+
+      cond do
+        state.registered? ->
+          {:reply, :ok, %{state | listeners: listeners}}
+
+        state.stream_task != nil ->
+          {:noreply,
+           %{
+             state
+             | listeners: listeners,
+               pending_register_waiters: [from | state.pending_register_waiters]
+           }}
+
+        true ->
+          task = start_reader_task(state.session)
+
+          {:noreply,
+           %{
+             state
+             | stream_task: task,
+               listeners: listeners,
+               pending_register_waiters: [from | state.pending_register_waiters]
+           }}
+      end
     end
   end
 
   def handle_call({:remove_listener, module}, _from, state) do
-    {:reply, :ok, %{state | listeners: List.delete(state.listeners, module)}}
+    listeners = List.delete(state.listeners, module)
+
+    if listeners == [] and state.stream_task != nil do
+      {:reply, :ok, stop_event_stream(%{state | listeners: listeners})}
+    else
+      {:reply, :ok, %{state | listeners: listeners}}
+    end
   end
 
   def handle_call(:list_listeners, _from, state) do
@@ -258,10 +285,45 @@ defmodule SparkEx.StreamingQueryListenerBus do
     {:noreply, state}
   end
 
+  def handle_info(:listener_bus_registered, state) do
+    Enum.each(state.pending_register_waiters, &GenServer.reply(&1, :ok))
+
+    {:noreply,
+     %{
+       state
+       | registered?: true,
+         pending_register_waiters: [],
+         closing_stream?: false
+     }}
+  end
+
   def handle_info({:listener_stream_ended, reason}, state) do
     case reason do
-      :normal -> {:stop, :normal, state}
-      error -> {:stop, {:stream_error, error}, state}
+      :normal ->
+        Enum.each(state.pending_register_waiters, &GenServer.reply(&1, {:error, :stream_closed}))
+
+        {:noreply,
+         %{
+           state
+           | stream_task: nil,
+             registered?: false,
+             pending_register_waiters: [],
+             closing_stream?: false
+         }}
+
+      error ->
+        Enum.each(state.pending_register_waiters, &GenServer.reply(&1, {:error, error}))
+
+        Logger.warning("StreamingQueryListenerBus stream ended with error: #{inspect(error)}")
+
+        {:noreply,
+         %{
+           state
+           | stream_task: nil,
+             registered?: false,
+             pending_register_waiters: [],
+             closing_stream?: false
+         }}
     end
   end
 
@@ -269,48 +331,50 @@ defmodule SparkEx.StreamingQueryListenerBus do
     {:noreply, state}
   end
 
+  def handle_info({:DOWN, _ref, :process, _pid, :shutdown}, %{closing_stream?: true} = state) do
+    {:noreply, %{state | stream_task: nil, closing_stream?: false}}
+  end
+
   def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
-    {:stop, {:stream_task_crash, reason}, state}
+    Enum.each(state.pending_register_waiters, &GenServer.reply(&1, {:error, reason}))
+
+    Logger.warning("StreamingQueryListenerBus stream task crashed: #{inspect(reason)}")
+
+    {:noreply,
+     %{
+       state
+       | stream_task: nil,
+         registered?: false,
+         pending_register_waiters: [],
+         closing_stream?: false
+     }}
   end
 
   @impl true
   def terminate(_reason, state) do
     unregister_bus(state.session, self())
-
-    if state.stream_task do
-      Process.exit(state.stream_task, :shutdown)
-    end
-
-    # Best-effort: send remove command to close server-side listener
-    try do
-      SparkEx.Session.execute_command_with_result(
-        state.session,
-        {:streaming_query_listener_bus_command, :remove}
-      )
-    rescue
-      _ -> :ok
-    catch
-      _, _ -> :ok
-    end
+    _ = stop_event_stream(state)
 
     :ok
   end
 
   # --- Private ---
 
-  defp start_event_stream(session) do
-    SparkEx.Session.execute_command_stream(
-      session,
-      {:streaming_query_listener_bus_command, :add}
-    )
-  end
-
-  defp start_reader_task(stream) do
+  defp start_reader_task(session) do
     parent = self()
 
     {pid, _ref} =
       spawn_monitor(fn ->
-        read_events(stream, parent)
+        case SparkEx.Session.execute_command_stream(
+               session,
+               {:streaming_query_listener_bus_command, :add}
+             ) do
+          {:ok, stream} ->
+            read_events(stream, parent)
+
+          {:error, reason} ->
+            send(parent, {:listener_stream_ended, reason})
+        end
       end)
 
     pid
@@ -322,6 +386,10 @@ defmodule SparkEx.StreamingQueryListenerBus do
         {:ok, %ExecutePlanResponse{} = resp}, _acc ->
           case resp.response_type do
             {:streaming_query_listener_events_result, result} ->
+              if result.listener_bus_listener_added == true do
+                send(parent, :listener_bus_registered)
+              end
+
               Enum.each(result.events, fn event ->
                 send(parent, {:listener_event, parse_event(event)})
               end)
@@ -338,6 +406,37 @@ defmodule SparkEx.StreamingQueryListenerBus do
       end)
 
     send(parent, {:listener_stream_ended, result})
+  end
+
+  defp stop_event_stream(%__MODULE__{stream_task: nil} = state), do: state
+
+  defp stop_event_stream(state) do
+    # Match PySpark listener bus lifecycle: when the last listener is removed,
+    # explicitly request server-side listener removal.
+    try do
+      SparkEx.Session.execute_command_with_result(
+        state.session,
+        {:streaming_query_listener_bus_command, :remove}
+      )
+    rescue
+      _ -> :ok
+    catch
+      _, _ -> :ok
+    end
+
+    if state.stream_task do
+      Process.exit(state.stream_task, :shutdown)
+    end
+
+    Enum.each(state.pending_register_waiters, &GenServer.reply(&1, {:error, :stream_closed}))
+
+    %{
+      state
+      | stream_task: nil,
+        registered?: false,
+        pending_register_waiters: [],
+        closing_stream?: true
+    }
   end
 
   defp parse_event(%StreamingQueryListenerEvent{} = event) do

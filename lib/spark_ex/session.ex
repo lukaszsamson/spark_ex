@@ -223,7 +223,21 @@ defmodule SparkEx.Session do
   @spec execute_plan_stream(GenServer.server(), term(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, term()}
   def execute_plan_stream(session, plan, opts \\ []) do
-    GenServer.call(session, {:execute_plan_stream, plan, opts}, call_timeout(opts))
+    if real_session_process?(session) do
+      case GenServer.call(
+             session,
+             {:prepare_execute_plan_stream, plan, opts},
+             call_timeout(opts)
+           ) do
+        {:ok, stream_state, proto_plan, stream_opts} ->
+          Client.execute_plan_raw_stream(stream_state, proto_plan, stream_opts)
+
+        {:error, _} = error ->
+          error
+      end
+    else
+      GenServer.call(session, {:execute_plan_stream, plan, opts}, call_timeout(opts))
+    end
   end
 
   @doc """
@@ -617,7 +631,25 @@ defmodule SparkEx.Session do
   @spec execute_command_stream(GenServer.server(), term(), keyword()) ::
           {:ok, SparkEx.ManagedStream.t()} | {:error, term()}
   def execute_command_stream(session, command, opts \\ []) do
-    GenServer.call(session, {:execute_command_stream, command, opts}, call_timeout(opts))
+    if real_session_process?(session) do
+      case GenServer.call(
+             session,
+             {:prepare_execute_command_stream, command, opts},
+             call_timeout(opts)
+           ) do
+        {:ok, stream_state, proto_plan, stream_opts} ->
+          Client.execute_plan_managed_stream(
+            stream_state,
+            proto_plan,
+            Keyword.put(stream_opts, :stream_owner, self())
+          )
+
+        {:error, _} = error ->
+          error
+      end
+    else
+      GenServer.call(session, {:execute_command_stream, command, opts}, call_timeout(opts))
+    end
   end
 
   @doc """
@@ -946,26 +978,16 @@ defmodule SparkEx.Session do
     end)
   end
 
-  def handle_call({:execute_plan_stream, plan, opts}, _from, state) do
-    operation_telemetry_span(:execute_plan_stream, state.session_id, fn ->
-      case safe_encode(plan, state.plan_id_counter) do
-        {{proto_plan, counter}, nil} ->
-          state = %{state | plan_id_counter: counter}
+  def handle_call({:prepare_execute_plan_stream, plan, opts}, _from, state) do
+    case safe_encode(plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
+        opts = merge_session_tags(opts, state.tags)
+        {:reply, {:ok, state, proto_plan, opts}, state}
 
-          opts = merge_session_tags(opts, state.tags)
-
-          case Client.execute_plan_raw_stream(state, proto_plan, opts) do
-            {:ok, stream} ->
-              {:reply, {:ok, stream}, state}
-
-            {:error, _} = error ->
-              {:reply, error, state}
-          end
-
-        {nil, error} ->
-          {:reply, error, state}
-      end
-    end)
+      {nil, error} ->
+        {:reply, error, state}
+    end
   end
 
   def handle_call({:execute_explorer, plan, opts}, _from, state) do
@@ -1486,24 +1508,12 @@ defmodule SparkEx.Session do
     end)
   end
 
-  def handle_call({:execute_command_stream, command, opts}, {owner, _tag}, state) do
+  def handle_call({:prepare_execute_command_stream, command, opts}, _from, state) do
     case safe_encode_command(command, state.plan_id_counter) do
       {{proto_plan, counter}, nil} ->
         state = %{state | plan_id_counter: counter}
-
         opts = merge_session_tags(opts, state.tags)
-
-        case Client.execute_plan_managed_stream(
-               state,
-               proto_plan,
-               Keyword.put(opts, :stream_owner, owner)
-             ) do
-          {:ok, stream} ->
-            {:reply, {:ok, stream}, state}
-
-          {:error, _} = error ->
-            {:reply, error, state}
-        end
+        {:reply, {:ok, state, proto_plan, opts}, state}
 
       {nil, error} ->
         {:reply, error, state}
@@ -2943,6 +2953,15 @@ defmodule SparkEx.Session do
       other ->
         raise ArgumentError, "timeout must be a positive integer or nil, got: #{inspect(other)}"
     end
+  end
+
+  defp real_session_process?(session) do
+    case :sys.get_state(session) do
+      %__MODULE__{} -> true
+      _ -> false
+    end
+  catch
+    :exit, _ -> false
   end
 
   # --- Local data preparation ---

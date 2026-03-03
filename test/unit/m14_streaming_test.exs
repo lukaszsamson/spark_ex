@@ -29,10 +29,23 @@ defmodule SparkEx.M14.StreamingTest do
 
       stream =
         Stream.resource(
-          fn -> :ok end,
-          fn _ ->
-            Process.sleep(:infinity)
-            {:halt, :ok}
+          fn -> :listener_added end,
+          fn
+            :listener_added ->
+              response = %Spark.Connect.ExecutePlanResponse{
+                response_type:
+                  {:streaming_query_listener_events_result,
+                   %Spark.Connect.StreamingQueryListenerEventsResult{
+                     listener_bus_listener_added: true,
+                     events: []
+                   }}
+              }
+
+              {[{:ok, response}], :idle}
+
+            :idle ->
+              Process.sleep(:infinity)
+              {:halt, :ok}
           end,
           fn _ -> :ok end
         )
