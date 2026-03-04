@@ -1998,7 +1998,8 @@ defmodule SparkEx.Connect.Client do
     %{row_count: length(rows)}
   end
 
-  defp row_count_metadata({:ok, %{dataframe: dataframe}}) when is_struct(dataframe, Explorer.DataFrame) do
+  defp row_count_metadata({:ok, %{dataframe: dataframe}})
+       when is_struct(dataframe, Explorer.DataFrame) do
     %{row_count: Explorer.DataFrame.n_rows(dataframe)}
   end
 

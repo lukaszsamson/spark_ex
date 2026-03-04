@@ -19,9 +19,19 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
   end
 
   # ── Geography/Geometry type support ──
-  # Note: These tests verify Spark 4.x geography/geometry type support.
-  # If the Spark cluster does not support these types, tests will fail with
-  # an UNRESOLVED_ROUTINE error, which we check for explicitly.
+  # These tests verify Spark 4.x geography/geometry type support.
+  # On Spark 3.x these functions are unresolved — we accept that specific error.
+  # Spark 3.x returns error_class=nil, so we also check the message.
+
+  defp assert_unresolved_routine_error(%SparkEx.Error.Remote{} = err) do
+    class = err.error_class || ""
+    msg = err.message || ""
+
+    assert String.contains?(class, "UNRESOLVED_ROUTINE") or
+             String.contains?(msg, "Undefined function") or
+             String.contains?(msg, "UNRESOLVED_ROUTINE"),
+           "expected unresolved routine error, got class=#{inspect(err.error_class)} message=#{inspect(err.message)}"
+  end
 
   describe "geography type" do
     test "ST_Point creates geography value via SQL", %{session: session} do
@@ -36,8 +46,7 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
           assert row["pt"] != nil
 
         {:error, %SparkEx.Error.Remote{} = err} ->
-          assert err.error_class =~ "UNRESOLVED_ROUTINE",
-                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
+          assert_unresolved_routine_error(err)
       end
     end
 
@@ -53,8 +62,7 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
           assert row["geom"] != nil
 
         {:error, %SparkEx.Error.Remote{} = err} ->
-          assert err.error_class =~ "UNRESOLVED_ROUTINE",
-                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
+          assert_unresolved_routine_error(err)
       end
     end
 
@@ -71,8 +79,7 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
           assert String.contains?(row["wkt"], "POINT")
 
         {:error, %SparkEx.Error.Remote{} = err} ->
-          assert err.error_class =~ "UNRESOLVED_ROUTINE",
-                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
+          assert_unresolved_routine_error(err)
       end
     end
   end
@@ -90,8 +97,7 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
           assert row["line"] != nil
 
         {:error, %SparkEx.Error.Remote{} = err} ->
-          assert err.error_class =~ "UNRESOLVED_ROUTINE",
-                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
+          assert_unresolved_routine_error(err)
       end
     end
 
@@ -107,8 +113,7 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
           assert row["poly"] != nil
 
         {:error, %SparkEx.Error.Remote{} = err} ->
-          assert err.error_class =~ "UNRESOLVED_ROUTINE",
-                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
+          assert_unresolved_routine_error(err)
       end
     end
   end
@@ -127,8 +132,7 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
           assert_in_delta row["dist"], 5.0, 0.1
 
         {:error, %SparkEx.Error.Remote{} = err} ->
-          assert err.error_class =~ "UNRESOLVED_ROUTINE",
-                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
+          assert_unresolved_routine_error(err)
       end
     end
 
@@ -147,8 +151,7 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
           assert row["inside"] == true
 
         {:error, %SparkEx.Error.Remote{} = err} ->
-          assert err.error_class =~ "UNRESOLVED_ROUTINE",
-                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
+          assert_unresolved_routine_error(err)
       end
     end
 
@@ -165,8 +168,7 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
           assert String.contains?(row["buffered"], "POLYGON")
 
         {:error, %SparkEx.Error.Remote{} = err} ->
-          assert err.error_class =~ "UNRESOLVED_ROUTINE",
-                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
+          assert_unresolved_routine_error(err)
       end
     end
   end
