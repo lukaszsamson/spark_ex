@@ -21,7 +21,7 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
   # ── Geography/Geometry type support ──
   # Note: These tests verify Spark 4.x geography/geometry type support.
   # If the Spark cluster does not support these types, tests will fail with
-  # a SQL parsing error, which is acceptable — these tests document the gap.
+  # an UNRESOLVED_ROUTINE error, which we check for explicitly.
 
   describe "geography type" do
     test "ST_Point creates geography value via SQL", %{session: session} do
@@ -33,12 +33,11 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
 
       case result do
         {:ok, [row]} ->
-          # Geography value should be returned (format depends on implementation)
           assert row["pt"] != nil
 
-        {:error, _} ->
-          # Expected if Spark version doesn't support geography types
-          assert true
+        {:error, %SparkEx.Error.Remote{} = err} ->
+          assert err.error_class =~ "UNRESOLVED_ROUTINE",
+                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
       end
     end
 
@@ -53,8 +52,9 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
         {:ok, [row]} ->
           assert row["geom"] != nil
 
-        {:error, _} ->
-          assert true
+        {:error, %SparkEx.Error.Remote{} = err} ->
+          assert err.error_class =~ "UNRESOLVED_ROUTINE",
+                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
       end
     end
 
@@ -70,8 +70,9 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
           assert is_binary(row["wkt"])
           assert String.contains?(row["wkt"], "POINT")
 
-        {:error, _} ->
-          assert true
+        {:error, %SparkEx.Error.Remote{} = err} ->
+          assert err.error_class =~ "UNRESOLVED_ROUTINE",
+                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
       end
     end
   end
@@ -88,8 +89,9 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
         {:ok, [row]} ->
           assert row["line"] != nil
 
-        {:error, _} ->
-          assert true
+        {:error, %SparkEx.Error.Remote{} = err} ->
+          assert err.error_class =~ "UNRESOLVED_ROUTINE",
+                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
       end
     end
 
@@ -104,8 +106,9 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
         {:ok, [row]} ->
           assert row["poly"] != nil
 
-        {:error, _} ->
-          assert true
+        {:error, %SparkEx.Error.Remote{} = err} ->
+          assert err.error_class =~ "UNRESOLVED_ROUTINE",
+                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
       end
     end
   end
@@ -123,8 +126,9 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
           assert is_number(row["dist"])
           assert_in_delta row["dist"], 5.0, 0.1
 
-        {:error, _} ->
-          assert true
+        {:error, %SparkEx.Error.Remote{} = err} ->
+          assert err.error_class =~ "UNRESOLVED_ROUTINE",
+                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
       end
     end
 
@@ -142,8 +146,9 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
         {:ok, [row]} ->
           assert row["inside"] == true
 
-        {:error, _} ->
-          assert true
+        {:error, %SparkEx.Error.Remote{} = err} ->
+          assert err.error_class =~ "UNRESOLVED_ROUTINE",
+                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
       end
     end
 
@@ -159,8 +164,9 @@ defmodule SparkEx.Integration.GeographyGeometryGapsTest do
           assert is_binary(row["buffered"])
           assert String.contains?(row["buffered"], "POLYGON")
 
-        {:error, _} ->
-          assert true
+        {:error, %SparkEx.Error.Remote{} = err} ->
+          assert err.error_class =~ "UNRESOLVED_ROUTINE",
+                 "expected UNRESOLVED_ROUTINE error, got: #{inspect(err.error_class)}"
       end
     end
   end

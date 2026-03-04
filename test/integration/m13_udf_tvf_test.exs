@@ -89,12 +89,20 @@ defmodule SparkEx.Integration.M13.UDFTVFTest do
           python_ver: "3.11"
         )
 
-      assert result == :ok or match?({:error, %SparkEx.Error.Remote{}}, result)
+      # Registration with dummy bytes should either succeed (registration is lazy)
+      # or fail with a Remote error — but we must validate which one we get
+      case result do
+        :ok ->
+          # If registration succeeded, calling the UDTF with garbage bytes must fail
+          assert {:error, %SparkEx.Error.Remote{}} =
+                   session
+                   |> SparkEx.sql("SELECT * FROM #{function_name}()")
+                   |> DataFrame.collect()
 
-      assert {:error, %SparkEx.Error.Remote{}} =
-               session
-               |> SparkEx.sql("SELECT * FROM #{function_name}()")
-               |> DataFrame.collect()
+        {:error, %SparkEx.Error.Remote{} = err} ->
+          # Registration itself was rejected — verify it's a real server error
+          assert err.message != nil
+      end
     end
   end
 end

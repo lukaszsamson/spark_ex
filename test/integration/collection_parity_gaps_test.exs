@@ -32,20 +32,9 @@ defmodule SparkEx.Integration.CollectionParityGapsTest do
       assert is_map(row)
     end
 
-    test "first on empty DataFrame returns nil or error", %{session: session} do
+    test "first on empty DataFrame returns {:ok, nil}", %{session: session} do
       df = SparkEx.sql(session, "SELECT 1 AS id WHERE 1 = 0")
-      result = DataFrame.first(df)
-
-      case result do
-        {:ok, nil} ->
-          assert true
-
-        {:error, _} ->
-          assert true
-
-        {:ok, row} when is_map(row) ->
-          flunk("expected nil or error for empty DF, got: #{inspect(row)}")
-      end
+      assert {:ok, nil} = DataFrame.first(df)
     end
 
     test "take(0) returns empty list", %{session: session} do

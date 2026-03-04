@@ -333,9 +333,10 @@ defmodule SparkEx.Integration.ReadWriteTypesGapsTest do
           {:ok, rows} = DataFrame.collect(read_df)
           assert length(rows) == 2
 
-        {:error, %SparkEx.Error.Remote{}} ->
-          # JDBC driver may not be available in all environments — pass gracefully
-          assert true
+        {:error, %SparkEx.Error.Remote{} = err} ->
+          # JDBC driver may not be available — verify it's a driver/class-not-found error
+          assert err.message =~ ~r/ClassNotFoundException|No suitable driver|jdbc/i,
+                 "expected JDBC driver error, got: #{inspect(err.message)}"
       end
     end
   end

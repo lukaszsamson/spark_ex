@@ -283,17 +283,17 @@ defmodule SparkEx.Integration.StreamingStatGapsTest do
 
       :ok = SparkEx.Session.stop(session2)
 
-      # Second stop should either succeed (idempotent) or return error
-      # GenServer.stop/1 raises if process is already dead, so catch that
+      # Second stop — process is already dead, so GenServer.stop will exit with :noproc
       result =
         try do
           SparkEx.Session.stop(session2)
         catch
           :exit, {:noproc, _} -> {:error, :noproc}
-          :exit, _ -> {:error, :already_stopped}
         end
 
-      assert result == :ok or match?({:error, _}, result)
+      # After stopping a session, a second stop must get :noproc (process is dead)
+      assert result == {:error, :noproc},
+             "expected {:error, :noproc} for double-stop, got: #{inspect(result)}"
     end
 
     test "multiple sessions to same remote are independent", %{session: session} do

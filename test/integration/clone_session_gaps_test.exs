@@ -50,9 +50,9 @@ defmodule SparkEx.Integration.CloneSessionGapsTest do
       result = SparkEx.clone_session(session, "not-a-uuid")
 
       case result do
-        {:error, _} ->
-          # Expected: invalid format rejected
-          assert true
+        {:error, %SparkEx.Error.Remote{} = err} ->
+          # Server rejected invalid UUID — verify it's a meaningful error
+          assert err.message != nil
 
         {:ok, clone} ->
           # Some implementations accept any string; verify it's still functional
@@ -63,7 +63,7 @@ defmodule SparkEx.Integration.CloneSessionGapsTest do
           end)
 
           df = SparkEx.range(clone, 1)
-          assert {:ok, _} = DataFrame.collect(df)
+          assert {:ok, [_]} = DataFrame.collect(df)
       end
     end
   end

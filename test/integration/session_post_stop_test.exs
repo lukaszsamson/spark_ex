@@ -28,9 +28,13 @@ defmodule SparkEx.Integration.SessionPostStopTest do
       try do
         DataFrame.collect(df)
       catch
-        :exit, reason -> {:exit, reason}
+        :exit, {:noproc, _} -> {:exit, :noproc}
+        :exit, {:normal, _} -> {:exit, :normal}
       end
 
-    assert match?({:error, :session_released}, result) or match?({:exit, _}, result)
+    assert match?({:error, :session_released}, result) or
+             match?({:exit, :noproc}, result) or
+             match?({:exit, :normal}, result),
+           "expected session_released or noproc/normal exit, got: #{inspect(result)}"
   end
 end

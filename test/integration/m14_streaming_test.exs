@@ -488,8 +488,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       # A random UUID that doesn't match any running query
       fake_id = "00000000-0000-0000-0000-000000000000"
 
-      result = StreamingQueryManager.get(session, fake_id)
-      assert match?({:error, _}, result) or result == {:ok, nil}
+      assert {:ok, nil} = StreamingQueryManager.get(session, fake_id)
     end
 
     test "await_any_termination with short timeout", %{session: session} do

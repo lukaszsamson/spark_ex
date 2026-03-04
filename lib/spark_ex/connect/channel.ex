@@ -58,10 +58,11 @@ defmodule SparkEx.Connect.Channel do
   @doc """
   Opens a gRPC channel to the given connection options.
   """
-  @spec connect(connect_opts()) :: {:ok, GRPC.Channel.t()} | {:error, term()}
-  def connect(opts) do
+  @spec connect(connect_opts(), keyword()) :: {:ok, GRPC.Channel.t()} | {:error, term()}
+  def connect(opts, extra_grpc_opts \\ []) do
     address = "#{opts.host}:#{opts.port}"
     grpc_opts = build_grpc_opts(opts)
+    grpc_opts = Keyword.merge(grpc_opts, extra_grpc_opts)
     GRPC.Stub.connect(address, grpc_opts)
   end
 

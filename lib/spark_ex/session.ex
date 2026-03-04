@@ -753,8 +753,10 @@ defmodule SparkEx.Session do
     allow_arrow_batch_chunking = Keyword.get(opts, :allow_arrow_batch_chunking, true)
     preferred_arrow_chunk_size = Keyword.get(opts, :preferred_arrow_chunk_size, nil)
 
+    grpc_opts = Keyword.get(opts, :grpc_opts, [])
+
     with {:ok, connect_opts} <- resolve_connect_opts(url_opt, connect_opts_opt),
-         {:ok, channel} <- Channel.connect(connect_opts) do
+         {:ok, channel} <- Channel.connect(connect_opts, grpc_opts) do
       state = %__MODULE__{
         channel: channel,
         connect_opts: connect_opts,

@@ -539,14 +539,10 @@ defmodule SparkEx.MissCodex2Test do
 
   describe "#20 CSV sep keyword" do
     test "reader csv builds with :sep option" do
-      # Verify the option is accepted (will fail at session layer with nil session)
-      assert_raise RuntimeError, fn ->
-        SparkEx.Reader.csv(nil, "/tmp/test.csv", sep: ",")
-      end
-    rescue
-      # If it doesn't raise at all or raises any other error, that's also fine
-      # The key test is that :sep doesn't get silently dropped
-      _ -> :ok
+      # Verify :sep option is passed through to the data source plan options
+      df = SparkEx.Reader.csv(nil, "/tmp/test.csv", sep: "|")
+      {:read_data_source, "csv", ["/tmp/test.csv"], _schema, options} = df.plan
+      assert options["sep"] == "|"
     end
   end
 

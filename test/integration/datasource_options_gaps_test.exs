@@ -284,11 +284,8 @@ defmodule SparkEx.Integration.DatasourceOptionsGapsTest do
       df = SparkEx.sql(session, "SELECT 1 AS id")
       assert :ok = Writer.parquet(df, path, mode: :overwrite)
 
-      # Second write should fail
-      result = Writer.parquet(df, path, mode: :error_if_exists)
-
-      assert result == {:error, :path_already_exists} or match?({:error, _}, result) or
-               result == :ok
+      # Second write should fail because path already exists
+      assert {:error, _} = Writer.parquet(df, path, mode: :error_if_exists)
     end
 
     test "ignore mode skips write if data exists", %{session: session} do

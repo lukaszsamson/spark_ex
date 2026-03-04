@@ -20,15 +20,23 @@ defmodule SparkEx.ReviewFixesTest do
         name: nil
       }
 
-      # The call should not crash with ArithmeticError; it may fail
-      # for other reasons (not a real session) but not arithmetic.
-      try do
-        SparkEx.StreamingQuery.await_termination(query, timeout: nil)
-      rescue
-        ArgumentError -> :ok
-      catch
-        :exit, _ -> :ok
-      end
+      # The call should not crash with ArithmeticError; it will fail
+      # with an :exit because self() is not a real GenServer.
+      result =
+        try do
+          SparkEx.StreamingQuery.await_termination(query, timeout: nil)
+        rescue
+          e in ArithmeticError -> {:raised, ArithmeticError, e}
+          e in ArgumentError -> {:raised, ArgumentError, e}
+        catch
+          :exit, reason -> {:exit, reason}
+        end
+
+      refute match?({:raised, ArithmeticError, _}, result),
+             "nil timeout caused ArithmeticError — the timeout + 5000 bug is back"
+
+      # Expected: GenServer call to self() exits
+      assert match?({:exit, _}, result) or match?({:error, _}, result)
     end
   end
 
