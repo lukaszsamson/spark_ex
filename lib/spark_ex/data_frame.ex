@@ -34,8 +34,6 @@ defmodule SparkEx.DataFrame do
 
   defstruct [:session, :plan, tags: []]
 
-  @compile {:no_warn_undefined, Explorer.DataFrame}
-
   @type plan :: term()
 
   @type t :: %__MODULE__{

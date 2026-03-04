@@ -1,8 +1,6 @@
 defmodule SparkEx.Connect.ResultDecoder do
   @moduledoc false
 
-  @compile {:no_warn_undefined, Explorer.DataFrame}
-
   alias Spark.Connect.ExecutePlanResponse
   alias SparkEx.Connect.Errors
   alias SparkEx.Connect.TypeMapper
@@ -778,16 +776,12 @@ defmodule SparkEx.Connect.ResultDecoder do
   # Decode each batch into rows.
 
   defp decode_single_batch(ipc_data) do
-    if Code.ensure_loaded?(Explorer.DataFrame) do
-      case safe_load_ipc_stream(ipc_data) do
-        {:ok, df} ->
-          safe_dataframe_to_rows(df)
+    case safe_load_ipc_stream(ipc_data) do
+      {:ok, df} ->
+        safe_dataframe_to_rows(df)
 
-        {:error, err_stream} ->
-          decode_with_fallback(ipc_data, err_stream)
-      end
-    else
-      {:error, {:missing_dependency, :explorer}}
+      {:error, err_stream} ->
+        decode_with_fallback(ipc_data, err_stream)
     end
   end
 
@@ -903,19 +897,15 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp decode_single_batch_explorer(ipc_data) do
-    if Code.ensure_loaded?(Explorer.DataFrame) do
-      case safe_load_ipc_stream(ipc_data) do
-        {:ok, df} ->
-          {:ok, df}
+    case safe_load_ipc_stream(ipc_data) do
+      {:ok, df} ->
+        {:ok, df}
 
-        {:error, err_stream} ->
-          case safe_load_ipc(ipc_data) do
-            {:ok, df} -> {:ok, df}
-            {:error, _} -> {:error, {:arrow_decode_failed, err_stream}}
-          end
-      end
-    else
-      {:error, {:missing_dependency, :explorer}}
+      {:error, err_stream} ->
+        case safe_load_ipc(ipc_data) do
+          {:ok, df} -> {:ok, df}
+          {:error, _} -> {:error, {:arrow_decode_failed, err_stream}}
+        end
     end
   end
 
@@ -950,20 +940,16 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp finalize_explorer_result(%{dataframes: []} = state) do
-    if Code.ensure_loaded?(Explorer.DataFrame) do
-      empty_df = build_empty_dataframe_from_schema(state.schema)
+    empty_df = build_empty_dataframe_from_schema(state.schema)
 
-      {:ok,
-       %{
-         dataframe: empty_df,
-         schema: state.schema,
-         server_side_session_id: state.server_side_session_id,
-         observed_metrics: state.observed_metrics,
-         execution_metrics: state.execution_metrics
-       }}
-    else
-      {:error, {:missing_dependency, :explorer}}
-    end
+    {:ok,
+     %{
+       dataframe: empty_df,
+       schema: state.schema,
+       server_side_session_id: state.server_side_session_id,
+       observed_metrics: state.observed_metrics,
+       execution_metrics: state.execution_metrics
+     }}
   end
 
   defp finalize_explorer_result(%{dataframes: [single]} = state) do

@@ -8,8 +8,6 @@ defmodule SparkEx.Session do
 
   use GenServer
 
-  @compile {:no_warn_undefined, [Explorer.DataFrame, Explorer.Series]}
-
   alias SparkEx.Connect.Channel
   alias SparkEx.Connect.Client
   alias SparkEx.Connect.PlanEncoder

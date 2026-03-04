@@ -40,14 +40,17 @@ defmodule SparkEx.MixProject do
       {:protobuf, "~> 0.13"},
 
       # Utilities
+      {:decimal, "~> 1.0 or ~> 2.0"},
       {:nimble_options, "~> 1.1"},
       {:jason, "~> 1.4"},
 
       # Observability
       {:telemetry, "~> 1.3"},
 
-      # Optional - feature gated
-      {:explorer, "~> 0.10", optional: true},
+      # Arrow IPC decoding for result materialization
+      {:explorer, "~> 0.10"},
+
+      # Optional - Livebook rendering
       {:kino, "~> 0.14", optional: true},
 
       # Dev/test

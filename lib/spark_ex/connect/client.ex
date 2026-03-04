@@ -30,8 +30,6 @@ defmodule SparkEx.Connect.Client do
     Plan
   }
 
-  @compile {:no_warn_undefined, Explorer.DataFrame}
-
   alias SparkEx.Connect.{Errors, ResultDecoder}
   alias SparkEx.Internal.UUID
   alias SparkEx.{ManagedStream, RetryPolicyRegistry, UserContextExtensions}
@@ -2000,13 +1998,11 @@ defmodule SparkEx.Connect.Client do
     %{row_count: length(rows)}
   end
 
-  defp row_count_metadata({:ok, %{dataframe: dataframe}}) do
-    if Code.ensure_loaded?(Explorer.DataFrame) and match?(%Explorer.DataFrame{}, dataframe) do
-      %{row_count: Explorer.DataFrame.n_rows(dataframe)}
-    else
-      %{}
-    end
+  defp row_count_metadata({:ok, %{dataframe: dataframe}}) when is_struct(dataframe, Explorer.DataFrame) do
+    %{row_count: Explorer.DataFrame.n_rows(dataframe)}
   end
+
+  defp row_count_metadata({:ok, _}), do: %{}
 
   defp row_count_metadata(_result), do: %{}
 
