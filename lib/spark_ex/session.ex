@@ -736,6 +736,9 @@ defmodule SparkEx.Session do
   @spec stop(GenServer.server()) :: :ok
   def stop(session) do
     GenServer.stop(session)
+  catch
+    :exit, {:noproc, _} -> :ok
+    :exit, {:normal, _} -> :ok
   end
 
   # --- GenServer Callbacks ---
