@@ -80,18 +80,30 @@ defmodule SparkEx.Connect.ChannelTest do
     end
 
     test "decodes percent-encoded params" do
+      session_id = "550e8400-e29b-41d4-a716-446655440000"
+
       assert {:ok, opts} =
                Channel.parse_uri(
-                 "sc://host/;x-my-header=hello%20world;user_agent=Agent123%20%2F3.4"
+                 "sc://host/;x-my-header=hello%20world;user_agent=Agent123%20%2F3.4;user_id=alice;session_id=#{session_id}"
                )
 
       assert opts.extra_params["x-my-header"] == "hello world"
-      assert opts.extra_params["user_agent"] == "Agent123 /3.4"
+      assert opts.user_agent == "Agent123 /3.4"
+      assert opts.user_id == "alice"
+      assert opts.session_id == session_id
+      refute Map.has_key?(opts.extra_params, "user_agent")
+      refute Map.has_key?(opts.extra_params, "user_id")
+      refute Map.has_key?(opts.extra_params, "session_id")
     end
 
     test "rejects empty token parameter" do
       assert {:error, {:invalid_param, "token="}} =
                Channel.parse_uri("sc://localhost:15002/;token=")
+    end
+
+    test "rejects invalid session_id parameter" do
+      assert {:error, {:invalid_param, "session_id=not-a-uuid"}} =
+               Channel.parse_uri("sc://localhost:15002/;session_id=not-a-uuid")
     end
 
     test "rejects non-numeric port" do
@@ -156,7 +168,7 @@ defmodule SparkEx.Connect.ChannelTest do
       assert md["authorization"] == "Bearer abc"
     end
 
-    test "token implies secure credentials even when use_ssl is false" do
+    test "remote token implies secure credentials even when use_ssl is false" do
       opts = %{
         host: "host",
         port: 15002,
@@ -168,6 +180,21 @@ defmodule SparkEx.Connect.ChannelTest do
 
       grpc_opts = Channel.build_grpc_opts(opts)
       assert %GRPC.Credential{} = Keyword.fetch!(grpc_opts, :cred)
+    end
+
+    test "localhost token does not force tls when use_ssl is false" do
+      opts = %{
+        host: "localhost",
+        port: 15002,
+        use_ssl: false,
+        token: "abc",
+        auth_transport: :auto,
+        extra_params: %{}
+      }
+
+      grpc_opts = Channel.build_grpc_opts(opts)
+      refute Keyword.has_key?(grpc_opts, :cred)
+      assert %{metadata: %{"authorization" => "Bearer abc"}} = Enum.into(grpc_opts, %{})
     end
 
     test "token authorization overrides custom authorization header" do

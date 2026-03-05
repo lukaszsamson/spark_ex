@@ -9,6 +9,7 @@ defmodule SparkEx do
   """
 
   alias SparkEx.Connect.Channel
+  alias SparkEx.Internal.UUID
 
   @doc """
   Connects to a Spark Connect endpoint and starts a session process.
@@ -557,7 +558,7 @@ defmodule SparkEx do
   defp validate_connect_identity_opts!(opts) do
     validate_optional_string_opt!(opts, :user_id)
     validate_optional_string_opt!(opts, :client_type)
-    validate_optional_string_opt!(opts, :session_id)
+    validate_optional_uuid_opt!(opts, :session_id)
     validate_optional_string_or_nil_opt!(opts, :server_side_session_id)
   end
 
@@ -576,6 +577,23 @@ defmodule SparkEx do
 
       {:ok, value} ->
         raise ArgumentError, "#{key} must be a string or nil, got: #{inspect(value)}"
+
+      :error ->
+        :ok
+    end
+  end
+
+  defp validate_optional_uuid_opt!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} when is_binary(value) ->
+        if UUID.valid_v4?(value) do
+          :ok
+        else
+          raise ArgumentError, "#{key} must be a UUID string, got: #{inspect(value)}"
+        end
+
+      {:ok, value} ->
+        raise ArgumentError, "#{key} must be a UUID string, got: #{inspect(value)}"
 
       :error ->
         :ok

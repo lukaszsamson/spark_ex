@@ -747,9 +747,6 @@ defmodule SparkEx.Session do
   def init(opts) do
     connect_opts_opt = Keyword.get(opts, :connect_opts)
     url_opt = Keyword.get(opts, :url)
-    user_id = Keyword.get(opts, :user_id, "spark_ex")
-    client_type = Keyword.get(opts, :client_type, default_client_type())
-    session_id = Keyword.get(opts, :session_id, UUID.generate_v4())
     observed_server_session_id = Keyword.get(opts, :server_side_session_id, nil)
     allow_arrow_batch_chunking = Keyword.get(opts, :allow_arrow_batch_chunking, true)
     preferred_arrow_chunk_size = Keyword.get(opts, :preferred_arrow_chunk_size, nil)
@@ -757,14 +754,15 @@ defmodule SparkEx.Session do
     grpc_opts = Keyword.get(opts, :grpc_opts, [])
 
     with {:ok, connect_opts} <- resolve_connect_opts(url_opt, connect_opts_opt),
+         {:ok, session_identity} <- resolve_session_identity(opts, connect_opts),
          {:ok, channel} <- Channel.connect(connect_opts, grpc_opts) do
       state = %__MODULE__{
         channel: channel,
         connect_opts: connect_opts,
-        session_id: session_id,
+        session_id: session_identity.session_id,
         server_side_session_id: observed_server_session_id,
-        user_id: user_id,
-        client_type: client_type,
+        user_id: session_identity.user_id,
+        client_type: session_identity.client_type,
         allow_arrow_batch_chunking: allow_arrow_batch_chunking,
         preferred_arrow_chunk_size: preferred_arrow_chunk_size
       }
@@ -3778,6 +3776,23 @@ defmodule SparkEx.Session do
 
   defp resolve_connect_opts(_url, _connect_opts) do
     {:error, {:invalid_connect_opts, "expected :url or :connect_opts"}}
+  end
+
+  defp resolve_session_identity(opts, connect_opts) do
+    user_id = Keyword.get(opts, :user_id) || Map.get(connect_opts, :user_id) || "spark_ex"
+
+    client_type =
+      Keyword.get(opts, :client_type) || Map.get(connect_opts, :user_agent) ||
+        default_client_type()
+
+    session_id =
+      Keyword.get(opts, :session_id) || Map.get(connect_opts, :session_id) || UUID.generate_v4()
+
+    if UUID.valid_v4?(session_id) do
+      {:ok, %{user_id: user_id, client_type: client_type, session_id: session_id}}
+    else
+      {:error, {:invalid_session_id, session_id}}
+    end
   end
 
   defp session_id_for(session) do

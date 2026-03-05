@@ -8,6 +8,9 @@ defmodule SparkEx.Connect.Channel do
           port: non_neg_integer(),
           use_ssl: boolean(),
           token: String.t() | nil,
+          user_id: String.t() | nil,
+          user_agent: String.t() | nil,
+          session_id: String.t() | nil,
           auth_transport: :auto | :metadata,
           extra_params: %{String.t() => String.t()}
         }
@@ -39,9 +42,13 @@ defmodule SparkEx.Connect.Channel do
     with {:ok, {host, port, params_string}} <- split_uri(uri_string),
          {:ok, params} <- parse_params(params_string),
          {:ok, auth_transport, params} <- pop_auth_transport(params),
-         :ok <- validate_token(params) do
+         :ok <- validate_token(params),
+         :ok <- validate_session_id(params) do
       {token, rest} = Map.pop(params, "token")
       {use_ssl_str, rest} = Map.pop(rest, "use_ssl", "false")
+      {user_id, rest} = Map.pop(rest, "user_id")
+      {user_agent, rest} = Map.pop(rest, "user_agent")
+      {session_id, rest} = Map.pop(rest, "session_id")
 
       {:ok,
        %{
@@ -49,6 +56,9 @@ defmodule SparkEx.Connect.Channel do
          port: port,
          use_ssl: use_ssl_str == "true",
          token: token,
+         user_id: user_id,
+         user_agent: user_agent,
+         session_id: session_id,
          auth_transport: auth_transport,
          extra_params: rest
        }}
@@ -69,8 +79,7 @@ defmodule SparkEx.Connect.Channel do
   @doc false
   @spec build_grpc_opts(connect_opts()) :: keyword()
   def build_grpc_opts(opts) do
-    # Align with Spark Connect client behavior where bearer token implies secure transport.
-    secure? = opts.use_ssl or not is_nil(opts.token)
+    secure? = opts.use_ssl or remote_token_requires_tls?(opts)
 
     cred =
       if secure? do
@@ -207,6 +216,33 @@ defmodule SparkEx.Connect.Channel do
 
   defp validate_token(%{"token" => ""}), do: {:error, {:invalid_param, "token="}}
   defp validate_token(_params), do: :ok
+
+  defp validate_session_id(%{"session_id" => session_id}) do
+    if SparkEx.Internal.UUID.valid_v4?(session_id) do
+      :ok
+    else
+      {:error, {:invalid_param, "session_id=#{session_id}"}}
+    end
+  end
+
+  defp validate_session_id(_params), do: :ok
+
+  defp remote_token_requires_tls?(%{token: nil}), do: false
+  defp remote_token_requires_tls?(%{use_ssl: true}), do: true
+
+  defp remote_token_requires_tls?(%{host: host}) do
+    not localhost?(host)
+  end
+
+  defp localhost?(host) when host in ["localhost", "::1"], do: true
+
+  defp localhost?(host) when is_binary(host) do
+    case :inet.parse_strict_address(String.to_charlist(host)) do
+      {:ok, {127, _, _, _}} -> true
+      {:ok, _addr} -> false
+      {:error, _reason} -> false
+    end
+  end
 
   defp malformed_port?(authority, nil) do
     # For bracketed IPv6 hosts like [::1], strip the bracket prefix

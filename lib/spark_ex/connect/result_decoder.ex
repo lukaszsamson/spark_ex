@@ -207,6 +207,11 @@ defmodule SparkEx.Connect.ResultDecoder do
               end
 
             {:result_complete, _} ->
+              if state.current_chunked_batch do
+                raise RuntimeError,
+                      "failed to decode local iterator stream: #{inspect(incomplete_arrow_batch_error(state.current_chunked_batch))}"
+              end
+
               {:halt, state}
 
             _ ->
@@ -226,11 +231,8 @@ defmodule SparkEx.Connect.ResultDecoder do
             :ok
 
           current ->
-            require Logger
-
-            Logger.warning(
-              "incomplete local iterator arrow batch discarded: #{inspect(%{expected_chunks: current.expected_chunks, received_chunks: length(current.parts)})}"
-            )
+            raise RuntimeError,
+                  "failed to decode local iterator stream: #{inspect(incomplete_arrow_batch_error(current))}"
         end
       end
     )
@@ -402,20 +404,18 @@ defmodule SparkEx.Connect.ResultDecoder do
               end
 
             {:result_complete, _} ->
-              if state[:current_chunked_batch] do
-                require Logger
+              case state.current_chunked_batch do
+                nil ->
+                  arrow_state =
+                    state
+                    |> Map.put_new(:arrow_parts, [])
+                    |> Map.put(:current_chunked_batch, nil)
 
-                Logger.warning(
-                  "incomplete chunked arrow batch discarded on result_complete: #{inspect(%{expected_chunks: state.current_chunked_batch.expected_chunks, received_chunks: length(state.current_chunked_batch.parts)})}"
-                )
+                  {:halt, finalize_arrow_result(arrow_state)}
+
+                current ->
+                  {:halt, {:error, incomplete_arrow_batch_error(current)}}
               end
-
-              arrow_state =
-                state
-                |> Map.put_new(:arrow_parts, [])
-                |> Map.put(:current_chunked_batch, nil)
-
-              {:halt, {:ok, finalize_arrow_result(arrow_state)}}
 
             _ ->
               {:cont, {:ok, state}}
@@ -441,12 +441,10 @@ defmodule SparkEx.Connect.ResultDecoder do
 
         case finalize_state.current_chunked_batch do
           nil ->
-            {:ok, finalize_arrow_result(finalize_state)}
+            finalize_arrow_result(finalize_state)
 
           current ->
-            {:error,
-             {:incomplete_arrow_batch,
-              %{expected_chunks: current.expected_chunks, received_chunks: length(current.parts)}}}
+            {:error, incomplete_arrow_batch_error(current)}
         end
 
       {:error, _} = error ->
@@ -650,15 +648,21 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp finalize_arrow_result(state) do
-    arrow_ipc = state.arrow_parts |> Enum.reverse() |> IO.iodata_to_binary()
+    with {:ok, arrow_ipc} <- merge_arrow_batches(state.arrow_parts) do
+      {:ok,
+       %{
+         arrow: arrow_ipc,
+         schema: state.schema,
+         server_side_session_id: state.server_side_session_id,
+         observed_metrics: state.observed_metrics,
+         execution_metrics: state.execution_metrics
+       }}
+    end
+  end
 
-    %{
-      arrow: arrow_ipc,
-      schema: state.schema,
-      server_side_session_id: state.server_side_session_id,
-      observed_metrics: state.observed_metrics,
-      execution_metrics: state.execution_metrics
-    }
+  defp incomplete_arrow_batch_error(current) do
+    {:incomplete_arrow_batch,
+     %{expected_chunks: current.expected_chunks, received_chunks: length(current.parts)}}
   end
 
   defp maybe_set_schema(state, nil), do: state
@@ -932,6 +936,42 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp safe_dataframe_to_rows(df) do
     try do
       {:ok, Explorer.DataFrame.to_rows(df)}
+    rescue
+      error -> {:error, {:arrow_decode_failed, error}}
+    catch
+      kind, reason -> {:error, {:arrow_decode_failed, {kind, reason}}}
+    end
+  end
+
+  defp merge_arrow_batches([]), do: {:ok, <<>>}
+
+  defp merge_arrow_batches([single_batch]), do: {:ok, single_batch}
+
+  defp merge_arrow_batches(batches) do
+    with {:ok, dataframes} <- decode_arrow_batches_to_dataframes(Enum.reverse(batches)),
+         combined <- Explorer.DataFrame.concat_rows(dataframes),
+         {:ok, ipc_data} <- dump_dataframe_ipc_stream(combined) do
+      {:ok, ipc_data}
+    end
+  end
+
+  defp decode_arrow_batches_to_dataframes(batches) do
+    batches
+    |> Enum.reduce_while({:ok, []}, fn batch, {:ok, acc} ->
+      case decode_single_batch_explorer(batch) do
+        {:ok, df} -> {:cont, {:ok, [df | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, dataframes} -> {:ok, Enum.reverse(dataframes)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp dump_dataframe_ipc_stream(df) do
+    try do
+      Explorer.DataFrame.dump_ipc_stream(df)
     rescue
       error -> {:error, {:arrow_decode_failed, error}}
     catch

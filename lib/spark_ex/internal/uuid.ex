@@ -1,6 +1,8 @@
 defmodule SparkEx.Internal.UUID do
   @moduledoc false
 
+  @uuid_v4_regex ~r/\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\z/
+
   @spec generate_v4() :: String.t()
   def generate_v4 do
     <<a::48, _::4, b::12, _::2, c::62>> = :crypto.strong_rand_bytes(16)
@@ -25,4 +27,8 @@ defmodule SparkEx.Internal.UUID do
     ]
     |> IO.iodata_to_binary()
   end
+
+  @spec valid_v4?(term()) :: boolean()
+  def valid_v4?(value) when is_binary(value), do: String.match?(value, @uuid_v4_regex)
+  def valid_v4?(_value), do: false
 end

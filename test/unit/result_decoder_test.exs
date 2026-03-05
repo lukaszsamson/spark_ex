@@ -382,6 +382,72 @@ defmodule SparkEx.Connect.ResultDecoderTest do
       assert result.observed_metrics == %{}
       assert result.execution_metrics == %{}
     end
+
+    test "merges multiple arrow batches into a single valid IPC stream" do
+      first_batch = build_ipc_data([1])
+      second_batch = build_ipc_data([2])
+      assert first_batch != <<>>
+      assert second_batch != <<>>
+
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: first_batch,
+                start_offset: 0,
+                chunk_index: 0,
+                num_chunks_in_batch: 1
+              }}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: second_batch,
+                start_offset: 1,
+                chunk_index: 0,
+                num_chunks_in_batch: 1
+              }}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      assert {:ok, result} = ResultDecoder.decode_stream_arrow(stream)
+      assert {:ok, df} = Explorer.DataFrame.load_ipc_stream(result.arrow)
+      assert Explorer.DataFrame.to_rows(df) == [%{"id" => 1}, %{"id" => 2}]
+    end
+
+    test "returns an error when result_complete arrives mid-chunked batch" do
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                row_count: 1,
+                data: <<1, 2, 3>>,
+                start_offset: 0,
+                chunk_index: 0,
+                num_chunks_in_batch: 2
+              }}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      assert {:error, {:incomplete_arrow_batch, %{expected_chunks: 2, received_chunks: 1}}} =
+               ResultDecoder.decode_stream_arrow(stream)
+    end
   end
 
   describe "rows_stream/2" do
@@ -445,11 +511,40 @@ defmodule SparkEx.Connect.ResultDecoderTest do
 
       assert Enum.to_list(ResultDecoder.rows_stream(stream)) == [%{"id" => 1}, %{"id" => 2}]
     end
+
+    test "raises when result_complete arrives mid-chunked batch" do
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type:
+             {:arrow_batch,
+              %ExecutePlanResponse.ArrowBatch{
+                data: <<1, 2, 3>>,
+                row_count: 1,
+                start_offset: 0,
+                chunk_index: 0,
+                num_chunks_in_batch: 2
+              }}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      assert_raise RuntimeError, ~r/incomplete_arrow_batch/, fn ->
+        Enum.to_list(ResultDecoder.rows_stream(stream))
+      end
+    end
   end
 
   defp build_multi_row_ipc_data(n) do
+    build_ipc_data(Enum.to_list(1..n))
+  end
+
+  defp build_ipc_data(ids) do
     if Code.ensure_loaded?(Explorer.DataFrame) do
-      df = Explorer.DataFrame.new(%{"id" => Enum.to_list(1..n)})
+      df = Explorer.DataFrame.new(%{"id" => ids})
 
       case Explorer.DataFrame.dump_ipc_stream(df) do
         {:ok, data} -> data
