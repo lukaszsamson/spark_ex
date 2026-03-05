@@ -1890,7 +1890,10 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
-  Materializes the DataFrame as a raw Arrow IPC binary.
+  Materializes the DataFrame as raw Arrow IPC payloads from the server.
+
+  Single-batch results return a binary. Multi-batch results return an ordered
+  list of Arrow IPC batch binaries.
 
   Returns an `Arrow.Table` if the `:arrow` dependency is available.
   """

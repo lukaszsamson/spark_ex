@@ -22,7 +22,8 @@ defmodule SparkEx.Connect.ResultDecoder do
         }
 
   @type arrow_result :: %{
-          arrow: term(),
+          arrow: binary() | [binary()],
+          arrow_batches: [binary()],
           schema: term() | nil,
           server_side_session_id: String.t() | nil,
           observed_metrics: map(),
@@ -354,7 +355,12 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   @doc """
-  Decodes an ExecutePlan response stream into a raw Arrow IPC payload.
+  Decodes an ExecutePlan response stream into an Arrow IPC payload.
+
+  `arrow` preserves the raw Arrow IPC payloads received from the server.
+  Single-batch results return a binary. Multi-batch results return the ordered
+  list of per-batch binaries, and `arrow_batches` exposes the same list
+  explicitly.
 
   ## Options
 
@@ -648,16 +654,24 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp finalize_arrow_result(state) do
-    with {:ok, arrow_ipc} <- merge_arrow_batches(state.arrow_parts) do
-      {:ok,
-       %{
-         arrow: arrow_ipc,
-         schema: state.schema,
-         server_side_session_id: state.server_side_session_id,
-         observed_metrics: state.observed_metrics,
-         execution_metrics: state.execution_metrics
-       }}
-    end
+    arrow_batches = Enum.reverse(state.arrow_parts)
+
+    arrow =
+      case arrow_batches do
+        [] -> <<>>
+        [single_batch] -> single_batch
+        batches -> batches
+      end
+
+    {:ok,
+     %{
+       arrow: arrow,
+       arrow_batches: arrow_batches,
+       schema: state.schema,
+       server_side_session_id: state.server_side_session_id,
+       observed_metrics: state.observed_metrics,
+       execution_metrics: state.execution_metrics
+     }}
   end
 
   defp incomplete_arrow_batch_error(current) do
@@ -936,42 +950,6 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp safe_dataframe_to_rows(df) do
     try do
       {:ok, Explorer.DataFrame.to_rows(df)}
-    rescue
-      error -> {:error, {:arrow_decode_failed, error}}
-    catch
-      kind, reason -> {:error, {:arrow_decode_failed, {kind, reason}}}
-    end
-  end
-
-  defp merge_arrow_batches([]), do: {:ok, <<>>}
-
-  defp merge_arrow_batches([single_batch]), do: {:ok, single_batch}
-
-  defp merge_arrow_batches(batches) do
-    with {:ok, dataframes} <- decode_arrow_batches_to_dataframes(Enum.reverse(batches)),
-         combined <- Explorer.DataFrame.concat_rows(dataframes),
-         {:ok, ipc_data} <- dump_dataframe_ipc_stream(combined) do
-      {:ok, ipc_data}
-    end
-  end
-
-  defp decode_arrow_batches_to_dataframes(batches) do
-    batches
-    |> Enum.reduce_while({:ok, []}, fn batch, {:ok, acc} ->
-      case decode_single_batch_explorer(batch) do
-        {:ok, df} -> {:cont, {:ok, [df | acc]}}
-        {:error, _} = error -> {:halt, error}
-      end
-    end)
-    |> case do
-      {:ok, dataframes} -> {:ok, Enum.reverse(dataframes)}
-      {:error, _} = error -> error
-    end
-  end
-
-  defp dump_dataframe_ipc_stream(df) do
-    try do
-      Explorer.DataFrame.dump_ipc_stream(df)
     rescue
       error -> {:error, {:arrow_decode_failed, error}}
     catch

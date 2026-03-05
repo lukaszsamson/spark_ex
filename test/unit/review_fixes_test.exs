@@ -313,7 +313,7 @@ defmodule SparkEx.ReviewFixesTest do
                  max_bytes: 10_000
                )
 
-      assert is_binary(result.arrow)
+      assert is_binary(result.arrow) or is_list(result.arrow)
     end
   end
 

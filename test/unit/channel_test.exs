@@ -1,5 +1,5 @@
 defmodule SparkEx.Connect.ChannelTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias SparkEx.Connect.Channel
 
@@ -106,6 +106,22 @@ defmodule SparkEx.Connect.ChannelTest do
                Channel.parse_uri("sc://localhost:15002/;session_id=not-a-uuid")
     end
 
+    test "uses SPARK_CONNECT_AUTHENTICATE_TOKEN when URI token is absent" do
+      previous = System.get_env("SPARK_CONNECT_AUTHENTICATE_TOKEN")
+      System.put_env("SPARK_CONNECT_AUTHENTICATE_TOKEN", "env-token")
+
+      on_exit(fn ->
+        if previous do
+          System.put_env("SPARK_CONNECT_AUTHENTICATE_TOKEN", previous)
+        else
+          System.delete_env("SPARK_CONNECT_AUTHENTICATE_TOKEN")
+        end
+      end)
+
+      assert {:ok, opts} = Channel.parse_uri("sc://localhost:15002")
+      assert opts.token == "env-token"
+    end
+
     test "rejects non-numeric port" do
       assert {:error, {:invalid_uri, _}} = Channel.parse_uri("sc://localhost:abc")
     end
@@ -195,6 +211,42 @@ defmodule SparkEx.Connect.ChannelTest do
       grpc_opts = Channel.build_grpc_opts(opts)
       refute Keyword.has_key?(grpc_opts, :cred)
       assert %{metadata: %{"authorization" => "Bearer abc"}} = Enum.into(grpc_opts, %{})
+    end
+
+    test "env token is used for auth metadata and tls selection" do
+      previous = System.get_env("SPARK_CONNECT_AUTHENTICATE_TOKEN")
+      System.put_env("SPARK_CONNECT_AUTHENTICATE_TOKEN", "env-token")
+
+      on_exit(fn ->
+        if previous do
+          System.put_env("SPARK_CONNECT_AUTHENTICATE_TOKEN", previous)
+        else
+          System.delete_env("SPARK_CONNECT_AUTHENTICATE_TOKEN")
+        end
+      end)
+
+      remote_opts = %{
+        host: "remote-host",
+        port: 15002,
+        use_ssl: false,
+        token: nil,
+        auth_transport: :auto,
+        extra_params: %{}
+      }
+
+      local_opts = %{remote_opts | host: "localhost"}
+
+      remote_grpc_opts = Channel.build_grpc_opts(remote_opts)
+      assert %GRPC.Credential{} = Keyword.fetch!(remote_grpc_opts, :cred)
+
+      assert %{metadata: %{"authorization" => "Bearer env-token"}} =
+               Enum.into(remote_grpc_opts, %{})
+
+      local_grpc_opts = Channel.build_grpc_opts(local_opts)
+      refute Keyword.has_key?(local_grpc_opts, :cred)
+
+      assert %{metadata: %{"authorization" => "Bearer env-token"}} =
+               Enum.into(local_grpc_opts, %{})
     end
 
     test "token authorization overrides custom authorization header" do

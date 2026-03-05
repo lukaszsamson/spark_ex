@@ -8,6 +8,8 @@ defmodule SparkEx.ManagedStream do
   - optional idle timeout auto-close
   """
 
+  @default_release_timeout 5_000
+
   @type release_fun :: (keyword() -> {:ok, term()} | {:error, term()} | term())
 
   @type t :: %__MODULE__{
@@ -23,12 +25,14 @@ defmodule SparkEx.ManagedStream do
     owner = Keyword.get(opts, :owner, self())
     idle_timeout = Keyword.get(opts, :idle_timeout)
     release_fun = Keyword.fetch!(opts, :release_fun)
+    release_timeout = Keyword.get(opts, :release_timeout, @default_release_timeout)
 
     with {:ok, controller} <-
            SparkEx.ManagedStream.Controller.start_link(
              owner: owner,
              idle_timeout: idle_timeout,
-             release_fun: release_fun
+             release_fun: release_fun,
+             release_timeout: release_timeout
            ) do
       wrapped =
         Stream.transform(
@@ -85,6 +89,7 @@ defmodule SparkEx.ManagedStream.Controller do
     owner = Keyword.get(opts, :owner, self())
     idle_timeout = Keyword.get(opts, :idle_timeout, nil)
     release_fun = Keyword.fetch!(opts, :release_fun)
+    release_timeout = Keyword.get(opts, :release_timeout, 5_000)
 
     owner_ref = Process.monitor(owner)
     timer_ref = arm_idle_timer(idle_timeout)
@@ -96,6 +101,7 @@ defmodule SparkEx.ManagedStream.Controller do
        idle_timeout: idle_timeout,
        timer_ref: timer_ref,
        release_fun: release_fun,
+       release_timeout: release_timeout,
        closed?: false
      }}
   end
@@ -130,32 +136,56 @@ defmodule SparkEx.ManagedStream.Controller do
 
   defp do_close(_reason, state) do
     if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+    Process.demonitor(state.owner_ref, [:flush])
+    start_async_release(state.release_fun, state.release_timeout)
 
-    case state.release_fun.([]) do
-      {:ok, _} ->
+    {:ok, %{state | closed?: true, timer_ref: nil}}
+  end
+
+  defp start_async_release(release_fun, timeout_ms) do
+    case Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
+           run_release_fun(release_fun, timeout_ms)
+         end) do
+      {:ok, _pid} ->
         :ok
 
       {:error, reason} ->
-        Logger.debug("managed stream release failed: #{inspect(reason)}")
-
-        :telemetry.execute(
-          [:spark_ex, :managed_stream, :release_failed],
-          %{},
-          %{reason: reason}
-        )
-
-      other ->
-        Logger.debug("managed stream release returned: #{inspect(other)}")
-
-        :telemetry.execute(
-          [:spark_ex, :managed_stream, :release_failed],
-          %{},
-          %{reason: other}
-        )
+        log_release_failure({:task_start_failed, reason}, timeout_ms)
     end
+  end
 
-    Process.demonitor(state.owner_ref, [:flush])
-    {:ok, %{state | closed?: true, timer_ref: nil}}
+  defp run_release_fun(release_fun, timeout_ms) do
+    task =
+      Task.Supervisor.async_nolink(SparkEx.TaskSupervisor, fn ->
+        release_fun.(timeout: timeout_ms)
+      end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, _}} ->
+        :ok
+
+      {:ok, {:error, reason}} ->
+        log_release_failure(reason, timeout_ms)
+
+      {:ok, other} ->
+        log_release_failure({:unexpected_release_result, other}, timeout_ms)
+
+      {:exit, reason} ->
+        log_release_failure({:task_exit, reason}, timeout_ms)
+
+      nil ->
+        log_release_failure(:timeout, timeout_ms)
+    end
+  end
+
+  defp log_release_failure(reason, timeout_ms) do
+    Logger.debug("managed stream release failed: #{inspect(reason)}")
+
+    :telemetry.execute(
+      [:spark_ex, :managed_stream, :release_failed],
+      %{},
+      %{reason: reason, timeout_ms: timeout_ms}
+    )
   end
 
   defp reset_idle_timer(%{idle_timeout: timeout, timer_ref: timer_ref} = state)

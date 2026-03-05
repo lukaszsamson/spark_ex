@@ -379,11 +379,12 @@ defmodule SparkEx.Connect.ResultDecoderTest do
 
       assert {:ok, result} = ResultDecoder.decode_stream_arrow(stream)
       assert result.arrow == <<1, 2, 3>>
+      assert result.arrow_batches == [<<1, 2, 3>>]
       assert result.observed_metrics == %{}
       assert result.execution_metrics == %{}
     end
 
-    test "merges multiple arrow batches into a single valid IPC stream" do
+    test "preserves multiple arrow batches in order" do
       first_batch = build_ipc_data([1])
       second_batch = build_ipc_data([2])
       assert first_batch != <<>>
@@ -421,8 +422,8 @@ defmodule SparkEx.Connect.ResultDecoderTest do
       ]
 
       assert {:ok, result} = ResultDecoder.decode_stream_arrow(stream)
-      assert {:ok, df} = Explorer.DataFrame.load_ipc_stream(result.arrow)
-      assert Explorer.DataFrame.to_rows(df) == [%{"id" => 1}, %{"id" => 2}]
+      assert result.arrow == [first_batch, second_batch]
+      assert result.arrow_batches == [first_batch, second_batch]
     end
 
     test "returns an error when result_complete arrives mid-chunked batch" do

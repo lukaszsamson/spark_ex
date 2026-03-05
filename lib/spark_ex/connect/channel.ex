@@ -44,11 +44,12 @@ defmodule SparkEx.Connect.Channel do
          {:ok, auth_transport, params} <- pop_auth_transport(params),
          :ok <- validate_token(params),
          :ok <- validate_session_id(params) do
-      {token, rest} = Map.pop(params, "token")
+      {parsed_token, rest} = Map.pop(params, "token")
       {use_ssl_str, rest} = Map.pop(rest, "use_ssl", "false")
       {user_id, rest} = Map.pop(rest, "user_id")
       {user_agent, rest} = Map.pop(rest, "user_agent")
       {session_id, rest} = Map.pop(rest, "session_id")
+      token = resolve_token(parsed_token)
 
       {:ok,
        %{
@@ -79,7 +80,8 @@ defmodule SparkEx.Connect.Channel do
   @doc false
   @spec build_grpc_opts(connect_opts()) :: keyword()
   def build_grpc_opts(opts) do
-    secure? = opts.use_ssl or remote_token_requires_tls?(opts)
+    token = resolve_token(opts.token)
+    secure? = opts.use_ssl or remote_token_requires_tls?(opts, token)
 
     cred =
       if secure? do
@@ -99,19 +101,19 @@ defmodule SparkEx.Connect.Channel do
       |> Enum.into(%{})
 
     grpc_opts =
-      case {opts.token, map_size(extra_metadata)} do
+      case {token, map_size(extra_metadata)} do
         {nil, 0} ->
           grpc_opts
 
-        {token, 0} when is_binary(token) ->
-          auth_metadata = auth_metadata_fallback(opts, token)
+        {resolved_token, 0} when is_binary(resolved_token) ->
+          auth_metadata = auth_metadata_fallback(opts, resolved_token)
           Keyword.put(grpc_opts, :metadata, auth_metadata)
 
         {nil, _} ->
           Keyword.put(grpc_opts, :metadata, extra_metadata)
 
-        {token, _} ->
-          md = Map.merge(extra_metadata, auth_metadata_fallback(opts, token))
+        {resolved_token, _} ->
+          md = Map.merge(extra_metadata, auth_metadata_fallback(opts, resolved_token))
           Keyword.put(grpc_opts, :metadata, md)
       end
 
@@ -227,10 +229,19 @@ defmodule SparkEx.Connect.Channel do
 
   defp validate_session_id(_params), do: :ok
 
-  defp remote_token_requires_tls?(%{token: nil}), do: false
-  defp remote_token_requires_tls?(%{use_ssl: true}), do: true
+  defp resolve_token(token) when is_binary(token), do: token
 
-  defp remote_token_requires_tls?(%{host: host}) do
+  defp resolve_token(nil) do
+    case System.get_env("SPARK_CONNECT_AUTHENTICATE_TOKEN") do
+      value when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
+  defp remote_token_requires_tls?(_opts, nil), do: false
+  defp remote_token_requires_tls?(%{use_ssl: true}, _token), do: true
+
+  defp remote_token_requires_tls?(%{host: host}, _token) do
     not localhost?(host)
   end
 

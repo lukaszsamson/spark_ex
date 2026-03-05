@@ -524,7 +524,7 @@ defmodule SparkEx.Connect.Client do
   end
 
   @doc """
-  Calls `ExecutePlan` and decodes the response as raw Arrow IPC bytes.
+  Calls `ExecutePlan` and decodes the response as raw Arrow IPC payloads.
   """
   @spec execute_plan_arrow(SparkEx.Session.t(), Plan.t(), keyword()) ::
           {:ok, ResultDecoder.arrow_result()} | {:error, term()}
@@ -603,6 +603,7 @@ defmodule SparkEx.Connect.Client do
     timeout = Keyword.get(opts, :timeout, :infinity)
     owner = Keyword.get(opts, :stream_owner, self())
     idle_timeout = Keyword.get(opts, :idle_timeout, nil)
+    release_timeout = Keyword.get(opts, :release_execute_timeout, @release_execute_timeout)
     operation_id = generate_operation_id()
     request = build_execute_request(session, plan, [], operation_id, true, opts)
 
@@ -613,7 +614,8 @@ defmodule SparkEx.Connect.Client do
         case ManagedStream.new(stream,
                owner: owner,
                idle_timeout: idle_timeout,
-               release_fun: release_fun
+               release_fun: release_fun,
+               release_timeout: release_timeout
              ) do
           {:ok, managed_stream} ->
             {:ok, managed_stream}
@@ -1150,6 +1152,7 @@ defmodule SparkEx.Connect.Client do
           {:ok, String.t() | nil} | {:error, term()}
   def release_execute(session, operation_id, opts \\ []) do
     until_response_id = Keyword.get(opts, :until_response_id, nil)
+    timeout = Keyword.get(opts, :timeout, @release_execute_timeout)
 
     release =
       if until_response_id do
@@ -1174,7 +1177,7 @@ defmodule SparkEx.Connect.Client do
     }
 
     rpc_telemetry_span(metadata, fn ->
-      case Stub.release_execute(session.channel, request) do
+      case Stub.release_execute(session.channel, request, timeout: timeout) do
         {:ok, %ReleaseExecuteResponse{} = resp} ->
           {:ok, resp.server_side_session_id}
 
