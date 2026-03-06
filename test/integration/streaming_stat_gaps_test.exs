@@ -277,23 +277,14 @@ defmodule SparkEx.Integration.StreamingStatGapsTest do
   # ── session management gaps ──
 
   describe "session management gaps" do
-    test "stop already-stopped session returns error or is idempotent", %{session: _session} do
+    test "stop already-stopped session is idempotent", %{session: _session} do
       {:ok, session2} = SparkEx.connect(url: @spark_remote)
       Process.unlink(session2)
 
       :ok = SparkEx.Session.stop(session2)
 
-      # Second stop — process is already dead, so GenServer.stop will exit with :noproc
-      result =
-        try do
-          SparkEx.Session.stop(session2)
-        catch
-          :exit, {:noproc, _} -> {:error, :noproc}
-        end
-
-      # After stopping a session, a second stop must get :noproc (process is dead)
-      assert result == {:error, :noproc},
-             "expected {:error, :noproc} for double-stop, got: #{inspect(result)}"
+      # Second stop — Session.stop/1 catches :noproc and returns :ok (idempotent)
+      assert :ok = SparkEx.Session.stop(session2)
     end
 
     test "multiple sessions to same remote are independent", %{session: session} do
