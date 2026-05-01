@@ -235,6 +235,47 @@ defmodule SparkEx.Connect.RetryTest do
     assert policy.min_jitter_threshold_ms == 2_000
   end
 
+  test "per-session retry_policies override the global registry" do
+    parent = self()
+    sleep_fun = fn ms -> send(parent, {:slept, ms}) end
+
+    on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
+
+    # Global registry says 5 retries; the session-scoped override below
+    # should win and cap us at 1.
+    SparkEx.RetryPolicyRegistry.set_policies(retry: %{max_retries: 5, sleep_fun: sleep_fun})
+
+    session = %SparkEx.Session{
+      session_id: "s",
+      user_id: "u",
+      client_type: "c",
+      retry_policies: %{
+        retry: %{
+          max_retries: 1,
+          initial_backoff_ms: 1,
+          max_backoff_ms: 1,
+          sleep_fun: sleep_fun
+        }
+      }
+    }
+
+    counter = :erlang.make_ref()
+    Process.put(counter, 0)
+
+    result =
+      SparkEx.Connect.Client.retry_with_backoff(
+        fn ->
+          Process.put(counter, Process.get(counter, 0) + 1)
+          {:error, %SparkEx.Error.Remote{message: "unavailable", grpc_status: 14}}
+        end,
+        session: session
+      )
+
+    assert {:error, %SparkEx.Error.Remote{grpc_status: 14}} = result
+    # max_retries: 1 → 2 attempts total
+    assert Process.get(counter) == 2
+  end
+
   test "caps retry_delay_ms using max_server_retry_delay" do
     parent = self()
     sleep_fun = fn ms -> send(parent, {:slept, ms}) end

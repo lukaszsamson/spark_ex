@@ -116,6 +116,12 @@ defmodule SparkEx.Connect.Errors do
   @error_info_type_url "type.googleapis.com/google.rpc.ErrorInfo"
   @retry_info_type_url "type.googleapis.com/google.rpc.RetryInfo"
 
+  # Bound the FetchErrorDetails enrichment so a slow/hanging server cannot
+  # stall the failed-RPC handle_call path indefinitely. On timeout the
+  # caller falls back to the base error built from inline ErrorInfo
+  # metadata.
+  @fetch_error_details_timeout_ms 5_000
+
   @doc """
   Converts a gRPC error into a structured SparkEx error.
 
@@ -179,7 +185,10 @@ defmodule SparkEx.Connect.Errors do
     _ -> :error
   end
 
-  defp retry_info_to_ms(%Google.Rpc.RetryInfo{retry_delay: nil}), do: 0
+  # Returns nil ("no hint") when RetryInfo carries no retry_delay so the
+  # retry loop falls back to its policy backoff instead of treating "no
+  # hint" as "retry immediately".
+  defp retry_info_to_ms(%Google.Rpc.RetryInfo{retry_delay: nil}), do: nil
 
   defp retry_info_to_ms(%Google.Rpc.RetryInfo{
          retry_delay: %Google.Protobuf.Duration{} = duration
@@ -224,6 +233,13 @@ defmodule SparkEx.Connect.Errors do
   end
 
   defp do_fetch_error_details(error_id, session) do
+    do_fetch_error_details(error_id, session, @fetch_error_details_timeout_ms)
+  end
+
+  @doc false
+  @spec do_fetch_error_details(String.t(), SparkEx.Session.t(), pos_integer() | :infinity) ::
+          {:ok, FetchErrorDetailsResponse.t()} | {:error, term()}
+  def do_fetch_error_details(error_id, session, timeout_ms) do
     request = %FetchErrorDetailsRequest{
       session_id: session.session_id,
       user_context: UserContextExtensions.build_user_context(session.user_id),
@@ -232,16 +248,37 @@ defmodule SparkEx.Connect.Errors do
       error_id: error_id
     }
 
-    try do
-      case Stub.fetch_error_details(session.channel, request) do
-        {:ok, %FetchErrorDetailsResponse{} = resp} ->
-          {:ok, resp}
+    # Run on a supervised task so a slow/hanging server can't block the
+    # caller's GenServer handle_call beyond `timeout_ms`. On timeout the
+    # task is brutally killed and we fall back to the base error.
+    task =
+      Task.Supervisor.async_nolink(SparkEx.TaskSupervisor, fn ->
+        try do
+          # Pass timeout to gRPC too so the RPC itself is bounded even if
+          # the task supervisor cannot interrupt it cleanly.
+          Stub.fetch_error_details(session.channel, request, timeout: timeout_ms)
+        rescue
+          e -> {:error, e}
+        catch
+          kind, reason -> {:error, {kind, reason}}
+        end
+      end)
 
-        {:error, reason} ->
-          {:error, reason}
-      end
-    rescue
-      e -> {:error, e}
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, %FetchErrorDetailsResponse{} = resp}} ->
+        {:ok, resp}
+
+      {:ok, {:error, reason}} ->
+        {:error, reason}
+
+      {:ok, other} ->
+        {:error, {:unexpected_response, other}}
+
+      {:exit, reason} ->
+        {:error, {:task_exit, reason}}
+
+      nil ->
+        {:error, :timeout}
     end
   end
 

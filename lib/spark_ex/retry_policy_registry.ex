@@ -37,6 +37,37 @@ defmodule SparkEx.RetryPolicyRegistry do
     Map.get(get_policies(), type)
   end
 
+  @doc """
+  Look up a policy with a session-first preference.
+
+  When `session.retry_policies` carries a per-session override for `type`,
+  it wins; otherwise we fall back to the global ETS-backed registry. Pass
+  `nil` for callers that don't have a session in hand.
+  """
+  @spec policy_for(SparkEx.Session.t() | nil, policy_type()) :: map()
+  def policy_for(%{retry_policies: %{} = policies}, type)
+      when type in [:retry, :reattach, :streaming] do
+    case Map.get(policies, type) do
+      nil -> policy(type)
+      override -> Map.merge(policy(type), override)
+    end
+  end
+
+  def policy_for(_session, type) when type in [:retry, :reattach, :streaming] do
+    policy(type)
+  end
+
+  @doc """
+  Normalize and validate a map/keyword of policies; raises on invalid input.
+
+  Used by `SparkEx.Session` to validate user-supplied per-session overrides
+  at session-start time.
+  """
+  @spec normalize_policies!(map() | keyword()) :: %{policy_type() => map()}
+  def normalize_policies!(policies) when is_map(policies) or is_list(policies) do
+    normalize_policies(policies)
+  end
+
   defp default_policies() do
     %{
       retry: default_policy(),

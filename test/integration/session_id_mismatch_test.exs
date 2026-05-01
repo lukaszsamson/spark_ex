@@ -14,7 +14,7 @@ defmodule SparkEx.Integration.SessionIdMismatchTest do
       if Process.alive?(session), do: SparkEx.Session.stop(session)
     end)
 
-    SparkEx.Session.update_server_side_session_id(session, "mismatch")
+    SparkEx.Session.__update_server_side_session_id__(session, "mismatch")
 
     assert {:error, %SparkEx.Error.Remote{} = error} = SparkEx.spark_version(session)
 
