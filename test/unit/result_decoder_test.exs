@@ -527,7 +527,7 @@ defmodule SparkEx.Connect.ResultDecoderTest do
       ]
 
       row_stream = ResultDecoder.rows_stream(stream)
-      assert Enum.take(row_stream, 2) == [%{"id" => 1}, %{"id" => 2}]
+      assert Enum.take(row_stream, 2) == [{:ok, %{"id" => 1}}, {:ok, %{"id" => 2}}]
     end
 
     test "reassembles chunked arrow batches while streaming rows" do
@@ -567,10 +567,13 @@ defmodule SparkEx.Connect.ResultDecoderTest do
          }}
       ]
 
-      assert Enum.to_list(ResultDecoder.rows_stream(stream)) == [%{"id" => 1}, %{"id" => 2}]
+      assert Enum.to_list(ResultDecoder.rows_stream(stream)) == [
+               {:ok, %{"id" => 1}},
+               {:ok, %{"id" => 2}}
+             ]
     end
 
-    test "raises when result_complete arrives mid-chunked batch" do
+    test "emits an error element instead of raising when result_complete arrives mid-chunked batch" do
       stream = [
         {:ok,
          %ExecutePlanResponse{
@@ -590,9 +593,8 @@ defmodule SparkEx.Connect.ResultDecoderTest do
          }}
       ]
 
-      assert_raise RuntimeError, ~r/incomplete_arrow_batch/, fn ->
-        Enum.to_list(ResultDecoder.rows_stream(stream))
-      end
+      assert [{:error, {:incomplete_arrow_batch, %{expected_chunks: 2, received_chunks: 1}}}] =
+               Enum.to_list(ResultDecoder.rows_stream(stream))
     end
   end
 

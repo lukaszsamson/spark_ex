@@ -156,6 +156,11 @@ defmodule SparkEx.Connect.TypeMapper do
   defp direct_ddl(:date, _), do: "DATE"
   defp direct_ddl(:timestamp, _), do: "TIMESTAMP"
   defp direct_ddl(:timestamp_ntz, _), do: "TIMESTAMP_NTZ"
+
+  defp direct_ddl(:time, %DataType.Time{precision: precision}) when is_integer(precision) do
+    "TIME(#{precision})"
+  end
+
   defp direct_ddl(:time, _), do: "TIME"
 
   defp direct_ddl(:decimal, %DataType.Decimal{precision: p, scale: s})
@@ -169,9 +174,43 @@ defmodule SparkEx.Connect.TypeMapper do
 
   defp direct_ddl(:decimal, _), do: "DECIMAL(10, 0)"
 
-  defp direct_ddl(:calendar_interval, _), do: "STRING"
-  defp direct_ddl(:year_month_interval, _), do: "STRING"
-  defp direct_ddl(:day_time_interval, _), do: "STRING"
+  defp direct_ddl(:calendar_interval, _), do: "INTERVAL"
+
+  defp direct_ddl(:year_month_interval, %DataType.YearMonthInterval{
+         start_field: sf,
+         end_field: ef
+       })
+       when is_integer(sf) and is_integer(ef) do
+    "INTERVAL #{year_month_interval_field(sf)} TO #{year_month_interval_field(ef)}"
+  end
+
+  defp direct_ddl(:year_month_interval, _), do: "INTERVAL YEAR TO MONTH"
+
+  defp direct_ddl(:day_time_interval, %DataType.DayTimeInterval{
+         start_field: sf,
+         end_field: ef
+       })
+       when is_integer(sf) and is_integer(ef) do
+    "INTERVAL #{day_time_interval_field(sf)} TO #{day_time_interval_field(ef)}"
+  end
+
+  defp direct_ddl(:day_time_interval, _), do: "INTERVAL DAY TO SECOND"
+
+  defp direct_ddl(:variant, _), do: "VARIANT"
+
+  defp direct_ddl(:geometry, %DataType.Geometry{srid: srid})
+       when is_integer(srid) and srid != 0 do
+    "GEOMETRY(#{srid})"
+  end
+
+  defp direct_ddl(:geometry, _), do: "GEOMETRY"
+
+  defp direct_ddl(:geography, %DataType.Geography{srid: srid})
+       when is_integer(srid) and srid != 0 do
+    "GEOGRAPHY(#{srid})"
+  end
+
+  defp direct_ddl(:geography, _), do: "GEOGRAPHY"
 
   defp direct_ddl(:array, %DataType.Array{element_type: element_type}) do
     "ARRAY<#{data_type_to_ddl(element_type)}>"
@@ -180,8 +219,13 @@ defmodule SparkEx.Connect.TypeMapper do
   defp direct_ddl(:struct, %DataType.Struct{fields: fields}) do
     inner =
       fields
-      |> Enum.map_join(", ", fn %DataType.StructField{name: name, data_type: data_type} ->
-        "#{name}: #{data_type_to_ddl(data_type)}"
+      |> Enum.map_join(", ", fn %DataType.StructField{
+                                  name: name,
+                                  data_type: data_type,
+                                  nullable: nullable
+                                } ->
+        suffix = if nullable == false, do: " NOT NULL", else: ""
+        "#{SparkEx.Types.quote_identifier(name)}: #{data_type_to_ddl(data_type)}#{suffix}"
       end)
 
     "STRUCT<#{inner}>"
@@ -192,6 +236,14 @@ defmodule SparkEx.Connect.TypeMapper do
   end
 
   defp direct_ddl(_, _), do: "STRING"
+
+  defp day_time_interval_field(0), do: "DAY"
+  defp day_time_interval_field(1), do: "HOUR"
+  defp day_time_interval_field(2), do: "MINUTE"
+  defp day_time_interval_field(3), do: "SECOND"
+
+  defp year_month_interval_field(0), do: "YEAR"
+  defp year_month_interval_field(1), do: "MONTH"
 
   # --- Reverse mapping: Explorer dtype → Spark DDL type string ---
 
@@ -236,7 +288,7 @@ defmodule SparkEx.Connect.TypeMapper do
     inner =
       fields
       |> Enum.map_join(", ", fn {name, dtype} ->
-        "#{name}: #{to_spark_ddl_type(dtype)}"
+        "#{SparkEx.Types.quote_identifier(name)}: #{to_spark_ddl_type(dtype)}"
       end)
 
     "STRUCT<#{inner}>"
@@ -265,7 +317,7 @@ defmodule SparkEx.Connect.TypeMapper do
   def explorer_schema_to_ddl(dtypes) when is_list(dtypes) do
     dtypes
     |> Enum.map_join(", ", fn {name, dtype} ->
-      "#{name} #{to_spark_ddl_type(dtype)}"
+      "#{SparkEx.Types.quote_identifier(name)} #{to_spark_ddl_type(dtype)}"
     end)
   end
 end

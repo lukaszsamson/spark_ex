@@ -948,7 +948,12 @@ defmodule SparkEx.Session do
           case maybe_execute_collect_with_json_projection(state, plan, proto_plan, opts) do
             {:ok, result, state} ->
               state = %{state | last_execution_metrics: result.execution_metrics}
-              SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+
+              SparkEx.Observation.store_observed_metrics(
+                result.observed_metrics,
+                state.session_id
+              )
+
               {:reply, {:ok, result.rows}, state}
 
             {:no_fallback, state} ->
@@ -966,7 +971,12 @@ defmodule SparkEx.Session do
                     )
 
                   state = %{state | last_execution_metrics: result.execution_metrics}
-                  SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+
+                  SparkEx.Observation.store_observed_metrics(
+                    result.observed_metrics,
+                    state.session_id
+                  )
+
                   {:reply, {:ok, result.rows}, state}
 
                 {:error, {:arrow_decode_failed, _reason}} = error ->
@@ -978,7 +988,12 @@ defmodule SparkEx.Session do
                         maybe_decode_retry_result_rows(state, plan, proto_plan, result)
 
                       state = %{state | last_execution_metrics: result.execution_metrics}
-                      SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+
+                      SparkEx.Observation.store_observed_metrics(
+                        result.observed_metrics,
+                        state.session_id
+                      )
+
                       {:reply, {:ok, result.rows}, state}
 
                     {:error, state} ->
@@ -990,7 +1005,12 @@ defmodule SparkEx.Session do
                     {:ok, result, state} ->
                       state = maybe_update_server_session(state, result.server_side_session_id)
                       state = %{state | last_execution_metrics: result.execution_metrics}
-                      SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+
+                      SparkEx.Observation.store_observed_metrics(
+                        result.observed_metrics,
+                        state.session_id
+                      )
+
                       {:reply, {:ok, result.rows}, state}
 
                     :error ->
@@ -1043,7 +1063,12 @@ defmodule SparkEx.Session do
             {:ok, result} ->
               state = maybe_update_server_session(state, result.server_side_session_id)
               state = %{state | last_execution_metrics: result.execution_metrics}
-              SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+
+              SparkEx.Observation.store_observed_metrics(
+                result.observed_metrics,
+                state.session_id
+              )
+
               {:reply, {:ok, result.dataframe}, state}
 
             {:error, _} = error ->
@@ -1068,7 +1093,12 @@ defmodule SparkEx.Session do
             {:ok, result} ->
               state = maybe_update_server_session(state, result.server_side_session_id)
               state = %{state | last_execution_metrics: result.execution_metrics}
-              SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+
+              SparkEx.Observation.store_observed_metrics(
+                result.observed_metrics,
+                state.session_id
+              )
+
               {:reply, {:ok, result.arrow}, state}
 
             {:error, _} = error ->
@@ -1091,7 +1121,11 @@ defmodule SparkEx.Session do
             {:ok, result} ->
               state = maybe_update_server_session(state, result.server_side_session_id)
               state = %{state | last_execution_metrics: result.execution_metrics}
-              SparkEx.Observation.store_observed_metrics(result.observed_metrics)
+
+              SparkEx.Observation.store_observed_metrics(
+                result.observed_metrics,
+                state.session_id
+              )
 
               case extract_count(result.rows) do
                 {:ok, count} -> {:reply, {:ok, count}, state}
