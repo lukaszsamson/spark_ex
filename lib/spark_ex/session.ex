@@ -3002,14 +3002,13 @@ defmodule SparkEx.Session do
   end
 
   defp prepare_local_data(data, opts) when is_map(data) and not is_struct(data) do
-    with {:ok, schema_ddl} <- normalize_create_dataframe_schema(opts) do
+    with {:ok, schema_ddl} <- normalize_create_dataframe_schema(opts),
+         {:ok, ordered} <- order_column_map(data) do
       # Column-oriented data: %{"col1" => [1,2,3], "col2" => ["a","b","c"]}
       # Map iteration order is undefined for maps with >32 keys; sort by
       # column name so the encoded relation is deterministic regardless
       # of insertion order. Callers needing user-controlled order should
-      # pass a keyword list of `{name, values}` pairs instead.
-      ordered = data |> Enum.sort_by(fn {key, _} -> to_string(key) end)
-
+      # pass a list of `{name, values}` pairs instead.
       case safe_explorer_new(ordered) do
         {:ok, explorer_df} ->
           effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
@@ -3166,6 +3165,26 @@ defmodule SparkEx.Session do
     {:ok, Explorer.DataFrame.new(data)}
   rescue
     e -> {:error, Exception.message(e)}
+  end
+
+  defp order_column_map(data) do
+    pairs =
+      Enum.map(data, fn
+        {key, value} when is_binary(key) ->
+          {key, value}
+
+        {key, value} when is_atom(key) and not is_nil(key) and not is_boolean(key) ->
+          {Atom.to_string(key), value}
+
+        {key, _value} ->
+          throw({:invalid_column_key, key})
+      end)
+
+    {:ok, Enum.sort_by(pairs, fn {key, _} -> key end)}
+  catch
+    {:invalid_column_key, key} ->
+      {:error,
+       {:invalid_data, "column-oriented data keys must be strings or atoms, got: #{inspect(key)}"}}
   end
 
   defp list_of_maps_to_explorer([]) do

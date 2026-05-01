@@ -75,14 +75,15 @@ defmodule SparkEx.MergeIntoWriter do
   @doc """
   Updates specific columns of matched rows.
 
-  `assignments` is a `%{"target_col" => Column.t()}` map or a keyword
-  list of `{"target_col", Column.t()}` pairs. Map inputs are sorted by
-  column name to give a deterministic encoding order; pass a keyword
-  list when you need to control the assignment order yourself.
+  `assignments` is a `%{"target_col" => Column.t()}` map or an ordered
+  list of `{column_name, Column.t()}` pairs (`column_name` may be a
+  string or atom). Map inputs are sorted by column name to give a
+  deterministic encoding order; pass a list when you need to control
+  the assignment order yourself.
   """
   @spec when_matched_update(
           t(),
-          %{String.t() => Column.t()} | [{String.t(), Column.t()}],
+          %{(String.t() | atom()) => Column.t()} | [{String.t() | atom(), Column.t()}],
           Column.t() | nil
         ) :: t()
   def when_matched_update(%__MODULE__{} = m, assignments, condition \\ nil)
@@ -103,13 +104,13 @@ defmodule SparkEx.MergeIntoWriter do
   @doc """
   Inserts specific columns for non-matched source rows.
 
-  `assignments` is a `%{"target_col" => Column.t()}` map or a keyword
-  list of `{"target_col", Column.t()}` pairs. See `when_matched_update/3`
-  for ordering details.
+  `assignments` is a `%{"target_col" => Column.t()}` map or an ordered
+  list of `{column_name, Column.t()}` pairs. See
+  `when_matched_update/3` for ordering details.
   """
   @spec when_not_matched_insert(
           t(),
-          %{String.t() => Column.t()} | [{String.t(), Column.t()}],
+          %{(String.t() | atom()) => Column.t()} | [{String.t() | atom(), Column.t()}],
           Column.t() | nil
         ) :: t()
   def when_not_matched_insert(%__MODULE__{} = m, assignments, condition \\ nil)
@@ -137,13 +138,13 @@ defmodule SparkEx.MergeIntoWriter do
   @doc """
   Updates specific columns of target rows not matched by source.
 
-  `assignments` is a `%{"target_col" => Column.t()}` map or a keyword
-  list of `{"target_col", Column.t()}` pairs. See `when_matched_update/3`
-  for ordering details.
+  `assignments` is a `%{"target_col" => Column.t()}` map or an ordered
+  list of `{column_name, Column.t()}` pairs. See
+  `when_matched_update/3` for ordering details.
   """
   @spec when_not_matched_by_source_update(
           t(),
-          %{String.t() => Column.t()} | [{String.t(), Column.t()}],
+          %{(String.t() | atom()) => Column.t()} | [{String.t() | atom(), Column.t()}],
           Column.t() | nil
         ) :: t()
   def when_not_matched_by_source_update(%__MODULE__{} = m, assignments, condition \\ nil)
@@ -184,22 +185,40 @@ defmodule SparkEx.MergeIntoWriter do
 
   defp normalize_assignments(assignments) when is_map(assignments) do
     assignments
+    |> Enum.map(&normalize_assignment_key/1)
     |> Enum.sort_by(fn {col_name, _} -> col_name end)
     |> normalize_assignment_pairs()
   end
 
   defp normalize_assignments(assignments) when is_list(assignments) do
-    normalize_assignment_pairs(assignments)
+    assignments
+    |> Enum.map(&normalize_assignment_key/1)
+    |> normalize_assignment_pairs()
+  end
+
+  defp normalize_assignment_key({col_name, value}) when is_binary(col_name) do
+    {col_name, value}
+  end
+
+  defp normalize_assignment_key({col_name, value})
+       when is_atom(col_name) and not is_nil(col_name) and not is_boolean(col_name) do
+    {Atom.to_string(col_name), value}
+  end
+
+  defp normalize_assignment_key({col_name, _value}) do
+    raise ArgumentError,
+          "merge assignment keys must be strings or atoms, got: #{inspect(col_name)}"
+  end
+
+  defp normalize_assignment_key(other) do
+    raise ArgumentError,
+          "merge assignments must be {column_name, SparkEx.Column} pairs, got: #{inspect(other)}"
   end
 
   defp normalize_assignment_pairs(pairs) do
     Enum.map(pairs, fn
-      {col_name, %Column{expr: value_expr}} when is_binary(col_name) ->
+      {col_name, %Column{expr: value_expr}} ->
         {{:col, col_name}, value_expr}
-
-      {col_name, _value} when not is_binary(col_name) ->
-        raise ArgumentError,
-              "merge assignment keys must be strings, got: #{inspect(col_name)}"
 
       {col_name, other} ->
         raise ArgumentError,

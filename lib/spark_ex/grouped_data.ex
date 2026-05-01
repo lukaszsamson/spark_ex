@@ -51,7 +51,12 @@ defmodule SparkEx.GroupedData do
       |> DataFrame.group_by(["department"])
       |> SparkEx.GroupedData.agg([sum(col("salary")), avg(col("age"))])
   """
-  @spec agg(t(), [Column.t()] | [{String.t(), String.t() | atom()}] | map()) :: DataFrame.t()
+  @spec agg(
+          t(),
+          [Column.t()]
+          | [{String.t() | atom(), String.t() | atom()}]
+          | %{(String.t() | atom()) => String.t() | atom()}
+        ) :: DataFrame.t()
   def agg(%__MODULE__{} = gd, agg_columns) when is_list(agg_columns) do
     cond do
       agg_columns == [] ->
