@@ -635,13 +635,27 @@ defmodule SparkEx.Connect.Client do
 
   # --- Config RPCs ---
 
+  @typedoc """
+  A config key/value type that can be coerced to a string before send.
+  Strings, booleans, numbers, and non-nil atoms are accepted; anything
+  else raises `ArgumentError` from `coerce_config_string/1`.
+  """
+  @type config_value :: String.t() | boolean() | integer() | float() | atom()
+
   @doc """
   Sets Spark configuration key-value pairs.
+
+  Keys/values may be strings, booleans, numbers, or non-nil atoms; non-string
+  values are coerced to strings before send. Raises `ArgumentError` for
+  unsupported value types.
   """
-  @spec config_set(SparkEx.Session.t(), [{String.t(), String.t()}]) ::
+  @spec config_set(SparkEx.Session.t(), [{config_value(), config_value()}]) ::
           {:ok, String.t() | nil} | {:error, term()}
   def config_set(session, pairs) do
-    kv_pairs = Enum.map(pairs, fn {k, v} -> %KeyValue{key: coerce_config_string(k), value: coerce_config_string(v)} end)
+    kv_pairs =
+      Enum.map(pairs, fn {k, v} ->
+        %KeyValue{key: coerce_config_string(k), value: coerce_config_string(v)}
+      end)
 
     request =
       build_config_request(session,
@@ -668,7 +682,7 @@ defmodule SparkEx.Connect.Client do
 
   Returns a list of `{key, value}` pairs.
   """
-  @spec config_get(SparkEx.Session.t(), [String.t()]) ::
+  @spec config_get(SparkEx.Session.t(), [config_value()]) ::
           {:ok, [{String.t(), String.t() | nil}], String.t() | nil} | {:error, term()}
   def config_get(session, keys) do
     request =
@@ -698,7 +712,7 @@ defmodule SparkEx.Connect.Client do
   When the config key has no value set, the provided default is returned.
   Returns a list of `{key, value}` pairs.
   """
-  @spec config_get_with_default(SparkEx.Session.t(), [{String.t(), String.t()}]) ::
+  @spec config_get_with_default(SparkEx.Session.t(), [{config_value(), config_value()}]) ::
           {:ok, [{String.t(), String.t() | nil}], String.t() | nil} | {:error, term()}
   def config_get_with_default(session, pairs) do
     kv_pairs =
@@ -733,13 +747,14 @@ defmodule SparkEx.Connect.Client do
   Returns a list of `{key, value}` pairs. When a key is not set, the value
   is nil (unlike `config_get/2` which may raise on the server).
   """
-  @spec config_get_option(SparkEx.Session.t(), [String.t()]) ::
+  @spec config_get_option(SparkEx.Session.t(), [config_value()]) ::
           {:ok, [{String.t(), String.t() | nil}], String.t() | nil} | {:error, term()}
   def config_get_option(session, keys) do
     request =
       build_config_request(session,
         operation: %ConfigRequest.Operation{
-          op_type: {:get_option, %ConfigRequest.GetOption{keys: Enum.map(keys, &coerce_config_string/1)}}
+          op_type:
+            {:get_option, %ConfigRequest.GetOption{keys: Enum.map(keys, &coerce_config_string/1)}}
         }
       )
 
@@ -796,7 +811,7 @@ defmodule SparkEx.Connect.Client do
   @doc """
   Unsets Spark configuration values for the given keys.
   """
-  @spec config_unset(SparkEx.Session.t(), [String.t()]) ::
+  @spec config_unset(SparkEx.Session.t(), [config_value()]) ::
           {:ok, String.t() | nil} | {:error, term()}
   def config_unset(session, keys) do
     request =
@@ -824,13 +839,15 @@ defmodule SparkEx.Connect.Client do
 
   Returns a list of `{key, value}` pairs where value is `"true"` or `"false"`.
   """
-  @spec config_is_modifiable(SparkEx.Session.t(), [String.t()]) ::
+  @spec config_is_modifiable(SparkEx.Session.t(), [config_value()]) ::
           {:ok, [{String.t(), boolean() | nil}], String.t() | nil} | {:error, term()}
   def config_is_modifiable(session, keys) do
     request =
       build_config_request(session,
         operation: %ConfigRequest.Operation{
-          op_type: {:is_modifiable, %ConfigRequest.IsModifiable{keys: Enum.map(keys, &coerce_config_string/1)}}
+          op_type:
+            {:is_modifiable,
+             %ConfigRequest.IsModifiable{keys: Enum.map(keys, &coerce_config_string/1)}}
         }
       )
 
@@ -855,7 +872,7 @@ defmodule SparkEx.Connect.Client do
     Enum.reduce_while(pairs, {:ok, []}, fn %KeyValue{key: k, value: v}, {:ok, acc} ->
       case parse_is_modifiable_value(v) do
         {:ok, parsed} -> {:cont, {:ok, [{k, parsed} | acc]}}
-        {:error, _} = err -> {:halt, err}
+        {:error, reason} -> {:halt, {:error, {:value_not_allowed, k, reason}}}
       end
     end)
     |> case do
@@ -865,13 +882,13 @@ defmodule SparkEx.Connect.Client do
   end
 
   defp parse_is_modifiable_value(nil), do: {:ok, nil}
-  defp parse_is_modifiable_value(""), do: {:ok, nil}
 
   defp parse_is_modifiable_value(value) when is_binary(value) do
-    case String.downcase(value) do
+    case value |> String.trim() |> String.downcase() do
+      "" -> {:ok, nil}
       "true" -> {:ok, true}
       "false" -> {:ok, false}
-      _ -> {:error, {:value_not_allowed, value}}
+      _ -> {:error, value}
     end
   end
 

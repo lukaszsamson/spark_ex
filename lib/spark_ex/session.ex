@@ -394,6 +394,10 @@ defmodule SparkEx.Session do
     end
   end
 
+  defp validate_config_keys!(keys, fun_name) do
+    raise ArgumentError, "#{fun_name} expects a list of string keys, got: #{inspect(keys)}"
+  end
+
   defp coercible_config_key?(key) when is_binary(key), do: true
   defp coercible_config_key?(key) when is_atom(key) and not is_nil(key), do: true
   defp coercible_config_key?(_), do: false
@@ -404,10 +408,6 @@ defmodule SparkEx.Session do
 
   defp coercible_config_value?(value) when is_atom(value) and not is_nil(value), do: true
   defp coercible_config_value?(_), do: false
-
-  defp validate_config_keys!(keys, fun_name) do
-    raise ArgumentError, "#{fun_name} expects a list of string keys, got: #{inspect(keys)}"
-  end
 
   defp validate_config_prefix!(nil), do: :ok
   defp validate_config_prefix!(prefix) when is_binary(prefix), do: :ok
@@ -3568,11 +3568,11 @@ defmodule SparkEx.Session do
   defp merge_inferred_types({:int, _}, :double), do: :double
   defp merge_inferred_types(:double, {:int, _}), do: :double
 
-  defp merge_inferred_types({:int, _}, {:decimal, p, s}),
-    do: {:decimal, p, s}
+  defp merge_inferred_types({:int, bits}, {:decimal, p, s}),
+    do: widen_decimal_for_int(p, s, bits)
 
-  defp merge_inferred_types({:decimal, p, s}, {:int, _}),
-    do: {:decimal, p, s}
+  defp merge_inferred_types({:decimal, p, s}, {:int, bits}),
+    do: widen_decimal_for_int(p, s, bits)
 
   defp merge_inferred_types({:decimal, p1, s1}, {:decimal, p2, s2}) do
     scale = max(s1, s2)
@@ -3586,7 +3586,8 @@ defmodule SparkEx.Session do
     a_map = Map.new(a)
     b_map = Map.new(b)
     a_keys = Enum.map(a, fn {k, _} -> k end)
-    extra_keys = for {k, _} <- b, k not in a_keys, do: k
+    a_key_set = MapSet.new(a_keys)
+    extra_keys = for {k, _} <- b, not MapSet.member?(a_key_set, k), do: k
     ordered_keys = a_keys ++ extra_keys
 
     merged =
@@ -3598,6 +3599,17 @@ defmodule SparkEx.Session do
   end
 
   defp merge_inferred_types(_a, _b), do: :string
+
+  defp widen_decimal_for_int(p, s, bits) do
+    int_digits = max_int_digits(bits)
+    {:decimal, max(p, int_digits + s), s}
+  end
+
+  defp max_int_digits(8), do: 3
+  defp max_int_digits(16), do: 5
+  defp max_int_digits(32), do: 10
+  defp max_int_digits(64), do: 19
+  defp max_int_digits(_), do: 19
 
   defp type_to_inferred_ddl(:null), do: "STRING"
   defp type_to_inferred_ddl(:boolean), do: "BOOLEAN"

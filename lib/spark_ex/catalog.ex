@@ -835,8 +835,51 @@ defmodule SparkEx.Catalog do
 
   defp quote_qualified_name(name) when is_binary(name) do
     name
-    |> String.split(".")
+    |> split_qualified_name()
     |> quote_identifier()
+  end
+
+  # Splits a qualified name on `.` while respecting `` `…` `` quoting.
+  # Inside backticks, `` `` `` is an escaped backtick (literal) and `.`
+  # is part of the segment. Outside backticks, `.` is a separator. If
+  # backticks are unbalanced (odd count), all backticks are treated as
+  # literal characters and the name is split on bare `.` only — this
+  # preserves the natural reading of names that happen to contain a
+  # stray backtick, at the cost of disambiguating quoted segments.
+  defp split_qualified_name(name) when is_binary(name) do
+    if backticks_balanced?(name) do
+      do_split_qualified(name, [], "", false)
+    else
+      String.split(name, ".")
+    end
+  end
+
+  defp backticks_balanced?(name) do
+    name
+    |> :binary.matches("`")
+    |> length()
+    |> rem(2)
+    |> Kernel.==(0)
+  end
+
+  defp do_split_qualified(<<>>, acc, current, _in_backtick) do
+    Enum.reverse([current | acc])
+  end
+
+  defp do_split_qualified(<<"``", rest::binary>>, acc, current, true) do
+    do_split_qualified(rest, acc, current <> "`", true)
+  end
+
+  defp do_split_qualified(<<"`", rest::binary>>, acc, current, in_backtick) do
+    do_split_qualified(rest, acc, current, not in_backtick)
+  end
+
+  defp do_split_qualified(<<".", rest::binary>>, acc, current, false) do
+    do_split_qualified(rest, [current | acc], "", false)
+  end
+
+  defp do_split_qualified(<<ch::utf8, rest::binary>>, acc, current, in_backtick) do
+    do_split_qualified(rest, acc, current <> <<ch::utf8>>, in_backtick)
   end
 
   defp maybe_add(list, _value, false), do: list
