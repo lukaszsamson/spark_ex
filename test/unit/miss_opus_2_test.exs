@@ -290,9 +290,11 @@ defmodule SparkEx.MissOpus2Test do
   # ── 4.2 split() with limit parameter ──
 
   describe "4.2 split() with limit parameter" do
-    test "split/2 splits without limit" do
+    test "split/2 sends default limit of -1 (PySpark parity)" do
       result = Functions.split("col", "\\.")
-      assert %Column{expr: {:fn, "split", [{:col, "col"}, {:lit, "\\."}], false}} = result
+
+      assert %Column{expr: {:fn, "split", [{:col, "col"}, {:lit, "\\."}, {:lit, -1}], false}} =
+               result
     end
 
     test "split/3 splits with limit" do
@@ -857,23 +859,26 @@ defmodule SparkEx.MissOpus2Test do
       assert %Column{expr: {:fn, "mode", [{:col, "x"}], false}} = result
     end
 
-    test "mode/2 with deterministic true" do
+    test "mode/2 forwards deterministic flag" do
       result = Functions.mode(Functions.col("x"), true)
-      assert %Column{expr: {:fn, "mode", [{:col, "x"}], false}} = result
+
+      assert %Column{expr: {:fn, "mode", [{:col, "x"}, {:lit, true}], false}} = result
     end
   end
 
   # ── 14.9 shuffle with seed ──
 
   describe "14.9 shuffle with seed" do
-    test "shuffle/1 uses single-arg form" do
+    test "shuffle/1 generates a seed argument" do
       result = Functions.shuffle(Functions.col("arr"))
-      assert %Column{expr: {:fn, "shuffle", [{:col, "arr"}], false}} = result
+
+      assert %Column{expr: {:fn, "shuffle", [{:col, "arr"}, {:lit, seed}], false}} = result
+      assert is_integer(seed)
     end
 
     test "shuffle/2 with explicit seed" do
       result = Functions.shuffle(Functions.col("arr"), 42)
-      assert %Column{expr: {:fn, "shuffle", [{:col, "arr"}], false}} = result
+      assert %Column{expr: {:fn, "shuffle", [{:col, "arr"}, {:lit, 42}], false}} = result
     end
   end
 
@@ -900,11 +905,10 @@ defmodule SparkEx.MissOpus2Test do
   # ── 14.21 replace optional third arg ──
 
   describe "14.21 replace optional third arg" do
-    test "replace/2 uses empty string as default replacement" do
+    test "replace/2 sends only two args (no replacement default)" do
       result = Functions.replace(Functions.col("s"), Functions.col("search"))
 
-      assert %Column{expr: {:fn, "replace", [{:col, "s"}, {:col, "search"}, {:lit, ""}], false}} =
-               result
+      assert %Column{expr: {:fn, "replace", [{:col, "s"}, {:col, "search"}], false}} = result
     end
 
     test "replace/3 with explicit replacement" do
@@ -1431,12 +1435,12 @@ defmodule SparkEx.MissOpus2Test do
     end
 
     test "extreme negative boundary is clamped to :unbounded", %{spec: spec} do
-      result = SparkEx.WindowSpec.rows_between(spec, -2_147_483_648, 0)
+      result = SparkEx.WindowSpec.rows_between(spec, -9_223_372_036_854_775_808, 0)
       assert %SparkEx.WindowSpec{frame_spec: {:rows, :unbounded, 0}} = result
     end
 
     test "extreme positive boundary is clamped to :unbounded", %{spec: spec} do
-      result = SparkEx.WindowSpec.rows_between(spec, 0, 2_147_483_647)
+      result = SparkEx.WindowSpec.rows_between(spec, 0, 9_223_372_036_854_775_807)
       assert %SparkEx.WindowSpec{frame_spec: {:rows, 0, :unbounded}} = result
     end
 
@@ -1446,7 +1450,13 @@ defmodule SparkEx.MissOpus2Test do
     end
 
     test "range_between also clamps", %{spec: spec} do
-      result = SparkEx.WindowSpec.range_between(spec, -2_147_483_648, 2_147_483_647)
+      result =
+        SparkEx.WindowSpec.range_between(
+          spec,
+          -9_223_372_036_854_775_808,
+          9_223_372_036_854_775_807
+        )
+
       assert %SparkEx.WindowSpec{frame_spec: {:range, :unbounded, :unbounded}} = result
     end
   end

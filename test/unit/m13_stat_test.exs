@@ -178,8 +178,14 @@ defmodule SparkEx.M13.StatTest do
 
   describe "sample_by validation" do
     test "raises on negative fraction" do
-      assert_raise ArgumentError, ~r/non-negative/, fn ->
+      assert_raise ArgumentError, ~r/\[0\.0, 1\.0\]/, fn ->
         Stat.sample_by(make_df(), "label", %{0 => -0.1})
+      end
+    end
+
+    test "raises on fraction greater than one" do
+      assert_raise ArgumentError, ~r/\[0\.0, 1\.0\]/, fn ->
+        Stat.sample_by(make_df(), "label", %{0 => 1.5})
       end
     end
   end

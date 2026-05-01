@@ -298,9 +298,9 @@ defmodule SparkEx.DataFrame.Stat do
               "fraction keys must be numbers, strings, or booleans, got: #{inspect(key)}"
       end
 
-      unless is_number(v) and v >= 0.0 do
+      unless is_number(v) and v >= 0.0 and v <= 1.0 do
         raise ArgumentError,
-              "each fraction must be a non-negative number, got: #{inspect(v)}"
+              "each fraction must be in the range [0.0, 1.0], got: #{inspect(v)}"
       end
     end)
   end

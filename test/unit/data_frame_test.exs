@@ -573,14 +573,14 @@ defmodule SparkEx.DataFrameTest do
   end
 
   describe "to_local_iterator/2" do
-    test "returns lazy rows enumerable from collected execution" do
+    test "returns lazy rows enumerable backed by ExecutePlan stream" do
       {:ok, session} = ArrowSession.start_link(self())
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
       assert {:ok, rows} = DataFrame.to_local_iterator(df)
       assert Enum.to_list(rows) == [%{"id" => 1}]
-      assert_receive :execute_collect_called
-      refute_receive :execute_plan_stream_called
+      assert_receive :execute_plan_stream_called
+      refute_receive :execute_collect_called
     end
   end
 

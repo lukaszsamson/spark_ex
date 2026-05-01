@@ -9,7 +9,7 @@ defmodule SparkEx.DataFrame.NA do
   `SparkEx.DataFrame.replace/3`, or directly.
   """
 
-  alias SparkEx.{Column, DataFrame}
+  alias SparkEx.DataFrame
 
   @doc """
   Fills null values with the given replacement.
@@ -175,7 +175,7 @@ defmodule SparkEx.DataFrame.NA do
     cols = normalize_subset(Keyword.get(effective_opts, :subset, nil))
     replacements = Enum.map(to_replace, fn {old, new} -> {old, new} end)
     validate_replace_types!(replacements)
-    build_replace_df(df, cols, replacements)
+    build_replace_df(df, cols, promote_numeric_replacements(replacements))
   end
 
   def replace(%DataFrame{} = df, to_replace, value_or_opts, opts) when is_list(to_replace) do
@@ -197,14 +197,14 @@ defmodule SparkEx.DataFrame.NA do
 
     replacements = Enum.zip(to_replace, values)
     validate_replace_types!(replacements)
-    build_replace_df(df, cols, replacements)
+    build_replace_df(df, cols, promote_numeric_replacements(replacements))
   end
 
   def replace(%DataFrame{} = df, to_replace, value_or_opts, opts) do
     {value, effective_opts} = extract_replace_value_and_opts(value_or_opts, opts)
     cols = normalize_subset(Keyword.get(effective_opts, :subset, nil))
     validate_replace_types!([{to_replace, value}])
-    build_replace_df(df, cols, [{to_replace, value}])
+    build_replace_df(df, cols, promote_numeric_replacements([{to_replace, value}]))
   end
 
   defp normalize_subset(nil), do: []
@@ -226,28 +226,27 @@ defmodule SparkEx.DataFrame.NA do
     end
   end
 
-  defp build_replace_df(%DataFrame{} = df, [], replacements) do
-    %DataFrame{df | plan: {:na_replace, df.plan, [], replacements}}
-  end
-
   defp build_replace_df(%DataFrame{} = df, cols, replacements) do
-    Enum.reduce(cols, df, fn col_name, acc_df ->
-      DataFrame.with_column(acc_df, col_name, subset_replace_expr(col_name, replacements))
-    end)
+    %DataFrame{df | plan: {:na_replace, df.plan, cols, replacements}}
   end
 
-  defp subset_replace_expr(col_name, replacements) do
-    base_expr = {:col, col_name}
-
-    args =
-      replacements
-      |> Enum.flat_map(fn {old, new} ->
-        [{:fn, "<=>", [base_expr, {:lit, old}], false}, {:lit, new}]
+  defp promote_numeric_replacements(replacements) do
+    all_values =
+      Enum.flat_map(replacements, fn {old, new} ->
+        [old, new]
       end)
-      |> Kernel.++([base_expr])
 
-    %Column{expr: {:fn, "when", args, false}}
+    cond do
+      Enum.all?(all_values, &is_number/1) and Enum.any?(all_values, &is_float/1) ->
+        Enum.map(replacements, fn {old, new} -> {to_float(old), to_float(new)} end)
+
+      true ->
+        replacements
+    end
   end
+
+  defp to_float(v) when is_integer(v), do: v * 1.0
+  defp to_float(v), do: v
 
   defp validate_fill_values!(values) do
     Enum.each(values, fn v ->

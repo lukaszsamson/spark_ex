@@ -334,12 +334,12 @@ defmodule SparkEx.Connect.Client do
   """
   @spec analyze_persist(SparkEx.Session.t(), Spark.Connect.Relation.t(), keyword()) ::
           {:ok, String.t() | nil} | {:error, term()}
-  # PySpark default: StorageLevel(True, True, True, False, 1) = MEMORY_AND_DISK_DESER
+  # PySpark default: StorageLevel(True, True, False, True, 1) = MEMORY_AND_DISK_DESER
   @default_storage_level %Spark.Connect.StorageLevel{
     use_disk: true,
     use_memory: true,
-    use_off_heap: true,
-    deserialized: false,
+    use_off_heap: false,
+    deserialized: true,
     replication: 1
   }
 

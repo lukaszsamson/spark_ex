@@ -82,16 +82,16 @@ defmodule SparkEx.WindowSpec do
     %__MODULE__{spec | frame_spec: {:range, clamp_boundary(start), clamp_boundary(end_)}}
   end
 
-  # PySpark clamps extreme boundary values to unbounded.
-  # _PRECEDING_THRESHOLD = -(1 << 31) + 1, _FOLLOWING_THRESHOLD = (1 << 31) - 1
+  # PySpark clamps extreme boundary values to unbounded using JVM Long sentinels.
+  # JVM_LONG_MIN = -(1 << 63), JVM_LONG_MAX = (1 << 63) - 1
   import Bitwise, only: [bsl: 2]
-  @preceding_threshold -bsl(1, 31) + 1
-  @following_threshold bsl(1, 31) - 1
+  @jvm_long_min -bsl(1, 63)
+  @jvm_long_max bsl(1, 63) - 1
 
-  defp clamp_boundary(value) when is_integer(value) and value <= @preceding_threshold,
+  defp clamp_boundary(value) when is_integer(value) and value <= @jvm_long_min,
     do: :unbounded
 
-  defp clamp_boundary(value) when is_integer(value) and value >= @following_threshold,
+  defp clamp_boundary(value) when is_integer(value) and value >= @jvm_long_max,
     do: :unbounded
 
   defp clamp_boundary(value), do: value
