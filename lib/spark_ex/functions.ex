@@ -415,8 +415,7 @@ defmodule SparkEx.Functions do
   @spec replace(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
   def replace(src, search) do
     %Column{
-      expr:
-        {:fn, "replace", [to_expr(src), to_lit_string_or_expr(search)], false}
+      expr: {:fn, "replace", [to_expr(src), to_lit_string_or_expr(search)], false}
     }
   end
 

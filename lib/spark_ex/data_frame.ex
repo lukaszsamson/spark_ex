@@ -1986,11 +1986,25 @@ defmodule SparkEx.DataFrame do
   def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
     case SparkEx.Session.execute_plan_stream(df.session, df.plan, merge_tags(df, opts)) do
       {:ok, stream} ->
-        {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream)}
+        {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream, fetch_session_state(df.session))}
 
       {:error, _} = error ->
         error
     end
+  end
+
+  # Returns the underlying %Session{} struct when the GenServer responds with
+  # one; otherwise nil. The session is passed to ResultDecoder.rows_stream/2
+  # so streaming gRPC errors flow through Errors.from_grpc_error/2 the same
+  # way collected results do. Test doubles that don't expose a real session
+  # struct simply skip the enrichment.
+  defp fetch_session_state(session) do
+    case SparkEx.Session.get_state(session) do
+      %SparkEx.Session{} = state -> state
+      _ -> nil
+    end
+  catch
+    :exit, _ -> nil
   end
 
   @doc """
@@ -2551,26 +2565,66 @@ defmodule SparkEx.DataFrame do
       :none ->
         {:ok, %Spark.Connect.StorageLevel{}}
 
+      # Values mirror pyspark/storagelevel.py StorageLevel(disk, memory,
+      # off_heap, deserialized, replication). Every flag is set explicitly
+      # so the preset semantics don't drift if proto defaults change.
       :disk_only ->
-        {:ok, %Spark.Connect.StorageLevel{use_disk: true, replication: 1}}
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: false,
+           use_off_heap: false,
+           deserialized: false,
+           replication: 1
+         }}
 
       :disk_only_2 ->
-        {:ok, %Spark.Connect.StorageLevel{use_disk: true, replication: 2}}
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: false,
+           use_off_heap: false,
+           deserialized: false,
+           replication: 2
+         }}
 
       :disk_only_3 ->
-        {:ok, %Spark.Connect.StorageLevel{use_disk: true, replication: 3}}
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: false,
+           use_off_heap: false,
+           deserialized: false,
+           replication: 3
+         }}
 
       :memory_only ->
-        {:ok, %Spark.Connect.StorageLevel{use_memory: true, replication: 1}}
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: false,
+           use_memory: true,
+           use_off_heap: false,
+           deserialized: false,
+           replication: 1
+         }}
 
       :memory_only_2 ->
-        {:ok, %Spark.Connect.StorageLevel{use_memory: true, replication: 2}}
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: false,
+           use_memory: true,
+           use_off_heap: false,
+           deserialized: false,
+           replication: 2
+         }}
 
       :memory_and_disk ->
         {:ok,
          %Spark.Connect.StorageLevel{
            use_disk: true,
            use_memory: true,
+           use_off_heap: false,
+           deserialized: false,
            replication: 1
          }}
 
@@ -2579,6 +2633,8 @@ defmodule SparkEx.DataFrame do
          %Spark.Connect.StorageLevel{
            use_disk: true,
            use_memory: true,
+           use_off_heap: false,
+           deserialized: false,
            replication: 2
          }}
 
@@ -2588,6 +2644,7 @@ defmodule SparkEx.DataFrame do
            use_disk: true,
            use_memory: true,
            use_off_heap: true,
+           deserialized: false,
            replication: 1
          }}
 
@@ -2596,6 +2653,7 @@ defmodule SparkEx.DataFrame do
          %Spark.Connect.StorageLevel{
            use_disk: true,
            use_memory: true,
+           use_off_heap: false,
            deserialized: true,
            replication: 1
          }}

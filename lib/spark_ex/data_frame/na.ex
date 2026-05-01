@@ -231,13 +231,16 @@ defmodule SparkEx.DataFrame.NA do
   end
 
   defp promote_numeric_replacements(replacements) do
-    all_values =
-      Enum.flat_map(replacements, fn {old, new} ->
-        [old, new]
-      end)
+    # PySpark only inspects non-nil values for the numeric-promotion check;
+    # nil is a valid replacement target/value and must not block promotion.
+    non_nil_values =
+      replacements
+      |> Enum.flat_map(fn {old, new} -> [old, new] end)
+      |> Enum.reject(&is_nil/1)
 
     cond do
-      Enum.all?(all_values, &is_number/1) and Enum.any?(all_values, &is_float/1) ->
+      non_nil_values != [] and Enum.all?(non_nil_values, &is_number/1) and
+          Enum.any?(non_nil_values, &is_float/1) ->
         Enum.map(replacements, fn {old, new} -> {to_float(old), to_float(new)} end)
 
       true ->
