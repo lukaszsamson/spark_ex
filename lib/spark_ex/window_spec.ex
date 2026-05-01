@@ -103,8 +103,9 @@ defmodule SparkEx.WindowSpec do
   @jvm_long_min -bsl(1, 63)
   @jvm_long_max bsl(1, 63) - 1
 
-  defp clamp_boundary(value, _position) when value in [:unbounded_preceding, :unbounded_following],
-    do: value
+  defp clamp_boundary(value, _position)
+       when value in [:unbounded_preceding, :unbounded_following],
+       do: value
 
   defp clamp_boundary(:unbounded, :lower), do: :unbounded_preceding
   defp clamp_boundary(:unbounded, :upper), do: :unbounded_following

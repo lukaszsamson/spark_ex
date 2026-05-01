@@ -43,8 +43,8 @@ defmodule SparkEx.BugsPlan2.StreamBTest do
 
     test "encoder maps Int.MinValue/MaxValue as integer literals, not unbounded" do
       win =
-        {:window, {:fn, "sum", [{:col, "x"}], false}, [],
-         [{:sort_order, {:col, "x"}, :asc, nil}], {:rows, -2_147_483_648, 2_147_483_647}}
+        {:window, {:fn, "sum", [{:col, "x"}], false}, [], [{:sort_order, {:col, "x"}, :asc, nil}],
+         {:rows, -2_147_483_648, 2_147_483_647}}
 
       expr = PlanEncoder.encode_expression(win)
       assert %Expression{expr_type: {:window, window}} = expr
@@ -58,8 +58,7 @@ defmodule SparkEx.BugsPlan2.StreamBTest do
 
     test "encoder maps :unbounded_preceding and :unbounded_following to unbounded boundary" do
       win =
-        {:window, {:fn, "sum", [{:col, "x"}], false}, [],
-         [{:sort_order, {:col, "x"}, :asc, nil}],
+        {:window, {:fn, "sum", [{:col, "x"}], false}, [], [{:sort_order, {:col, "x"}, :asc, nil}],
          {:rows, :unbounded_preceding, :unbounded_following}}
 
       expr = PlanEncoder.encode_expression(win)
@@ -70,8 +69,7 @@ defmodule SparkEx.BugsPlan2.StreamBTest do
 
     test "encoder still maps Long.MIN/MAX literals to unbounded as a backstop" do
       win =
-        {:window, {:fn, "sum", [{:col, "x"}], false}, [],
-         [{:sort_order, {:col, "x"}, :asc, nil}],
+        {:window, {:fn, "sum", [{:col, "x"}], false}, [], [{:sort_order, {:col, "x"}, :asc, nil}],
          {:range, -9_223_372_036_854_775_808, 9_223_372_036_854_775_807}}
 
       expr = PlanEncoder.encode_expression(win)
@@ -86,9 +84,7 @@ defmodule SparkEx.BugsPlan2.StreamBTest do
   describe "B2 — struct literal accepts named fields" do
     test "encodes {:struct, [{name, value}, ...]} with declared names" do
       lit =
-        PlanEncoder.encode_expression(
-          {:lit, {:struct, [{"name", "Alice"}, {"age", 30}]}}
-        )
+        PlanEncoder.encode_expression({:lit, {:struct, [{"name", "Alice"}, {"age", 30}]}})
 
       assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:struct, s}}}} =
                lit
