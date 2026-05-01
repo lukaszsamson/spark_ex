@@ -86,7 +86,7 @@ defmodule SparkEx.StreamReader do
     }
   end
 
-  @spec load(t(), String.t() | [String.t()]) :: DataFrame.t()
+  @spec load(t(), String.t()) :: DataFrame.t()
   def load(%__MODULE__{} = reader, path) when is_binary(path) do
     validate_path!(path)
 
@@ -96,17 +96,14 @@ defmodule SparkEx.StreamReader do
     }
   end
 
-  def load(%__MODULE__{} = reader, paths) when is_list(paths) do
-    if paths == [] do
-      raise ArgumentError, "stream load paths must not be empty"
-    end
+  def load(%__MODULE__{}, paths) when is_list(paths) do
+    raise ArgumentError,
+          "stream load only accepts a single path; got a list: #{inspect(paths)}. " <>
+            "Streaming sources read from one location at a time — call load/2 once per path."
+  end
 
-    Enum.each(paths, &validate_path!/1)
-
-    %DataFrame{
-      session: reader.session,
-      plan: {:read_data_source_streaming, reader.format, paths, reader.schema, reader.options}
-    }
+  def load(%__MODULE__{}, other) do
+    raise ArgumentError, "stream load path must be a string, got: #{inspect(other)}"
   end
 
   @spec table(t(), String.t()) :: DataFrame.t()
@@ -190,12 +187,12 @@ defmodule SparkEx.StreamReader do
   end
 
   defp normalize_stream_paths!(paths) when is_list(paths) do
-    Enum.each(paths, &validate_path!/1)
-    paths
+    raise ArgumentError,
+          "streaming sources accept a single path; got a list: #{inspect(paths)}"
   end
 
   defp normalize_stream_paths!(_path) do
-    raise ArgumentError, "path must be a non-empty string or list of non-empty strings"
+    raise ArgumentError, "path must be a non-empty string"
   end
 
   defp merge_source_options(opts, reserved_keys) do

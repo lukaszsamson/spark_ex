@@ -216,6 +216,12 @@ defmodule SparkEx.StreamWriter do
       writer |> StreamWriter.foreach_writer(foreach_fn)
   """
   @spec foreach_writer(t(), SparkEx.Types.foreach_function()) :: t()
+  def foreach_writer(%__MODULE__{foreach_batch: batch}, %Spark.Connect.StreamingForeachFunction{})
+      when batch != nil do
+    raise ArgumentError,
+          "cannot set foreach_writer on a writer that already has foreach_batch set"
+  end
+
   def foreach_writer(%__MODULE__{} = writer, %Spark.Connect.StreamingForeachFunction{} = func) do
     %{writer | foreach_writer: func}
   end
@@ -236,6 +242,12 @@ defmodule SparkEx.StreamWriter do
       writer |> StreamWriter.foreach_batch(foreach_fn)
   """
   @spec foreach_batch(t(), SparkEx.Types.foreach_function()) :: t()
+  def foreach_batch(%__MODULE__{foreach_writer: writer_fn}, %Spark.Connect.StreamingForeachFunction{})
+      when writer_fn != nil do
+    raise ArgumentError,
+          "cannot set foreach_batch on a writer that already has foreach_writer set"
+  end
+
   def foreach_batch(%__MODULE__{} = writer, %Spark.Connect.StreamingForeachFunction{} = func) do
     %{writer | foreach_batch: func}
   end

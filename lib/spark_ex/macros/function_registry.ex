@@ -252,7 +252,10 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :datetime, doc: "Returns current date.", aliases: [:curdate]},
       {:current_timestamp, "current_timestamp", :zero,
        group: :datetime, doc: "Returns current timestamp.", aliases: [:now]},
-      {:current_time, "current_time", :zero, group: :datetime, doc: "Returns current time."},
+      {:current_time, "current_time", :zero_or_lit_1,
+       group: :datetime,
+       doc:
+         "Returns current time. With one argument, accepts a TIME precision literal (0..6) — emits `current_time(lit(precision))`."},
       {:current_timezone, "current_timezone", :zero,
        group: :datetime, doc: "Returns current timezone string."},
       {:localtimestamp_, "localtimestamp", :zero,

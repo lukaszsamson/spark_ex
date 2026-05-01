@@ -67,6 +67,9 @@ defmodule SparkEx.StreamingQueryManager do
     * `:timeout` — timeout in seconds (default: no timeout). Must be a
       positive number when set; `nil` means wait forever. Mirrors
       PySpark's `awaitAnyTermination(timeout=None)` semantics.
+
+  Returns `{:ok, nil}` for the no-timeout form. Returns `{:ok,
+  terminated?}` for the timeout form.
   """
   @spec await_any_termination(GenServer.server(), keyword()) ::
           {:ok, boolean() | nil} | {:error, term()}
@@ -77,8 +80,11 @@ defmodule SparkEx.StreamingQueryManager do
     case execute_command(session, {:await_any_termination, timeout_ms}, opts) do
       {:ok, {:streaming_query_manager, result}} ->
         case result.result_type do
-          {:await_any_termination, at} -> {:ok, at.terminated}
-          other -> {:error, {:unexpected_result, other}}
+          {:await_any_termination, at} ->
+            if timeout_ms == nil, do: {:ok, nil}, else: {:ok, at.terminated}
+
+          other ->
+            {:error, {:unexpected_result, other}}
         end
 
       {:error, _} = error ->

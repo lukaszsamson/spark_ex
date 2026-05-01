@@ -2,24 +2,52 @@ defmodule SparkEx.Artifacts do
   @moduledoc """
   Convenience helpers for uploading local artifacts to a Spark Connect session.
 
-  These helpers read local files and upload them via `AddArtifacts`,
-  prefixing names with the appropriate category.
+  These helpers prefix artifact names with the appropriate category and
+  upload via `AddArtifacts`. File contents are streamed from disk in
+  chunks (peak memory ~ chunk size, not file size), so large jars and
+  archives can be sent without loading them whole.
+
+  ## Hash-fragment aliases
+
+  Path strings of the form `"/local/path/foo.jar#alias"` are accepted
+  for `add_files`, `add_jars`, `add_archives`, and `add_pyfiles`. The
+  fragment after `#` is used as the artifact basename instead of the
+  filesystem name. This mirrors Spark's `addFile(path, recursive,
+  alias)` / `addJar(path)#alias` semantics.
   """
 
-  @type artifact_entry :: {String.t(), binary()}
+  @type artifact_data :: binary() | {:file, Path.t(), non_neg_integer()}
+  @type artifact_entry :: {String.t(), artifact_data()}
+
+  @archive_extensions ~w(.zip .jar .tar.gz .tgz .tar)
+  @jar_extensions ~w(.jar)
+  @pyfile_extensions ~w(.py .zip .egg .jar)
 
   @doc """
-  Prepares artifact entries by reading local paths and prefixing names.
+  Prepares artifact entries by validating local paths and prefixing names.
+
+  Returns lazy `{name, {:file, path, size}}` entries — the file is
+  read in chunks at upload time, not here.
   """
   @spec prepare(String.t() | [String.t()], String.t()) ::
           {:ok, [artifact_entry()]} | {:error, term()}
   def prepare(paths, prefix) when is_binary(prefix) do
-    normalized_prefix = normalize_prefix(prefix)
+    prepare(paths, prefix, [])
+  end
 
-    with {:ok, entries} <- read_paths(normalize_paths(paths)) do
+  @doc false
+  @spec prepare(String.t() | [String.t()], String.t(), keyword()) ::
+          {:ok, [artifact_entry()]} | {:error, term()}
+  def prepare(paths, prefix, opts) when is_binary(prefix) and is_list(opts) do
+    normalized_prefix = normalize_prefix(prefix)
+    allowed_extensions = Keyword.get(opts, :extensions, nil)
+    paths = normalize_paths(paths)
+
+    with :ok <- validate_extensions(paths, allowed_extensions),
+         {:ok, entries} <- stat_paths(paths) do
       artifacts =
-        Enum.map(entries, fn {path, data} ->
-          {normalized_prefix <> Path.basename(path), data}
+        Enum.map(entries, fn {real_path, alias_name, size} ->
+          {normalized_prefix <> alias_name, {:file, real_path, size}}
         end)
 
       names = Enum.map(artifacts, &elem(&1, 0))
@@ -36,11 +64,14 @@ defmodule SparkEx.Artifacts do
 
   @doc """
   Uploads JAR files from local paths.
+
+  Each path must end in `.jar`. Hash-fragment aliases are honored:
+  `"foo.jar#bar.jar"` is uploaded as `bar.jar`.
   """
   @spec add_jars(GenServer.server(), String.t() | [String.t()]) ::
           {:ok, [{String.t(), boolean()}]} | {:error, term()}
   def add_jars(session, paths) do
-    add_with_prefix(session, paths, "jars/")
+    add_with_prefix(session, paths, "jars/", extensions: @jar_extensions)
   end
 
   @doc """
@@ -54,11 +85,14 @@ defmodule SparkEx.Artifacts do
 
   @doc """
   Uploads archive artifacts from local paths.
+
+  Each path must end in one of `.zip`, `.jar`, `.tar.gz`, `.tgz`, or
+  `.tar`.
   """
   @spec add_archives(GenServer.server(), String.t() | [String.t()]) ::
           {:ok, [{String.t(), boolean()}]} | {:error, term()}
   def add_archives(session, paths) do
-    add_with_prefix(session, paths, "archives/")
+    add_with_prefix(session, paths, "archives/", extensions: @archive_extensions)
   end
 
   @doc """
@@ -72,14 +106,14 @@ defmodule SparkEx.Artifacts do
   def add_pyfiles(session, paths) do
     paths = normalize_paths(paths)
 
-    case validate_pyfile_extensions(paths) do
+    case validate_extensions(paths, @pyfile_extensions) do
       :ok -> add_with_prefix(session, paths, "pyfiles/")
       {:error, _} = error -> error
     end
   end
 
-  defp add_with_prefix(session, paths, prefix) do
-    with {:ok, artifacts} <- prepare(paths, prefix) do
+  defp add_with_prefix(session, paths, prefix, opts \\ []) do
+    with {:ok, artifacts} <- prepare(paths, prefix, opts) do
       SparkEx.Session.add_artifacts(session, artifacts)
     end
   end
@@ -98,18 +132,25 @@ defmodule SparkEx.Artifacts do
     raise ArgumentError, "expected paths to be a string or list of strings"
   end
 
-  @pyfile_extensions ~w(.py .zip .egg .jar)
+  defp validate_extensions(_paths, nil), do: :ok
 
-  defp validate_pyfile_extensions(paths) do
+  defp validate_extensions(paths, allowed) when is_list(allowed) do
     bad =
-      Enum.reject(paths, fn path ->
-        path |> Path.extname() |> String.downcase() |> Kernel.in(@pyfile_extensions)
+      Enum.reject(paths, fn raw ->
+        {real, alias_name} = split_fragment(raw)
+        path_for_check = if alias_name == nil, do: real, else: alias_name
+        ext_match?(path_for_check, allowed)
       end)
 
     case bad do
       [] -> :ok
-      [_ | _] -> {:error, {:invalid_pyfile_extension, bad, @pyfile_extensions}}
+      [_ | _] -> {:error, {:invalid_artifact_extension, bad, allowed}}
     end
+  end
+
+  defp ext_match?(path, allowed) do
+    lower = String.downcase(path)
+    Enum.any?(allowed, &String.ends_with?(lower, &1))
   end
 
   defp normalize_prefix(prefix) do
@@ -118,11 +159,36 @@ defmodule SparkEx.Artifacts do
     |> Kernel.<>("/")
   end
 
-  defp read_paths(paths) do
-    Enum.reduce_while(paths, {:ok, []}, fn path, {:ok, acc} ->
-      case File.read(path) do
-        {:ok, data} -> {:cont, {:ok, [{path, data} | acc]}}
-        {:error, reason} -> {:halt, {:error, {:file_read_error, path, reason}}}
+  # Splits a `path#alias` string into {real_path, alias_or_nil}. The
+  # fragment is the *last* `#`-separated component when present. Paths
+  # without `#` return `{path, nil}`.
+  defp split_fragment(raw) when is_binary(raw) do
+    case String.split(raw, "#", parts: 2) do
+      [path] -> {path, nil}
+      [path, ""] -> {path, nil}
+      [path, alias_name] -> {path, alias_name}
+    end
+  end
+
+  defp stat_paths(paths) do
+    Enum.reduce_while(paths, {:ok, []}, fn raw, {:ok, acc} ->
+      {real_path, fragment} = split_fragment(raw)
+
+      case File.stat(real_path) do
+        {:ok, %File.Stat{type: :regular, size: size}} ->
+          alias_name =
+            case fragment do
+              nil -> Path.basename(real_path)
+              other -> other
+            end
+
+          {:cont, {:ok, [{real_path, alias_name, size} | acc]}}
+
+        {:ok, %File.Stat{type: type}} ->
+          {:halt, {:error, {:not_a_regular_file, real_path, type}}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:file_read_error, real_path, reason}}}
       end
     end)
     |> case do
