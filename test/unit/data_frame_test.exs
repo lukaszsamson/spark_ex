@@ -170,6 +170,11 @@ defmodule SparkEx.DataFrameTest do
     def handle_call({:analyze_is_streaming, _plan}, _from, is_streaming) do
       {:reply, {:ok, is_streaming}, is_streaming}
     end
+
+    @impl true
+    def handle_call(:get_state, _from, is_streaming) do
+      {:reply, :mock_session, is_streaming}
+    end
   end
 
   describe "columns/1" do
@@ -578,7 +583,7 @@ defmodule SparkEx.DataFrameTest do
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
       assert {:ok, rows} = DataFrame.to_local_iterator(df)
-      assert Enum.to_list(rows) == [%{"id" => 1}]
+      assert Enum.to_list(rows) == [{:ok, %{"id" => 1}}]
       assert_receive :execute_plan_stream_called
       refute_receive :execute_collect_called
     end

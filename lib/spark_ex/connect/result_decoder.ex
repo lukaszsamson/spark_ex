@@ -146,55 +146,95 @@ defmodule SparkEx.Connect.ResultDecoder do
   @doc """
   Returns a lazy row stream decoded from ExecutePlan responses.
 
-  Rows are emitted batch-by-batch as Arrow batches arrive.
+  Rows are emitted batch-by-batch as Arrow batches arrive. Each emitted
+  element is `{:ok, row}` for a successfully decoded row, or
+  `{:error, reason}` when the underlying gRPC stream fails, integrity
+  validation rejects a response, or batch decoding fails. After an
+  `{:error, _}` element is emitted the stream halts; no further elements
+  follow.
+
+  When `session` is non-nil, the same session-id / server-session-id
+  invariants enforced by `decode_stream/2` are applied here so that a
+  drifting `to_local_iterator` consumer sees an integrity error rather
+  than silently merging foreign-session rows.
   """
   @spec rows_stream(Enumerable.t(), SparkEx.Session.t() | nil) :: Enumerable.t()
   def rows_stream(stream, session \\ nil) do
     Stream.transform(
       stream,
-      fn -> %{current_chunked_batch: nil, num_records: 0} end,
+      fn ->
+        %{
+          current_chunked_batch: nil,
+          num_records: 0,
+          server_side_session_id: nil,
+          errored: false
+        }
+      end,
       fn
+        _event, %{errored: true} = state ->
+          {:halt, state}
+
         {:ok, %ExecutePlanResponse{} = resp}, state ->
-          case resp.response_type do
-            {:arrow_batch, %ExecutePlanResponse.ArrowBatch{} = batch} ->
-              case handle_arrow_batch_rows_stream(state, batch) do
-                {:ok, rows, next_state} ->
-                  {rows, next_state}
-
-                {:error, reason} ->
-                  raise RuntimeError, "failed to decode local iterator stream: #{inspect(reason)}"
-              end
-
-            {:result_complete, _} ->
-              if state.current_chunked_batch do
-                raise RuntimeError,
-                      "failed to decode local iterator stream: #{inspect(incomplete_arrow_batch_error(state.current_chunked_batch))}"
-              end
-
-              {:halt, state}
-
-            _ ->
-              {[], state}
+          case check_response_integrity(resp, session, state) do
+            {:ok, state} -> handle_rows_stream_response(resp, state)
+            {:error, reason} -> emit_rows_stream_error(reason, state)
           end
 
-        {:error, %GRPC.RPCError{} = error}, _state ->
+        {:error, %GRPC.RPCError{} = error}, state ->
           err = if session, do: Errors.from_grpc_error(error, session), else: error
-          raise err
+          emit_rows_stream_error(err, state)
 
-        {:error, reason}, _state ->
-          raise RuntimeError, "local iterator stream error: #{inspect(reason)}"
+        {:error, reason}, state ->
+          emit_rows_stream_error(reason, state)
       end,
       fn state ->
-        case state.current_chunked_batch do
-          nil ->
+        case state do
+          %{errored: true} ->
             :ok
 
-          current ->
-            raise RuntimeError,
-                  "failed to decode local iterator stream: #{inspect(incomplete_arrow_batch_error(current))}"
+          %{current_chunked_batch: nil} ->
+            :ok
+
+          _current ->
+            # Source enumerable terminated mid-chunked batch without a
+            # `result_complete` marker. The truncation has already been
+            # surfaced upstream (or the consumer halted early); we no
+            # longer raise from the after-fun so that the stream remains
+            # safe to enumerate.
+            :ok
         end
       end
     )
+  end
+
+  defp handle_rows_stream_response(%ExecutePlanResponse{} = resp, state) do
+    case resp.response_type do
+      {:arrow_batch, %ExecutePlanResponse.ArrowBatch{} = batch} ->
+        case handle_arrow_batch_rows_stream(state, batch) do
+          {:ok, rows, next_state} ->
+            {Enum.map(rows, &{:ok, &1}), next_state}
+
+          {:error, reason} ->
+            emit_rows_stream_error(reason, state)
+        end
+
+      {:result_complete, _} ->
+        if state.current_chunked_batch do
+          emit_rows_stream_error(
+            incomplete_arrow_batch_error(state.current_chunked_batch),
+            state
+          )
+        else
+          {:halt, state}
+        end
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp emit_rows_stream_error(reason, state) do
+    {[{:error, reason}], %{state | errored: true}}
   end
 
   @doc """
@@ -444,7 +484,11 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp dispatch_response_type({:result_complete, _}, state, _session), do: {:cont, state}
-  defp dispatch_response_type({:sql_command_result, _}, state, _session), do: {:cont, state}
+
+  defp dispatch_response_type({:sql_command_result, result}, state, _session) do
+    relation = Map.get(result || %{}, :relation)
+    {:cont, push_command_result(state, {:sql_command, relation})}
+  end
 
   defp dispatch_response_type({:write_stream_operation_start_result, result}, state, _),
     do: {:cont, push_command_result(state, {:write_stream_start, result})}
@@ -771,7 +815,7 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   defp do_validate(_response_server_id, nil, _resp, _state), do: :ok
 
-  defp do_validate(response_server_id, %{} = session, resp, state) do
+  defp do_validate(response_server_id, %SparkEx.Session{} = session, resp, state) do
     with :ok <- SessionIntegrity.validate_session_id(resp, session) do
       baseline = session.server_side_session_id || state.server_side_session_id
 
@@ -781,6 +825,11 @@ defmodule SparkEx.Connect.ResultDecoder do
       end
     end
   end
+
+  # Catch-all for callers that pass an unrelated value (e.g. test fakes that
+  # mock `:get_state` to return an atom). Treat it as "no session" so the
+  # integrity invariants are simply skipped rather than crashing the stream.
+  defp do_validate(_response_server_id, _other, _resp, _state), do: :ok
 
   defp nonempty_id(nil), do: nil
   defp nonempty_id(""), do: nil
@@ -1103,12 +1152,8 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   defp build_empty_dataframe_from_schema(%Spark.Connect.DataType{kind: {:struct, struct}}) do
     {:ok, dtypes} = TypeMapper.schema_to_dtypes(struct)
-
-    columns =
-      dtypes
-      |> Enum.map(fn {name, _dtype} -> {name, []} end)
-      |> Map.new()
-
+    # Ordered list (not map) so column order survives wide schemas.
+    columns = Enum.map(dtypes, fn {name, _dtype} -> {name, []} end)
     Explorer.DataFrame.new(columns, dtypes: dtypes)
   end
 
@@ -1131,9 +1176,11 @@ defmodule SparkEx.Connect.ResultDecoder do
       names = Explorer.DataFrame.names(df)
       row_count = Explorer.DataFrame.n_rows(df)
 
+      # Use an ordered keyword list of `{name, values}` pairs (not a map)
+      # so wide schemas (>32 cols) preserve column order through
+      # `Explorer.DataFrame.new/2`. Maps would re-bucket by hash and shuffle.
       columns =
-        names
-        |> Enum.map(fn name ->
+        Enum.map(names, fn name ->
           series = Explorer.DataFrame.pull(df, name)
           values = Explorer.Series.to_list(series)
 
@@ -1145,7 +1192,6 @@ defmodule SparkEx.Connect.ResultDecoder do
 
           {name, normalized}
         end)
-        |> Map.new()
 
       {:ok, mapped_dtypes} = TypeMapper.schema_to_dtypes(struct)
 
@@ -1153,7 +1199,7 @@ defmodule SparkEx.Connect.ResultDecoder do
         mapped_dtypes
         |> Enum.filter(fn {name, _} -> name in names end)
 
-      if map_size(columns) == 0 and row_count == 0 do
+      if columns == [] and row_count == 0 do
         build_empty_dataframe_from_schema(%Spark.Connect.DataType{kind: {:struct, struct}})
       else
         Explorer.DataFrame.new(columns, dtypes: dtypes)
@@ -1178,13 +1224,19 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp column_value_transform(%Spark.Connect.DataType{kind: {:var_char, _}}),
     do: &strip_trailing_spaces/1
 
+  defp column_value_transform(%Spark.Connect.DataType{kind: {:udt, %Spark.Connect.DataType.UDT{} = udt}}) do
+    case SparkEx.Connect.UDTRegistry.lookup_deserializer(udt) do
+      nil -> &raw_passthrough/1
+      fun when is_function(fun, 1) -> fun
+    end
+  end
+
   defp column_value_transform(%Spark.Connect.DataType{kind: {tag, _}})
        when tag in [
               :calendar_interval,
               :year_month_interval,
               :day_time_interval,
               :variant,
-              :udt,
               :geometry,
               :geography,
               :unparsed
@@ -1208,6 +1260,10 @@ defmodule SparkEx.Connect.ResultDecoder do
       Enum.reduce(observed_metrics, acc, &merge_observed_metric/2)
     end
   end
+
+  defp merge_observed_metric(%ExecutePlanResponse.ObservedMetrics{name: name}, acc)
+       when name == "" or is_nil(name),
+       do: acc
 
   defp merge_observed_metric(%ExecutePlanResponse.ObservedMetrics{} = metric, acc) do
     keys = metric.keys || []
