@@ -651,9 +651,16 @@ defmodule SparkEx.Connect.PlanEncoder do
         }
       end)
 
-    # Populate the deprecated `rename_columns_map` for Spark 3.5 servers, which
-    # ignore the newer `renames` field. Newer servers prefer `renames`.
-    rename_columns_map = Map.new(string_renames)
+    # Populate the deprecated `rename_columns_map` for Spark 3.5 servers that
+    # only read that field. The map cannot represent duplicate sources or
+    # chained renames (e.g. a->b, b->c), so only emit it when the input is a
+    # clean one-to-one rename. Newer servers prefer the ordered `renames`.
+    rename_columns_map =
+      if safe_rename_columns_map?(string_renames) do
+        Map.new(string_renames)
+      else
+        %{}
+      end
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -667,6 +674,14 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
 
     {relation, counter}
+  end
+
+  defp safe_rename_columns_map?(string_renames) do
+    sources = Enum.map(string_renames, &elem(&1, 0))
+    targets = Enum.map(string_renames, &elem(&1, 1))
+
+    sources == Enum.uniq(sources) and
+      MapSet.disjoint?(MapSet.new(sources), MapSet.new(targets))
   end
 
   def encode_relation({:repartition, child_plan, num_partitions, shuffle}, counter) do
@@ -3268,15 +3283,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp encode_literal(%Decimal{} = d) do
-    %Expression.Literal{
-      literal_type:
-        {:decimal,
-         %Expression.Literal.Decimal{
-           value: Decimal.to_string(d),
-           precision: 10,
-           scale: 0
-         }}
-    }
+    encode_literal({:decimal, Decimal.to_string(d)})
   end
 
   defp encode_literal({:decimal, value}) when is_binary(value) do
@@ -3658,8 +3665,8 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp infer_literal_data_type(v) when is_float(v),
     do: %DataType{kind: {:double, %DataType.Double{}}}
 
-  defp infer_literal_data_type(%Decimal{}) do
-    %DataType{kind: {:decimal, %DataType.Decimal{precision: 10, scale: 0}}}
+  defp infer_literal_data_type(%Decimal{} = d) do
+    infer_literal_data_type({:decimal, Decimal.to_string(d)})
   end
 
   defp infer_literal_data_type({:decimal, value}) when is_binary(value) do

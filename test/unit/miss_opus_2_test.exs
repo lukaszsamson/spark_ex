@@ -1641,13 +1641,15 @@ defmodule SparkEx.MissOpus2Test do
   # ── 15.15 Decimal precision/scale defaults ──
 
   describe "15.15 decimal precision/scale" do
-    test "default precision/scale for unannotated Decimal literal" do
+    test "unannotated Decimal literal derives precision/scale from value" do
       expr = {:lit, Decimal.new("123.45")}
       encoded = SparkEx.Connect.PlanEncoder.encode_expression(expr)
       assert %{expr_type: {:literal, %{literal_type: {:decimal, decimal}}}} = encoded
-      # Matches PySpark: unannotated Decimal literals default to (10, 0)
-      assert decimal.precision == 10
-      assert decimal.scale == 0
+      # Matches PySpark: derive precision/scale from the actual value so the
+      # encoded `value` string stays consistent with (precision, scale).
+      assert decimal.value == "123.45"
+      assert decimal.precision == 5
+      assert decimal.scale == 2
     end
 
     test "explicit precision/scale annotation is honored" do

@@ -1448,9 +1448,12 @@ defmodule SparkEx.DataFrame do
   @doc """
   Repartitions by partition ID.
 
+  Wraps the partition-id column in `DirectShufflePartitionID` so the values
+  are used directly as physical partition indices (Spark 4.0+).
+
   ## Examples
 
-      df |> DataFrame.repartition_by_id(col("partition_col"))
+      df |> DataFrame.repartition_by_id(4, col("partition_col"))
   """
   @spec repartition_by_id(t(), pos_integer(), Column.t() | String.t() | atom()) :: t()
   def repartition_by_id(%__MODULE__{} = df, num_partitions, col)
