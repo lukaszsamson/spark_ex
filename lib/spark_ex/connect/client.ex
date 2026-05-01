@@ -1580,7 +1580,7 @@ defmodule SparkEx.Connect.Client do
       [empty_begin_chunk_request(session, name, num_chunks)]
     else
       path
-      |> File.stream!([], chunk_size)
+      |> file_byte_stream(chunk_size)
       |> Stream.transform(:first, fn chunk, acc ->
         case acc do
           :first ->
@@ -1619,6 +1619,32 @@ defmodule SparkEx.Connect.Client do
         end
       end)
     end
+  end
+
+  # Lazy byte-chunk stream over a file. Avoids `File.stream!/2`/`/3`
+  # because the argument order changed between Elixir 1.15 and 1.19,
+  # which makes a single call site impossible to satisfy across the
+  # supported version range.
+  defp file_byte_stream(path, chunk_size) do
+    Stream.resource(
+      fn -> File.open!(path, [:read, :binary, :raw]) end,
+      fn io ->
+        case IO.binread(io, chunk_size) do
+          :eof ->
+            {:halt, io}
+
+          {:error, reason} ->
+            raise File.Error,
+              reason: reason,
+              action: "read from",
+              path: IO.chardata_to_string(path)
+
+          data when is_binary(data) ->
+            {[data], io}
+        end
+      end,
+      fn io -> File.close(io) end
+    )
   end
 
   defp empty_begin_chunk_request(session, name, num_chunks) do
