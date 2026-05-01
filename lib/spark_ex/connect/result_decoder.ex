@@ -9,9 +9,13 @@ defmodule SparkEx.Connect.ResultDecoder do
           rows: [map()],
           schema: term() | nil,
           server_side_session_id: String.t() | nil,
+          command_result: term() | nil,
+          command_results: [term()],
           observed_metrics: map(),
           execution_metrics: map()
         }
+
+  @type unsupported_response_type :: atom()
 
   @type explorer_result :: %{
           dataframe: Explorer.DataFrame.t(),
@@ -37,6 +41,7 @@ defmodule SparkEx.Connect.ResultDecoder do
           | {:invalid_arrow_batch_row_count,
              %{expected: non_neg_integer(), got: non_neg_integer()}}
           | {:arrow_decode_failed, term()}
+          | {:unsupported_response_type, atom()}
 
   @doc """
   Consumes an ExecutePlan response stream and returns decoded rows.
@@ -61,6 +66,7 @@ defmodule SparkEx.Connect.ResultDecoder do
       server_side_session_id: nil,
       num_records: 0,
       command_result: nil,
+      command_results: [],
       observed_metrics: %{},
       execution_metrics: %{}
     }
@@ -84,63 +90,9 @@ defmodule SparkEx.Connect.ResultDecoder do
               execution_metrics: execution_metrics
           }
 
-          case resp.response_type do
-            {:arrow_batch, batch} ->
-              case handle_arrow_batch(state, batch) do
-                {:ok, state} -> {:cont, {:ok, state}}
-                {:error, _} = error -> {:halt, error}
-              end
-
-            {:result_complete, _} ->
-              {:cont, {:ok, state}}
-
-            {:sql_command_result, _} ->
-              {:cont, {:ok, state}}
-
-            {:write_stream_operation_start_result, result} ->
-              {:cont, {:ok, %{state | command_result: {:write_stream_start, result}}}}
-
-            {:streaming_query_command_result, result} ->
-              {:cont, {:ok, %{state | command_result: {:streaming_query, result}}}}
-
-            {:streaming_query_manager_command_result, result} ->
-              {:cont, {:ok, %{state | command_result: {:streaming_query_manager, result}}}}
-
-            {:streaming_query_listener_events_result, result} ->
-              {:cont, {:ok, %{state | command_result: {:listener_events, result}}}}
-
-            {:checkpoint_command_result, result} ->
-              {:cont, {:ok, %{state | command_result: {:checkpoint, result}}}}
-
-            {:execution_progress, progress} ->
-              :telemetry.execute(
-                [:spark_ex, :result, :progress],
-                %{num_inflight_tasks: progress.num_inflight_tasks || 0},
-                %{
-                  session_id: session && session.session_id,
-                  stages:
-                    Enum.map(progress.stages || [], fn stage ->
-                      %{
-                        stage_id: stage.stage_id,
-                        num_tasks: stage.num_tasks,
-                        num_completed_tasks: stage.num_completed_tasks,
-                        input_bytes_read: stage.input_bytes_read,
-                        done: stage.done
-                      }
-                    end)
-                }
-              )
-
-              {:cont, {:ok, state}}
-
-            {:metrics, _} ->
-              {:cont, {:ok, state}}
-
-            nil ->
-              {:cont, {:ok, state}}
-
-            _other ->
-              {:cont, {:ok, state}}
+          case dispatch_response_type(resp.response_type, state, session) do
+            {:cont, state} -> {:cont, {:ok, state}}
+            {:error, _} = error -> {:halt, error}
           end
 
         {:error, %GRPC.RPCError{} = error}, {:ok, _state} ->
@@ -167,6 +119,7 @@ defmodule SparkEx.Connect.ResultDecoder do
                schema: state.schema,
                server_side_session_id: state.server_side_session_id,
                command_result: state.command_result,
+               command_results: Enum.reverse(state.command_results),
                observed_metrics: state.observed_metrics,
                execution_metrics: state.execution_metrics
              }}
@@ -456,6 +409,100 @@ defmodule SparkEx.Connect.ResultDecoder do
       {:error, _} = error ->
         error
     end
+  end
+
+  # --- Response-type dispatch (rows mode) ---
+  #
+  # Returns `{:cont, state}` to continue, `{:error, reason}` to halt.
+  # Recognized command-result variants are accumulated in `state.command_results`
+  # (in arrival order) and `state.command_result` is updated to the latest one
+  # for back-compat with single-result callers.
+
+  defp dispatch_response_type({:arrow_batch, batch}, state, _session) do
+    case handle_arrow_batch(state, batch) do
+      {:ok, state} -> {:cont, state}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp dispatch_response_type({:result_complete, _}, state, _session), do: {:cont, state}
+  defp dispatch_response_type({:sql_command_result, _}, state, _session), do: {:cont, state}
+
+  defp dispatch_response_type({:write_stream_operation_start_result, result}, state, _),
+    do: {:cont, push_command_result(state, {:write_stream_start, result})}
+
+  defp dispatch_response_type({:streaming_query_command_result, result}, state, _),
+    do: {:cont, push_command_result(state, {:streaming_query, result})}
+
+  defp dispatch_response_type({:streaming_query_manager_command_result, result}, state, _),
+    do: {:cont, push_command_result(state, {:streaming_query_manager, result})}
+
+  defp dispatch_response_type({:streaming_query_listener_events_result, result}, state, _),
+    do: {:cont, push_command_result(state, {:listener_events, result})}
+
+  defp dispatch_response_type({:checkpoint_command_result, result}, state, _),
+    do: {:cont, push_command_result(state, {:checkpoint, result})}
+
+  defp dispatch_response_type({:create_resource_profile_command_result, result}, state, _),
+    do: {:cont, push_command_result(state, {:create_resource_profile, result})}
+
+  defp dispatch_response_type({:ml_command_result, result}, state, _),
+    do: {:cont, push_command_result(state, {:ml, result})}
+
+  defp dispatch_response_type({:get_resources_command_result, result}, state, _),
+    do: {:cont, push_command_result(state, {:get_resources, result})}
+
+  defp dispatch_response_type({:pipeline_command_result, result}, state, _),
+    do: {:cont, push_command_result(state, {:pipeline, result})}
+
+  defp dispatch_response_type({:pipeline_event_result, result}, state, _),
+    do: {:cont, push_command_result(state, {:pipeline_event, result})}
+
+  defp dispatch_response_type({:pipeline_query_function_execution_signal, result}, state, _),
+    do: {:cont, push_command_result(state, {:pipeline_query_function_execution_signal, result})}
+
+  defp dispatch_response_type({:execution_progress, progress}, state, session) do
+    emit_progress_telemetry(progress, session)
+    {:cont, state}
+  end
+
+  defp dispatch_response_type({:metrics, _}, state, _session), do: {:cont, state}
+  defp dispatch_response_type(nil, state, _session), do: {:cont, state}
+
+  defp dispatch_response_type({:extension, _ext}, _state, _session) do
+    {:error, {:unsupported_response_type, :extension}}
+  end
+
+  defp dispatch_response_type({tag, _}, _state, _session) when is_atom(tag) do
+    {:error, {:unsupported_response_type, tag}}
+  end
+
+  defp push_command_result(state, tagged_tuple) do
+    %{
+      state
+      | command_result: tagged_tuple,
+        command_results: [tagged_tuple | state.command_results]
+    }
+  end
+
+  defp emit_progress_telemetry(progress, session) do
+    :telemetry.execute(
+      [:spark_ex, :result, :progress],
+      %{num_inflight_tasks: progress.num_inflight_tasks || 0},
+      %{
+        session_id: session && session.session_id,
+        stages:
+          Enum.map(progress.stages || [], fn stage ->
+            %{
+              stage_id: stage.stage_id,
+              num_tasks: stage.num_tasks,
+              num_completed_tasks: stage.num_completed_tasks,
+              input_bytes_read: stage.input_bytes_read,
+              done: stage.done
+            }
+          end)
+      }
+    )
   end
 
   # --- Arrow batch handling (rows mode) ---
@@ -1018,18 +1065,17 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp build_empty_dataframe_from_schema(_), do: Explorer.DataFrame.new([])
 
   defp apply_schema_policy(df, %Spark.Connect.DataType{kind: {:struct, struct}}) do
-    fallback_columns =
+    column_transforms =
       struct.fields
-      |> Enum.filter(fn field ->
-        case field.data_type do
-          %Spark.Connect.DataType{kind: {tag, _}} -> fallback_string_type?(tag)
-          _ -> false
+      |> Enum.flat_map(fn %Spark.Connect.DataType.StructField{name: name, data_type: dt} ->
+        case column_value_transform(dt) do
+          nil -> []
+          fun -> [{name, fun}]
         end
       end)
-      |> Enum.map(& &1.name)
-      |> MapSet.new()
+      |> Map.new()
 
-    if MapSet.size(fallback_columns) == 0 do
+    if map_size(column_transforms) == 0 do
       df
     else
       names = Explorer.DataFrame.names(df)
@@ -1042,10 +1088,9 @@ defmodule SparkEx.Connect.ResultDecoder do
           values = Explorer.Series.to_list(series)
 
           normalized =
-            if MapSet.member?(fallback_columns, name) do
-              Enum.map(values, &json_string_fallback/1)
-            else
-              values
+            case Map.fetch(column_transforms, name) do
+              {:ok, fun} -> Enum.map(values, fun)
+              :error -> values
             end
 
           {name, normalized}
@@ -1068,52 +1113,41 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   defp apply_schema_policy(df, _), do: df
 
-  defp fallback_string_type?(tag) do
-    tag in [
-      :calendar_interval,
-      :year_month_interval,
-      :day_time_interval,
-      :variant,
-      :udt,
-      :geometry,
-      :geography,
-      :unparsed
-    ]
-  end
+  # Per-column post-decode transformation. Returns nil for columns that need no
+  # rewriting, or a 1-arity function applied to each value otherwise.
+  #
+  # - char(n): strip read-side space padding (matches CharVarcharCodegenUtils).
+  # - varchar(n): strip trailing spaces (Spark stores varchar as space-padded
+  #   when written through fixed-width sinks).
+  # - variant / udt / geometry / geography / unparsed: pass the raw decoded
+  #   value through unchanged. Earlier code Jason-encoded list/map values,
+  #   which lost native structure for callers who can handle it.
+  defp column_value_transform(%Spark.Connect.DataType{kind: {:char, _}}),
+    do: &strip_trailing_spaces/1
 
-  defp json_string_fallback(nil), do: nil
-  defp json_string_fallback(value) when is_binary(value), do: value
+  defp column_value_transform(%Spark.Connect.DataType{kind: {:var_char, _}}),
+    do: &strip_trailing_spaces/1
 
-  defp json_string_fallback(value) when is_list(value) or is_map(value) or is_tuple(value) do
-    value
-    |> normalize_json_value()
-    |> Jason.encode!()
-  end
+  defp column_value_transform(%Spark.Connect.DataType{kind: {tag, _}})
+       when tag in [
+              :calendar_interval,
+              :year_month_interval,
+              :day_time_interval,
+              :variant,
+              :udt,
+              :geometry,
+              :geography,
+              :unparsed
+            ],
+       do: &raw_passthrough/1
 
-  defp json_string_fallback(value), do: to_string(value)
+  defp column_value_transform(_), do: nil
 
-  defp normalize_json_value(value) when is_list(value) do
-    Enum.map(value, &normalize_json_value/1)
-  end
+  defp strip_trailing_spaces(nil), do: nil
+  defp strip_trailing_spaces(value) when is_binary(value), do: String.trim_trailing(value, " ")
+  defp strip_trailing_spaces(other), do: other
 
-  defp normalize_json_value(value) when is_tuple(value) do
-    value
-    |> Tuple.to_list()
-    |> Enum.map(&normalize_json_value/1)
-  end
-
-  defp normalize_json_value(value) when is_map(value) do
-    value =
-      if is_struct(value) do
-        Map.from_struct(value)
-      else
-        value
-      end
-
-    Map.new(value, fn {k, v} -> {to_string(k), normalize_json_value(v)} end)
-  end
-
-  defp normalize_json_value(value), do: value
+  defp raw_passthrough(value), do: value
 
   defp merge_observed_metrics(acc, nil), do: acc
 

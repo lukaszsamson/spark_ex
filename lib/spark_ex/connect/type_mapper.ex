@@ -11,8 +11,9 @@ defmodule SparkEx.Connect.TypeMapper do
       iex> TypeMapper.to_explorer_dtype(%DataType{kind: {:boolean, %DataType.Boolean{}}})
       {:ok, :boolean}
 
-      iex> TypeMapper.to_explorer_dtype(%DataType{kind: {:array, %DataType.Array{}}})
-      {:ok, :string}
+      iex> element = %DataType{kind: {:integer, %DataType.Integer{}}}
+      iex> TypeMapper.to_explorer_dtype(%DataType{kind: {:array, %DataType.Array{element_type: element}}})
+      {:ok, {:list, {:s, 32}}}
   """
   @spec to_explorer_dtype(DataType.t()) :: {:ok, atom() | {atom(), term()}}
   def to_explorer_dtype(%DataType{kind: {tag, _value}} = dt) do
@@ -103,9 +104,29 @@ defmodule SparkEx.Connect.TypeMapper do
   defp map_kind(:year_month_interval, _dt), do: :string
   defp map_kind(:day_time_interval, _dt), do: :string
 
-  # Complex types — fall back to string (JSON representation)
-  defp map_kind(:array, _dt), do: :string
-  defp map_kind(:struct, _dt), do: :string
+  # Complex types — preserve native nested structure
+  defp map_kind(:array, %DataType{kind: {:array, %DataType.Array{element_type: et}}})
+       when not is_nil(et) do
+    {:ok, dtype} = to_explorer_dtype(et)
+    {:list, dtype}
+  end
+
+  defp map_kind(:array, _dt), do: {:list, :null}
+
+  defp map_kind(:struct, %DataType{kind: {:struct, %DataType.Struct{fields: fields}}}) do
+    field_dtypes =
+      Enum.map(fields, fn %DataType.StructField{name: name, data_type: dt} ->
+        {:ok, dtype} = to_explorer_dtype(dt)
+        {name, dtype}
+      end)
+
+    {:struct, field_dtypes}
+  end
+
+  defp map_kind(:struct, _dt), do: {:struct, []}
+
+  # Map: Explorer has no native map dtype; keep as :string. Values still arrive
+  # natively decoded from Arrow when the server emits them.
   defp map_kind(:map, _dt), do: :string
 
   # Other types — fall back to string
