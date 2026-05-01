@@ -15,10 +15,7 @@ defmodule SparkEx.Connect.ResultDecoder do
           execution_metrics: map()
         }
 
-  @type unsupported_response_type ::
-          :extension
-          | :pipeline_query_function_execution_signal
-          | atom()
+  @type unsupported_response_type :: atom()
 
   @type explorer_result :: %{
           dataframe: Explorer.DataFrame.t(),

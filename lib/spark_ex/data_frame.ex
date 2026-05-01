@@ -1083,7 +1083,18 @@ defmodule SparkEx.DataFrame do
   @doc """
   Observes metrics during query execution.
 
-  Accepts an `SparkEx.Observation` or a name string and a list of Column expressions.
+  Accepts an `SparkEx.Observation` or a name string and a list of Column
+  expressions.
+
+  When given an `SparkEx.Observation` struct, the metrics can be retrieved
+  with `SparkEx.Observation.get/1` after an action has been executed.
+
+  When given a raw name string, retrieval through `SparkEx.Observation.get/1`
+  is **not** supported — read the metrics from `:observed_metrics` on the
+  action's result map instead. The string overload exists for parity with
+  Spark's API but does not associate the metrics with a retrievable handle;
+  prefer `SparkEx.Observation.new/1` if you need to look the metrics up
+  later.
   """
   @spec observe(t(), SparkEx.Observation.t() | String.t(), [Column.t()]) :: t()
   def observe(%__MODULE__{} = df, %SparkEx.Observation{name: name} = obs, exprs)

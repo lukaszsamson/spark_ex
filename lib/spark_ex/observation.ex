@@ -135,16 +135,27 @@ defmodule SparkEx.Observation do
     NaiveDateTime.add(~N[1970-01-01 00:00:00.000000], micros, :microsecond)
   end
 
+  # 86_400 seconds in a day → upper bound (exclusive) for nanos within a day.
+  @max_time_nanos 86_400 * 1_000_000_000
+
   def decode_literal(%Expression.Literal{
         literal_type: {:time, %Expression.Literal.Time{nano: nano}}
       })
-      when is_integer(nano) do
+      when is_integer(nano) and nano >= 0 and nano < @max_time_nanos do
     seconds = div(nano, 1_000_000_000)
     micros = div(rem(nano, 1_000_000_000), 1_000)
 
     seconds
     |> Time.from_seconds_after_midnight()
     |> Map.put(:microsecond, {micros, 6})
+  end
+
+  def decode_literal(%Expression.Literal{
+        literal_type: {:time, %Expression.Literal.Time{nano: nano}}
+      })
+      when is_integer(nano) do
+    raise ArgumentError,
+          "time literal nano-of-day must be in 0..#{@max_time_nanos - 1}, got: #{inspect(nano)}"
   end
 
   def decode_literal(%Expression.Literal{
