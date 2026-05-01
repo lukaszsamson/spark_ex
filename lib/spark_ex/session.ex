@@ -527,11 +527,19 @@ defmodule SparkEx.Session do
   @doc """
   Uploads artifacts to the server.
 
-  Artifacts are provided as a list of `{name, data}` tuples.
+  Artifacts are provided as a list of `{name, data}` tuples where
+  `data` is either:
+
+    * a `binary()` containing the artifact contents in memory; or
+    * `{:file, path, size}` for a path on disk that should be streamed
+      lazily in chunks (peak memory ≈ chunk size, not file size).
+
   Returns a list of `{name, crc_successful?}` tuples.
   """
-  @spec add_artifacts(GenServer.server(), [{String.t(), binary()}]) ::
-          {:ok, [{String.t(), boolean()}]} | {:error, term()}
+  @spec add_artifacts(
+          GenServer.server(),
+          [{String.t(), binary() | {:file, Path.t(), non_neg_integer()}}]
+        ) :: {:ok, [{String.t(), boolean()}]} | {:error, term()}
   def add_artifacts(session, artifacts) do
     GenServer.call(session, {:add_artifacts, artifacts})
   end

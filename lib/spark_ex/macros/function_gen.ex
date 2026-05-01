@@ -64,6 +64,22 @@ defmodule SparkEx.Macros.FunctionGen do
     end
   end
 
+  defp generate_function(name, spark_name, :zero_or_lit_1, is_distinct, doc) do
+    quote do
+      @doc unquote(doc)
+      @spec unquote(name)() :: Column.t()
+      def unquote(name)() do
+        %Column{expr: {:fn, unquote(spark_name), [], unquote(is_distinct)}}
+      end
+
+      @doc unquote(doc)
+      @spec unquote(name)(term()) :: Column.t()
+      def unquote(name)(arg1) do
+        %Column{expr: {:fn, unquote(spark_name), [lit_expr(arg1)], unquote(is_distinct)}}
+      end
+    end
+  end
+
   defp generate_function(name, spark_name, :one_col, is_distinct, doc) do
     quote do
       @doc unquote(doc)
@@ -228,7 +244,13 @@ defmodule SparkEx.Macros.FunctionGen do
         unquote(name)(col, [{unquote(first_key), opt_value}])
       end
 
-      def unquote(name)(col, opts) do
+      def unquote(name)(col, opts) when is_list(opts) do
+        unless opts == [] or Keyword.keyword?(opts) do
+          raise ArgumentError,
+                "expected #{inspect(unquote(name))} options to be a keyword list, got: " <>
+                  inspect(opts)
+        end
+
         opt_args =
           unquote(escaped_defaults)
           |> Enum.map(fn {key, default} -> Keyword.get(opts, key, default) end)
