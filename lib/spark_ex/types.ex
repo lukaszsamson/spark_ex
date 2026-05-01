@@ -271,12 +271,15 @@ defmodule SparkEx.Types do
   defp type_to_ddl(:day_time_interval), do: "INTERVAL DAY TO SECOND"
 
   defp type_to_ddl({:day_time_interval, start_field, end_field}) do
+    validate_day_time_interval_fields!(start_field, end_field)
     "INTERVAL #{day_time_interval_field(start_field)} TO #{day_time_interval_field(end_field)}"
   end
 
   defp type_to_ddl(:year_month_interval), do: "INTERVAL YEAR TO MONTH"
 
   defp type_to_ddl({:year_month_interval, start_field, end_field}) do
+    validate_year_month_interval_fields!(start_field, end_field)
+
     "INTERVAL #{year_month_interval_field(start_field)} TO #{year_month_interval_field(end_field)}"
   end
 
@@ -315,6 +318,50 @@ defmodule SparkEx.Types do
   # 0=YEAR, 1=MONTH.
   defp year_month_interval_field(0), do: "YEAR"
   defp year_month_interval_field(1), do: "MONTH"
+
+  defp validate_day_time_interval_fields!(start_field, end_field) do
+    unless is_integer(start_field) and start_field in 0..3 do
+      raise ArgumentError,
+            "invalid day_time_interval start_field: #{inspect(start_field)}. " <>
+              "Expected an integer in 0..3 (0=DAY, 1=HOUR, 2=MINUTE, 3=SECOND)."
+    end
+
+    unless is_integer(end_field) and end_field in 0..3 do
+      raise ArgumentError,
+            "invalid day_time_interval end_field: #{inspect(end_field)}. " <>
+              "Expected an integer in 0..3 (0=DAY, 1=HOUR, 2=MINUTE, 3=SECOND)."
+    end
+
+    if start_field > end_field do
+      raise ArgumentError,
+            "invalid day_time_interval field order: start_field (#{start_field}) " <>
+              "must be <= end_field (#{end_field})."
+    end
+
+    :ok
+  end
+
+  defp validate_year_month_interval_fields!(start_field, end_field) do
+    unless is_integer(start_field) and start_field in 0..1 do
+      raise ArgumentError,
+            "invalid year_month_interval start_field: #{inspect(start_field)}. " <>
+              "Expected an integer in 0..1 (0=YEAR, 1=MONTH)."
+    end
+
+    unless is_integer(end_field) and end_field in 0..1 do
+      raise ArgumentError,
+            "invalid year_month_interval end_field: #{inspect(end_field)}. " <>
+              "Expected an integer in 0..1 (0=YEAR, 1=MONTH)."
+    end
+
+    if start_field > end_field do
+      raise ArgumentError,
+            "invalid year_month_interval field order: start_field (#{start_field}) " <>
+              "must be <= end_field (#{end_field})."
+    end
+
+    :ok
+  end
 
   # --- JSON type conversion (Spark JSON format) ---
 
@@ -594,8 +641,9 @@ defmodule SparkEx.Types do
     }
   end
 
-  defp type_to_proto({:day_time_interval, start_field, end_field})
-       when is_integer(start_field) and is_integer(end_field) do
+  defp type_to_proto({:day_time_interval, start_field, end_field}) do
+    validate_day_time_interval_fields!(start_field, end_field)
+
     %Spark.Connect.DataType{
       kind:
         {:day_time_interval,
@@ -612,8 +660,9 @@ defmodule SparkEx.Types do
     }
   end
 
-  defp type_to_proto({:year_month_interval, start_field, end_field})
-       when is_integer(start_field) and is_integer(end_field) do
+  defp type_to_proto({:year_month_interval, start_field, end_field}) do
+    validate_year_month_interval_fields!(start_field, end_field)
+
     %Spark.Connect.DataType{
       kind:
         {:year_month_interval,

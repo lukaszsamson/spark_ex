@@ -10,12 +10,12 @@ defmodule SparkEx.Observation do
   Two `Observation` structs that happen to share the same `name` will not
   collide: each carries its own `id` and metrics are stored under that id.
 
-  Routing tables (`{:obs_route, name}` and the legacy `{:metric_aliases, name}`)
-  are namespaced by the originating session id so two sessions that observe
-  the same `name` simultaneously do not overwrite each other's routing slot.
-  When the session id is unknown the namespace falls back to a global slot —
-  this preserves the prior behaviour for direct callers that don't go through
-  `DataFrame.observe/3`.
+  Routing tables (`{:obs_route, session_id, name}` and the legacy
+  `{:metric_aliases, session_id, name}`) are namespaced by the originating
+  session id so two sessions that observe the same `name` simultaneously do
+  not overwrite each other's routing slot. When the session id is unknown
+  the namespace falls back to a global slot — this preserves the prior
+  behaviour for direct callers that don't go through `DataFrame.observe/3`.
   """
 
   alias Spark.Connect.{DataType, Expression}

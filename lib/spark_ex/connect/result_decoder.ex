@@ -181,7 +181,16 @@ defmodule SparkEx.Connect.ResultDecoder do
           end
 
         {:error, %GRPC.RPCError{} = error}, state ->
-          err = if session, do: Errors.from_grpc_error(error, session), else: error
+          # Only enrich when we have a real session struct. Tests sometimes
+          # pass a stand-in (e.g. `:mock_session`); enriching those would
+          # crash inside `Errors.from_grpc_error/2`, so fall back to the raw
+          # error in that case.
+          err =
+            case session do
+              %SparkEx.Session{} -> Errors.from_grpc_error(error, session)
+              _ -> error
+            end
+
           emit_rows_stream_error(err, state)
 
         {:error, reason}, state ->
@@ -1215,9 +1224,12 @@ defmodule SparkEx.Connect.ResultDecoder do
   # - char(n): strip read-side space padding (matches CharVarcharCodegenUtils).
   # - varchar(n): strip trailing spaces (Spark stores varchar as space-padded
   #   when written through fixed-width sinks).
-  # - variant / udt / geometry / geography / unparsed: pass the raw decoded
-  #   value through unchanged. Earlier code Jason-encoded list/map values,
-  #   which lost native structure for callers who can handle it.
+  # - udt: look up a deserializer in `SparkEx.Connect.UDTRegistry`. If a
+  #   callback is registered for the UDT class, it is invoked per cell;
+  #   otherwise the raw decoded value passes through unchanged.
+  # - variant / geometry / geography / interval / unparsed: pass the raw
+  #   decoded value through unchanged. Earlier code Jason-encoded list/map
+  #   values, which lost native structure for callers who can handle it.
   defp column_value_transform(%Spark.Connect.DataType{kind: {:char, _}}),
     do: &strip_trailing_spaces/1
 

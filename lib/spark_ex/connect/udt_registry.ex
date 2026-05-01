@@ -37,15 +37,10 @@ defmodule SparkEx.Connect.UDTRegistry do
   @doc false
   @spec ensure_table() :: :ok
   def ensure_table do
-    if :ets.whereis(@table) == :undefined do
-      try do
-        :ets.new(@table, [:named_table, :set, :public, read_concurrency: true])
-      rescue
-        ArgumentError -> :ok
-      end
-    end
-
-    :ok
+    # Owned by `SparkEx.EtsTableOwner` so the table (and all registrations)
+    # survive for the lifetime of the application rather than dying with
+    # whichever process happened to call `register/2` first.
+    SparkEx.EtsTableOwner.ensure_table!(@table, :set)
   end
 
   @doc """
