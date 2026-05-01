@@ -141,15 +141,34 @@ defmodule SparkEx.Column do
   end
 
   @doc """
+  Casts the column to the given type with an explicit eval mode.
+
+  Modes:
+  - `:default` — server-default cast behavior (no eval_mode set; equivalent to `cast/2`).
+  - `:try` — return null on cast failure (equivalent to `try_cast/2`).
+  - `:legacy` — Spark legacy cast semantics.
+  - `:ansi` — ANSI cast semantics (raises on overflow / invalid input).
+  """
+  @spec cast(t(), String.t() | SparkEx.Types.data_type_proto(), :default | :try | :legacy | :ansi) ::
+          t()
+  def cast(%__MODULE__{} = col, type, :default), do: cast(col, type)
+
+  def cast(%__MODULE__{} = col, type_str, mode)
+      when is_binary(type_str) and mode in [:try, :legacy, :ansi] do
+    %__MODULE__{expr: {:cast, col.expr, type_str, mode}}
+  end
+
+  def cast(%__MODULE__{} = col, %Spark.Connect.DataType{} = type, mode)
+      when mode in [:try, :legacy, :ansi] do
+    %__MODULE__{expr: {:cast, col.expr, type, mode}}
+  end
+
+  @doc """
   Try-casts the column to the given type. Returns null on cast failure instead of error.
   """
   @spec try_cast(t(), String.t() | SparkEx.Types.data_type_proto()) :: t()
-  def try_cast(%__MODULE__{} = col, type_str) when is_binary(type_str) do
-    %__MODULE__{expr: {:cast, col.expr, type_str, :try}}
-  end
-
-  def try_cast(%__MODULE__{} = col, %Spark.Connect.DataType{} = type) do
-    %__MODULE__{expr: {:cast, col.expr, type, :try}}
+  def try_cast(%__MODULE__{} = col, type) do
+    cast(col, type, :try)
   end
 
   # ── Membership / range ──

@@ -21,7 +21,12 @@ defmodule SparkEx.WindowSpec do
 
   defstruct partition_spec: [], order_spec: [], frame_spec: nil
 
-  @type boundary :: :unbounded | :current_row | integer()
+  @type boundary ::
+          :unbounded
+          | :unbounded_preceding
+          | :unbounded_following
+          | :current_row
+          | integer()
 
   @type frame_spec ::
           nil
@@ -56,7 +61,9 @@ defmodule SparkEx.WindowSpec do
   Defines a row-based window frame between `start` and `end_` boundaries.
 
   Boundary values:
-  - `:unbounded` — unbounded preceding/following
+  - `:unbounded_preceding` — unbounded preceding
+  - `:unbounded_following` — unbounded following
+  - `:unbounded` — unbounded (legacy alias; resolves by position)
   - `:current_row` — current row
   - negative integer — N rows preceding
   - positive integer — N rows following
@@ -64,14 +71,19 @@ defmodule SparkEx.WindowSpec do
   """
   @spec rows_between(t(), boundary(), boundary()) :: t()
   def rows_between(%__MODULE__{} = spec, start, end_) do
-    %__MODULE__{spec | frame_spec: {:rows, clamp_boundary(start), clamp_boundary(end_)}}
+    %__MODULE__{
+      spec
+      | frame_spec: {:rows, clamp_boundary(start, :lower), clamp_boundary(end_, :upper)}
+    }
   end
 
   @doc """
   Defines a range-based window frame between `start` and `end_` boundaries.
 
   Boundary values:
-  - `:unbounded` — unbounded preceding/following
+  - `:unbounded_preceding` — unbounded preceding
+  - `:unbounded_following` — unbounded following
+  - `:unbounded` — unbounded (legacy alias; resolves by position)
   - `:current_row` — current row
   - negative integer — N preceding
   - positive integer — N following
@@ -79,7 +91,10 @@ defmodule SparkEx.WindowSpec do
   """
   @spec range_between(t(), boundary(), boundary()) :: t()
   def range_between(%__MODULE__{} = spec, start, end_) do
-    %__MODULE__{spec | frame_spec: {:range, clamp_boundary(start), clamp_boundary(end_)}}
+    %__MODULE__{
+      spec
+      | frame_spec: {:range, clamp_boundary(start, :lower), clamp_boundary(end_, :upper)}
+    }
   end
 
   # PySpark clamps extreme boundary values to unbounded using JVM Long sentinels.
@@ -88,13 +103,20 @@ defmodule SparkEx.WindowSpec do
   @jvm_long_min -bsl(1, 63)
   @jvm_long_max bsl(1, 63) - 1
 
-  defp clamp_boundary(value) when is_integer(value) and value <= @jvm_long_min,
-    do: :unbounded
+  defp clamp_boundary(value, _position)
+       when value in [:unbounded_preceding, :unbounded_following],
+       do: value
 
-  defp clamp_boundary(value) when is_integer(value) and value >= @jvm_long_max,
-    do: :unbounded
+  defp clamp_boundary(:unbounded, :lower), do: :unbounded_preceding
+  defp clamp_boundary(:unbounded, :upper), do: :unbounded_following
 
-  defp clamp_boundary(value), do: value
+  defp clamp_boundary(value, _position) when is_integer(value) and value <= @jvm_long_min,
+    do: :unbounded_preceding
+
+  defp clamp_boundary(value, _position) when is_integer(value) and value >= @jvm_long_max,
+    do: :unbounded_following
+
+  defp clamp_boundary(value, _position), do: value
 
   defp to_expr(%Column{expr: e}), do: e
   defp to_expr(name) when is_binary(name), do: {:col, name}

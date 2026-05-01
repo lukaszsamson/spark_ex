@@ -7,6 +7,7 @@ defmodule SparkEx.EtsTableOwner do
     {:spark_ex_retry_policies, :set},
     {:spark_ex_user_context_extensions, :set},
     {:spark_ex_observations, :set},
+    {:spark_ex_udt_deserializers, :set},
     {:spark_ex_progress_handlers, :bag},
     {:spark_ex_streaming_listener_buses, :bag}
   ]

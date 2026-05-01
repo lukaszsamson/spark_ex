@@ -43,10 +43,13 @@ defmodule SparkEx.Types do
           | :binary
           | :date
           | :time
+          | {:time, non_neg_integer()}
           | :timestamp
           | :timestamp_ntz
           | :day_time_interval
+          | {:day_time_interval, non_neg_integer(), non_neg_integer()}
           | :year_month_interval
+          | {:year_month_interval, non_neg_integer(), non_neg_integer()}
           | :calendar_interval
           | {:decimal, non_neg_integer(), non_neg_integer()}
           | {:array, spark_type()}
@@ -54,7 +57,9 @@ defmodule SparkEx.Types do
           | {:struct, [field()]}
           | :variant
           | :geometry
+          | {:geometry, integer()}
           | :geography
+          | {:geography, integer()}
 
   @type field :: %{
           name: String.t(),
@@ -147,10 +152,54 @@ defmodule SparkEx.Types do
   """
   @spec to_ddl(struct_type()) :: String.t()
   def to_ddl({:struct, fields}) do
-    fields
-    |> Enum.map_join(", ", fn %{name: name, type: type} ->
-      "#{name} #{type_to_ddl(type)}"
+    Enum.map_join(fields, ", ", fn field ->
+      suffix = if Map.get(field, :nullable, true) == false, do: " NOT NULL", else: ""
+      "#{quote_identifier(field.name)} #{type_to_ddl(field.type)}#{suffix}"
     end)
+  end
+
+  @doc """
+  Quotes a Spark SQL identifier with backticks when necessary.
+
+  Identifiers that contain characters outside `[A-Za-z0-9_]` (or that
+  match a reserved word) are wrapped in backticks. Embedded backticks
+  are escaped by doubling.
+
+  Plain identifiers like `"id"` or `"user_name"` are returned unchanged.
+  """
+  @spec quote_identifier(String.t()) :: String.t()
+  def quote_identifier(name) when is_binary(name) do
+    if needs_quoting?(name) do
+      escaped = String.replace(name, "`", "``")
+      "`" <> escaped <> "`"
+    else
+      name
+    end
+  end
+
+  defp needs_quoting?(""), do: true
+
+  defp needs_quoting?(name) do
+    not Regex.match?(~r/\A[A-Za-z_][A-Za-z0-9_]*\z/, name) or reserved_word?(name)
+  end
+
+  # Conservative subset of Spark SQL reserved words that are likely to appear
+  # as field names in user data. Quoting non-reserved identifiers is safe, so
+  # this list errs on the side of inclusion when a name doubles as a keyword.
+  @reserved_words ~w(
+    select from where group order by having join on as case when then else end
+    distinct union intersect except all any in not and or null true false
+    insert update delete create table view drop alter index primary key
+    references foreign default values into between like is exists with
+    cast convert interval timestamp date time array map struct decimal
+    string int integer bigint smallint tinyint float double boolean binary
+    cross inner outer left right full natural using lateral table values
+    rollup cube grouping limit offset fetch sort over partition window
+    rows range unbounded preceding following current row
+  )
+
+  defp reserved_word?(name) do
+    String.downcase(name) in @reserved_words
   end
 
   @doc """
@@ -216,10 +265,24 @@ defmodule SparkEx.Types do
   defp type_to_ddl(:binary), do: "BINARY"
   defp type_to_ddl(:date), do: "DATE"
   defp type_to_ddl(:time), do: "TIME"
+  defp type_to_ddl({:time, precision}) when is_integer(precision), do: "TIME(#{precision})"
   defp type_to_ddl(:timestamp), do: "TIMESTAMP"
   defp type_to_ddl(:timestamp_ntz), do: "TIMESTAMP_NTZ"
   defp type_to_ddl(:day_time_interval), do: "INTERVAL DAY TO SECOND"
+
+  defp type_to_ddl({:day_time_interval, start_field, end_field}) do
+    validate_day_time_interval_fields!(start_field, end_field)
+    "INTERVAL #{day_time_interval_field(start_field)} TO #{day_time_interval_field(end_field)}"
+  end
+
   defp type_to_ddl(:year_month_interval), do: "INTERVAL YEAR TO MONTH"
+
+  defp type_to_ddl({:year_month_interval, start_field, end_field}) do
+    validate_year_month_interval_fields!(start_field, end_field)
+
+    "INTERVAL #{year_month_interval_field(start_field)} TO #{year_month_interval_field(end_field)}"
+  end
+
   defp type_to_ddl(:calendar_interval), do: "INTERVAL"
   defp type_to_ddl({:decimal, precision, scale}), do: "DECIMAL(#{precision}, #{scale})"
   defp type_to_ddl({:array, element}), do: "ARRAY<#{type_to_ddl(element)}>"
@@ -231,15 +294,73 @@ defmodule SparkEx.Types do
 
   defp type_to_ddl(:variant), do: "VARIANT"
   defp type_to_ddl(:geometry), do: "GEOMETRY"
+  defp type_to_ddl({:geometry, srid}) when is_integer(srid), do: "GEOMETRY(#{srid})"
   defp type_to_ddl(:geography), do: "GEOGRAPHY"
+  defp type_to_ddl({:geography, srid}) when is_integer(srid), do: "GEOGRAPHY(#{srid})"
 
   defp type_to_ddl({:struct, fields}) do
     inner =
-      Enum.map_join(fields, ", ", fn %{name: name, type: type} ->
-        "#{name}: #{type_to_ddl(type)}"
+      Enum.map_join(fields, ", ", fn field ->
+        suffix = if Map.get(field, :nullable, true) == false, do: " NOT NULL", else: ""
+        "#{quote_identifier(field.name)}: #{type_to_ddl(field.type)}#{suffix}"
       end)
 
     "STRUCT<#{inner}>"
+  end
+
+  # Spark uses these tokens for day-time interval start/end fields.
+  # 0=DAY, 1=HOUR, 2=MINUTE, 3=SECOND.
+  defp day_time_interval_field(0), do: "DAY"
+  defp day_time_interval_field(1), do: "HOUR"
+  defp day_time_interval_field(2), do: "MINUTE"
+  defp day_time_interval_field(3), do: "SECOND"
+
+  # 0=YEAR, 1=MONTH.
+  defp year_month_interval_field(0), do: "YEAR"
+  defp year_month_interval_field(1), do: "MONTH"
+
+  defp validate_day_time_interval_fields!(start_field, end_field) do
+    unless is_integer(start_field) and start_field in 0..3 do
+      raise ArgumentError,
+            "invalid day_time_interval start_field: #{inspect(start_field)}. " <>
+              "Expected an integer in 0..3 (0=DAY, 1=HOUR, 2=MINUTE, 3=SECOND)."
+    end
+
+    unless is_integer(end_field) and end_field in 0..3 do
+      raise ArgumentError,
+            "invalid day_time_interval end_field: #{inspect(end_field)}. " <>
+              "Expected an integer in 0..3 (0=DAY, 1=HOUR, 2=MINUTE, 3=SECOND)."
+    end
+
+    if start_field > end_field do
+      raise ArgumentError,
+            "invalid day_time_interval field order: start_field (#{start_field}) " <>
+              "must be <= end_field (#{end_field})."
+    end
+
+    :ok
+  end
+
+  defp validate_year_month_interval_fields!(start_field, end_field) do
+    unless is_integer(start_field) and start_field in 0..1 do
+      raise ArgumentError,
+            "invalid year_month_interval start_field: #{inspect(start_field)}. " <>
+              "Expected an integer in 0..1 (0=YEAR, 1=MONTH)."
+    end
+
+    unless is_integer(end_field) and end_field in 0..1 do
+      raise ArgumentError,
+            "invalid year_month_interval end_field: #{inspect(end_field)}. " <>
+              "Expected an integer in 0..1 (0=YEAR, 1=MONTH)."
+    end
+
+    if start_field > end_field do
+      raise ArgumentError,
+            "invalid year_month_interval field order: start_field (#{start_field}) " <>
+              "must be <= end_field (#{end_field})."
+    end
+
+    :ok
   end
 
   # --- JSON type conversion (Spark JSON format) ---
@@ -263,10 +384,21 @@ defmodule SparkEx.Types do
   defp type_to_json(:binary), do: "binary"
   defp type_to_json(:date), do: "date"
   defp type_to_json(:time), do: "time"
+  defp type_to_json({:time, precision}) when is_integer(precision), do: "time(#{precision})"
   defp type_to_json(:timestamp), do: "timestamp"
   defp type_to_json(:timestamp_ntz), do: "timestamp_ntz"
   defp type_to_json(:day_time_interval), do: "day-time interval"
+
+  defp type_to_json({:day_time_interval, start_field, end_field}) do
+    "day-time interval(#{start_field},#{end_field})"
+  end
+
   defp type_to_json(:year_month_interval), do: "year-month interval"
+
+  defp type_to_json({:year_month_interval, start_field, end_field}) do
+    "year-month interval(#{start_field},#{end_field})"
+  end
+
   defp type_to_json(:calendar_interval), do: "interval"
 
   defp type_to_json({:decimal, precision, scale}) do
@@ -283,7 +415,9 @@ defmodule SparkEx.Types do
 
   defp type_to_json(:variant), do: "variant"
   defp type_to_json(:geometry), do: "geometry"
+  defp type_to_json({:geometry, srid}) when is_integer(srid), do: "geometry(#{srid})"
   defp type_to_json(:geography), do: "geography"
+  defp type_to_json({:geography, srid}) when is_integer(srid), do: "geography(#{srid})"
 
   defp type_to_json({:map, key, value}) do
     %{
@@ -332,23 +466,59 @@ defmodule SparkEx.Types do
       :var_char -> "varchar(#{value.length})"
       :binary -> "binary"
       :date -> "date"
-      :time -> "time"
+      :time -> time_proto_to_json(value)
       :timestamp -> "timestamp"
       :timestamp_ntz -> "timestamp_ntz"
-      :day_time_interval -> "day-time interval"
-      :year_month_interval -> "year-month interval"
+      :day_time_interval -> day_time_interval_proto_to_json(value)
+      :year_month_interval -> year_month_interval_proto_to_json(value)
       :calendar_interval -> "interval"
       :decimal -> "decimal(#{value.precision},#{value.scale})"
       :array -> array_proto_to_json(value)
       :map -> map_proto_to_json(value)
       :struct -> struct_proto_to_json(value)
       :variant -> "variant"
-      :geometry -> "geometry"
-      :geography -> "geography"
+      :geometry -> geometry_proto_to_json(value)
+      :geography -> geography_proto_to_json(value)
       :unparsed -> value.data_type_string
       _ -> raise ArgumentError, "unsupported Spark.Connect.DataType kind: #{inspect(kind)}"
     end
   end
+
+  defp time_proto_to_json(%Spark.Connect.DataType.Time{precision: precision})
+       when is_integer(precision),
+       do: "time(#{precision})"
+
+  defp time_proto_to_json(_), do: "time"
+
+  defp day_time_interval_proto_to_json(%Spark.Connect.DataType.DayTimeInterval{
+         start_field: sf,
+         end_field: ef
+       })
+       when is_integer(sf) and is_integer(ef),
+       do: "day-time interval(#{sf},#{ef})"
+
+  defp day_time_interval_proto_to_json(_), do: "day-time interval"
+
+  defp year_month_interval_proto_to_json(%Spark.Connect.DataType.YearMonthInterval{
+         start_field: sf,
+         end_field: ef
+       })
+       when is_integer(sf) and is_integer(ef),
+       do: "year-month interval(#{sf},#{ef})"
+
+  defp year_month_interval_proto_to_json(_), do: "year-month interval"
+
+  defp geometry_proto_to_json(%Spark.Connect.DataType.Geometry{srid: srid})
+       when is_integer(srid) and srid != 0,
+       do: "geometry(#{srid})"
+
+  defp geometry_proto_to_json(_), do: "geometry"
+
+  defp geography_proto_to_json(%Spark.Connect.DataType.Geography{srid: srid})
+       when is_integer(srid) and srid != 0,
+       do: "geography(#{srid})"
+
+  defp geography_proto_to_json(_), do: "geography"
 
   defp string_proto_to_json(%Spark.Connect.DataType.String{collation: ""}), do: "string"
 
@@ -451,6 +621,12 @@ defmodule SparkEx.Types do
   defp type_to_proto(:time),
     do: %Spark.Connect.DataType{kind: {:time, %Spark.Connect.DataType.Time{}}}
 
+  defp type_to_proto({:time, precision}) when is_integer(precision) do
+    %Spark.Connect.DataType{
+      kind: {:time, %Spark.Connect.DataType.Time{precision: precision}}
+    }
+  end
+
   defp type_to_proto(:timestamp) do
     %Spark.Connect.DataType{kind: {:timestamp, %Spark.Connect.DataType.Timestamp{}}}
   end
@@ -465,9 +641,35 @@ defmodule SparkEx.Types do
     }
   end
 
+  defp type_to_proto({:day_time_interval, start_field, end_field}) do
+    validate_day_time_interval_fields!(start_field, end_field)
+
+    %Spark.Connect.DataType{
+      kind:
+        {:day_time_interval,
+         %Spark.Connect.DataType.DayTimeInterval{
+           start_field: start_field,
+           end_field: end_field
+         }}
+    }
+  end
+
   defp type_to_proto(:year_month_interval) do
     %Spark.Connect.DataType{
       kind: {:year_month_interval, %Spark.Connect.DataType.YearMonthInterval{}}
+    }
+  end
+
+  defp type_to_proto({:year_month_interval, start_field, end_field}) do
+    validate_year_month_interval_fields!(start_field, end_field)
+
+    %Spark.Connect.DataType{
+      kind:
+        {:year_month_interval,
+         %Spark.Connect.DataType.YearMonthInterval{
+           start_field: start_field,
+           end_field: end_field
+         }}
     }
   end
 
@@ -532,8 +734,16 @@ defmodule SparkEx.Types do
   defp type_to_proto(:geometry),
     do: %Spark.Connect.DataType{kind: {:geometry, %Spark.Connect.DataType.Geometry{}}}
 
+  defp type_to_proto({:geometry, srid}) when is_integer(srid) do
+    %Spark.Connect.DataType{kind: {:geometry, %Spark.Connect.DataType.Geometry{srid: srid}}}
+  end
+
   defp type_to_proto(:geography),
     do: %Spark.Connect.DataType{kind: {:geography, %Spark.Connect.DataType.Geography{}}}
+
+  defp type_to_proto({:geography, srid}) when is_integer(srid) do
+    %Spark.Connect.DataType{kind: {:geography, %Spark.Connect.DataType.Geography{srid: srid}}}
+  end
 
   defp type_to_proto({:struct, fields}) do
     proto_fields =

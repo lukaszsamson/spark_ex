@@ -3344,7 +3344,10 @@ defmodule SparkEx.Connect.PlanEncoder do
         {:array,
          %Expression.Literal.Array{
            element_type: element_type,
-           elements: Enum.map(elements, &encode_literal/1)
+           elements:
+             Enum.map(elements, fn el ->
+               el |> encode_literal() |> promote_literal_to_type(element_type)
+             end)
          }}
     }
   end
@@ -3355,7 +3358,12 @@ defmodule SparkEx.Connect.PlanEncoder do
 
     {keys, values} =
       map
-      |> Enum.map(fn {k, v} -> {encode_literal(k), encode_literal(v)} end)
+      |> Enum.map(fn {k, v} ->
+        {
+          k |> encode_literal() |> promote_literal_to_type(key_type),
+          v |> encode_literal() |> promote_literal_to_type(value_type)
+        }
+      end)
       |> Enum.unzip()
 
     %Expression.Literal{
@@ -3371,15 +3379,34 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp encode_literal({:struct, elements}) when is_list(elements) do
-    fields =
-      Enum.with_index(elements, 1)
-      |> Enum.map(fn {value, idx} ->
-        %DataType.StructField{
-          name: "col#{idx}",
-          data_type: infer_literal_data_type(value),
-          nullable: true
-        }
+    {fields, encoded_elements} =
+      elements
+      |> Enum.with_index(1)
+      |> Enum.map(fn {entry, idx} ->
+        case entry do
+          {name, value} when is_binary(name) ->
+            {%DataType.StructField{
+               name: name,
+               data_type: infer_literal_data_type(value),
+               nullable: true
+             }, encode_literal(value)}
+
+          {name, value} when is_atom(name) and not is_nil(name) and not is_boolean(name) ->
+            {%DataType.StructField{
+               name: Atom.to_string(name),
+               data_type: infer_literal_data_type(value),
+               nullable: true
+             }, encode_literal(value)}
+
+          value ->
+            {%DataType.StructField{
+               name: "col#{idx}",
+               data_type: infer_literal_data_type(value),
+               nullable: true
+             }, encode_literal(value)}
+        end
       end)
+      |> Enum.unzip()
 
     struct_type = %DataType{kind: {:struct, %DataType.Struct{fields: fields}}}
 
@@ -3388,7 +3415,7 @@ defmodule SparkEx.Connect.PlanEncoder do
         {:struct,
          %Expression.Literal.Struct{
            struct_type: struct_type,
-           elements: Enum.map(elements, &encode_literal/1)
+           elements: encoded_elements
          }}
     }
   end
@@ -3588,6 +3615,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_set_op_type(:union), do: :SET_OP_TYPE_UNION
   defp encode_set_op_type(:intersect), do: :SET_OP_TYPE_INTERSECT
   defp encode_set_op_type(:except), do: :SET_OP_TYPE_EXCEPT
+  defp encode_set_op_type(:minus), do: :SET_OP_TYPE_EXCEPT
 
   # --- Window frame encoding ---
 
@@ -3604,8 +3632,6 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_frame_type(:rows), do: :FRAME_TYPE_ROW
   defp encode_frame_type(:range), do: :FRAME_TYPE_RANGE
 
-  @jvm_int_min -2_147_483_648
-  @jvm_int_max 2_147_483_647
   @jvm_long_min -9_223_372_036_854_775_808
   @jvm_long_max 9_223_372_036_854_775_807
 
@@ -3613,12 +3639,13 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.Window.WindowFrame.FrameBoundary{boundary: {:current_row, true}}
   end
 
-  defp encode_frame_boundary(:unbounded, _frame_type) do
+  defp encode_frame_boundary(boundary, _frame_type)
+       when boundary in [:unbounded, :unbounded_preceding, :unbounded_following] do
     %Expression.Window.WindowFrame.FrameBoundary{boundary: {:unbounded, true}}
   end
 
   defp encode_frame_boundary(n, _frame_type)
-       when n in [@jvm_int_min, @jvm_int_max, @jvm_long_min, @jvm_long_max] do
+       when n in [@jvm_long_min, @jvm_long_max] do
     %Expression.Window.WindowFrame.FrameBoundary{boundary: {:unbounded, true}}
   end
 
@@ -3708,7 +3735,7 @@ defmodule SparkEx.Connect.PlanEncoder do
         {:array,
          %DataType.Array{
            element_type: infer_collection_element_type(elements),
-           contains_null: Enum.any?(elements, &is_nil/1)
+           contains_null: true
          }}
     }
   end
@@ -3720,20 +3747,38 @@ defmodule SparkEx.Connect.PlanEncoder do
          %DataType.Map{
            key_type: infer_collection_element_type(Map.keys(map)),
            value_type: infer_collection_element_type(Map.values(map)),
-           value_contains_null: Enum.any?(Map.values(map), &is_nil/1)
+           value_contains_null: true
          }}
     }
   end
 
   defp infer_literal_data_type({:struct, elements}) when is_list(elements) do
     fields =
-      Enum.with_index(elements, 1)
-      |> Enum.map(fn {value, idx} ->
-        %DataType.StructField{
-          name: "col#{idx}",
-          data_type: infer_literal_data_type(value),
-          nullable: true
-        }
+      elements
+      |> Enum.with_index(1)
+      |> Enum.map(fn {entry, idx} ->
+        case entry do
+          {name, value} when is_binary(name) ->
+            %DataType.StructField{
+              name: name,
+              data_type: infer_literal_data_type(value),
+              nullable: true
+            }
+
+          {name, value} when is_atom(name) and not is_nil(name) and not is_boolean(name) ->
+            %DataType.StructField{
+              name: Atom.to_string(name),
+              data_type: infer_literal_data_type(value),
+              nullable: true
+            }
+
+          value ->
+            %DataType.StructField{
+              name: "col#{idx}",
+              data_type: infer_literal_data_type(value),
+              nullable: true
+            }
+        end
       end)
 
     %DataType{kind: {:struct, %DataType.Struct{fields: fields}}}
@@ -3757,6 +3802,37 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp infer_literal_data_type(%Time{}), do: %DataType{kind: {:time, %DataType.Time{}}}
   defp infer_literal_data_type(_), do: %DataType{kind: {:string, %DataType.String{}}}
+
+  # Promotes a child literal so its `literal_type` matches the merged
+  # element_type of its container. Without this, a `[1, 2_147_483_648]` array
+  # ends up with `element_type: long` while the first child stays `:integer`,
+  # which Spark refuses to deserialize.
+  defp promote_literal_to_type(
+         %Expression.Literal{literal_type: {:null, _}} = lit,
+         %DataType{} = type
+       ) do
+    %Expression.Literal{lit | literal_type: {:null, type}}
+  end
+
+  defp promote_literal_to_type(
+         %Expression.Literal{literal_type: {:integer, v}} = lit,
+         %DataType{kind: {:long, _}}
+       ),
+       do: %Expression.Literal{lit | literal_type: {:long, v}}
+
+  defp promote_literal_to_type(
+         %Expression.Literal{literal_type: {:integer, v}} = lit,
+         %DataType{kind: {:double, _}}
+       ),
+       do: %Expression.Literal{lit | literal_type: {:double, v * 1.0}}
+
+  defp promote_literal_to_type(
+         %Expression.Literal{literal_type: {:long, v}} = lit,
+         %DataType{kind: {:double, _}}
+       ),
+       do: %Expression.Literal{lit | literal_type: {:double, v * 1.0}}
+
+  defp promote_literal_to_type(%Expression.Literal{} = lit, _), do: lit
 
   defp merge_literal_data_types(%DataType{kind: {:null, _}}, right), do: right
   defp merge_literal_data_types(left, %DataType{kind: {:null, _}}), do: left

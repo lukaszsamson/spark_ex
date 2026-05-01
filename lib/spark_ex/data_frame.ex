@@ -1142,7 +1142,7 @@ defmodule SparkEx.DataFrame do
 
     ensure_observe_supported!(df)
     metric_exprs = Enum.map(exprs, &normalize_column_expr/1)
-    SparkEx.Observation.register_observation(obs, metric_exprs)
+    SparkEx.Observation.register_observation(obs, metric_exprs, fetch_session_id(df.session))
     %__MODULE__{df | _schema: nil, plan: {:collect_metrics, df.plan, name, metric_exprs}}
   end
 
@@ -1153,8 +1153,21 @@ defmodule SparkEx.DataFrame do
 
     ensure_observe_supported!(df)
     metric_exprs = Enum.map(exprs, &normalize_column_expr/1)
-    SparkEx.Observation.register_metric_aliases(name, metric_exprs)
+
+    SparkEx.Observation.register_metric_aliases(
+      name,
+      metric_exprs,
+      fetch_session_id(df.session)
+    )
+
     %__MODULE__{df | _schema: nil, plan: {:collect_metrics, df.plan, name, metric_exprs}}
+  end
+
+  defp fetch_session_id(session) do
+    case fetch_session_state(session) do
+      %SparkEx.Session{session_id: session_id} -> session_id
+      _ -> nil
+    end
   end
 
   @doc """
@@ -2075,6 +2088,19 @@ defmodule SparkEx.DataFrame do
   Backed by the underlying ExecutePlan stream — rows are decoded
   batch-by-batch as Arrow batches arrive, rather than collected on
   the driver up-front.
+
+  The returned enumerable yields `{:ok, row}` for each successfully
+  decoded row, or `{:error, reason}` if the stream fails partway
+  through (gRPC error, integrity-check failure, or arrow-decode error).
+  After an `{:error, _}` element no further elements are emitted, so
+  consumers can pattern-match without `try/rescue`.
+
+      with {:ok, stream} <- DataFrame.to_local_iterator(df) do
+        Enum.reduce_while(stream, [], fn
+          {:ok, row}, acc -> {:cont, [row | acc]}
+          {:error, reason}, acc -> {:halt, {:error, reason, acc}}
+        end)
+      end
   """
   @spec to_local_iterator(t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
   def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
@@ -2082,6 +2108,9 @@ defmodule SparkEx.DataFrame do
       {:ok, stream} ->
         # Pass the underlying %Session{} struct so streaming gRPC errors flow
         # through Errors.from_grpc_error/2 the same way collected results do.
+        # The decoder applies the same session-id integrity checks used by
+        # the collected-result path, surfacing drift as `{:error, _}`
+        # elements instead of merging foreign-session rows silently.
         session_state = fetch_session_state(df.session)
         {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state)}
 
