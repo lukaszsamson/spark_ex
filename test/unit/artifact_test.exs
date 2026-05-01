@@ -229,7 +229,7 @@ defmodule SparkEx.Unit.ArtifactTest do
 
     test "returns error for missing file" do
       missing = tmp_path("missing.txt")
-      assert {:error, {:file_read_error, ^missing, _}} = Artifacts.prepare(missing, "files/")
+      assert {:error, {:file_stat_error, ^missing, _}} = Artifacts.prepare(missing, "files/")
     end
 
     test "raises on duplicate artifact names from different paths" do

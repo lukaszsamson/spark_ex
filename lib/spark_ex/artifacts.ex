@@ -159,9 +159,10 @@ defmodule SparkEx.Artifacts do
     |> Kernel.<>("/")
   end
 
-  # Splits a `path#alias` string into {real_path, alias_or_nil}. The
-  # fragment is the *last* `#`-separated component when present. Paths
-  # without `#` return `{path, nil}`.
+  # Splits a `path#alias` string into `{real_path, alias_or_nil}`. The
+  # fragment after the *first* `#` is treated as the alias (any further
+  # `#` characters are kept verbatim in the alias). Paths without `#`
+  # return `{path, nil}`.
   defp split_fragment(raw) when is_binary(raw) do
     case String.split(raw, "#", parts: 2) do
       [path] -> {path, nil}
@@ -188,7 +189,7 @@ defmodule SparkEx.Artifacts do
           {:halt, {:error, {:not_a_regular_file, real_path, type}}}
 
         {:error, reason} ->
-          {:halt, {:error, {:file_read_error, real_path, reason}}}
+          {:halt, {:error, {:file_stat_error, real_path, reason}}}
       end
     end)
     |> case do

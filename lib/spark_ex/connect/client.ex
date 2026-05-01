@@ -1135,7 +1135,7 @@ defmodule SparkEx.Connect.Client do
 
           cond do
             size > chunk_size ->
-              flush_emit = if batch == [], do: [], else: [{:batch, Enum.reverse(batch)}]
+              flush_emit = if batch == [], do: [], else: [{:batch, batch}]
               {flush_emit ++ [large_producer(entry)], {[], 0}}
 
             batch_size + size > chunk_size and batch != [] ->
@@ -1576,44 +1576,66 @@ defmodule SparkEx.Connect.Client do
   defp file_chunk_request_stream(session, name, path, total_bytes, chunk_size) do
     num_chunks = max(div(total_bytes + chunk_size - 1, chunk_size), 1)
 
-    path
-    |> File.stream!(chunk_size)
-    |> Stream.transform(:first, fn chunk, acc ->
-      case acc do
-        :first ->
-          begin = %AddArtifactsRequest{
-            session_id: session.session_id,
-            client_observed_server_side_session_id: session.server_side_session_id,
-            user_context: UserContextExtensions.build_user_context(session.user_id),
-            client_type: session.client_type,
-            payload:
-              {:begin_chunk,
-               %AddArtifactsRequest.BeginChunkedArtifact{
-                 name: name,
-                 total_bytes: total_bytes,
-                 num_chunks: num_chunks,
-                 initial_chunk: %AddArtifactsRequest.ArtifactChunk{
-                   data: chunk,
-                   crc: :erlang.crc32(chunk)
-                 }
-               }}
-          }
+    if total_bytes == 0 do
+      [empty_begin_chunk_request(session, name, num_chunks)]
+    else
+      path
+      |> File.stream!([], chunk_size)
+      |> Stream.transform(:first, fn chunk, acc ->
+        case acc do
+          :first ->
+            begin = %AddArtifactsRequest{
+              session_id: session.session_id,
+              client_observed_server_side_session_id: session.server_side_session_id,
+              user_context: UserContextExtensions.build_user_context(session.user_id),
+              client_type: session.client_type,
+              payload:
+                {:begin_chunk,
+                 %AddArtifactsRequest.BeginChunkedArtifact{
+                   name: name,
+                   total_bytes: total_bytes,
+                   num_chunks: num_chunks,
+                   initial_chunk: %AddArtifactsRequest.ArtifactChunk{
+                     data: chunk,
+                     crc: :erlang.crc32(chunk)
+                   }
+                 }}
+            }
 
-          {[begin], :rest}
+            {[begin], :rest}
 
-        :rest ->
-          req = %AddArtifactsRequest{
-            session_id: session.session_id,
-            client_observed_server_side_session_id: session.server_side_session_id,
-            user_context: UserContextExtensions.build_user_context(session.user_id),
-            client_type: session.client_type,
-            payload:
-              {:chunk, %AddArtifactsRequest.ArtifactChunk{data: chunk, crc: :erlang.crc32(chunk)}}
-          }
+          :rest ->
+            req = %AddArtifactsRequest{
+              session_id: session.session_id,
+              client_observed_server_side_session_id: session.server_side_session_id,
+              user_context: UserContextExtensions.build_user_context(session.user_id),
+              client_type: session.client_type,
+              payload:
+                {:chunk,
+                 %AddArtifactsRequest.ArtifactChunk{data: chunk, crc: :erlang.crc32(chunk)}}
+            }
 
-          {[req], :rest}
-      end
-    end)
+            {[req], :rest}
+        end
+      end)
+    end
+  end
+
+  defp empty_begin_chunk_request(session, name, num_chunks) do
+    %AddArtifactsRequest{
+      session_id: session.session_id,
+      client_observed_server_side_session_id: session.server_side_session_id,
+      user_context: UserContextExtensions.build_user_context(session.user_id),
+      client_type: session.client_type,
+      payload:
+        {:begin_chunk,
+         %AddArtifactsRequest.BeginChunkedArtifact{
+           name: name,
+           total_bytes: 0,
+           num_chunks: num_chunks,
+           initial_chunk: %AddArtifactsRequest.ArtifactChunk{data: <<>>, crc: :erlang.crc32(<<>>)}
+         }}
+    }
   end
 
   defp chunk_binary(data, chunk_size), do: do_chunk_binary(data, chunk_size, [])
