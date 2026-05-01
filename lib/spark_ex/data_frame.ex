@@ -668,7 +668,6 @@ defmodule SparkEx.DataFrame do
   def with_columns(%__MODULE__{} = df, columns) when is_map(columns) do
     aliases =
       columns
-      |> Enum.sort_by(fn {name, _} -> name end)
       |> Enum.map(fn
         {name, %Column{} = col} when is_binary(name) -> {:alias, col.expr, name}
         {name, value} when is_binary(name) -> {:alias, {:lit, value}, name}
@@ -1027,7 +1026,7 @@ defmodule SparkEx.DataFrame do
 
     resolved_seed =
       case seed_or_opts do
-        nil -> System.unique_integer([:positive])
+        nil -> :rand.uniform(0x7FFFFFFFFFFFFFFF)
         s when is_integer(s) -> s
         other -> raise ArgumentError, "expected seed to be integer or nil, got: #{inspect(other)}"
       end
@@ -2010,17 +2009,30 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
-  Returns a lazy enumerable over collected rows.
+  Returns a lazy enumerable over the DataFrame's rows.
+
+  Backed by the underlying ExecutePlan stream — rows are decoded
+  batch-by-batch as Arrow batches arrive, rather than collected on
+  the driver up-front.
   """
   @spec to_local_iterator(t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
   def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
-    case SparkEx.Session.execute_collect(df.session, df.plan, merge_tags(df, opts)) do
-      {:ok, rows} ->
-        {:ok, Stream.map(rows, & &1)}
+    case SparkEx.Session.execute_plan_stream(df.session, df.plan, merge_tags(df, opts)) do
+      {:ok, stream} ->
+        # Pass the underlying %Session{} struct so streaming gRPC errors flow
+        # through Errors.from_grpc_error/2 the same way collected results do.
+        session_state = fetch_session_state(df.session)
+        {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state)}
 
       {:error, _} = error ->
         error
     end
+  end
+
+  defp fetch_session_state(session) do
+    SparkEx.Session.get_state(session)
+  catch
+    :exit, _ -> nil
   end
 
   @doc """
@@ -2124,7 +2136,14 @@ defmodule SparkEx.DataFrame do
   def explain(%__MODULE__{} = df, false), do: explain(df, :simple)
 
   def explain(%__MODULE__{} = df, mode) when is_binary(mode) do
-    explain(df, String.to_existing_atom(mode))
+    case mode do
+      "simple" -> explain(df, :simple)
+      "extended" -> explain(df, :extended)
+      "codegen" -> explain(df, :codegen)
+      "cost" -> explain(df, :cost)
+      "formatted" -> explain(df, :formatted)
+      _ -> {:error, {:invalid_explain_mode, mode}}
+    end
   end
 
   def explain(%__MODULE__{} = df, mode) when is_atom(mode) do
@@ -2412,13 +2431,7 @@ defmodule SparkEx.DataFrame do
   defp normalize_hint_parameters(parameters) do
     parameters
     |> List.wrap()
-    |> Enum.flat_map(fn
-      vals when is_list(vals) ->
-        if Enum.all?(vals, &valid_hint_param?/1), do: vals, else: [vals]
-
-      val ->
-        [val]
-    end)
+    |> unwrap_single_list_parameter()
     |> Enum.map(fn
       %Column{} = c ->
         c.expr
@@ -2432,8 +2445,9 @@ defmodule SparkEx.DataFrame do
     end)
   end
 
-  defp valid_hint_param?(%Column{}), do: true
-  defp valid_hint_param?(v), do: primitive_hint?(v)
+  # PySpark special case: when a single argument is a list, unwrap it once.
+  defp unwrap_single_list_parameter([single]) when is_list(single), do: single
+  defp unwrap_single_list_parameter(other), do: other
 
   defp primitive_hint?(v), do: is_binary(v) or is_integer(v) or is_float(v)
 
@@ -2579,24 +2593,66 @@ defmodule SparkEx.DataFrame do
       :none ->
         {:ok, %Spark.Connect.StorageLevel{}}
 
+      # Values mirror pyspark/storagelevel.py StorageLevel(disk, memory,
+      # off_heap, deserialized, replication). Every flag is set explicitly
+      # so the preset semantics don't drift if proto defaults change.
       :disk_only ->
-        {:ok, %Spark.Connect.StorageLevel{use_disk: true, replication: 1}}
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: false,
+           use_off_heap: false,
+           deserialized: false,
+           replication: 1
+         }}
 
       :disk_only_2 ->
-        {:ok, %Spark.Connect.StorageLevel{use_disk: true, replication: 2}}
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: false,
+           use_off_heap: false,
+           deserialized: false,
+           replication: 2
+         }}
+
+      :disk_only_3 ->
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: false,
+           use_off_heap: false,
+           deserialized: false,
+           replication: 3
+         }}
 
       :memory_only ->
-        {:ok, %Spark.Connect.StorageLevel{use_memory: true, deserialized: true, replication: 1}}
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: false,
+           use_memory: true,
+           use_off_heap: false,
+           deserialized: false,
+           replication: 1
+         }}
 
       :memory_only_2 ->
-        {:ok, %Spark.Connect.StorageLevel{use_memory: true, deserialized: true, replication: 2}}
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: false,
+           use_memory: true,
+           use_off_heap: false,
+           deserialized: false,
+           replication: 2
+         }}
 
       :memory_and_disk ->
         {:ok,
          %Spark.Connect.StorageLevel{
            use_disk: true,
            use_memory: true,
-           deserialized: true,
+           use_off_heap: false,
+           deserialized: false,
            replication: 1
          }}
 
@@ -2605,20 +2661,28 @@ defmodule SparkEx.DataFrame do
          %Spark.Connect.StorageLevel{
            use_disk: true,
            use_memory: true,
-           deserialized: true,
+           use_off_heap: false,
+           deserialized: false,
            replication: 2
          }}
 
       :off_heap ->
-        {:ok, %Spark.Connect.StorageLevel{use_off_heap: true, replication: 1}}
-
-      :memory_and_disk_deser ->
         {:ok,
          %Spark.Connect.StorageLevel{
            use_disk: true,
            use_memory: true,
            use_off_heap: true,
            deserialized: false,
+           replication: 1
+         }}
+
+      :memory_and_disk_deser ->
+        {:ok,
+         %Spark.Connect.StorageLevel{
+           use_disk: true,
+           use_memory: true,
+           use_off_heap: false,
+           deserialized: true,
            replication: 1
          }}
 

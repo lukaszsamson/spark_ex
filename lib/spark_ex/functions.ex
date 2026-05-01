@@ -373,18 +373,23 @@ defmodule SparkEx.Functions do
   Most frequent value in group. Optional deterministic parameter (Spark 4.x+).
   """
   @spec mode(Column.t() | String.t(), boolean()) :: Column.t()
-  def mode(col, deterministic) when is_boolean(deterministic), do: mode(col)
+  def mode(col, deterministic) when is_boolean(deterministic) do
+    %Column{expr: {:fn, "mode", [to_expr(col), {:lit, deterministic}], false}}
+  end
 
   @doc """
-  Returns randomly shuffled array. Optional `seed` parameter.
+  Returns randomly shuffled array. PySpark generates a random seed when no
+  seed is provided so the function is non-deterministic by default.
   """
   @spec shuffle(Column.t() | String.t()) :: Column.t()
   def shuffle(col) do
-    %Column{expr: {:fn, "shuffle", [to_expr(col)], false}}
+    shuffle(col, :rand.uniform(0x7FFFFFFFFFFFFFFF))
   end
 
   @spec shuffle(Column.t() | String.t(), integer()) :: Column.t()
-  def shuffle(col, seed) when is_integer(seed), do: shuffle(col)
+  def shuffle(col, seed) when is_integer(seed) do
+    %Column{expr: {:fn, "shuffle", [to_expr(col), {:lit, seed}], false}}
+  end
 
   @doc """
   Converts unix timestamp to string. Always sends format (default "yyyy-MM-dd HH:mm:ss").
@@ -405,11 +410,21 @@ defmodule SparkEx.Functions do
   end
 
   @doc """
-  Replaces occurrences of search string. When `replacement` is omitted, uses empty string.
+  Replaces occurrences of search string with empty string (2-arg form).
+  """
+  @spec replace(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
+  def replace(src, search) do
+    %Column{
+      expr: {:fn, "replace", [to_expr(src), to_lit_string_or_expr(search)], false}
+    }
+  end
+
+  @doc """
+  Replaces occurrences of search string with the given replacement (3-arg form).
   """
   @spec replace(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t()) ::
           Column.t()
-  def replace(src, search, replacement \\ "") do
+  def replace(src, search, replacement) do
     %Column{
       expr:
         {:fn, "replace",
@@ -429,15 +444,11 @@ defmodule SparkEx.Functions do
       split(col("s"), "\\\\.")
       split(col("s"), "\\\\.", 3)
   """
-  @spec split(Column.t() | String.t(), String.t(), integer() | nil) :: Column.t()
-  def split(col, pattern, limit \\ nil) do
-    args =
-      case limit do
-        nil -> [to_expr(col), lit_expr(pattern)]
-        n -> [to_expr(col), lit_expr(pattern), lit_expr(n)]
-      end
-
-    %Column{expr: {:fn, "split", args, false}}
+  @spec split(Column.t() | String.t(), String.t(), integer()) :: Column.t()
+  def split(col, pattern, limit \\ -1) when is_integer(limit) do
+    %Column{
+      expr: {:fn, "split", [to_expr(col), lit_expr(pattern), lit_expr(limit)], false}
+    }
   end
 
   @doc """
@@ -1634,6 +1645,16 @@ defmodule SparkEx.Functions do
     %Column{
       expr: {:fn, "percentile", [to_expr(col), pct_expr, to_col_or_lit(frequency)], false}
     }
+  end
+
+  @doc """
+  Approximate percentile with PySpark's default accuracy (10000).
+
+  Equivalent to `percentile_approx(col, percentage, 10000)`.
+  """
+  @spec percentile_approx(Column.t() | String.t(), number() | [number()]) :: Column.t()
+  def percentile_approx(col, percentage) do
+    percentile_approx(col, percentage, 10000)
   end
 
   @doc "Generates a random UUID string."

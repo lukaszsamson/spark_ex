@@ -111,17 +111,7 @@ defmodule SparkEx.M13.NATest do
       df = NA.replace(make_df(), %{"N/A" => "unknown"}, nil, subset: ["name"])
 
       assert %DataFrame{
-               plan:
-                 {:with_columns, :test_plan,
-                  [
-                    {:alias,
-                     {:fn, "when",
-                      [
-                        {:fn, "<=>", [{:col, "name"}, {:lit, "N/A"}], false},
-                        {:lit, "unknown"},
-                        {:col, "name"}
-                      ], false}, "name"}
-                  ]}
+               plan: {:na_replace, :test_plan, ["name"], [{"N/A", "unknown"}]}
              } = df
     end
 
@@ -129,14 +119,7 @@ defmodule SparkEx.M13.NATest do
       df = NA.replace(make_df(), %{1 => 100}, subset: ["a"])
 
       assert %DataFrame{
-               plan:
-                 {:with_columns, :test_plan,
-                  [
-                    {:alias,
-                     {:fn, "when",
-                      [{:fn, "<=>", [{:col, "a"}, {:lit, 1}], false}, {:lit, 100}, {:col, "a"}],
-                      false}, "a"}
-                  ]}
+               plan: {:na_replace, :test_plan, ["a"], [{1, 100}]}
              } = df
     end
   end
@@ -198,17 +181,7 @@ defmodule SparkEx.M13.NATest do
       df = DataFrame.replace(make_df(), %{"a" => "b"}, subset: ["col1"])
 
       assert %DataFrame{
-               plan:
-                 {:with_columns, :test_plan,
-                  [
-                    {:alias,
-                     {:fn, "when",
-                      [
-                        {:fn, "<=>", [{:col, "col1"}, {:lit, "a"}], false},
-                        {:lit, "b"},
-                        {:col, "col1"}
-                      ], false}, "col1"}
-                  ]}
+               plan: {:na_replace, :test_plan, ["col1"], [{"a", "b"}]}
              } = df
     end
 

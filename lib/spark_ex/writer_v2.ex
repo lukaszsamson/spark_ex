@@ -181,9 +181,13 @@ defmodule SparkEx.WriterV2 do
   @doc """
   Overwrites rows in the table.
 
+  Without a condition, this maps to `overwritePartitions()` (the
+  no-condition form in Spark's `DataFrameWriterV2`). Pass a `Column`
+  condition to perform a conditional overwrite.
+
   ## Examples
 
-      # Overwrite all data
+      # Overwrite all touched partitions (no condition)
       overwrite(writer)
 
       # Overwrite with condition
@@ -191,12 +195,7 @@ defmodule SparkEx.WriterV2 do
   """
   @spec overwrite(t()) :: :ok | {:error, term()}
   def overwrite(%__MODULE__{} = writer) do
-    execute_v2(writer, :overwrite, [])
-  end
-
-  @spec overwrite(t(), keyword()) :: :ok | {:error, term()}
-  def overwrite(%__MODULE__{} = writer, opts) when is_list(opts) do
-    execute_v2(writer, :overwrite, opts)
+    execute_v2(writer, :overwrite_partitions, [])
   end
 
   @doc """
