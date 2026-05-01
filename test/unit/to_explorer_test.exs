@@ -5,7 +5,9 @@ defmodule SparkEx.DataFrame.ToExplorerTest do
 
   describe "to_explorer/2 plan construction" do
     test "to_explorer is listed as an action" do
-      # Ensure to_explorer/2 exists on the module
+      # `function_exported?/3` returns false until the module is loaded,
+      # which is matrix-dependent under async tests. Force-load first.
+      Code.ensure_loaded!(DataFrame)
       assert function_exported?(DataFrame, :to_explorer, 2)
       assert function_exported?(DataFrame, :to_explorer, 1)
     end

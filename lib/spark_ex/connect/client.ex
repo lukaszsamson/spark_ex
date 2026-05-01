@@ -30,7 +30,7 @@ defmodule SparkEx.Connect.Client do
     Plan
   }
 
-  alias SparkEx.Connect.{Errors, ResultDecoder}
+  alias SparkEx.Connect.{Errors, ResultDecoder, SessionIntegrity}
   alias SparkEx.Internal.UUID
   alias SparkEx.{ManagedStream, RetryPolicyRegistry, UserContextExtensions}
 
@@ -58,18 +58,17 @@ defmodule SparkEx.Connect.Client do
         analyze: {:spark_version, %AnalyzePlanRequest.SparkVersion{}}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request,
+           extra_metadata: %{analyze: :spark_version}
+         ) do
       {:ok, %AnalyzePlanResponse{result: {:spark_version, %{version: version}}} = resp} ->
         {:ok, version, resp.server_side_session_id}
 
       {:ok, %AnalyzePlanResponse{result: other}} ->
         {:error, {:unexpected_response, other}}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -84,15 +83,12 @@ defmodule SparkEx.Connect.Client do
         analyze: {:schema, %AnalyzePlanRequest.Schema{plan: plan}}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request, extra_metadata: %{analyze: :schema}) do
       {:ok, %AnalyzePlanResponse{result: {:schema, %{schema: schema}}} = resp} ->
         {:ok, schema, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -108,15 +104,14 @@ defmodule SparkEx.Connect.Client do
           analyze: {:explain, %AnalyzePlanRequest.Explain{plan: plan, explain_mode: explain_mode}}
         )
 
-      case Stub.analyze_plan(session.channel, request) do
+      case dispatch_unary_rpc(:analyze_plan, session, request,
+             extra_metadata: %{analyze: :explain}
+           ) do
         {:ok, %AnalyzePlanResponse{result: {:explain, %{explain_string: str}}} = resp} ->
           {:ok, str, resp.server_side_session_id}
 
-        {:error, %GRPC.RPCError{} = error} ->
-          {:error, Errors.from_grpc_error(error, session)}
-
-        {:error, reason} ->
-          {:error, reason}
+        {:error, _} = error ->
+          error
       end
     end
   end
@@ -145,15 +140,14 @@ defmodule SparkEx.Connect.Client do
         analyze: {:tree_string, tree_string_msg}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request,
+           extra_metadata: %{analyze: :tree_string}
+         ) do
       {:ok, %AnalyzePlanResponse{result: {:tree_string, %{tree_string: str}}} = resp} ->
         {:ok, str, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -168,15 +162,14 @@ defmodule SparkEx.Connect.Client do
         analyze: {:is_local, %AnalyzePlanRequest.IsLocal{plan: plan}}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request,
+           extra_metadata: %{analyze: :is_local}
+         ) do
       {:ok, %AnalyzePlanResponse{result: {:is_local, %{is_local: is_local}}} = resp} ->
         {:ok, is_local, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -191,15 +184,14 @@ defmodule SparkEx.Connect.Client do
         analyze: {:is_streaming, %AnalyzePlanRequest.IsStreaming{plan: plan}}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request,
+           extra_metadata: %{analyze: :is_streaming}
+         ) do
       {:ok, %AnalyzePlanResponse{result: {:is_streaming, %{is_streaming: is_streaming}}} = resp} ->
         {:ok, is_streaming, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -214,15 +206,14 @@ defmodule SparkEx.Connect.Client do
         analyze: {:input_files, %AnalyzePlanRequest.InputFiles{plan: plan}}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request,
+           extra_metadata: %{analyze: :input_files}
+         ) do
       {:ok, %AnalyzePlanResponse{result: {:input_files, %{files: files}}} = resp} ->
         {:ok, files, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -237,15 +228,14 @@ defmodule SparkEx.Connect.Client do
         analyze: {:ddl_parse, %AnalyzePlanRequest.DDLParse{ddl_string: ddl_string}}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request,
+           extra_metadata: %{analyze: :ddl_parse}
+         ) do
       {:ok, %AnalyzePlanResponse{result: {:ddl_parse, %{parsed: parsed}}} = resp} ->
         {:ok, parsed, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -260,15 +250,14 @@ defmodule SparkEx.Connect.Client do
         analyze: {:json_to_ddl, %AnalyzePlanRequest.JsonToDDL{json_string: json_string}}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request,
+           extra_metadata: %{analyze: :json_to_ddl}
+         ) do
       {:ok, %AnalyzePlanResponse{result: {:json_to_ddl, %{ddl_string: ddl}}} = resp} ->
         {:ok, ddl, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -288,15 +277,14 @@ defmodule SparkEx.Connect.Client do
            }}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request,
+           extra_metadata: %{analyze: :same_semantics}
+         ) do
       {:ok, %AnalyzePlanResponse{result: {:same_semantics, %{result: result}}} = resp} ->
         {:ok, result, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -311,15 +299,14 @@ defmodule SparkEx.Connect.Client do
         analyze: {:semantic_hash, %AnalyzePlanRequest.SemanticHash{plan: plan}}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request,
+           extra_metadata: %{analyze: :semantic_hash}
+         ) do
       {:ok, %AnalyzePlanResponse{result: {:semantic_hash, %{result: hash}}} = resp} ->
         {:ok, hash, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -354,15 +341,12 @@ defmodule SparkEx.Connect.Client do
            }}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request, extra_metadata: %{analyze: :persist}) do
       {:ok, %AnalyzePlanResponse{result: {:persist, _}} = resp} ->
         {:ok, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -388,15 +372,14 @@ defmodule SparkEx.Connect.Client do
            }}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request,
+           extra_metadata: %{analyze: :unpersist}
+         ) do
       {:ok, %AnalyzePlanResponse{result: {:unpersist, _}} = resp} ->
         {:ok, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -411,17 +394,16 @@ defmodule SparkEx.Connect.Client do
         analyze: {:get_storage_level, %AnalyzePlanRequest.GetStorageLevel{relation: relation}}
       )
 
-    case Stub.analyze_plan(session.channel, request) do
+    case dispatch_unary_rpc(:analyze_plan, session, request,
+           extra_metadata: %{analyze: :get_storage_level}
+         ) do
       {:ok,
        %AnalyzePlanResponse{result: {:get_storage_level, %{storage_level: storage_level}}} =
            resp} ->
         {:ok, storage_level, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -662,16 +644,13 @@ defmodule SparkEx.Connect.Client do
         }
       )
 
-    case Stub.config(session.channel, request) do
+    case dispatch_unary_rpc(:config, session, request, extra_metadata: %{operation: :set}) do
       {:ok, %ConfigResponse{} = resp} ->
         log_config_warnings(resp)
         {:ok, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -690,17 +669,14 @@ defmodule SparkEx.Connect.Client do
         }
       )
 
-    case Stub.config(session.channel, request) do
+    case dispatch_unary_rpc(:config, session, request, extra_metadata: %{operation: :get}) do
       {:ok, %ConfigResponse{pairs: pairs} = resp} ->
         log_config_warnings(resp)
         result = Enum.map(pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
         {:ok, result, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -725,17 +701,16 @@ defmodule SparkEx.Connect.Client do
         }
       )
 
-    case Stub.config(session.channel, request) do
+    case dispatch_unary_rpc(:config, session, request,
+           extra_metadata: %{operation: :get_with_default}
+         ) do
       {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
         log_config_warnings(resp)
         result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
         {:ok, result, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -756,17 +731,14 @@ defmodule SparkEx.Connect.Client do
         }
       )
 
-    case Stub.config(session.channel, request) do
+    case dispatch_unary_rpc(:config, session, request, extra_metadata: %{operation: :get_option}) do
       {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
         log_config_warnings(resp)
         result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
         {:ok, result, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -792,17 +764,14 @@ defmodule SparkEx.Connect.Client do
         }
       )
 
-    case Stub.config(session.channel, request) do
+    case dispatch_unary_rpc(:config, session, request, extra_metadata: %{operation: :get_all}) do
       {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
         log_config_warnings(resp)
         result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
         {:ok, result, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -819,16 +788,13 @@ defmodule SparkEx.Connect.Client do
         }
       )
 
-    case Stub.config(session.channel, request) do
+    case dispatch_unary_rpc(:config, session, request, extra_metadata: %{operation: :unset}) do
       {:ok, %ConfigResponse{} = resp} ->
         log_config_warnings(resp)
         {:ok, resp.server_side_session_id}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -849,7 +815,9 @@ defmodule SparkEx.Connect.Client do
         }
       )
 
-    case Stub.config(session.channel, request) do
+    case dispatch_unary_rpc(:config, session, request,
+           extra_metadata: %{operation: :is_modifiable}
+         ) do
       {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
         log_config_warnings(resp)
 
@@ -858,11 +826,8 @@ defmodule SparkEx.Connect.Client do
           {:error, _} = err -> err
         end
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -940,25 +905,18 @@ defmodule SparkEx.Connect.Client do
       new_session_id: new_session_id
     }
 
-    metadata = %{rpc: :clone_session, session_id: session.session_id}
+    case dispatch_unary_rpc(:clone_session, session, request) do
+      {:ok, %CloneSessionResponse{} = resp} ->
+        {:ok,
+         %{
+           new_session_id: resp.new_session_id,
+           new_server_side_session_id: blank_to_nil(resp.new_server_side_session_id),
+           source_server_side_session_id: blank_to_nil(resp.server_side_session_id)
+         }}
 
-    rpc_telemetry_span(metadata, fn ->
-      case Stub.clone_session(session.channel, request) do
-        {:ok, %CloneSessionResponse{} = resp} ->
-          {:ok,
-           %{
-             new_session_id: resp.new_session_id,
-             new_server_side_session_id: blank_to_nil(resp.new_server_side_session_id),
-             source_server_side_session_id: blank_to_nil(resp.server_side_session_id)
-           }}
-
-        {:error, %GRPC.RPCError{} = error} ->
-          {:error, Errors.from_grpc_error(error, session)}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end)
+      {:error, _} = error ->
+        error
+    end
   end
 
   @doc """
@@ -973,20 +931,13 @@ defmodule SparkEx.Connect.Client do
       client_type: session.client_type
     }
 
-    metadata = %{rpc: :release_session, session_id: session.session_id}
+    case dispatch_unary_rpc(:release_session, session, request) do
+      {:ok, %ReleaseSessionResponse{} = resp} ->
+        {:ok, resp.server_side_session_id}
 
-    rpc_telemetry_span(metadata, fn ->
-      case Stub.release_session(session.channel, request) do
-        {:ok, %ReleaseSessionResponse{} = resp} ->
-          {:ok, resp.server_side_session_id}
-
-        {:error, %GRPC.RPCError{} = error} ->
-          {:error, Errors.from_grpc_error(error, session)}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end)
+      {:error, _} = error ->
+        error
+    end
   end
 
   # --- Interrupt RPC ---
@@ -1004,20 +955,14 @@ defmodule SparkEx.Connect.Client do
           {:ok, [String.t()], String.t() | nil} | {:error, term()}
   def interrupt(session, type) do
     request = build_interrupt_request(session, type)
-    metadata = %{rpc: :interrupt, session_id: session.session_id, interrupt_type: type}
 
-    rpc_telemetry_span(metadata, fn ->
-      case Stub.interrupt(session.channel, request) do
-        {:ok, %InterruptResponse{} = resp} ->
-          {:ok, resp.interrupted_ids, resp.server_side_session_id}
+    case dispatch_unary_rpc(:interrupt, session, request, extra_metadata: %{interrupt_type: type}) do
+      {:ok, %InterruptResponse{} = resp} ->
+        {:ok, resp.interrupted_ids, resp.server_side_session_id}
 
-        {:error, %GRPC.RPCError{} = error} ->
-          {:error, Errors.from_grpc_error(error, session)}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end)
+      {:error, _} = error ->
+        error
+    end
   end
 
   defp build_interrupt_request(session, :all) do
@@ -1070,23 +1015,16 @@ defmodule SparkEx.Connect.Client do
       names: names
     }
 
-    metadata = %{rpc: :artifact_status, session_id: session.session_id}
+    case dispatch_unary_rpc(:artifact_status, session, request) do
+      {:ok, %ArtifactStatusesResponse{} = resp} ->
+        statuses =
+          Map.new(resp.statuses, fn {name, %{exists: exists}} -> {name, exists} end)
 
-    rpc_telemetry_span(metadata, fn ->
-      case Stub.artifact_status(session.channel, request) do
-        {:ok, %ArtifactStatusesResponse{} = resp} ->
-          statuses =
-            Map.new(resp.statuses, fn {name, %{exists: exists}} -> {name, exists} end)
+        {:ok, statuses, resp.server_side_session_id}
 
-          {:ok, statuses, resp.server_side_session_id}
-
-        {:error, %GRPC.RPCError{} = error} ->
-          {:error, Errors.from_grpc_error(error, session)}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end)
+      {:error, _} = error ->
+        error
+    end
   end
 
   @doc """
@@ -1118,12 +1056,18 @@ defmodule SparkEx.Connect.Client do
 
           case GRPC.Stub.recv(stream) do
             {:ok, %AddArtifactsResponse{} = resp} ->
-              summaries =
-                Enum.map(resp.artifacts, fn summary ->
-                  {summary.name, summary.is_crc_successful}
-                end)
+              case SessionIntegrity.validate_response(resp, session) do
+                {:ok, _} ->
+                  summaries =
+                    Enum.map(resp.artifacts, fn summary ->
+                      {summary.name, summary.is_crc_successful}
+                    end)
 
-              {:ok, summaries, resp.server_side_session_id}
+                  {:ok, summaries, resp.server_side_session_id}
+
+                {:error, _} = error ->
+                  error
+              end
 
             {:error, %GRPC.RPCError{} = error} ->
               {:error, Errors.from_grpc_error(error, session)}
@@ -1241,24 +1185,16 @@ defmodule SparkEx.Connect.Client do
       release: release
     }
 
-    metadata = %{
-      rpc: :release_execute,
-      session_id: session.session_id,
-      operation_id: operation_id
-    }
+    case dispatch_unary_rpc(:release_execute, session, request,
+           timeout: timeout,
+           extra_metadata: %{operation_id: operation_id}
+         ) do
+      {:ok, %ReleaseExecuteResponse{} = resp} ->
+        {:ok, resp.server_side_session_id}
 
-    rpc_telemetry_span(metadata, fn ->
-      case Stub.release_execute(session.channel, request, timeout: timeout) do
-        {:ok, %ReleaseExecuteResponse{} = resp} ->
-          {:ok, resp.server_side_session_id}
-
-        {:error, %GRPC.RPCError{} = error} ->
-          {:error, Errors.from_grpc_error(error, session)}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end)
+      {:error, _} = error ->
+        error
+    end
   end
 
   # --- Reattachable execution helpers ---
@@ -1888,6 +1824,88 @@ defmodule SparkEx.Connect.Client do
       ] ++ fields
     )
   end
+
+  # --- Unary RPC dispatch wrapper (A3) ---
+  #
+  # Every unary (single-response) gRPC call funnels through this helper.
+  # It guarantees three things on every dispatch:
+  #
+  #   1. Telemetry — start/stop spans with a consistent metadata shape.
+  #   2. Session integrity — the response's `session_id` matches our
+  #      client id, and the `server_side_session_id` has not rotated
+  #      since being pinned (handled by `SessionIntegrity.validate_response/2`).
+  #   3. Error normalization — `%GRPC.RPCError{}` is converted to
+  #      `%SparkEx.Error.Remote{}` via `Errors.from_grpc_error/2`.
+  #
+  # Streaming RPCs do not pass through this helper. `ExecutePlan` and
+  # `ReattachExecute` perform per-message integrity checks inside
+  # `ResultDecoder`; `AddArtifacts` is client-streaming with a single
+  # response and is validated inline in `add_artifacts/2`. All three
+  # paths share the same `SessionIntegrity` module.
+  @typep unary_rpc ::
+           :analyze_plan
+           | :config
+           | :clone_session
+           | :release_session
+           | :interrupt
+           | :artifact_status
+           | :release_execute
+
+  @spec dispatch_unary_rpc(unary_rpc, SparkEx.Session.t(), struct(), keyword()) ::
+          {:ok, struct()} | {:error, term()}
+  defp dispatch_unary_rpc(rpc, session, request, opts \\ []) do
+    {extra_metadata, opts} = Keyword.pop(opts, :extra_metadata, %{})
+    {grpc_opts, _} = Keyword.split(opts, [:timeout])
+
+    # Reserved keys (`:rpc`, `:session_id`) win over `extra_metadata` so
+    # callers can't accidentally corrupt telemetry attribution by passing
+    # a colliding key.
+    metadata =
+      Map.merge(
+        extra_metadata,
+        %{rpc: rpc, session_id: session.session_id}
+      )
+
+    rpc_telemetry_span(metadata, fn ->
+      case do_unary_stub_call(rpc, session.channel, request, grpc_opts) do
+        {:ok, response} ->
+          case SessionIntegrity.validate_response(response, session) do
+            {:ok, _server_session_id} ->
+              {:ok, response}
+
+            {:error, _reason} = error ->
+              error
+          end
+
+        {:error, %GRPC.RPCError{} = error} ->
+          {:error, Errors.from_grpc_error(error, session)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
+  end
+
+  defp do_unary_stub_call(:analyze_plan, channel, request, opts),
+    do: Stub.analyze_plan(channel, request, opts)
+
+  defp do_unary_stub_call(:config, channel, request, opts),
+    do: Stub.config(channel, request, opts)
+
+  defp do_unary_stub_call(:clone_session, channel, request, opts),
+    do: Stub.clone_session(channel, request, opts)
+
+  defp do_unary_stub_call(:release_session, channel, request, opts),
+    do: Stub.release_session(channel, request, opts)
+
+  defp do_unary_stub_call(:interrupt, channel, request, opts),
+    do: Stub.interrupt(channel, request, opts)
+
+  defp do_unary_stub_call(:artifact_status, channel, request, opts),
+    do: Stub.artifact_status(channel, request, opts)
+
+  defp do_unary_stub_call(:release_execute, channel, request, opts),
+    do: Stub.release_execute(channel, request, opts)
 
   defp explain_mode_to_proto(:simple), do: {:ok, :EXPLAIN_MODE_SIMPLE}
   defp explain_mode_to_proto(:extended), do: {:ok, :EXPLAIN_MODE_EXTENDED}
