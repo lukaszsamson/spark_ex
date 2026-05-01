@@ -310,7 +310,7 @@ defmodule SparkEx.Connect.CommandEncoder do
 
     write_proto = %WriteStreamOperationStart{
       input: relation,
-      format: format || "",
+      format: format || "parquet",
       options: options,
       output_mode: output_mode || "",
       query_name: query_name || "",
@@ -518,14 +518,33 @@ defmodule SparkEx.Connect.CommandEncoder do
 
   defp apply_trigger(proto, nil), do: proto
 
-  defp apply_trigger(proto, {:processing_time, interval}),
-    do: %{proto | trigger: {:processing_time_interval, interval}}
+  defp apply_trigger(proto, {:processing_time, interval}) do
+    validate_trigger_interval!(:processing_time, interval)
+    %{proto | trigger: {:processing_time_interval, interval}}
+  end
 
   defp apply_trigger(proto, :available_now), do: %{proto | trigger: {:available_now, true}}
   defp apply_trigger(proto, :once), do: %{proto | trigger: {:once, true}}
 
-  defp apply_trigger(proto, {:continuous, interval}),
-    do: %{proto | trigger: {:continuous_checkpoint_interval, interval}}
+  defp apply_trigger(proto, {:continuous, interval}) do
+    validate_trigger_interval!(:continuous, interval)
+    %{proto | trigger: {:continuous_checkpoint_interval, interval}}
+  end
+
+  defp validate_trigger_interval!(kind, interval)
+       when is_binary(interval) and byte_size(interval) > 0 do
+    if String.trim(interval) == "" do
+      raise ArgumentError,
+            "#{kind} trigger interval must be a non-empty string, got: #{inspect(interval)}"
+    end
+
+    :ok
+  end
+
+  defp validate_trigger_interval!(kind, interval) do
+    raise ArgumentError,
+          "#{kind} trigger interval must be a non-empty string, got: #{inspect(interval)}"
+  end
 
   defp apply_sink_destination(proto, opts) do
     path = Keyword.get(opts, :path, nil)
@@ -541,6 +560,11 @@ defmodule SparkEx.Connect.CommandEncoder do
   defp apply_foreach(proto, opts) do
     foreach_writer = Keyword.get(opts, :foreach_writer, nil)
     foreach_batch = Keyword.get(opts, :foreach_batch, nil)
+
+    if foreach_writer != nil and foreach_batch != nil do
+      raise ArgumentError,
+            "cannot set both :foreach_writer and :foreach_batch on a streaming writer"
+    end
 
     proto =
       if foreach_writer do

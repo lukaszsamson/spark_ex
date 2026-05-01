@@ -1030,35 +1030,47 @@ defmodule SparkEx.Connect.Client do
   @doc """
   Calls `AddArtifacts` (client-streaming) to upload artifacts to the server.
 
-  Artifacts are provided as a list of `{name, data}` tuples where `data` is
-  binary content. Small artifacts are batched; large artifacts are streamed
-  in chunks (`begin_chunk` + `chunk` payloads).
+  Artifacts are provided as a list of `{name, data}` tuples where `data`
+  is either:
+
+    * a `binary()` — the artifact contents in memory; or
+    * `{:file, path, size}` — the path is opened and streamed in
+      chunks at upload time, so peak memory stays at chunk size
+      regardless of file size.
+
+  Small artifacts are batched; large artifacts are streamed in chunks
+  (`begin_chunk` + `chunk` payloads).
 
   Returns a list of `{name, crc_successful?}` tuples.
   """
-  @spec add_artifacts(SparkEx.Session.t(), [{String.t(), binary()}]) ::
+  @spec add_artifacts(SparkEx.Session.t(), [
+          {String.t(), binary() | {:file, Path.t(), non_neg_integer()}}
+        ]) ::
           {:ok, [{String.t(), boolean()}], String.t() | nil} | {:error, term()}
   def add_artifacts(session, artifacts) when is_list(artifacts) do
-    requests = build_add_artifacts_requests(session, artifacts)
+    artifacts = validate_artifacts!(artifacts)
 
     metadata = %{rpc: :add_artifacts, session_id: session.session_id}
 
     rpc_telemetry_span(metadata, fn ->
-      case requests do
+      case artifacts do
         [] ->
           {:ok, [], session.server_side_session_id}
 
         _ ->
-          # Each retry attempt rebuilds the gRPC stream from scratch.
-          # Reusing a stream after a transient failure is not supported
-          # by the gRPC library; the request list is pure data so
-          # reconstruction is cheap.
+          # Each retry attempt rebuilds the gRPC stream from scratch by
+          # re-evaluating the lazy `stream_artifact_requests/3` enum:
+          # reusing a gRPC stream after a transient failure is not
+          # supported by the library, and the request enumerable is
+          # pure data + lazy file IO so reconstruction is cheap.
           retry_with_backoff(
             fn ->
               stream =
                 session.channel
                 |> Stub.add_artifacts()
-                |> send_add_artifacts_requests(requests)
+                |> send_artifact_request_stream(
+                  stream_artifact_requests(session, artifacts, @artifact_chunk_size)
+                )
 
               case GRPC.Stub.recv(stream) do
                 {:ok, %AddArtifactsResponse{} = resp} ->
@@ -1089,48 +1101,90 @@ defmodule SparkEx.Connect.Client do
   end
 
   @doc false
-  @spec build_add_artifacts_requests(SparkEx.Session.t(), [{String.t(), binary()}], pos_integer()) ::
-          [AddArtifactsRequest.t()]
+  @spec build_add_artifacts_requests(
+          SparkEx.Session.t(),
+          [{String.t(), binary() | {:file, Path.t(), non_neg_integer()}}],
+          pos_integer()
+        ) :: [AddArtifactsRequest.t()]
   def build_add_artifacts_requests(session, artifacts, chunk_size \\ @artifact_chunk_size)
       when is_list(artifacts) and is_integer(chunk_size) and chunk_size > 0 do
-    artifact_entries = validate_artifacts!(artifacts)
+    session
+    |> stream_artifact_requests(validate_artifacts!(artifacts), chunk_size)
+    |> Enum.to_list()
+  end
 
-    {requests, pending_batch, _pending_size} =
-      Enum.reduce(artifact_entries, {[], [], 0}, fn {name, data}, {acc, batch, batch_size} ->
-        data_size = byte_size(data)
+  defp stream_artifact_requests(session, artifacts, chunk_size) do
+    artifacts
+    |> producer_stream(chunk_size)
+    |> Stream.flat_map(fn
+      {:batch, entries} ->
+        [build_batch_request(session, entries)]
 
-        if data_size > chunk_size do
-          acc =
-            case batch do
-              [] -> acc
-              _ -> [build_batch_request(session, batch) | acc]
-            end
+      {:binary_chunks, name, data} ->
+        build_chunked_requests(session, name, data, chunk_size)
 
-          chunked = build_chunked_requests(session, name, data, chunk_size)
+      {:file_chunks, name, path, size} ->
+        file_chunk_request_stream(session, name, path, size, chunk_size)
+    end)
+  end
 
-          acc =
-            Enum.reduce(chunked, acc, fn req, req_acc ->
-              [req | req_acc]
-            end)
-
-          {acc, [], 0}
-        else
-          if batch_size + data_size > chunk_size and batch != [] do
-            acc = [build_batch_request(session, batch) | acc]
-            {acc, [{name, data}], data_size}
+  defp producer_stream(artifacts, chunk_size) do
+    Stream.transform(
+      Stream.concat(artifacts, [:__flush__]),
+      {[], 0},
+      fn
+        :__flush__, {batch, _bs} ->
+          if batch == [] do
+            {[], {[], 0}}
           else
-            {acc, [{name, data} | batch], batch_size + data_size}
+            {[{:batch, batch}], {[], 0}}
           end
+
+        entry, {batch, batch_size} ->
+          size = artifact_size(entry)
+
+          cond do
+            size > chunk_size ->
+              flush_emit = if batch == [], do: [], else: [{:batch, batch}]
+              {flush_emit ++ [large_producer(entry)], {[], 0}}
+
+            batch_size + size > chunk_size and batch != [] ->
+              {[{:batch, batch}], {[materialize_for_batch(entry)], size}}
+
+            true ->
+              {[], {[materialize_for_batch(entry) | batch], batch_size + size}}
+          end
+      end
+    )
+  end
+
+  defp artifact_size({_name, data}) when is_binary(data), do: byte_size(data)
+  defp artifact_size({_name, {:file, _path, size}}), do: size
+
+  defp large_producer({name, data}) when is_binary(data), do: {:binary_chunks, name, data}
+
+  defp large_producer({name, {:file, path, size}}), do: {:file_chunks, name, path, size}
+
+  defp materialize_for_batch({name, data}) when is_binary(data), do: {name, data}
+
+  defp materialize_for_batch({name, {:file, path, _size}}), do: {name, File.read!(path)}
+
+  defp send_artifact_request_stream(stream, request_stream) do
+    {final_stream, prev} =
+      Enum.reduce(request_stream, {stream, nil}, fn request, {acc_stream, prev_req} ->
+        case prev_req do
+          nil ->
+            {acc_stream, request}
+
+          earlier ->
+            {GRPC.Stub.send_request(acc_stream, earlier, end_stream: false), request}
         end
       end)
 
-    requests =
-      case pending_batch do
-        [] -> requests
-        _ -> [build_batch_request(session, pending_batch) | requests]
-      end
-
-    Enum.reverse(requests)
+    case prev do
+      nil -> final_stream
+      last -> GRPC.Stub.send_request(final_stream, last, end_stream: true)
+    end
   end
 
   # --- ReattachExecute / ReleaseExecute RPCs ---
@@ -1458,23 +1512,18 @@ defmodule SparkEx.Connect.Client do
           "expected :preferred_arrow_chunk_size to be a positive integer or nil, got: #{inspect(size)}"
   end
 
-  defp send_add_artifacts_requests(stream, requests) do
-    total = length(requests)
-
-    Enum.with_index(requests, 1)
-    |> Enum.reduce(stream, fn {request, idx}, acc_stream ->
-      GRPC.Stub.send_request(acc_stream, request, end_stream: idx == total)
-    end)
-  end
-
   defp validate_artifacts!(artifacts) do
     Enum.map(artifacts, fn
       {name, data} when is_binary(name) and is_binary(data) ->
         {name, data}
 
+      {name, {:file, path, size}}
+      when is_binary(name) and is_binary(path) and is_integer(size) and size >= 0 ->
+        {name, {:file, path, size}}
+
       other ->
         raise ArgumentError,
-              "expected artifacts as list of {name, binary} tuples, got: #{inspect(other)}"
+              "expected artifacts as list of {name, binary} or {name, {:file, path, size}} tuples, got: #{inspect(other)}"
     end)
   end
 
@@ -1541,6 +1590,97 @@ defmodule SparkEx.Connect.Client do
       end)
 
     [begin_request | chunk_requests]
+  end
+
+  defp file_chunk_request_stream(session, name, path, total_bytes, chunk_size) do
+    num_chunks = max(div(total_bytes + chunk_size - 1, chunk_size), 1)
+
+    if total_bytes == 0 do
+      [empty_begin_chunk_request(session, name, num_chunks)]
+    else
+      path
+      |> file_byte_stream(chunk_size)
+      |> Stream.transform(:first, fn chunk, acc ->
+        case acc do
+          :first ->
+            begin = %AddArtifactsRequest{
+              session_id: session.session_id,
+              client_observed_server_side_session_id: session.server_side_session_id,
+              user_context: UserContextExtensions.build_user_context(session.user_id),
+              client_type: session.client_type,
+              payload:
+                {:begin_chunk,
+                 %AddArtifactsRequest.BeginChunkedArtifact{
+                   name: name,
+                   total_bytes: total_bytes,
+                   num_chunks: num_chunks,
+                   initial_chunk: %AddArtifactsRequest.ArtifactChunk{
+                     data: chunk,
+                     crc: :erlang.crc32(chunk)
+                   }
+                 }}
+            }
+
+            {[begin], :rest}
+
+          :rest ->
+            req = %AddArtifactsRequest{
+              session_id: session.session_id,
+              client_observed_server_side_session_id: session.server_side_session_id,
+              user_context: UserContextExtensions.build_user_context(session.user_id),
+              client_type: session.client_type,
+              payload:
+                {:chunk,
+                 %AddArtifactsRequest.ArtifactChunk{data: chunk, crc: :erlang.crc32(chunk)}}
+            }
+
+            {[req], :rest}
+        end
+      end)
+    end
+  end
+
+  # Lazy byte-chunk stream over a file. Avoids `File.stream!/2`/`/3`
+  # because the argument order changed between Elixir 1.15 and 1.19,
+  # which makes a single call site impossible to satisfy across the
+  # supported version range.
+  defp file_byte_stream(path, chunk_size) do
+    Stream.resource(
+      fn -> File.open!(path, [:read, :binary, :raw]) end,
+      fn io ->
+        case IO.binread(io, chunk_size) do
+          :eof ->
+            {:halt, io}
+
+          {:error, reason} ->
+            raise File.Error,
+              reason: reason,
+              action: "read from",
+              path: IO.chardata_to_string(path)
+
+          data when is_binary(data) ->
+            {[data], io}
+        end
+      end,
+      fn io -> File.close(io) end
+    )
+  end
+
+  defp empty_begin_chunk_request(session, name, num_chunks) do
+    %AddArtifactsRequest{
+      session_id: session.session_id,
+      client_observed_server_side_session_id: session.server_side_session_id,
+      user_context: UserContextExtensions.build_user_context(session.user_id),
+      client_type: session.client_type,
+      payload:
+        {:begin_chunk,
+         %AddArtifactsRequest.BeginChunkedArtifact{
+           name: name,
+           total_bytes: 0,
+           num_chunks: num_chunks,
+           initial_chunk: %AddArtifactsRequest.ArtifactChunk{data: <<>>, crc: :erlang.crc32(<<>>)}
+         }}
+    }
   end
 
   defp chunk_binary(data, chunk_size), do: do_chunk_binary(data, chunk_size, [])

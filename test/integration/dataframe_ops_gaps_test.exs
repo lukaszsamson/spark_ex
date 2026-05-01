@@ -401,7 +401,8 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
       assert {:ok, stream} = DataFrame.to_local_iterator(local_df)
       rows = Enum.to_list(stream)
       assert length(rows) == 5
-      ids = rows |> Enum.map(& &1["id"]) |> Enum.sort()
+      assert Enum.all?(rows, &match?({:ok, _}, &1))
+      ids = rows |> Enum.map(fn {:ok, row} -> row["id"] end) |> Enum.sort()
       assert ids == [0, 1, 2, 3, 4]
     end
 
@@ -409,7 +410,7 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
       {:ok, local_df} = SparkEx.create_dataframe(session, Enum.map(0..20, &%{"id" => &1}))
 
       assert {:ok, stream} = DataFrame.to_local_iterator(local_df)
-      ids = stream |> Stream.take(3) |> Enum.map(& &1["id"])
+      ids = stream |> Stream.take(3) |> Enum.map(fn {:ok, row} -> row["id"] end)
       assert length(ids) == 3
       assert Enum.all?(ids, &is_integer/1)
     end

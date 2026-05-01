@@ -63,10 +63,10 @@ defmodule SparkEx.Window do
   end
 
   @doc "Unbounded preceding boundary constant."
-  def unbounded_preceding, do: :unbounded
+  def unbounded_preceding, do: :unbounded_preceding
 
   @doc "Unbounded following boundary constant."
-  def unbounded_following, do: :unbounded
+  def unbounded_following, do: :unbounded_following
 
   @doc "Current row boundary constant."
   def current_row, do: :current_row

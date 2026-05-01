@@ -752,18 +752,18 @@ defmodule SparkEx.M14.StreamingTest do
       end
     end
 
-    test "load with list raises on blank path in list" do
+    test "load rejects a list of paths (single path only)" do
       reader = SparkEx.StreamReader.new(:s) |> SparkEx.StreamReader.format("json")
 
-      assert_raise ArgumentError, ~r/must not be empty/, fn ->
-        SparkEx.StreamReader.load(reader, ["/valid", "  "])
+      assert_raise ArgumentError, ~r/single path/, fn ->
+        SparkEx.StreamReader.load(reader, ["/valid", "/also-valid"])
       end
     end
 
-    test "load with list raises on empty list" do
+    test "load rejects an empty list (single path only)" do
       reader = SparkEx.StreamReader.new(:s) |> SparkEx.StreamReader.format("json")
 
-      assert_raise ArgumentError, ~r/must not be empty/, fn ->
+      assert_raise ArgumentError, ~r/single path/, fn ->
         SparkEx.StreamReader.load(reader, [])
       end
     end

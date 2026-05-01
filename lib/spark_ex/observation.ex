@@ -9,6 +9,13 @@ defmodule SparkEx.Observation do
 
   Two `Observation` structs that happen to share the same `name` will not
   collide: each carries its own `id` and metrics are stored under that id.
+
+  Routing tables (`{:obs_route, session_id, name}` and the legacy
+  `{:metric_aliases, session_id, name}`) are namespaced by the originating
+  session id so two sessions that observe the same `name` simultaneously do
+  not overwrite each other's routing slot. When the session id is unknown
+  the namespace falls back to a global slot — this preserves the prior
+  behaviour for direct callers that don't go through `DataFrame.observe/3`.
   """
 
   alias Spark.Connect.{DataType, Expression}
@@ -21,12 +28,12 @@ defmodule SparkEx.Observation do
 
   @table :spark_ex_observations
 
-  # ETS keys:
-  #   {:obs, id}            -> metrics map (per-instance store; first writer wins)
-  #   {:obs_aliases, id}    -> [alias_name | nil]
-  #   {:obs_route, name}    -> id (most-recent observe() with this name wins)
-  #   {:metric_aliases, name} -> [alias_name | nil]   (legacy: raw-name observe)
-  #   name                  -> metrics map            (legacy: raw-name observe)
+  # ETS keys (all session-scoped where applicable):
+  #   {:obs, id}                       -> metrics map (id is a per-instance UUID)
+  #   {:obs_aliases, id}               -> [alias_name | nil]
+  #   {:obs_route, session_id, name}   -> id (most-recent observe() with this name wins, per session)
+  #   {:metric_aliases, session_id, name} -> [alias_name | nil] (legacy: raw-name observe)
+  #   {:metric_legacy, session_id, name}  -> metrics map (legacy: raw-name observe)
 
   @doc """
   Creates a named observation. When called with no arguments, generates a UUID name.
@@ -62,37 +69,43 @@ defmodule SparkEx.Observation do
   end
 
   @doc false
-  @spec register_observation(t(), [term()]) :: :ok
-  def register_observation(%__MODULE__{id: id, name: name}, metric_exprs)
+  @spec register_observation(t(), [term()], String.t() | nil) :: :ok
+  def register_observation(observation, metric_exprs, session_id \\ nil)
+
+  def register_observation(%__MODULE__{id: id, name: name}, metric_exprs, session_id)
       when is_list(metric_exprs) do
     aliases = aliases_from_exprs(metric_exprs)
     :ets.insert(@table, {{:obs_aliases, id}, aliases})
-    :ets.insert(@table, {{:obs_route, name}, id})
+    :ets.insert(@table, {{:obs_route, session_id, name}, id})
     :ok
   end
 
   @doc false
-  @spec register_metric_aliases(String.t(), [term()]) :: :ok
-  def register_metric_aliases(name, metric_exprs)
+  @spec register_metric_aliases(String.t(), [term()], String.t() | nil) :: :ok
+  def register_metric_aliases(name, metric_exprs, session_id \\ nil)
+
+  def register_metric_aliases(name, metric_exprs, session_id)
       when is_binary(name) and is_list(metric_exprs) do
     aliases = aliases_from_exprs(metric_exprs)
-    :ets.insert(@table, {{:metric_aliases, name}, aliases})
+    :ets.insert(@table, {{:metric_aliases, session_id, name}, aliases})
     :ok
   end
 
   @doc false
-  @spec store_observed_metrics(map()) :: :ok
-  def store_observed_metrics(observed_metrics) when is_map(observed_metrics) do
+  @spec store_observed_metrics(map(), String.t() | nil) :: :ok
+  def store_observed_metrics(observed_metrics, session_id \\ nil)
+
+  def store_observed_metrics(observed_metrics, session_id) when is_map(observed_metrics) do
     if map_size(observed_metrics) > 0 do
-      Enum.each(observed_metrics, &store_one/1)
+      Enum.each(observed_metrics, &store_one(&1, session_id))
     end
 
     :ok
   end
 
-  defp store_one({name, metrics}) do
-    case :ets.lookup(@table, {:obs_route, name}) do
-      [{{:obs_route, ^name}, id}] ->
+  defp store_one({name, metrics}, session_id) do
+    case :ets.lookup(@table, {:obs_route, session_id, name}) do
+      [{{:obs_route, ^session_id, ^name}, id}] ->
         normalized = maybe_apply_observation_aliases(id, metrics)
         # First writer wins: a single Observation captures the metrics from
         # the first execution of its plan, matching PySpark semantics.
@@ -102,7 +115,11 @@ defmodule SparkEx.Observation do
         # Legacy: observe() was called with a raw string name (no Observation
         # struct attached). Retrieval through Observation.get/1 isn't possible
         # in this case; we still keep the legacy slot for backward compatibility.
-        :ets.insert(@table, {name, maybe_apply_metric_aliases(name, metrics)})
+        :ets.insert(
+          @table,
+          {{:metric_legacy, session_id, name},
+           maybe_apply_metric_aliases(session_id, name, metrics)}
+        )
     end
   end
 
@@ -262,9 +279,9 @@ defmodule SparkEx.Observation do
     end
   end
 
-  defp maybe_apply_metric_aliases(name, metrics) when is_map(metrics) do
-    case :ets.lookup(@table, {:metric_aliases, name}) do
-      [{{:metric_aliases, ^name}, aliases}] when is_list(aliases) ->
+  defp maybe_apply_metric_aliases(session_id, name, metrics) when is_map(metrics) do
+    case :ets.lookup(@table, {:metric_aliases, session_id, name}) do
+      [{{:metric_aliases, ^session_id, ^name}, aliases}] when is_list(aliases) ->
         remap_positional_metrics(metrics, aliases)
 
       _ ->

@@ -203,7 +203,7 @@ defmodule SparkEx.Unit.ArtifactTest do
   end
 
   describe "Artifacts.prepare/2" do
-    test "reads local files and prefixes names" do
+    test "stats local files and prefixes names without reading contents" do
       jar_path = tmp_path("artifact_jar.txt")
       file_path = tmp_path("artifact_file.txt")
 
@@ -211,13 +211,25 @@ defmodule SparkEx.Unit.ArtifactTest do
       File.write!(file_path, "file-data")
 
       assert {:ok, artifacts} = Artifacts.prepare([jar_path, file_path], "jars")
-      assert {"jars/spark_ex_artifact_jar.txt", "jar-data"} in artifacts
-      assert {"jars/spark_ex_artifact_file.txt", "file-data"} in artifacts
+
+      assert {"jars/spark_ex_artifact_jar.txt", {:file, ^jar_path, 8}} =
+               Enum.find(artifacts, fn {name, _} -> name == "jars/spark_ex_artifact_jar.txt" end)
+
+      assert {"jars/spark_ex_artifact_file.txt", {:file, ^file_path, 9}} =
+               Enum.find(artifacts, fn {name, _} -> name == "jars/spark_ex_artifact_file.txt" end)
+    end
+
+    test "honours #fragment alias for the artifact basename" do
+      file_path = tmp_path("aliased.txt")
+      File.write!(file_path, "data")
+
+      assert {:ok, [{"files/renamed.txt", {:file, ^file_path, 4}}]} =
+               Artifacts.prepare(file_path <> "#renamed.txt", "files/")
     end
 
     test "returns error for missing file" do
       missing = tmp_path("missing.txt")
-      assert {:error, {:file_read_error, ^missing, _}} = Artifacts.prepare(missing, "files/")
+      assert {:error, {:file_stat_error, ^missing, _}} = Artifacts.prepare(missing, "files/")
     end
 
     test "raises on duplicate artifact names from different paths" do
