@@ -1043,7 +1043,9 @@ defmodule SparkEx.Connect.Client do
 
   Returns a list of `{name, crc_successful?}` tuples.
   """
-  @spec add_artifacts(SparkEx.Session.t(), [{String.t(), binary() | {:file, Path.t(), non_neg_integer()}}]) ::
+  @spec add_artifacts(SparkEx.Session.t(), [
+          {String.t(), binary() | {:file, Path.t(), non_neg_integer()}}
+        ]) ::
           {:ok, [{String.t(), boolean()}], String.t() | nil} | {:error, term()}
   def add_artifacts(session, artifacts) when is_list(artifacts) do
     artifacts = validate_artifacts!(artifacts)
@@ -1127,7 +1129,6 @@ defmodule SparkEx.Connect.Client do
           else
             {[{:batch, batch}], {[], 0}}
           end
-
 
         entry, {batch, batch_size} ->
           size = artifact_size(entry)
@@ -1607,8 +1608,7 @@ defmodule SparkEx.Connect.Client do
             user_context: UserContextExtensions.build_user_context(session.user_id),
             client_type: session.client_type,
             payload:
-              {:chunk,
-               %AddArtifactsRequest.ArtifactChunk{data: chunk, crc: :erlang.crc32(chunk)}}
+              {:chunk, %AddArtifactsRequest.ArtifactChunk{data: chunk, crc: :erlang.crc32(chunk)}}
           }
 
           {[req], :rest}

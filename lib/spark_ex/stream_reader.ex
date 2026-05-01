@@ -232,8 +232,4 @@ defmodule SparkEx.StreamReader do
       raise ArgumentError, "path must not be empty or blank"
     end
   end
-
-  defp validate_path!(_path) do
-    raise ArgumentError, "path must be a non-empty string"
-  end
 end
