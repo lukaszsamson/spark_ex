@@ -1054,7 +1054,20 @@ defmodule SparkEx.MissOpus2Test do
       result = Functions.try_parse_url(Functions.col("url"), Functions.col("part"))
 
       assert %Column{
-               expr: {:fn, "parse_url", [{:col, "url"}, {:col, "part"}], false}
+               expr: {:fn, "try_parse_url", [{:col, "url"}, {:col, "part"}], false}
+             } = result
+    end
+
+    test "try_parse_url with key" do
+      result =
+        Functions.try_parse_url(
+          Functions.col("url"),
+          Functions.col("part"),
+          Functions.col("key")
+        )
+
+      assert %Column{
+               expr: {:fn, "try_parse_url", [{:col, "url"}, {:col, "part"}, {:col, "key"}], false}
              } = result
     end
   end
@@ -1180,7 +1193,7 @@ defmodule SparkEx.MissOpus2Test do
 
     test "uuid with explicit seed" do
       result = Functions.uuid(42)
-      assert %Column{expr: {:fn, "uuid", [], false}} = result
+      assert %Column{expr: {:fn, "uuid", [{:lit, 42}], false}} = result
     end
 
     test "uniform auto-generates seed" do
@@ -1188,14 +1201,11 @@ defmodule SparkEx.MissOpus2Test do
 
       assert %Column{
                expr:
-                 {:fn, "+",
+                 {:fn, "uniform",
                   [
                     {:col, "min"},
-                    {:fn, "*",
-                     [
-                       {:fn, "rand", [{:lit, seed}], false},
-                       {:fn, "-", [{:lit, 100}, {:col, "min"}], false}
-                     ], false}
+                    {:lit, 100},
+                    {:lit, seed}
                   ], false}
              } = result
 
@@ -1207,14 +1217,11 @@ defmodule SparkEx.MissOpus2Test do
 
       assert %Column{
                expr:
-                 {:fn, "+",
+                 {:fn, "uniform",
                   [
                     {:col, "min"},
-                    {:fn, "*",
-                     [
-                       {:fn, "rand", [{:lit, 42}], false},
-                       {:fn, "-", [{:lit, 100}, {:col, "min"}], false}
-                     ], false}
+                    {:lit, 100},
+                    {:lit, 42}
                   ], false}
              } = result
     end
@@ -1223,14 +1230,7 @@ defmodule SparkEx.MissOpus2Test do
       result = Functions.randstr(Functions.col("len"))
 
       assert %Column{
-               expr:
-                 {:fn, "substr",
-                  [
-                    {:fn, "md5", [{:cast, {:fn, "rand", [{:lit, seed}], false}, "STRING"}],
-                     false},
-                    {:lit, 1},
-                    {:col, "len"}
-                  ], false}
+               expr: {:fn, "randstr", [{:col, "len"}, {:lit, seed}], false}
              } = result
 
       assert is_integer(seed)
@@ -1240,13 +1240,7 @@ defmodule SparkEx.MissOpus2Test do
       result = Functions.randstr(Functions.col("len"), 42)
 
       assert %Column{
-               expr:
-                 {:fn, "substr",
-                  [
-                    {:fn, "md5", [{:cast, {:fn, "rand", [{:lit, 42}], false}, "STRING"}], false},
-                    {:lit, 1},
-                    {:col, "len"}
-                  ], false}
+               expr: {:fn, "randstr", [{:col, "len"}, {:lit, 42}], false}
              } = result
     end
   end

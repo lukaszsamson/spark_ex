@@ -415,13 +415,26 @@ defmodule SparkEx.M11.FunctionsTest do
     end
   end
 
-  describe "spark 3.5 compatibility fallbacks" do
-    test "to_time/1 composes to_timestamp + date_format" do
+  describe "Spark 4.x time / variant function emission" do
+    test "to_time/1 emits unresolved to_time" do
+      assert %Column{expr: {:fn, "to_time", [{:col, "ts"}], false}} = Functions.to_time("ts")
+    end
+
+    test "to_time/2 with format emits unresolved to_time" do
       assert %Column{
-               expr:
-                 {:fn, "date_format",
-                  [{:fn, "to_timestamp", [{:col, "ts"}], false}, {:lit, "HH:mm:ss"}], false}
-             } = Functions.to_time("ts")
+               expr: {:fn, "to_time", [{:col, "ts"}, {:lit, "HH:mm"}], false}
+             } = Functions.to_time("ts", format: "HH:mm")
+    end
+
+    test "try_to_time/1 emits unresolved try_to_time" do
+      assert %Column{expr: {:fn, "try_to_time", [{:col, "ts"}], false}} =
+               Functions.try_to_time("ts")
+    end
+
+    test "time_trunc/2 emits unresolved time_trunc with literal unit" do
+      assert %Column{
+               expr: {:fn, "time_trunc", [{:lit, "HOUR"}, {:col, "t"}], false}
+             } = Functions.time_trunc("HOUR", Functions.col("t"))
     end
 
     test "time_diff/3 maps to time_diff" do
@@ -431,16 +444,46 @@ defmodule SparkEx.M11.FunctionsTest do
              } = Functions.time_diff("HOUR", "start_ts", "end_ts")
     end
 
-    test "parse_json/1 uses local fallback expression" do
-      assert %Column{
-               expr: {:fn, "coalesce", [{:col, "js"}, {:lit, nil}], false}
-             } = Functions.parse_json("js")
+    test "parse_json/1 emits unresolved parse_json" do
+      assert %Column{expr: {:fn, "parse_json", [{:col, "js"}], false}} =
+               Functions.parse_json("js")
     end
 
-    test "variant_get/3 maps to get_json_object" do
+    test "try_parse_json/1 emits unresolved try_parse_json" do
+      assert %Column{expr: {:fn, "try_parse_json", [{:col, "js"}], false}} =
+               Functions.try_parse_json("js")
+    end
+
+    test "is_variant_null/1 emits unresolved is_variant_null" do
+      assert %Column{expr: {:fn, "is_variant_null", [{:col, "js"}], false}} =
+               Functions.is_variant_null("js")
+    end
+
+    test "variant_get/3 emits unresolved variant_get with target_type" do
       assert %Column{
-               expr: {:fn, "get_json_object", [{:col, "js"}, {:lit, "$.a"}], false}
+               expr: {:fn, "variant_get", [{:col, "js"}, {:lit, "$.a"}, {:lit, "int"}], false}
              } = Functions.variant_get("js", "$.a", "int")
+    end
+
+    test "try_variant_get/3 emits unresolved try_variant_get with target_type" do
+      assert %Column{
+               expr: {:fn, "try_variant_get", [{:col, "js"}, {:lit, "$.a"}, {:lit, "int"}], false}
+             } = Functions.try_variant_get("js", "$.a", "int")
+    end
+
+    test "to_variant_object/1 emits unresolved to_variant_object" do
+      assert %Column{expr: {:fn, "to_variant_object", [{:col, "js"}], false}} =
+               Functions.to_variant_object("js")
+    end
+
+    test "schema_of_variant/1 emits unresolved schema_of_variant" do
+      assert %Column{expr: {:fn, "schema_of_variant", [{:col, "js"}], false}} =
+               Functions.schema_of_variant("js")
+    end
+
+    test "schema_of_variant_agg/1 emits unresolved schema_of_variant_agg" do
+      assert %Column{expr: {:fn, "schema_of_variant_agg", [{:col, "js"}], false}} =
+               Functions.schema_of_variant_agg("js")
     end
   end
 

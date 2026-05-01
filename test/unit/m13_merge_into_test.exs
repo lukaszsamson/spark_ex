@@ -84,6 +84,70 @@ defmodule SparkEx.M13.MergeIntoTest do
                is_binary(target) and is_tuple(value_expr)
              end)
     end
+
+    test "map inputs are sorted by column name for deterministic order" do
+      assignments = %{
+        "name" => Functions.col("source.name"),
+        "age" => Functions.col("source.age"),
+        "zip" => Functions.col("source.zip")
+      }
+
+      m =
+        MergeIntoWriter.new(make_df(), "t")
+        |> MergeIntoWriter.when_matched_update(assignments)
+
+      assert [{:update, nil, assigns}] = m.match_actions
+
+      assert Enum.map(assigns, fn {{:col, target}, _} -> target end) == [
+               "age",
+               "name",
+               "zip"
+             ]
+    end
+
+    test "list inputs preserve user-given order" do
+      assignments = [
+        {"zip", Functions.col("source.zip")},
+        {"age", Functions.col("source.age")},
+        {"name", Functions.col("source.name")}
+      ]
+
+      m =
+        MergeIntoWriter.new(make_df(), "t")
+        |> MergeIntoWriter.when_matched_update(assignments)
+
+      assert [{:update, nil, assigns}] = m.match_actions
+
+      assert Enum.map(assigns, fn {{:col, target}, _} -> target end) == [
+               "zip",
+               "age",
+               "name"
+             ]
+    end
+
+    test "atom keys are coerced to strings" do
+      assignments = [{:name, Functions.col("source.name")}]
+
+      m =
+        MergeIntoWriter.new(make_df(), "t")
+        |> MergeIntoWriter.when_matched_update(assignments)
+
+      assert [{:update, nil, [{{:col, "name"}, _}]}] = m.match_actions
+    end
+
+    test "raises when an assignment value is not a Column" do
+      assert_raise ArgumentError, ~r/must be a SparkEx.Column/, fn ->
+        MergeIntoWriter.new(make_df(), "t")
+        |> MergeIntoWriter.when_matched_update([{"name", "not-a-column"}])
+      end
+    end
+
+    test "raises when assignment keys are neither strings nor atoms" do
+      assert_raise ArgumentError, ~r/must be strings or atoms/, fn ->
+        MergeIntoWriter.new(make_df(), "t")
+        |> MergeIntoWriter.when_matched_update([{123, Functions.lit(1)}])
+      end
+    end
   end
 
   describe "when_not_matched_insert_all/1" do

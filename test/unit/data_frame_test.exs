@@ -598,21 +598,21 @@ defmodule SparkEx.DataFrameTest do
     end
   end
 
-  describe "foreach/3" do
+  describe "foreach_local/3" do
     test "applies function over collected rows" do
       {:ok, session} = ArrowSession.start_link()
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
-      assert :ok = DataFrame.foreach(df, fn _ -> :ok end)
+      assert :ok = DataFrame.foreach_local(df, fn _ -> :ok end)
     end
   end
 
-  describe "foreach_partition/3" do
+  describe "foreach_partition_local/3" do
     test "applies function over rows as a single partition" do
       {:ok, session} = ArrowSession.start_link()
       df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
 
-      assert :ok = DataFrame.foreach_partition(df, fn _ -> :ok end)
+      assert :ok = DataFrame.foreach_partition_local(df, fn _ -> :ok end)
     end
   end
 

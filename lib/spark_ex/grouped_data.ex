@@ -51,18 +51,42 @@ defmodule SparkEx.GroupedData do
       |> DataFrame.group_by(["department"])
       |> SparkEx.GroupedData.agg([sum(col("salary")), avg(col("age"))])
   """
-  @spec agg(t(), [Column.t()] | map()) :: DataFrame.t()
+  @spec agg(
+          t(),
+          [Column.t()]
+          | [{String.t() | atom(), String.t() | atom()}]
+          | %{(String.t() | atom()) => String.t() | atom()}
+        ) :: DataFrame.t()
   def agg(%__MODULE__{} = gd, agg_columns) when is_list(agg_columns) do
-    if agg_columns == [] do
-      raise ArgumentError, "expected at least one aggregate column"
+    cond do
+      agg_columns == [] ->
+        raise ArgumentError, "expected at least one aggregate column"
+
+      Enum.all?(agg_columns, &match?(%Column{}, &1)) ->
+        agg_with_exprs(gd, Enum.map(agg_columns, fn %Column{} = c -> c.expr end))
+
+      Enum.all?(agg_columns, &agg_pair?/1) ->
+        agg(gd, pairs_to_columns(agg_columns))
+
+      true ->
+        raise ArgumentError, "expected all aggregate expressions to be SparkEx.Column"
+    end
+  end
+
+  def agg(%__MODULE__{} = gd, agg_map) when is_map(agg_map) do
+    if map_size(agg_map) == 0 do
+      raise ArgumentError, "expected at least one aggregate expression"
     end
 
-    unless Enum.all?(agg_columns, &match?(%Column{}, &1)) do
-      raise ArgumentError, "expected all aggregate expressions to be SparkEx.Column"
-    end
+    sorted = Enum.sort_by(agg_map, fn {col_name, _} -> to_string(col_name) end)
+    agg(gd, pairs_to_columns(sorted))
+  end
 
-    agg_exprs = Enum.map(agg_columns, fn %Column{} = col -> col.expr end)
+  def agg(%__MODULE__{}, _other) do
+    raise ArgumentError, "expected aggregate expressions as a non-empty list of SparkEx.Column"
+  end
 
+  defp agg_with_exprs(%__MODULE__{} = gd, agg_exprs) do
     case gd.pivot_col do
       nil ->
         plan =
@@ -87,25 +111,22 @@ defmodule SparkEx.GroupedData do
     end
   end
 
-  def agg(%__MODULE__{} = gd, agg_map) when is_map(agg_map) do
-    if map_size(agg_map) == 0 do
-      raise ArgumentError, "expected at least one aggregate expression"
-    end
-
-    agg_cols =
-      Enum.map(agg_map, fn {col_name, func_name} ->
-        %Column{
-          expr:
-            {:alias, {:fn, to_string(func_name), [{:col, to_string(col_name)}], false},
-             "#{func_name}(#{col_name})"}
-        }
-      end)
-
-    agg(gd, agg_cols)
+  defp agg_pair?({col_name, func_name})
+       when (is_binary(col_name) or is_atom(col_name)) and
+              (is_binary(func_name) or is_atom(func_name)) do
+    not is_nil(col_name) and not is_boolean(col_name)
   end
 
-  def agg(%__MODULE__{}, _other) do
-    raise ArgumentError, "expected aggregate expressions as a non-empty list of SparkEx.Column"
+  defp agg_pair?(_), do: false
+
+  defp pairs_to_columns(pairs) do
+    Enum.map(pairs, fn {col_name, func_name} ->
+      %Column{
+        expr:
+          {:alias, {:fn, to_string(func_name), [{:col, to_string(col_name)}], false},
+           "#{func_name}(#{col_name})"}
+      }
+    end)
   end
 
   # ── Convenience aggregation methods ──
@@ -281,15 +302,6 @@ defmodule SparkEx.GroupedData do
 
     if values != nil and not is_list(values) do
       raise ArgumentError, "pivot values must be a list or nil, got: #{inspect(values)}"
-    end
-
-    if is_list(values) do
-      Enum.each(values, fn v ->
-        unless is_boolean(v) or is_number(v) or is_binary(v) do
-          raise ArgumentError,
-                "pivot values must be booleans, numbers, or strings, got: #{inspect(v)}"
-        end
-      end)
     end
 
     col_expr =
