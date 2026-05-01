@@ -63,7 +63,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
   end
 
   describe "join encoding with bound columns" do
-    test "encodes bound join condition without empty relation" do
+    test "preserves expression join condition rather than rewriting to USING" do
       left = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM emp", nil}}
       right = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM dept", nil}}
 
@@ -71,8 +71,9 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       joined = DataFrame.join(left, right, join_condition, :inner)
       {plan, _counter} = PlanEncoder.encode(joined.plan, 0)
       assert %Relation{rel_type: {:join, join}} = root_relation(plan)
-      assert is_nil(join.join_condition)
-      assert join.using_columns == ["dept_id"]
+      assert join.using_columns == []
+      assert %Expression{expr_type: {:unresolved_function, top_fn}} = join.join_condition
+      assert top_fn.function_name == "=="
       assert is_integer(join.left.common.plan_id)
       assert is_integer(join.right.common.plan_id)
     end

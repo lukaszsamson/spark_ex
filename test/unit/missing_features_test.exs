@@ -722,24 +722,33 @@ defmodule SparkEx.MissingFeaturesTest do
 
   # ── DataFrame.repartition_by_id ──
 
-  describe "DataFrame.repartition_by_id/2" do
-    test "creates repartition by expression on partition column" do
+  describe "DataFrame.repartition_by_id/3" do
+    test "creates repartition by expression wrapping DirectShufflePartitionID" do
       df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
-      result = DataFrame.repartition_by_id(df, Functions.col("part"))
+      result = DataFrame.repartition_by_id(df, 4, Functions.col("part"))
 
       assert %DataFrame{
-               plan: {:repartition_by_expression, _, [{:col, "part"}], nil}
+               plan:
+                 {:repartition_by_expression, _, [{:direct_shuffle_partition_id, {:col, "part"}}],
+                  4}
              } = result
+    end
+
+    test "rejects non-positive partition counts" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      assert_raise ArgumentError, fn -> DataFrame.repartition_by_id(df, 0, "part") end
+      assert_raise ArgumentError, fn -> DataFrame.repartition_by_id(df, -1, "part") end
+      assert_raise ArgumentError, fn -> DataFrame.repartition_by_id(df, nil, "part") end
     end
   end
 
   # ── Column.outer ──
 
   describe "Column.outer/1" do
-    test "marks column for lateral join context" do
+    test "is a no-op metadata marker matching Connect/PySpark" do
       col = Functions.col("x")
       result = Column.outer(col)
-      assert %Column{expr: {:outer, {:col, "x"}}} = result
+      assert result == col
     end
   end
 

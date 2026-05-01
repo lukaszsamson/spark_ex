@@ -513,13 +513,7 @@ defmodule SparkEx.Connect.PlanEncoder do
     {left, counter} = encode_relation(left_plan, counter)
     {right, counter} = encode_relation(right_plan, counter)
 
-    {join_condition, using_columns} =
-      normalize_join_condition_using_columns(
-        join_condition,
-        using_columns || [],
-        left_plan,
-        right_plan
-      )
+    using_columns = using_columns || []
 
     join_cond =
       case join_condition do
@@ -643,9 +637,43 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   def encode_relation({:with_columns_renamed, child_plan, renames}, counter) do
-    # Spark 3.5 does not reliably apply WithColumnsRenamed relation.
-    # Expand into supported with_columns/drop primitives for compatibility.
-    encode_relation(expand_with_columns_renamed_plan(child_plan, renames), counter)
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    string_renames =
+      Enum.map(renames, fn {old_name, new_name} -> {to_string(old_name), to_string(new_name)} end)
+
+    rename_entries =
+      Enum.map(string_renames, fn {old_name, new_name} ->
+        %Spark.Connect.WithColumnsRenamed.Rename{
+          col_name: old_name,
+          new_col_name: new_name
+        }
+      end)
+
+    # Populate the deprecated `rename_columns_map` for Spark 3.5 servers that
+    # only read that field. The map cannot represent duplicate sources or
+    # chained renames (e.g. a->b, b->c), so only emit it when the input is a
+    # clean one-to-one rename. Newer servers prefer the ordered `renames`.
+    rename_columns_map =
+      if safe_rename_columns_map?(string_renames) do
+        Map.new(string_renames)
+      else
+        %{}
+      end
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:with_columns_renamed,
+         %Spark.Connect.WithColumnsRenamed{
+           input: child,
+           rename_columns_map: rename_columns_map,
+           renames: rename_entries
+         }}
+    }
+
+    {relation, counter}
   end
 
   def encode_relation({:repartition, child_plan, num_partitions, shuffle}, counter) do
@@ -949,10 +977,14 @@ defmodule SparkEx.Connect.PlanEncoder do
           }
 
         _ ->
+          remapped =
+            join_condition
+            |> remap_join_condition_plan_ids(left.common.plan_id, right.common.plan_id)
+
           %Spark.Connect.LateralJoin{
             left: left,
             right: right,
-            join_condition: encode_expression(join_condition),
+            join_condition: encode_expression(remapped),
             join_type: encode_join_type(join_type)
           }
       end
@@ -1220,6 +1252,102 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
 
     {relation, counter}
+  end
+
+  # --- MapPartitions / GroupMap / CoGroupMap ---
+
+  def encode_relation({:map_partitions, child_plan, func, opts}, counter)
+      when is_list(opts) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    map_partitions = %Spark.Connect.MapPartitions{
+      input: child,
+      func: func,
+      is_barrier: Keyword.get(opts, :is_barrier),
+      profile_id: Keyword.get(opts, :profile_id)
+    }
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:map_partitions, map_partitions}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:group_map, child_plan, grouping_exprs, func, opts}, counter)
+      when is_list(grouping_exprs) and is_list(opts) do
+    {plan_id, counter} = next_id(counter)
+    {child, counter} = encode_relation(child_plan, counter)
+
+    {initial_input, counter} =
+      case Keyword.get(opts, :initial_input) do
+        nil -> {nil, counter}
+        plan -> encode_relation(plan, counter)
+      end
+
+    group_map = %Spark.Connect.GroupMap{
+      input: child,
+      grouping_expressions: Enum.map(grouping_exprs, &encode_expression/1),
+      func: func,
+      sorting_expressions:
+        Keyword.get(opts, :sorting_expressions, []) |> Enum.map(&encode_expression/1),
+      initial_input: initial_input,
+      initial_grouping_expressions:
+        Keyword.get(opts, :initial_grouping_expressions, []) |> Enum.map(&encode_expression/1),
+      is_map_groups_with_state: Keyword.get(opts, :is_map_groups_with_state),
+      output_mode: Keyword.get(opts, :output_mode),
+      timeout_conf: Keyword.get(opts, :timeout_conf),
+      state_schema: Keyword.get(opts, :state_schema),
+      transform_with_state_info: Keyword.get(opts, :transform_with_state_info)
+    }
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:group_map, group_map}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation(
+        {:co_group_map, left_plan, left_grouping, right_plan, right_grouping, func, opts},
+        counter
+      )
+      when is_list(left_grouping) and is_list(right_grouping) and is_list(opts) do
+    {plan_id, counter} = next_id(counter)
+    {left, counter} = encode_relation(left_plan, counter)
+    {right, counter} = encode_relation(right_plan, counter)
+
+    co_group_map = %Spark.Connect.CoGroupMap{
+      input: left,
+      input_grouping_expressions: Enum.map(left_grouping, &encode_expression/1),
+      other: right,
+      other_grouping_expressions: Enum.map(right_grouping, &encode_expression/1),
+      func: func,
+      input_sorting_expressions:
+        Keyword.get(opts, :input_sorting_expressions, []) |> Enum.map(&encode_expression/1),
+      other_sorting_expressions:
+        Keyword.get(opts, :other_sorting_expressions, []) |> Enum.map(&encode_expression/1)
+    }
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type: {:co_group_map, co_group_map}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:apply_in_pandas_with_state, _child_plan, _opts}, _counter) do
+    raise ArgumentError,
+          "ApplyInPandasWithState relation is not supported by SparkEx; use Python clients for stateful pandas UDFs"
+  end
+
+  def encode_relation({:ml_relation, _ml_plan}, _counter) do
+    raise ArgumentError,
+          "MlRelation is not supported by SparkEx; use Python or Scala clients for Spark ML"
   end
 
   # --- Catalog operations ---
@@ -1540,7 +1668,7 @@ defmodule SparkEx.Connect.PlanEncoder do
          %Expression.SortOrder{
            child: encode_expression(expr),
            direction: encode_sort_direction(direction),
-           null_ordering: encode_null_ordering(null_ordering)
+           null_ordering: encode_null_ordering(null_ordering, direction)
          }}
     }
   end
@@ -1582,15 +1710,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   def encode_expression({:outer, child_expr}) do
-    %Expression{
-      expr_type:
-        {:unresolved_function,
-         %Expression.UnresolvedFunction{
-           function_name: "outer",
-           arguments: [encode_expression(child_expr)],
-           is_distinct: false
-         }}
-    }
+    encode_expression(child_expr)
   end
 
   # --- Subquery expression ---
@@ -2528,6 +2648,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_expr({:lambda_var, _name} = expr, plan_ids, refs, counter),
     do: {expr, plan_ids, refs, counter}
 
+  defp rewrite_expr({:outer, child}, plan_ids, refs, counter) do
+    rewrite_expr(child, plan_ids, refs, counter)
+  end
+
   defp rewrite_expr({:subquery, subquery_type, referenced_plan, opts}, plan_ids, refs, counter)
        when is_list(opts) do
     {plan_ids, refs, plan_id, counter} = ensure_plan_id(referenced_plan, plan_ids, refs, counter)
@@ -2741,72 +2865,13 @@ defmodule SparkEx.Connect.PlanEncoder do
     remap_expr_plan_ids(expr, [left_plan_id, right_plan_id])
   end
 
-  defp normalize_join_condition_using_columns(nil, using_columns, _left_plan, _right_plan),
-    do: {nil, using_columns}
+  defp safe_rename_columns_map?(string_renames) do
+    sources = Enum.map(string_renames, &elem(&1, 0))
+    targets = Enum.map(string_renames, &elem(&1, 1))
 
-  defp normalize_join_condition_using_columns(
-         join_condition,
-         using_columns,
-         left_plan,
-         right_plan
-       ) do
-    if using_columns == [] do
-      case extract_single_column_using_join(join_condition, left_plan, right_plan) do
-        nil -> {join_condition, using_columns}
-        column_name -> {nil, [column_name]}
-      end
-    else
-      {join_condition, using_columns}
-    end
+    sources == Enum.uniq(sources) and
+      MapSet.disjoint?(MapSet.new(sources), MapSet.new(targets))
   end
-
-  defp extract_single_column_using_join(
-         {:fn, "==", [left_expr, right_expr], _distinct},
-         left_plan,
-         right_plan
-       ) do
-    with {:ok, {:left, column_name}} <- join_column_side(left_expr, left_plan, right_plan),
-         {:ok, {:right, ^column_name}} <- join_column_side(right_expr, left_plan, right_plan) do
-      column_name
-    else
-      _ ->
-        with {:ok, {:right, column_name}} <- join_column_side(left_expr, left_plan, right_plan),
-             {:ok, {:left, ^column_name}} <- join_column_side(right_expr, left_plan, right_plan) do
-          column_name
-        else
-          _ ->
-            with {:ok, {left_plan_id, column_name}} when is_integer(left_plan_id) <-
-                   join_column_plan_id(left_expr),
-                 {:ok, {right_plan_id, ^column_name}} when is_integer(right_plan_id) <-
-                   join_column_plan_id(right_expr),
-                 true <- left_plan_id != right_plan_id do
-              column_name
-            else
-              _ -> nil
-            end
-        end
-    end
-  end
-
-  defp extract_single_column_using_join(_expr, _left_plan, _right_plan), do: nil
-
-  defp join_column_side({:col, column_name, source_plan}, left_plan, right_plan)
-       when is_binary(column_name) do
-    cond do
-      source_plan == left_plan -> {:ok, {:left, column_name}}
-      source_plan == right_plan -> {:ok, {:right, column_name}}
-      true -> :error
-    end
-  end
-
-  defp join_column_side(_expr, _left_plan, _right_plan), do: :error
-
-  defp join_column_plan_id({:col, column_name, plan_id})
-       when is_binary(column_name) and is_integer(plan_id) do
-    {:ok, {plan_id, column_name}}
-  end
-
-  defp join_column_plan_id(_expr), do: :error
 
   defp remap_expr_plan_ids_to_input(expr, %Relation{} = input_relation) do
     candidate_plan_ids = source_relation_plan_ids(input_relation)
@@ -3004,72 +3069,6 @@ defmodule SparkEx.Connect.PlanEncoder do
        do: [plan_id]
 
   defp default_source_relation_plan_ids(_), do: []
-
-  defp expand_with_columns_renamed_plan(child_plan, renames) do
-    normalized_renames =
-      renames
-      |> Enum.map(fn {old_name, new_name} -> {to_string(old_name), to_string(new_name)} end)
-      |> Enum.reject(fn {old_name, new_name} -> old_name == new_name end)
-
-    if normalized_renames == [] do
-      child_plan
-    else
-      reserved_names =
-        normalized_renames
-        |> Enum.flat_map(fn {old_name, new_name} -> [old_name, new_name] end)
-        |> MapSet.new()
-
-      {temp_pairs, _reserved_names} =
-        Enum.map_reduce(
-          Enum.with_index(normalized_renames),
-          reserved_names,
-          fn {{old_name, _new_name}, idx}, used_names ->
-            temp_name = generate_rename_temp_name(idx, used_names)
-            {{old_name, temp_name}, MapSet.put(used_names, temp_name)}
-          end
-        )
-
-      temp_aliases =
-        Enum.map(temp_pairs, fn {old_name, temp_name} ->
-          {:alias, {:col, old_name}, temp_name}
-        end)
-
-      rename_aliases =
-        Enum.zip(temp_pairs, normalized_renames)
-        |> Enum.map(fn {{_old_name, temp_name}, {_old_name2, new_name}} ->
-          {:alias, {:col, temp_name}, new_name}
-        end)
-
-      dropped_original_names = Enum.map(normalized_renames, &elem(&1, 0))
-      dropped_temp_names = Enum.map(temp_pairs, &elem(&1, 1))
-
-      child_plan
-      |> then(&{:with_columns, &1, temp_aliases})
-      |> then(&{:drop, &1, dropped_original_names})
-      |> then(&{:with_columns, &1, rename_aliases})
-      |> then(&{:drop, &1, dropped_temp_names})
-    end
-  end
-
-  defp generate_rename_temp_name(idx, used_names) do
-    base = "__spark_ex_rename_tmp_#{idx}"
-    generate_rename_temp_name(base, 0, used_names)
-  end
-
-  defp generate_rename_temp_name(base, suffix, used_names) do
-    candidate =
-      if suffix == 0 do
-        base
-      else
-        "#{base}_#{suffix}"
-      end
-
-    if MapSet.member?(used_names, candidate) do
-      generate_rename_temp_name(base, suffix + 1, used_names)
-    else
-      candidate
-    end
-  end
 
   defp encode_schema(%DataType{} = schema), do: schema
 
@@ -3378,7 +3377,7 @@ defmodule SparkEx.Connect.PlanEncoder do
         %DataType.StructField{
           name: "col#{idx}",
           data_type: infer_literal_data_type(value),
-          nullable: is_nil(value)
+          nullable: true
         }
       end)
 
@@ -3395,7 +3394,12 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp encode_literal(v) when is_binary(v) do
-    %Expression.Literal{literal_type: {:string, v}}
+    if String.valid?(v) do
+      %Expression.Literal{literal_type: {:string, v}}
+    else
+      raise ArgumentError,
+            "binary literal contains invalid UTF-8; wrap as {:binary, value} to send raw bytes"
+    end
   end
 
   defp encode_literal(%Date{} = date) do
@@ -3413,9 +3417,10 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
-  defp encode_literal(%Time{} = time) do
+  defp encode_literal(%Time{microsecond: {_usec, precision}} = time) do
     %Expression.Literal{
-      literal_type: {:time, %Expression.Literal.Time{nano: time_to_nanos(time), precision: 6}}
+      literal_type:
+        {:time, %Expression.Literal.Time{nano: time_to_nanos(time), precision: precision}}
     }
   end
 
@@ -3526,7 +3531,7 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.SortOrder{
       child: encode_expression(expr),
       direction: encode_sort_direction(direction),
-      null_ordering: encode_null_ordering(null_ordering)
+      null_ordering: encode_null_ordering(null_ordering, direction)
     }
   end
 
@@ -3549,9 +3554,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_sort_direction(:asc), do: :SORT_DIRECTION_ASCENDING
   defp encode_sort_direction(:desc), do: :SORT_DIRECTION_DESCENDING
 
-  defp encode_null_ordering(nil), do: :SORT_NULLS_FIRST
-  defp encode_null_ordering(:nulls_first), do: :SORT_NULLS_FIRST
-  defp encode_null_ordering(:nulls_last), do: :SORT_NULLS_LAST
+  defp encode_null_ordering(nil, :desc), do: :SORT_NULLS_LAST
+  defp encode_null_ordering(nil, _direction), do: :SORT_NULLS_FIRST
+  defp encode_null_ordering(:nulls_first, _direction), do: :SORT_NULLS_FIRST
+  defp encode_null_ordering(:nulls_last, _direction), do: :SORT_NULLS_LAST
 
   defp time_to_nanos(%Time{microsecond: {usec, precision}} = time) do
     {seconds, _usecs} = Time.to_seconds_after_midnight(time)
@@ -3598,11 +3604,21 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_frame_type(:rows), do: :FRAME_TYPE_ROW
   defp encode_frame_type(:range), do: :FRAME_TYPE_RANGE
 
+  @jvm_int_min -2_147_483_648
+  @jvm_int_max 2_147_483_647
+  @jvm_long_min -9_223_372_036_854_775_808
+  @jvm_long_max 9_223_372_036_854_775_807
+
   defp encode_frame_boundary(:current_row, _frame_type) do
     %Expression.Window.WindowFrame.FrameBoundary{boundary: {:current_row, true}}
   end
 
   defp encode_frame_boundary(:unbounded, _frame_type) do
+    %Expression.Window.WindowFrame.FrameBoundary{boundary: {:unbounded, true}}
+  end
+
+  defp encode_frame_boundary(n, _frame_type)
+       when n in [@jvm_int_min, @jvm_int_max, @jvm_long_min, @jvm_long_max] do
     %Expression.Window.WindowFrame.FrameBoundary{boundary: {:unbounded, true}}
   end
 
@@ -3716,15 +3732,20 @@ defmodule SparkEx.Connect.PlanEncoder do
         %DataType.StructField{
           name: "col#{idx}",
           data_type: infer_literal_data_type(value),
-          nullable: is_nil(value)
+          nullable: true
         }
       end)
 
     %DataType{kind: {:struct, %DataType.Struct{fields: fields}}}
   end
 
-  defp infer_literal_data_type(v) when is_binary(v),
-    do: %DataType{kind: {:string, %DataType.String{}}}
+  defp infer_literal_data_type(v) when is_binary(v) do
+    if String.valid?(v) do
+      %DataType{kind: {:string, %DataType.String{}}}
+    else
+      %DataType{kind: {:binary, %DataType.Binary{}}}
+    end
+  end
 
   defp infer_literal_data_type(%Date{}), do: %DataType{kind: {:date, %DataType.Date{}}}
 
@@ -3761,7 +3782,13 @@ defmodule SparkEx.Connect.PlanEncoder do
        do: right
 
   defp merge_literal_data_types(left, right) do
-    if left == right, do: left, else: left
+    if left == right do
+      left
+    else
+      raise ArgumentError,
+            "heterogeneous element types in literal collection: #{inspect(left)} vs #{inspect(right)}. " <>
+              "Wrap mixed values in explicit casts or split into separate columns."
+    end
   end
 
   defp null_data_type, do: %DataType{kind: {:null, %DataType.NULL{}}}

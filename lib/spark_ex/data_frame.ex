@@ -509,6 +509,11 @@ defmodule SparkEx.DataFrame do
     ensure_same_session!(left, right, :lateral_join)
     canonical = normalize_join_type(join_type)
 
+    if canonical not in [:inner, :left, :cross] do
+      raise ArgumentError,
+            "lateral_join only supports :inner, :left, and :cross join types, got: #{inspect(join_type)}"
+    end
+
     cond_expr =
       case condition do
         nil -> nil
@@ -1462,14 +1467,23 @@ defmodule SparkEx.DataFrame do
   @doc """
   Repartitions by partition ID.
 
+  Wraps the partition-id column in `DirectShufflePartitionID` so the values
+  are used directly as physical partition indices (Spark 4.0+).
+
   ## Examples
 
-      df |> DataFrame.repartition_by_id(col("partition_col"))
+      df |> DataFrame.repartition_by_id(4, col("partition_col"))
   """
-  @spec repartition_by_id(t(), pos_integer() | nil, Column.t() | String.t() | atom()) :: t()
-  def repartition_by_id(%__MODULE__{} = df, num_partitions \\ nil, col) do
-    col_expr = normalize_column_expr(col)
+  @spec repartition_by_id(t(), pos_integer(), Column.t() | String.t() | atom()) :: t()
+  def repartition_by_id(%__MODULE__{} = df, num_partitions, col)
+      when is_integer(num_partitions) and num_partitions > 0 do
+    col_expr = {:direct_shuffle_partition_id, normalize_column_expr(col)}
     %__MODULE__{df | plan: {:repartition_by_expression, df.plan, [col_expr], num_partitions}}
+  end
+
+  def repartition_by_id(%__MODULE__{}, num_partitions, _col) do
+    raise ArgumentError,
+          "repartition_by_id requires a positive integer num_partitions, got: #{inspect(num_partitions)}"
   end
 
   @doc "Alias for `filter/2`."
