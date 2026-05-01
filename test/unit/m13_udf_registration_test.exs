@@ -157,7 +157,7 @@ defmodule SparkEx.M13.UDFRegistrationTest do
     test "register_udtf raises when eval_type is missing" do
       {:ok, session} = FakeUDFSession.start_link(self())
 
-      assert_raise KeyError, fn ->
+      assert_raise ArgumentError, ~r/requires the :eval_type option/, fn ->
         SparkEx.UDFRegistration.register_udtf(
           session,
           "my_udtf",
@@ -170,7 +170,7 @@ defmodule SparkEx.M13.UDFRegistrationTest do
     test "register_udtf raises when python_ver is missing" do
       {:ok, session} = FakeUDFSession.start_link(self())
 
-      assert_raise KeyError, fn ->
+      assert_raise ArgumentError, ~r/requires the :python_ver option/, fn ->
         SparkEx.UDFRegistration.register_udtf(
           session,
           "my_udtf",

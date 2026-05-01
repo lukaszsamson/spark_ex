@@ -71,7 +71,7 @@ defmodule SparkEx.StreamingQueryManager do
   @spec await_any_termination(GenServer.server(), keyword()) ::
           {:ok, boolean() | nil} | {:error, term()}
   def await_any_termination(session, opts \\ []) do
-    timeout_ms = normalize_timeout_seconds(Keyword.get(opts, :timeout, nil))
+    {timeout_ms, opts} = SparkEx.Internal.StreamingTimeout.resolve(opts)
     opts = Keyword.put_new(opts, :reattach_policy, :streaming)
 
     case execute_command(session, {:await_any_termination, timeout_ms}, opts) do
@@ -235,16 +235,5 @@ defmodule SparkEx.StreamingQueryManager do
 
   defp build_streaming_query(_session, instance) do
     {:error, {:unexpected_result, {:missing_query_ids, instance}}}
-  end
-
-  defp normalize_timeout_seconds(nil), do: nil
-
-  defp normalize_timeout_seconds(seconds) when is_number(seconds) and seconds > 0 do
-    trunc(seconds * 1000)
-  end
-
-  defp normalize_timeout_seconds(other) do
-    raise ArgumentError,
-          "expected :timeout to be a positive number of seconds or nil, got: #{inspect(other)}"
   end
 end

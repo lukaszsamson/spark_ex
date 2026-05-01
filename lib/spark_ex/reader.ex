@@ -381,13 +381,19 @@ defmodule SparkEx.Reader do
 
     extra_options =
       case properties do
-        nil -> %{}
-        props when is_map(props) or is_list(props) -> normalize_options(props)
+        nil ->
+          %{}
+
+        props when is_map(props) or is_list(props) ->
+          normalize_options(props)
+
+        other ->
+          raise ArgumentError,
+                "properties must be nil, a map, or a keyword list, got: #{inspect(other)}"
       end
 
     merged =
-      %{}
-      |> Map.merge(partition_options)
+      partition_options
       |> Map.merge(extra_options)
       |> Map.put("url", url)
       |> Map.put("dbtable", table)

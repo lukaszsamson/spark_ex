@@ -101,8 +101,8 @@ defmodule SparkEx.UDFRegistration do
   def register_udtf(session, name, python_command, opts \\ [])
       when is_binary(name) and is_binary(python_command) do
     return_type = Keyword.get(opts, :return_type, nil)
-    eval_type = Keyword.fetch!(opts, :eval_type)
-    python_ver = Keyword.fetch!(opts, :python_ver)
+    eval_type = require_opt!(opts, :eval_type, :register_udtf)
+    python_ver = require_opt!(opts, :python_ver, :register_udtf)
     deterministic = Keyword.get(opts, :deterministic, true)
 
     with {:ok, normalized_return_type} <- normalize_return_type(session, return_type),
@@ -140,7 +140,7 @@ defmodule SparkEx.UDFRegistration do
           :ok | {:error, term()}
   def register_data_source(session, name, python_command, opts \\ [])
       when is_binary(name) and is_binary(python_command) do
-    python_ver = Keyword.fetch!(opts, :python_ver)
+    python_ver = require_opt!(opts, :python_ver, :register_data_source)
 
     with {:ok, normalized_python_ver} <- normalize_python_ver(python_ver) do
       command = {:register_data_source, name, python_command, normalized_python_ver}
@@ -177,4 +177,17 @@ defmodule SparkEx.UDFRegistration do
 
   defp normalize_aggregate(aggregate) when is_boolean(aggregate), do: {:ok, aggregate}
   defp normalize_aggregate(other), do: {:error, {:invalid_aggregate, other}}
+
+  defp require_opt!(opts, key, fun) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        raise ArgumentError,
+              "#{fun}/4 requires the #{inspect(key)} option — there is no portable " <>
+                "default because the value depends on the Python runtime that produced " <>
+                "the bytes payload"
+    end
+  end
 end

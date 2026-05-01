@@ -104,7 +104,7 @@ defmodule SparkEx.StreamingQuery do
   """
   @spec await_termination(t(), keyword()) :: {:ok, boolean() | nil} | {:error, term()}
   def await_termination(%__MODULE__{} = query, opts \\ []) do
-    timeout_ms = normalize_timeout_seconds(Keyword.get(opts, :timeout, nil))
+    {timeout_ms, opts} = SparkEx.Internal.StreamingTimeout.resolve(opts)
     opts = Keyword.put_new(opts, :reattach_policy, :streaming)
 
     case execute_command(query, {:await_termination, timeout_ms}, opts) do
@@ -269,17 +269,6 @@ defmodule SparkEx.StreamingQuery do
       [_type_prefix, rest] -> rest
       [msg] -> msg
     end
-  end
-
-  defp normalize_timeout_seconds(nil), do: nil
-
-  defp normalize_timeout_seconds(seconds) when is_number(seconds) and seconds > 0 do
-    trunc(seconds * 1000)
-  end
-
-  defp normalize_timeout_seconds(other) do
-    raise ArgumentError,
-          "expected :timeout to be a positive number of seconds or nil, got: #{inspect(other)}"
   end
 
   defp parse_progress(json) when is_binary(json) do
