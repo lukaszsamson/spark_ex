@@ -676,14 +676,6 @@ defmodule SparkEx.Connect.PlanEncoder do
     {relation, counter}
   end
 
-  defp safe_rename_columns_map?(string_renames) do
-    sources = Enum.map(string_renames, &elem(&1, 0))
-    targets = Enum.map(string_renames, &elem(&1, 1))
-
-    sources == Enum.uniq(sources) and
-      MapSet.disjoint?(MapSet.new(sources), MapSet.new(targets))
-  end
-
   def encode_relation({:repartition, child_plan, num_partitions, shuffle}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
@@ -2871,6 +2863,14 @@ defmodule SparkEx.Connect.PlanEncoder do
   # remap first/second distinct referenced IDs to concrete left/right child IDs.
   defp remap_join_condition_plan_ids(expr, left_plan_id, right_plan_id) do
     remap_expr_plan_ids(expr, [left_plan_id, right_plan_id])
+  end
+
+  defp safe_rename_columns_map?(string_renames) do
+    sources = Enum.map(string_renames, &elem(&1, 0))
+    targets = Enum.map(string_renames, &elem(&1, 1))
+
+    sources == Enum.uniq(sources) and
+      MapSet.disjoint?(MapSet.new(sources), MapSet.new(targets))
   end
 
   defp remap_expr_plan_ids_to_input(expr, %Relation{} = input_relation) do
