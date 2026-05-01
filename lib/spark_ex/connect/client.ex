@@ -1735,7 +1735,8 @@ defmodule SparkEx.Connect.Client do
       # fresh execution. Surface RESPONSE_ALREADY_RECEIVED separately so the
       # caller knows the previous response was already consumed by another
       # client and reattach is unrecoverable.
-      {:error, %SparkEx.Error.Remote{error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED"} =
+      {:error,
+       %SparkEx.Error.Remote{error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED"} =
            remote} ->
         {:error, remote}
 
@@ -1926,7 +1927,8 @@ defmodule SparkEx.Connect.Client do
           {:ok, %Google.Rpc.RetryInfo{retry_delay: nil}} ->
             0
 
-          {:ok, %Google.Rpc.RetryInfo{
+          {:ok,
+           %Google.Rpc.RetryInfo{
              retry_delay: %Google.Protobuf.Duration{seconds: seconds, nanos: nanos}
            }} ->
             seconds * 1000 + div(nanos, 1_000_000)

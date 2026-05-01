@@ -74,8 +74,10 @@ defmodule SparkEx.Connect.SessionIntegrity do
   rotated the session (`INVALID_HANDLE.SESSION_CHANGED`).
   """
   @spec session_changed_error?(term()) :: boolean()
-  def session_changed_error?(%SparkEx.Error.Remote{error_class: "INVALID_HANDLE.SESSION_CHANGED"}),
-    do: true
+  def session_changed_error?(%SparkEx.Error.Remote{
+        error_class: "INVALID_HANDLE.SESSION_CHANGED"
+      }),
+      do: true
 
   def session_changed_error?(%SparkEx.Error.Remote{message: message}) when is_binary(message) do
     String.contains?(message, "INVALID_HANDLE.SESSION_CHANGED")

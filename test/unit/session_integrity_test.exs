@@ -126,7 +126,8 @@ defmodule SparkEx.Connect.SessionIntegrityTest do
          }}
       ]
 
-      assert {:ok, %{server_side_session_id: "ssid-1"}} = ResultDecoder.decode_stream(stream, sess)
+      assert {:ok, %{server_side_session_id: "ssid-1"}} =
+               ResultDecoder.decode_stream(stream, sess)
     end
   end
 end

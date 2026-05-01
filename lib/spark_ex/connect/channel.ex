@@ -265,9 +265,15 @@ defmodule SparkEx.Connect.Channel do
     {permit, params} = pop_bool(params, "grpc_keepalive_permit_without_calls")
 
     case {time_ms, timeout_ms, permit} do
-      {{:error, _} = err, _, _} -> err
-      {_, {:error, _} = err, _} -> err
-      {_, _, {:error, _} = err} -> err
+      {{:error, _} = err, _, _} ->
+        err
+
+      {_, {:error, _} = err, _} ->
+        err
+
+      {_, _, {:error, _} = err} ->
+        err
+
       {{:ok, t}, {:ok, to}, {:ok, p}} ->
         keepalive =
           %{}

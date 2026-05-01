@@ -738,16 +738,6 @@ defmodule SparkEx.Connect.ResultDecoder do
     %{state | schema: schema}
   end
 
-  defp maybe_set_server_session(state, %ExecutePlanResponse{server_side_session_id: nil}),
-    do: state
-
-  defp maybe_set_server_session(state, %ExecutePlanResponse{server_side_session_id: id})
-       when is_binary(id) do
-    %{state | server_side_session_id: id}
-  end
-
-  defp maybe_set_server_session(state, _resp), do: state
-
   defp validate_batch_start_offset(_state, %ExecutePlanResponse.ArrowBatch{start_offset: nil}),
     do: :ok
 
