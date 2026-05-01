@@ -1434,14 +1434,14 @@ defmodule SparkEx.MissOpus2Test do
       %{spec: %SparkEx.WindowSpec{}}
     end
 
-    test "extreme negative boundary is clamped to :unbounded", %{spec: spec} do
+    test "extreme negative boundary is clamped to :unbounded_preceding", %{spec: spec} do
       result = SparkEx.WindowSpec.rows_between(spec, -9_223_372_036_854_775_808, 0)
-      assert %SparkEx.WindowSpec{frame_spec: {:rows, :unbounded, 0}} = result
+      assert %SparkEx.WindowSpec{frame_spec: {:rows, :unbounded_preceding, 0}} = result
     end
 
-    test "extreme positive boundary is clamped to :unbounded", %{spec: spec} do
+    test "extreme positive boundary is clamped to :unbounded_following", %{spec: spec} do
       result = SparkEx.WindowSpec.rows_between(spec, 0, 9_223_372_036_854_775_807)
-      assert %SparkEx.WindowSpec{frame_spec: {:rows, 0, :unbounded}} = result
+      assert %SparkEx.WindowSpec{frame_spec: {:rows, 0, :unbounded_following}} = result
     end
 
     test "normal boundaries are not clamped", %{spec: spec} do
@@ -1457,7 +1457,9 @@ defmodule SparkEx.MissOpus2Test do
           9_223_372_036_854_775_807
         )
 
-      assert %SparkEx.WindowSpec{frame_spec: {:range, :unbounded, :unbounded}} = result
+      assert %SparkEx.WindowSpec{
+               frame_spec: {:range, :unbounded_preceding, :unbounded_following}
+             } = result
     end
   end
 

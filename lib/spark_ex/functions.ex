@@ -38,7 +38,12 @@ defmodule SparkEx.Functions do
   def col("*"), do: %Column{expr: {:star}}
 
   def col(name) when is_binary(name) do
-    %Column{expr: {:col, name}}
+    if String.ends_with?(name, ".*") do
+      target = String.slice(name, 0, byte_size(name) - 2)
+      %Column{expr: {:star, target}}
+    else
+      %Column{expr: {:col, name}}
+    end
   end
 
   @doc """
