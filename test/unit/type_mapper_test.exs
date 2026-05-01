@@ -90,18 +90,46 @@ defmodule SparkEx.Connect.TypeMapperTest do
       assert {:ok, {:time, :microsecond}} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "maps array to :string (JSON fallback)" do
+    test "maps array to native list dtype" do
       element = %DataType{kind: {:integer, %DataType.Integer{}}}
       dt = %DataType{kind: {:array, %DataType.Array{element_type: element, contains_null: false}}}
-      assert {:ok, :string} = TypeMapper.to_explorer_dtype(dt)
+      assert {:ok, {:list, {:s, 32}}} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "maps struct to :string (JSON fallback)" do
+    test "maps nested array to native nested list dtype" do
+      inner_element = %DataType{kind: {:string, %DataType.String{}}}
+
+      inner_array =
+        %DataType{kind: {:array, %DataType.Array{element_type: inner_element}}}
+
+      dt = %DataType{kind: {:array, %DataType.Array{element_type: inner_array}}}
+      assert {:ok, {:list, {:list, :string}}} = TypeMapper.to_explorer_dtype(dt)
+    end
+
+    test "maps struct to native struct dtype with field names" do
+      fields = [
+        %DataType.StructField{
+          name: "id",
+          data_type: %DataType{kind: {:long, %DataType.Long{}}}
+        },
+        %DataType.StructField{
+          name: "name",
+          data_type: %DataType{kind: {:string, %DataType.String{}}}
+        }
+      ]
+
+      dt = %DataType{kind: {:struct, %DataType.Struct{fields: fields}}}
+
+      assert {:ok, {:struct, [{"id", {:s, 64}}, {"name", :string}]}} =
+               TypeMapper.to_explorer_dtype(dt)
+    end
+
+    test "maps empty struct to native struct dtype with empty fields" do
       dt = %DataType{kind: {:struct, %DataType.Struct{fields: []}}}
-      assert {:ok, :string} = TypeMapper.to_explorer_dtype(dt)
+      assert {:ok, {:struct, []}} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "maps map to :string (JSON fallback)" do
+    test "maps map to :string (no native Explorer dtype)" do
       key = %DataType{kind: {:string, %DataType.String{}}}
       value = %DataType{kind: {:integer, %DataType.Integer{}}}
 

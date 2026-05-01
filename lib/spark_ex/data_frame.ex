@@ -1083,11 +1083,30 @@ defmodule SparkEx.DataFrame do
   @doc """
   Observes metrics during query execution.
 
-  Accepts an `SparkEx.Observation` or a name string and a list of Column expressions.
+  Accepts an `SparkEx.Observation` or a name string and a list of Column
+  expressions.
+
+  When given an `SparkEx.Observation` struct, the metrics can be retrieved
+  with `SparkEx.Observation.get/1` after an action has been executed.
+
+  When given a raw name string, retrieval through `SparkEx.Observation.get/1`
+  is **not** supported — read the metrics from `:observed_metrics` on the
+  action's result map instead. The string overload exists for parity with
+  Spark's API but does not associate the metrics with a retrievable handle;
+  prefer `SparkEx.Observation.new/1` if you need to look the metrics up
+  later.
   """
   @spec observe(t(), SparkEx.Observation.t() | String.t(), [Column.t()]) :: t()
-  def observe(%__MODULE__{} = df, %SparkEx.Observation{name: name}, exprs) when is_list(exprs) do
-    observe(df, name, exprs)
+  def observe(%__MODULE__{} = df, %SparkEx.Observation{name: name} = obs, exprs)
+      when is_list(exprs) do
+    if exprs == [] do
+      raise ArgumentError, "exprs should not be empty"
+    end
+
+    ensure_observe_supported!(df)
+    metric_exprs = Enum.map(exprs, &normalize_column_expr/1)
+    SparkEx.Observation.register_observation(obs, metric_exprs)
+    %__MODULE__{df | plan: {:collect_metrics, df.plan, name, metric_exprs}}
   end
 
   def observe(%__MODULE__{} = df, name, exprs) when is_binary(name) and is_list(exprs) do

@@ -69,6 +69,63 @@ defmodule SparkEx.Connect.ResultDecoderTest do
 
       assert {:ok, decoded} = ResultDecoder.decode_stream(stream)
       assert decoded.command_result == {:checkpoint, result}
+      assert decoded.command_results == [{:checkpoint, result}]
+    end
+
+    test "accumulates multiple command results in arrival order" do
+      first =
+        %Spark.Connect.CheckpointCommandResult{
+          relation: %Spark.Connect.CachedRemoteRelation{relation_id: "rel-1"}
+        }
+
+      second =
+        %Spark.Connect.CheckpointCommandResult{
+          relation: %Spark.Connect.CachedRemoteRelation{relation_id: "rel-2"}
+        }
+
+      stream = [
+        {:ok, %ExecutePlanResponse{response_type: {:checkpoint_command_result, first}}},
+        {:ok, %ExecutePlanResponse{response_type: {:checkpoint_command_result, second}}}
+      ]
+
+      assert {:ok, decoded} = ResultDecoder.decode_stream(stream)
+      assert decoded.command_result == {:checkpoint, second}
+      assert decoded.command_results == [{:checkpoint, first}, {:checkpoint, second}]
+    end
+
+    test "captures pipeline, ml, get_resources, create_resource_profile command results" do
+      pipe = %Spark.Connect.PipelineCommandResult{}
+      pipe_event = %Spark.Connect.PipelineEventResult{}
+      ml = %Spark.Connect.MlCommandResult{}
+      gres = %Spark.Connect.GetResourcesCommandResult{}
+      crp = %Spark.Connect.CreateResourceProfileCommandResult{profile_id: 7}
+
+      stream = [
+        {:ok, %ExecutePlanResponse{response_type: {:pipeline_command_result, pipe}}},
+        {:ok, %ExecutePlanResponse{response_type: {:pipeline_event_result, pipe_event}}},
+        {:ok, %ExecutePlanResponse{response_type: {:ml_command_result, ml}}},
+        {:ok, %ExecutePlanResponse{response_type: {:get_resources_command_result, gres}}},
+        {:ok, %ExecutePlanResponse{response_type: {:create_resource_profile_command_result, crp}}}
+      ]
+
+      assert {:ok, decoded} = ResultDecoder.decode_stream(stream)
+
+      assert decoded.command_results == [
+               {:pipeline, pipe},
+               {:pipeline_event, pipe_event},
+               {:ml, ml},
+               {:get_resources, gres},
+               {:create_resource_profile, crp}
+             ]
+    end
+
+    test "returns unsupported_response_type error for opaque extension responses" do
+      stream = [
+        {:ok, %ExecutePlanResponse{response_type: {:extension, %Google.Protobuf.Any{}}}}
+      ]
+
+      assert {:error, {:unsupported_response_type, :extension}} =
+               ResultDecoder.decode_stream(stream)
     end
 
     test "captures observed metrics" do
