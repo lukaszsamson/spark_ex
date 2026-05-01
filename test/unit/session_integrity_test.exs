@@ -108,6 +108,31 @@ defmodule SparkEx.Connect.SessionIntegrityTest do
                ResultDecoder.decode_stream(stream, sess)
     end
 
+    test "treats empty server_side_session_id as absent (does not overwrite the pin)" do
+      # Protobuf string fields default to "" when unset. An empty value
+      # must not clobber the pinned id and trigger a later false-positive
+      # `server_session_changed` error.
+      sess = session("c", "ssid-1")
+
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           session_id: "c",
+           server_side_session_id: "",
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }},
+        {:ok,
+         %ExecutePlanResponse{
+           session_id: "c",
+           server_side_session_id: "ssid-1",
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      assert {:ok, %{server_side_session_id: "ssid-1"}} =
+               ResultDecoder.decode_stream(stream, sess)
+    end
+
     test "passes when session_id matches and server-side id is consistent" do
       sess = session("c", nil)
 

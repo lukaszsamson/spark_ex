@@ -704,14 +704,17 @@ defmodule SparkEx.Connect.ResultDecoder do
   # the response carries one) or `{:error, reason}` to halt the stream.
   # When `session` is `nil` (used by tests / the bare 1-arity entrypoint)
   # the cross-session checks are skipped.
+  #
+  # Note: protobuf string fields default to "" when unset, which is truthy
+  # in Elixir. We treat "" as "absent" here so a response with no
+  # server_side_session_id can't overwrite the previously-pinned value
+  # (and later trigger a false `server_session_changed` error).
   defp check_response_integrity(resp, session, state) do
-    response_server_id = Map.get(resp, :server_side_session_id)
+    response_server_id = nonempty_id(Map.get(resp, :server_side_session_id))
 
-    case do_validate(resp, session, state) do
+    case do_validate(response_server_id, session, resp, state) do
       :ok ->
-        new_state_server_id =
-          response_server_id || state.server_side_session_id
-
+        new_state_server_id = response_server_id || state.server_side_session_id
         {:ok, %{state | server_side_session_id: new_state_server_id}}
 
       {:error, _} = error ->
@@ -719,18 +722,22 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
-  defp do_validate(_resp, nil, _state), do: :ok
+  defp do_validate(_response_server_id, nil, _resp, _state), do: :ok
 
-  defp do_validate(resp, %{} = session, state) do
+  defp do_validate(response_server_id, %{} = session, resp, state) do
     with :ok <- SessionIntegrity.validate_session_id(resp, session) do
       baseline = session.server_side_session_id || state.server_side_session_id
 
-      case SessionIntegrity.validate_server_session_id(resp.server_side_session_id, baseline) do
+      case SessionIntegrity.validate_server_session_id(response_server_id, baseline) do
         {:ok, _} -> :ok
         {:error, _} = error -> error
       end
     end
   end
+
+  defp nonempty_id(nil), do: nil
+  defp nonempty_id(""), do: nil
+  defp nonempty_id(id) when is_binary(id), do: id
 
   defp maybe_set_schema(state, nil), do: state
 

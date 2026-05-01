@@ -44,11 +44,13 @@ defmodule SparkEx.Connect.Channel do
 
   ## Examples
 
-      iex> SparkEx.Connect.Channel.parse_uri("sc://localhost:15002")
-      {:ok, %{host: "localhost", port: 15002, use_ssl: false, token: nil, extra_params: %{}}}
+      iex> {:ok, opts} = SparkEx.Connect.Channel.parse_uri("sc://localhost:15002")
+      iex> {opts.host, opts.port, opts.use_ssl, opts.token, opts.extra_params}
+      {"localhost", 15002, false, nil, %{}}
 
-      iex> SparkEx.Connect.Channel.parse_uri("sc://spark-host:15002/;use_ssl=true;token=abc123")
-      {:ok, %{host: "spark-host", port: 15002, use_ssl: true, token: "abc123", extra_params: %{}}}
+      iex> {:ok, opts} = SparkEx.Connect.Channel.parse_uri("sc://spark-host:15002/;use_ssl=true;token=abc123")
+      iex> {opts.host, opts.port, opts.use_ssl, opts.token}
+      {"spark-host", 15002, true, "abc123"}
   """
   @spec parse_uri(String.t()) :: {:ok, connect_opts()} | {:error, term()}
   def parse_uri(uri_string) when is_binary(uri_string) do
@@ -151,18 +153,32 @@ defmodule SparkEx.Connect.Channel do
 
   # --- Private ---
 
+  # HTTP/2 SETTINGS_MAX_FRAME_SIZE valid range (RFC 7540 §6.5.2):
+  #   min 16,384 (2^14), max 16,777,215 (2^24 - 1).
+  @http2_min_frame_size 16_384
+  @http2_max_frame_size 16_777_215
+
   defp build_adapter_opts(opts) do
     max_size = Map.get(opts, :max_message_size) || @default_max_message_size
-    # Cap the http/2 frame size to gun's allowed range (max 16 MiB).
-    # The window size advertised by us controls how much the peer can send
-    # without an explicit WINDOW_UPDATE; raise it to the max message size so
-    # large server responses (Arrow batches, plan results) don't stall.
-    frame_size = min(max_size, 16 * 1024 * 1024 - 1)
+
+    # Frame size advertised to the peer. Independently clamped to the
+    # HTTP/2 valid range so an unusually small `grpc_max_message_size`
+    # can't produce an invalid SETTINGS value and break negotiation.
+    frame_size =
+      max_size
+      |> min(@http2_max_frame_size)
+      |> max(@http2_min_frame_size)
+
+    # Window size advertised by us controls how much the peer can send
+    # without an explicit WINDOW_UPDATE; raise it to the max message
+    # size so large server responses (Arrow batches, plan results)
+    # don't stall on default 64 KiB windows.
+    window_size = max(max_size, 65_535)
 
     http2_opts = %{
       max_frame_size_received: frame_size,
-      initial_connection_window_size: max(max_size, 65_535),
-      initial_stream_window_size: max(max_size, 65_535)
+      initial_connection_window_size: window_size,
+      initial_stream_window_size: window_size
     }
 
     [http2_opts: http2_opts]

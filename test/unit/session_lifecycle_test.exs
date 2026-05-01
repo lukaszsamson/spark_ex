@@ -31,8 +31,10 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
     @impl true
     def init(state), do: {:ok, state}
 
-    # Catch-all: ignore unknown calls so that safe_disconnect can probe this
-    # process without crashing it (and us, via the start_link link).
+    # Catch-all: GRPC.Stub.disconnect/1 issues a GenServer.call to the
+    # registered grpc connection process. Reply with an error so the call
+    # returns cleanly instead of crashing this fake (which would propagate
+    # an EXIT to the test via the start_link link).
     @impl true
     def handle_call(_msg, _from, state), do: {:reply, {:error, :not_supported}, state}
   end

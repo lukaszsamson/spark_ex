@@ -249,6 +249,37 @@ defmodule SparkEx.Connect.ChannelTest do
                Enum.into(local_grpc_opts, %{})
     end
 
+    test "adapter http2_opts clamp frame size to the HTTP/2 valid range" do
+      # Below the HTTP/2 minimum (16,384) — must clamp UP, not produce an
+      # invalid SETTINGS value that breaks gun negotiation.
+      tiny_opts = %{
+        host: "host",
+        port: 15002,
+        use_ssl: false,
+        token: nil,
+        auth_transport: :auto,
+        extra_params: %{},
+        max_message_size: 8_000
+      }
+
+      grpc_opts = Channel.build_grpc_opts(tiny_opts)
+      adapter_opts = Keyword.fetch!(grpc_opts, :adapter_opts)
+      http2_opts = Keyword.fetch!(adapter_opts, :http2_opts)
+      assert http2_opts.max_frame_size_received == 16_384
+
+      # Above the HTTP/2 maximum (16,777,215) — must clamp DOWN.
+      huge_opts = %{tiny_opts | max_message_size: 256 * 1024 * 1024}
+      grpc_opts = Channel.build_grpc_opts(huge_opts)
+      adapter_opts = Keyword.fetch!(grpc_opts, :adapter_opts)
+      http2_opts = Keyword.fetch!(adapter_opts, :http2_opts)
+      assert http2_opts.max_frame_size_received == 16_777_215
+
+      # Window size scales with the configured max — large responses
+      # shouldn't stall on the default 64 KiB window.
+      assert http2_opts.initial_stream_window_size == 256 * 1024 * 1024
+      assert http2_opts.initial_connection_window_size == 256 * 1024 * 1024
+    end
+
     test "token authorization overrides custom authorization header" do
       opts = %{
         host: "host",
