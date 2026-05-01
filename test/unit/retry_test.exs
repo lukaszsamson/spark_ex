@@ -225,6 +225,16 @@ defmodule SparkEx.Connect.RetryTest do
     assert_received {:slept, 25}
   end
 
+  test "normalize_session_policies! rejects unknown policy types and keys" do
+    assert_raise ArgumentError, ~r/unknown retry policy type/, fn ->
+      SparkEx.RetryPolicyRegistry.normalize_session_policies!(%{bogus: %{max_retries: 1}})
+    end
+
+    assert_raise ArgumentError, ~r/unknown retry policy key/, fn ->
+      SparkEx.RetryPolicyRegistry.normalize_session_policies!(%{retry: %{not_a_key: 1}})
+    end
+  end
+
   test "uses PySpark DefaultPolicy fields by default" do
     policy = SparkEx.RetryPolicyRegistry.default_policy_template()
     assert policy.max_retries == 15
@@ -235,15 +245,14 @@ defmodule SparkEx.Connect.RetryTest do
     assert policy.min_jitter_threshold_ms == 2_000
   end
 
-  test "per-session retry_policies override the global registry" do
+  test "per-session retry_policies override the global default" do
+    # Avoid mutating the shared ETS registry — async tests in other
+    # modules rely on the module-level defaults staying put. The session
+    # struct's own override is enough to prove the precedence chain
+    # because the registry default of 15 retries would otherwise
+    # dominate.
     parent = self()
     sleep_fun = fn ms -> send(parent, {:slept, ms}) end
-
-    on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
-
-    # Global registry says 5 retries; the session-scoped override below
-    # should win and cap us at 1.
-    SparkEx.RetryPolicyRegistry.set_policies(retry: %{max_retries: 5, sleep_fun: sleep_fun})
 
     session = %SparkEx.Session{
       session_id: "s",
@@ -272,8 +281,44 @@ defmodule SparkEx.Connect.RetryTest do
       )
 
     assert {:error, %SparkEx.Error.Remote{grpc_status: 14}} = result
-    # max_retries: 1 → 2 attempts total
+    # max_retries: 1 → 2 attempts total. If the session override were
+    # ignored, the registry default (15) would attempt many more.
     assert Process.get(counter) == 2
+  end
+
+  test "per-session retry_policies are partial overrides; unrelated keys are inherited" do
+    # Verify the merge contract via `policy_for/2` directly so the test
+    # doesn't depend on (or perturb) the shared ETS-backed registry's
+    # current contents. We only assert that the overridden key wins
+    # AND every other key matches whatever the global lookup returns
+    # for that same field — proving the merge is a partial overlay
+    # rather than a default-reset.
+    base = SparkEx.RetryPolicyRegistry.policy_for(nil, :retry)
+
+    session = %SparkEx.Session{
+      session_id: "s",
+      user_id: "u",
+      client_type: "c",
+      retry_policies: %{retry: %{max_retries: 1}}
+    }
+
+    merged = SparkEx.RetryPolicyRegistry.policy_for(session, :retry)
+
+    assert merged.max_retries == 1
+
+    for key <- [
+          :initial_backoff_ms,
+          :max_backoff_ms,
+          :backoff_multiplier,
+          :jitter_ms,
+          :min_jitter_threshold_ms,
+          :max_server_retry_delay,
+          :jitter_fun,
+          :sleep_fun
+        ] do
+      assert Map.get(merged, key) == Map.get(base, key),
+             "expected partial override to leave #{inspect(key)} untouched"
+    end
   end
 
   test "caps retry_delay_ms using max_server_retry_delay" do

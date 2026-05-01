@@ -58,14 +58,41 @@ defmodule SparkEx.RetryPolicyRegistry do
   end
 
   @doc """
-  Normalize and validate a map/keyword of policies; raises on invalid input.
+  Normalize and validate per-session policy overrides.
 
-  Used by `SparkEx.Session` to validate user-supplied per-session overrides
-  at session-start time.
+  Returns a map keyed by `:retry | :reattach | :streaming` whose values
+  contain only the user-supplied keys (validated, but **not** merged
+  against the global defaults). The session-aware lookup
+  `policy_for/2` merges these partial maps onto the active global
+  policy, so callers who specify a single key (e.g. `max_retries: 3`)
+  do not implicitly reset every other knob (`sleep_fun`, jitter
+  config, etc.) back to defaults.
+
+  Raises `ArgumentError` on:
+
+    * unknown policy types — anything outside
+      `:retry | :reattach | :streaming`
+    * unknown keys inside a per-type policy map
+    * key values that fail per-key validation
+      (non-negative integer / positive number / function arity)
+
+  Intended for `SparkEx.Session` user input. The global registry's
+  `set_policies/1` keeps its more permissive, default-merging behavior
+  for backward compatibility.
   """
-  @spec normalize_policies!(map() | keyword()) :: %{policy_type() => map()}
-  def normalize_policies!(policies) when is_map(policies) or is_list(policies) do
-    normalize_policies(policies)
+  @spec normalize_session_policies!(map() | keyword()) :: %{policy_type() => map()}
+  def normalize_session_policies!(policies) when is_map(policies) or is_list(policies) do
+    map = if is_list(policies), do: Map.new(policies), else: policies
+
+    Enum.into(map, %{}, fn {type, policy} ->
+      unless type in [:retry, :reattach, :streaming] do
+        raise ArgumentError,
+              "unknown retry policy type #{inspect(type)}; expected one of " <>
+                ":retry, :reattach, :streaming"
+      end
+
+      {type, normalize_partial_policy!(policy)}
+    end)
   end
 
   defp default_policies() do
@@ -113,7 +140,39 @@ defmodule SparkEx.RetryPolicyRegistry do
   defp normalize_policy(policy) when is_list(policy), do: normalize_policy(Map.new(policy))
 
   defp normalize_policy(policy) when is_map(policy) do
-    allowed = [
+    normalized = Map.take(policy, allowed_policy_keys())
+    validate_policy!(normalized)
+    Map.merge(default_policy(), normalized)
+  end
+
+  # Per-session overrides keep ONLY the user-provided keys (no default
+  # merge), and surface unknown keys as an error rather than silently
+  # dropping them. The global `set_policies/1` path stays permissive
+  # for backward compatibility.
+  defp normalize_partial_policy!(policy) when is_list(policy),
+    do: normalize_partial_policy!(Map.new(policy))
+
+  defp normalize_partial_policy!(policy) when is_map(policy) do
+    allowed = allowed_policy_keys()
+
+    case Map.keys(policy) -- allowed do
+      [] ->
+        validate_policy!(policy)
+        policy
+
+      extras ->
+        raise ArgumentError,
+              "unknown retry policy key(s) #{inspect(extras)}; expected any of #{inspect(allowed)}"
+    end
+  end
+
+  defp normalize_partial_policy!(other) do
+    raise ArgumentError,
+          "expected a map or keyword list of policy options, got: #{inspect(other)}"
+  end
+
+  defp allowed_policy_keys do
+    [
       :max_retries,
       :initial_backoff_ms,
       :max_backoff_ms,
@@ -124,10 +183,6 @@ defmodule SparkEx.RetryPolicyRegistry do
       :jitter_fun,
       :sleep_fun
     ]
-
-    normalized = Map.take(policy, allowed)
-    validate_policy!(normalized)
-    Map.merge(default_policy(), normalized)
   end
 
   defp validate_policy!(policy) do

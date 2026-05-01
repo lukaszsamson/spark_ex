@@ -63,6 +63,12 @@ defmodule SparkEx.Session do
   - `:session_id` — custom session UUID (default: auto-generated)
   - `:allow_arrow_batch_chunking` — allow server-side Arrow chunk splitting (default: `true`)
   - `:preferred_arrow_chunk_size` — preferred chunk size in bytes (default: `nil`)
+  - `:retry_policies` — per-session retry policy overrides (default: `nil`,
+    falling back to `SparkEx.RetryPolicyRegistry`'s global policies). Accepts
+    a map or keyword list keyed by `:retry`, `:reattach`, and/or `:streaming`,
+    where each value is a partial map/keyword of the same keys accepted by
+    `SparkEx.RetryPolicyRegistry.set_policies/1`. Only the keys you supply
+    override the global policy; everything else is inherited unchanged.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -797,7 +803,13 @@ defmodule SparkEx.Session do
   defp normalize_retry_policies_opt(nil), do: nil
 
   defp normalize_retry_policies_opt(policies) when is_map(policies) or is_list(policies) do
-    SparkEx.RetryPolicyRegistry.normalize_policies!(policies)
+    SparkEx.RetryPolicyRegistry.normalize_session_policies!(policies)
+  end
+
+  defp normalize_retry_policies_opt(other) do
+    raise ArgumentError,
+          "expected :retry_policies to be nil, a map, or a keyword list keyed by " <>
+            ":retry | :reattach | :streaming, got: #{inspect(other)}"
   end
 
   @impl true

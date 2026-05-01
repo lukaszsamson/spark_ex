@@ -236,10 +236,7 @@ defmodule SparkEx.Connect.Errors do
     do_fetch_error_details(error_id, session, @fetch_error_details_timeout_ms)
   end
 
-  @doc false
-  @spec do_fetch_error_details(String.t(), SparkEx.Session.t(), pos_integer() | :infinity) ::
-          {:ok, FetchErrorDetailsResponse.t()} | {:error, term()}
-  def do_fetch_error_details(error_id, session, timeout_ms) do
+  defp do_fetch_error_details(error_id, session, timeout_ms) do
     request = %FetchErrorDetailsRequest{
       session_id: session.session_id,
       user_context: UserContextExtensions.build_user_context(session.user_id),
