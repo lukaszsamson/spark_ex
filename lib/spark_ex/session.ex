@@ -3090,7 +3090,8 @@ defmodule SparkEx.Session do
   defp normalize_list_data_and_schema([], schema) do
     case schema do
       {:column_names, _} ->
-        {:error, {:invalid_data, "cannot create DataFrame from empty list with column-name schema"}}
+        {:error,
+         {:invalid_data, "cannot create DataFrame from empty list with column-name schema"}}
 
       _ ->
         {:ok, [], schema}
@@ -3226,7 +3227,8 @@ defmodule SparkEx.Session do
         query = json_rows_to_sql_query(row_json, validated_schema)
         {:ok, {:sql_relation, query, nil}}
       else
-        helper_schema = helper_schema_for_non_string_map_fields(validated_schema, non_string_map_fields)
+        helper_schema =
+          helper_schema_for_non_string_map_fields(validated_schema, non_string_map_fields)
 
         with {:ok, validated_helper_schema} <-
                validate_schema_ddl_for_sql_relation(helper_schema) do
