@@ -198,7 +198,8 @@ defmodule SparkEx.Connect.TypeMapper do
 
   defp direct_ddl(:variant, _), do: "VARIANT"
 
-  defp direct_ddl(:geometry, %DataType.Geometry{srid: srid}) when is_integer(srid) and srid != 0 do
+  defp direct_ddl(:geometry, %DataType.Geometry{srid: srid})
+       when is_integer(srid) and srid != 0 do
     "GEOMETRY(#{srid})"
   end
 

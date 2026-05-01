@@ -117,7 +117,8 @@ defmodule SparkEx.Observation do
         # in this case; we still keep the legacy slot for backward compatibility.
         :ets.insert(
           @table,
-          {{:metric_legacy, session_id, name}, maybe_apply_metric_aliases(session_id, name, metrics)}
+          {{:metric_legacy, session_id, name},
+           maybe_apply_metric_aliases(session_id, name, metrics)}
         )
     end
   end

@@ -178,6 +178,7 @@ defmodule SparkEx.Types do
   end
 
   defp needs_quoting?(""), do: true
+
   defp needs_quoting?(name) do
     not Regex.match?(~r/\A[A-Za-z_][A-Za-z0-9_]*\z/, name) or reserved_word?(name)
   end

@@ -1224,7 +1224,9 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp column_value_transform(%Spark.Connect.DataType{kind: {:var_char, _}}),
     do: &strip_trailing_spaces/1
 
-  defp column_value_transform(%Spark.Connect.DataType{kind: {:udt, %Spark.Connect.DataType.UDT{} = udt}}) do
+  defp column_value_transform(%Spark.Connect.DataType{
+         kind: {:udt, %Spark.Connect.DataType.UDT{} = udt}
+       }) do
     case SparkEx.Connect.UDTRegistry.lookup_deserializer(udt) do
       nil -> &raw_passthrough/1
       fun when is_function(fun, 1) -> fun
