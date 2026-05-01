@@ -103,7 +103,7 @@ defmodule SparkEx.Integration.ConfigOpsTest do
       assert length(pairs) == 1
       {key, val} = hd(pairs)
       assert key == "spark.sql.shuffle.partitions"
-      assert val in ["true", "false"]
+      assert val in [true, false]
     end
   end
 

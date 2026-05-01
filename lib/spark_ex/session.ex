@@ -355,7 +355,7 @@ defmodule SparkEx.Session do
   Checks whether configuration keys are modifiable at runtime.
   """
   @spec config_is_modifiable(GenServer.server(), String.t() | [String.t()]) ::
-          {:ok, [{String.t(), String.t()}]} | {:error, term()}
+          {:ok, [{String.t(), boolean() | nil}]} | {:error, term()}
   def config_is_modifiable(session, key) when is_binary(key) do
     config_is_modifiable(session, [key])
   end
