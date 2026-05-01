@@ -86,7 +86,7 @@ defmodule SparkEx.Integration.RepartitionParityGapsTest do
   # ── repartition_by_id ──
 
   describe "repartition_by_id" do
-    @describetag min_spark: "4.0"
+    @describetag min_spark: "4.1"
     test "repartition_by_id with valid column", %{session: session} do
       df =
         SparkEx.sql(
