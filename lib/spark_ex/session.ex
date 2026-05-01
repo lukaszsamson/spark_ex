@@ -1924,15 +1924,9 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp retry_collect_with_legacy_fallbacks(
-         state,
-         plan,
-         opts,
-         %SparkEx.Error.Remote{message: message}
-       )
-       when is_binary(message) do
-    cond do
-      String.contains?(message, "Unknown Group Type UNRECOGNIZED") ->
+  defp retry_collect_with_legacy_fallbacks(state, plan, opts, %SparkEx.Error.Remote{} = remote) do
+    case classify_legacy_recovery_strategy(remote) do
+      :legacy_grouping_sets ->
         :telemetry.execute(
           [:spark_ex, :session, :collect_retry],
           %{attempt: 1},
@@ -1946,7 +1940,7 @@ defmodule SparkEx.Session do
           _ -> :error
         end
 
-      String.contains?(message, "Does not support convert UNPARSED to catalyst types.") ->
+      :legacy_unparsed ->
         :telemetry.execute(
           [:spark_ex, :session, :collect_retry],
           %{attempt: 1},
@@ -1960,15 +1954,48 @@ defmodule SparkEx.Session do
           _ -> :error
         end
 
-      String.contains?(message, "Expected Relation to be set, but is empty.") ->
+      :empty_relation ->
         retry_collect_for_empty_relation_errors(state, plan, opts)
 
-      true ->
+      nil ->
         :error
     end
   end
 
-  defp retry_collect_with_legacy_fallbacks(_state, _plan, _opts, _remote), do: :error
+  # Each strategy is keyed first by the server's `errorClass` (set in
+  # ErrorInfo.metadata, surfaced by `Connect.Errors`). A localised or
+  # version-shifted server message no longer breaks the retry path
+  # when the class is present. The message-substring tier remains as
+  # a fallback for clusters that return errors without an errorClass.
+  @legacy_recovery_error_classes %{
+    "_LEGACY_ERROR_TEMP_GROUPING_SETS" => :legacy_grouping_sets,
+    "_LEGACY_ERROR_TEMP_UNPARSED" => :legacy_unparsed,
+    "_LEGACY_ERROR_TEMP_EMPTY_RELATION" => :empty_relation
+  }
+
+  @legacy_recovery_message_fragments [
+    {"Unknown Group Type UNRECOGNIZED", :legacy_grouping_sets},
+    {"Does not support convert UNPARSED to catalyst types.", :legacy_unparsed},
+    {"Expected Relation to be set, but is empty.", :empty_relation}
+  ]
+
+  defp classify_legacy_recovery_strategy(%SparkEx.Error.Remote{
+         error_class: error_class,
+         message: message
+       }) do
+    case Map.get(@legacy_recovery_error_classes, error_class) do
+      nil -> classify_legacy_recovery_by_message(message)
+      strategy -> strategy
+    end
+  end
+
+  defp classify_legacy_recovery_by_message(message) when is_binary(message) do
+    Enum.find_value(@legacy_recovery_message_fragments, fn {fragment, strategy} ->
+      if String.contains?(message, fragment), do: strategy
+    end)
+  end
+
+  defp classify_legacy_recovery_by_message(_), do: nil
 
   defp retry_collect_for_empty_relation_errors(state, plan, opts) do
     rewriters = [
@@ -2988,15 +3015,18 @@ defmodule SparkEx.Session do
   end
 
   defp prepare_local_data(data, opts) when is_list(data) do
-    with {:ok, schema} <- normalize_create_dataframe_schema(opts) do
+    with {:ok, schema} <- normalize_create_dataframe_schema(opts),
+         {:ok, normalized_data, normalized_schema} <- normalize_list_data_and_schema(data, schema) do
       cond do
-        is_binary(schema) ->
-          # User provided DDL schema string — convert list of maps to Explorer.DataFrame
-          prepare_list_data_with_schema(data, schema, opts)
+        is_binary(normalized_schema) ->
+          prepare_list_data_with_schema(
+            normalized_data,
+            normalized_schema,
+            Keyword.put(opts, :schema, normalized_schema)
+          )
 
-        true ->
-          # No schema — try to infer from data
-          prepare_list_data_inferred(data, opts)
+        is_nil(normalized_schema) ->
+          prepare_list_data_inferred(normalized_data, Keyword.delete(opts, :schema))
       end
     end
   end
@@ -3030,10 +3060,114 @@ defmodule SparkEx.Session do
       {:struct, _} = schema ->
         {:ok, SparkEx.Types.schema_to_string(schema)}
 
+      schema when is_list(schema) ->
+        cond do
+          schema == [] ->
+            {:error, {:invalid_schema, "schema column-name list cannot be empty"}}
+
+          Enum.all?(schema, &is_binary/1) ->
+            {:ok, {:column_names, schema}}
+
+          true ->
+            {:error,
+             {:invalid_schema,
+              "expected list of column names as strings, got: #{inspect(schema)}"}}
+        end
+
       other ->
         {:error,
          {:invalid_schema,
-          "expected schema as DDL string or SparkEx.Types struct schema, got: #{inspect(other)}"}}
+          "expected schema as DDL string, SparkEx.Types struct schema, or list of column names, got: #{inspect(other)}"}}
+    end
+  end
+
+  # Bridges three input shapes (list of maps, list of tuples, list of
+  # bare values) to the inferred / explicit-DDL paths. Returns the
+  # rewritten data and the schema in canonical form: either a DDL
+  # string or `nil` (inference). Tuples without column names are
+  # rejected — the previous `is_list/1` arm silently fell through to
+  # the inferred path which then failed inside Explorer.
+  defp normalize_list_data_and_schema([], schema) do
+    case schema do
+      {:column_names, _} ->
+        {:error, {:invalid_data, "cannot create DataFrame from empty list with column-name schema"}}
+
+      _ ->
+        {:ok, [], schema}
+    end
+  end
+
+  defp normalize_list_data_and_schema(data, schema) when is_list(data) do
+    cond do
+      Enum.all?(data, &(is_map(&1) and not is_struct(&1))) ->
+        case schema do
+          {:column_names, _names} ->
+            # PySpark accepts list-of-dicts + name list, but the names
+            # are advisory only. Falling back to inference preserves
+            # the dict's own keys, which is the only semantics we can
+            # honour without re-keying user data.
+            {:ok, data, nil}
+
+          _ ->
+            {:ok, data, schema}
+        end
+
+      Enum.all?(data, &is_tuple/1) ->
+        with {:ok, names} <- column_names_for_tuple_data(data, schema) do
+          maps = Enum.map(data, fn tuple -> tuple_to_named_map(tuple, names) end)
+
+          case schema do
+            binary when is_binary(binary) -> {:ok, maps, binary}
+            {:column_names, _} -> {:ok, maps, nil}
+            nil -> {:ok, maps, nil}
+          end
+        end
+
+      true ->
+        {:error,
+         {:invalid_data,
+          "expected list of maps or list of tuples for createDataFrame, got: #{inspect(data)}"}}
+    end
+  end
+
+  defp column_names_for_tuple_data(_data, {:column_names, names}), do: {:ok, names}
+
+  defp column_names_for_tuple_data(_data, schema_ddl) when is_binary(schema_ddl) do
+    names =
+      schema_ddl
+      |> split_top_level_schema_fields()
+      |> Enum.flat_map(fn field ->
+        case parse_schema_field(field) do
+          {name, _type} -> [name]
+          :error -> []
+        end
+      end)
+
+    if names == [] do
+      {:error, {:invalid_schema, "could not extract field names from DDL: #{schema_ddl}"}}
+    else
+      {:ok, names}
+    end
+  end
+
+  defp column_names_for_tuple_data(_data, nil) do
+    {:error,
+     {:invalid_schema,
+      "tuple rows require a schema (DDL string or list of column names) so columns can be named"}}
+  end
+
+  defp tuple_to_named_map(tuple, names) when is_tuple(tuple) and is_list(names) do
+    values = Tuple.to_list(tuple)
+
+    cond do
+      length(values) == length(names) ->
+        names
+        |> Enum.zip(values)
+        |> Map.new()
+
+      true ->
+        raise ArgumentError,
+              "tuple arity #{length(values)} does not match #{length(names)} column names"
     end
   end
 
@@ -3080,7 +3214,8 @@ defmodule SparkEx.Session do
          non_string_map_fields,
          binary_fields
        ) do
-    with {:ok, normalized_rows} <-
+    with {:ok, validated_schema} <- validate_schema_ddl_for_sql_relation(schema_ddl),
+         {:ok, normalized_rows} <-
            normalize_rows_for_schema(
              data,
              Enum.map(non_string_map_fields, & &1.name),
@@ -3088,21 +3223,25 @@ defmodule SparkEx.Session do
            ),
          {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
       if non_string_map_fields == [] do
-        query =
-          json_rows_to_sql_query(length(row_json), schema_ddl)
-          |> inline_sql_json_args(row_json)
-
+        query = json_rows_to_sql_query(row_json, validated_schema)
         {:ok, {:sql_relation, query, nil}}
       else
-        query =
-          json_rows_to_sql_query_with_projection(
-            length(row_json),
-            helper_schema_for_non_string_map_fields(schema_ddl, non_string_map_fields),
-            projected_select_list_for_non_string_map_fields(schema_ddl, non_string_map_fields)
-          )
-          |> inline_sql_json_args(row_json)
+        helper_schema = helper_schema_for_non_string_map_fields(validated_schema, non_string_map_fields)
 
-        {:ok, {:sql_relation, query, nil}}
+        with {:ok, validated_helper_schema} <-
+               validate_schema_ddl_for_sql_relation(helper_schema) do
+          query =
+            json_rows_to_sql_query_with_projection(
+              row_json,
+              validated_helper_schema,
+              projected_select_list_for_non_string_map_fields(
+                validated_schema,
+                non_string_map_fields
+              )
+            )
+
+          {:ok, {:sql_relation, query, nil}}
+        end
       end
     end
   end
@@ -3134,11 +3273,10 @@ defmodule SparkEx.Session do
           if normalize_local_relation_arrow?(opts) do
             with {:ok, normalized_rows} <- normalize_rows_for_schema(data),
                  {:ok, inferred_schema_ddl} <- infer_schema_ddl_from_rows(normalized_rows),
+                 {:ok, validated_schema} <-
+                   validate_schema_ddl_for_sql_relation(inferred_schema_ddl),
                  {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
-              query =
-                json_rows_to_sql_query(length(row_json), inferred_schema_ddl)
-                |> inline_sql_json_args(row_json)
-
+              query = json_rows_to_sql_query(row_json, validated_schema)
               {:ok, {:sql_relation, query, nil}}
             else
               {:error, _} = error -> error
@@ -3519,7 +3657,8 @@ defmodule SparkEx.Session do
 
   defp infer_single_type(%Date{}), do: :date
   defp infer_single_type(%DateTime{}), do: :timestamp
-  defp infer_single_type(%NaiveDateTime{}), do: :timestamp
+  defp infer_single_type(%NaiveDateTime{}), do: :timestamp_ntz
+  defp infer_single_type(%Time{}), do: :time
   defp infer_single_type({:binary, v}) when is_binary(v), do: :binary
   defp infer_single_type(v) when is_binary(v), do: :string
 
@@ -3592,7 +3731,12 @@ defmodule SparkEx.Session do
     {:struct, merged}
   end
 
-  defp merge_inferred_types(_a, _b), do: :string
+  defp merge_inferred_types(a, b) do
+    raise ArgumentError,
+          "heterogeneous inferred types in createDataFrame column: " <>
+            "#{inspect(a)} vs #{inspect(b)}. Provide an explicit schema, " <>
+            "wrap mixed values in compatible types, or split into separate columns."
+  end
 
   defp widen_decimal_for_int(p, s, bits) do
     int_digits = max_int_digits(bits)
@@ -3615,6 +3759,8 @@ defmodule SparkEx.Session do
   defp type_to_inferred_ddl({:decimal, p, s}), do: "DECIMAL(#{p}, #{s})"
   defp type_to_inferred_ddl(:date), do: "DATE"
   defp type_to_inferred_ddl(:timestamp), do: "TIMESTAMP"
+  defp type_to_inferred_ddl(:timestamp_ntz), do: "TIMESTAMP_NTZ"
+  defp type_to_inferred_ddl(:time), do: "TIME"
   defp type_to_inferred_ddl(:string), do: "STRING"
   defp type_to_inferred_ddl(:binary), do: "BINARY"
 
@@ -3657,13 +3803,52 @@ defmodule SparkEx.Session do
   defp prepare_sql_json_relation(explorer_df, schema_ddl) do
     rows = Explorer.DataFrame.to_rows(explorer_df)
 
-    with {:ok, row_json} <- encode_rows_as_json(rows) do
-      query =
-        json_rows_to_sql_query(length(row_json), schema_ddl)
-        |> inline_sql_json_args(row_json)
-
+    with {:ok, validated_schema} <- validate_schema_ddl_for_sql_relation(schema_ddl),
+         {:ok, row_json} <- encode_rows_as_json(rows) do
+      query = json_rows_to_sql_query(row_json, validated_schema)
       {:ok, {:sql_relation, query, nil}}
     end
+  end
+
+  # Reject schema DDL strings that would let user input escape from the
+  # `from_json('<ddl>', …)` literal context: unbalanced quoting, comment
+  # markers, or statement terminators. `sql_escape_string/1` handles a
+  # single quote/backslash, but stops short of catching `\` followed by
+  # `'` (which the Spark parser treats as an escaped quote when
+  # `escapedStringLiterals=true`) and is no defence against `--`, `/*`,
+  # `*/`, or `;` injecting a separate clause.
+  defp validate_schema_ddl_for_sql_relation(schema_ddl) when is_binary(schema_ddl) do
+    cond do
+      String.contains?(schema_ddl, ";") ->
+        {:error, {:invalid_schema_ddl, "schema contains ';'"}}
+
+      String.contains?(schema_ddl, "--") ->
+        {:error, {:invalid_schema_ddl, "schema contains '--' comment marker"}}
+
+      String.contains?(schema_ddl, "/*") or String.contains?(schema_ddl, "*/") ->
+        {:error, {:invalid_schema_ddl, "schema contains block comment marker"}}
+
+      not balanced_quotes?(schema_ddl, "`") ->
+        {:error, {:invalid_schema_ddl, "schema has unbalanced backticks"}}
+
+      not balanced_quotes?(schema_ddl, "'") ->
+        {:error, {:invalid_schema_ddl, "schema has unbalanced single quotes"}}
+
+      true ->
+        {:ok, schema_ddl}
+    end
+  end
+
+  defp validate_schema_ddl_for_sql_relation(other) do
+    {:error, {:invalid_schema_ddl, "expected DDL string, got: #{inspect(other)}"}}
+  end
+
+  defp balanced_quotes?(string, quote_char) when is_binary(string) and is_binary(quote_char) do
+    string
+    |> String.graphemes()
+    |> Enum.count(&(&1 == quote_char))
+    |> rem(2)
+    |> Kernel.==(0)
   end
 
   defp encode_rows_as_json(rows) do
@@ -3679,7 +3864,7 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp json_rows_to_sql_query(0, schema_ddl) do
+  defp json_rows_to_sql_query([], schema_ddl) do
     escaped_schema = sql_escape_string(schema_ddl)
 
     """
@@ -3692,25 +3877,21 @@ defmodule SparkEx.Session do
     |> String.trim()
   end
 
-  defp json_rows_to_sql_query(row_count, schema_ddl) when row_count > 0 do
+  defp json_rows_to_sql_query(json_rows, schema_ddl) when is_list(json_rows) do
     escaped_schema = sql_escape_string(schema_ddl)
-
-    placeholders =
-      1..row_count
-      |> Enum.map(fn _ -> "(?)" end)
-      |> Enum.join(", ")
+    values_clause = json_rows_to_values_clause(json_rows)
 
     """
     SELECT parsed.*
     FROM (
       SELECT from_json(_spark_ex_json, '#{escaped_schema}', map('mode', 'FAILFAST')) AS parsed
-      FROM VALUES #{placeholders} AS _spark_ex_input(_spark_ex_json)
+      FROM VALUES #{values_clause} AS _spark_ex_input(_spark_ex_json)
     ) _spark_ex_parsed
     """
     |> String.trim()
   end
 
-  defp json_rows_to_sql_query_with_projection(0, schema_ddl, select_list) do
+  defp json_rows_to_sql_query_with_projection([], schema_ddl, select_list) do
     escaped_schema = sql_escape_string(schema_ddl)
 
     """
@@ -3723,38 +3904,31 @@ defmodule SparkEx.Session do
     |> String.trim()
   end
 
-  defp json_rows_to_sql_query_with_projection(row_count, schema_ddl, select_list)
-       when row_count > 0 do
+  defp json_rows_to_sql_query_with_projection(json_rows, schema_ddl, select_list)
+       when is_list(json_rows) do
     escaped_schema = sql_escape_string(schema_ddl)
-
-    placeholders =
-      1..row_count
-      |> Enum.map(fn _ -> "(?)" end)
-      |> Enum.join(", ")
+    values_clause = json_rows_to_values_clause(json_rows)
 
     """
     SELECT #{select_list}
     FROM (
       SELECT from_json(_spark_ex_json, '#{escaped_schema}', map('mode', 'FAILFAST')) AS parsed
-      FROM VALUES #{placeholders} AS _spark_ex_input(_spark_ex_json)
+      FROM VALUES #{values_clause} AS _spark_ex_input(_spark_ex_json)
     ) _spark_ex_parsed
     """
     |> String.trim()
+  end
+
+  defp json_rows_to_values_clause(json_rows) do
+    json_rows
+    |> Enum.map(fn json -> "('" <> sql_escape_string(json) <> "')" end)
+    |> Enum.join(", ")
   end
 
   defp sql_escape_string(value) when is_binary(value) do
     value
     |> String.replace("\\", "\\\\")
     |> String.replace("'", "''")
-  end
-
-  defp inline_sql_json_args(query, []), do: query
-
-  defp inline_sql_json_args(query, json_rows) when is_list(json_rows) do
-    Enum.reduce(json_rows, query, fn json, acc ->
-      escaped = sql_escape_string(json)
-      String.replace(acc, "(?)", "('#{escaped}')", global: false)
-    end)
   end
 
   defp normalize_local_relation_arrow?(opts) do

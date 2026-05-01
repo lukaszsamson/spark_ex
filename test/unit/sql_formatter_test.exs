@@ -69,6 +69,23 @@ defmodule SparkEx.SqlFormatterTest do
                "SELECT 'it''s a ?' AS literal, 1 AS v"
     end
 
+    test "treats backslash-escaped single quote as part of the string literal" do
+      # Regression for LC2-20 / GPT-L24. With the buggy lexer the
+      # `\'` ended the string literal early, so `?` after it was
+      # treated as a placeholder; the second `?` then ran out of args.
+      sql = ~S(SELECT 'it\'s a ?' AS literal, ? AS v)
+
+      assert SqlFormatter.format(sql, [1]) ==
+               ~S(SELECT 'it\'s a ?' AS literal, 1 AS v)
+    end
+
+    test "treats doubled backslash inside literal as part of the literal" do
+      sql = ~S(SELECT 'a\\b ?' AS literal, ? AS v)
+
+      assert SqlFormatter.format(sql, [7]) ==
+               ~S(SELECT 'a\\b ?' AS literal, 7 AS v)
+    end
+
     test "empty args with no placeholders" do
       assert SqlFormatter.format("SELECT 1", []) == "SELECT 1"
     end
