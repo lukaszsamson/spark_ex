@@ -1086,8 +1086,16 @@ defmodule SparkEx.DataFrame do
   Accepts an `SparkEx.Observation` or a name string and a list of Column expressions.
   """
   @spec observe(t(), SparkEx.Observation.t() | String.t(), [Column.t()]) :: t()
-  def observe(%__MODULE__{} = df, %SparkEx.Observation{name: name}, exprs) when is_list(exprs) do
-    observe(df, name, exprs)
+  def observe(%__MODULE__{} = df, %SparkEx.Observation{name: name} = obs, exprs)
+      when is_list(exprs) do
+    if exprs == [] do
+      raise ArgumentError, "exprs should not be empty"
+    end
+
+    ensure_observe_supported!(df)
+    metric_exprs = Enum.map(exprs, &normalize_column_expr/1)
+    SparkEx.Observation.register_observation(obs, metric_exprs)
+    %__MODULE__{df | plan: {:collect_metrics, df.plan, name, metric_exprs}}
   end
 
   def observe(%__MODULE__{} = df, name, exprs) when is_binary(name) and is_list(exprs) do
