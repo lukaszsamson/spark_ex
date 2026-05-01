@@ -640,13 +640,20 @@ defmodule SparkEx.Connect.PlanEncoder do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
+    string_renames =
+      Enum.map(renames, fn {old_name, new_name} -> {to_string(old_name), to_string(new_name)} end)
+
     rename_entries =
-      Enum.map(renames, fn {old_name, new_name} ->
+      Enum.map(string_renames, fn {old_name, new_name} ->
         %Spark.Connect.WithColumnsRenamed.Rename{
-          col_name: to_string(old_name),
-          new_col_name: to_string(new_name)
+          col_name: old_name,
+          new_col_name: new_name
         }
       end)
+
+    # Populate the deprecated `rename_columns_map` for Spark 3.5 servers, which
+    # ignore the newer `renames` field. Newer servers prefer `renames`.
+    rename_columns_map = Map.new(string_renames)
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -654,6 +661,7 @@ defmodule SparkEx.Connect.PlanEncoder do
         {:with_columns_renamed,
          %Spark.Connect.WithColumnsRenamed{
            input: child,
+           rename_columns_map: rename_columns_map,
            renames: rename_entries
          }}
     }
