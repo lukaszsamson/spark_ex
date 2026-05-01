@@ -55,14 +55,24 @@ defmodule SparkEx.StreamWriter do
     :release_execute_fun
   ]
 
+  @doc """
+  Sets the output mode for the streaming sink.
+
+  Common values are `"append"`, `"complete"`, and `"update"` but the
+  string is forwarded verbatim — the server does final case-insensitive
+  validation, matching PySpark's behavior.
+  """
   @spec output_mode(t(), String.t()) :: t()
-  def output_mode(%__MODULE__{} = writer, mode) when mode in ["append", "complete", "update"] do
+  def output_mode(%__MODULE__{} = writer, mode) when is_binary(mode) do
+    if String.trim(mode) == "" do
+      raise ArgumentError, "output_mode must be a non-empty string, got: #{inspect(mode)}"
+    end
+
     %{writer | output_mode: mode}
   end
 
   def output_mode(%__MODULE__{}, mode) do
-    raise ArgumentError,
-          "output_mode must be one of \"append\", \"complete\", \"update\", got: #{inspect(mode)}"
+    raise ArgumentError, "output_mode must be a string, got: #{inspect(mode)}"
   end
 
   @spec format(t(), String.t()) :: t()

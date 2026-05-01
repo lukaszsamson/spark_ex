@@ -121,7 +121,7 @@ defmodule SparkEx.Integration.StreamingListenerParityTest do
 
   defp assert_query_eventually_has_progress(query, deadline_ms) when deadline_ms > 0 do
     case StreamingQuery.last_progress(query) do
-      {:ok, json} when is_binary(json) and json != "" ->
+      {:ok, progress} when is_map(progress) and map_size(progress) > 0 ->
         :ok
 
       _ ->
@@ -162,7 +162,7 @@ defmodule SparkEx.Integration.StreamingListenerParityTest do
     :ok = StreamingQueryListenerBus.add_listener(bus, ListenerLocalV1)
 
     :ok = StreamingQuery.stop(query)
-    assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
+    assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20)
 
     assert_receive {:listener_v1, :terminated, %{type: :terminated}}, 20_000
     refute_receive {:listener_v2, :terminated, _}, 1_500
@@ -184,7 +184,7 @@ defmodule SparkEx.Integration.StreamingListenerParityTest do
     assert_receive {:listener_v2, :progress, %{type: :progress}}, 10_000
 
     :ok = StreamingQuery.stop(query)
-    assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
+    assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20)
     assert_receive {:listener_v2, :terminated, %{type: :terminated}}, 20_000
   end
 end

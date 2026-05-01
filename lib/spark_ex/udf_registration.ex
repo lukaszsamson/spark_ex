@@ -69,6 +69,11 @@ defmodule SparkEx.UDFRegistration do
   the `register_table_function` command with the `CommonInlineUserDefinedTableFunction`
   protocol.
 
+  Both `:python_ver` and `:eval_type` must match the runtime that
+  produced the bytes in `python_command` — there is no portable way to
+  derive them from Elixir, so the caller is responsible for supplying
+  them. There is no default.
+
   ## Parameters
 
   - `session` — the SparkEx session (GenServer reference).
@@ -76,14 +81,18 @@ defmodule SparkEx.UDFRegistration do
   - `python_command` — serialized Python UDTF command bytes.
   - `opts` — keyword options:
     - `:return_type` — optional Spark DataType protobuf struct for the UDTF output schema.
-    - `:eval_type` — integer eval type (default: `0`).
-    - `:python_ver` — Python version string (default: `"3.11"`).
+    - `:eval_type` — integer `PythonEvalType` constant matching the
+      worker that produced `python_command` (e.g. `300` /
+      `SQL_TABLE_UDF`). Required.
+    - `:python_ver` — Python version string of the worker that produced
+      `python_command` (e.g. `"3.11"`). Required.
     - `:deterministic` — boolean (default: `true`).
 
   ## Examples
 
       SparkEx.UDFRegistration.register_udtf(session, "my_udtf", python_bytes,
         return_type: return_schema,
+        eval_type: 300,
         python_ver: "3.11"
       )
   """
@@ -92,8 +101,8 @@ defmodule SparkEx.UDFRegistration do
   def register_udtf(session, name, python_command, opts \\ [])
       when is_binary(name) and is_binary(python_command) do
     return_type = Keyword.get(opts, :return_type, nil)
-    eval_type = Keyword.get(opts, :eval_type, 0)
-    python_ver = Keyword.get(opts, :python_ver, "3.11")
+    eval_type = Keyword.fetch!(opts, :eval_type)
+    python_ver = Keyword.fetch!(opts, :python_ver)
     deterministic = Keyword.get(opts, :deterministic, true)
 
     with {:ok, normalized_return_type} <- normalize_return_type(session, return_type),
@@ -114,19 +123,24 @@ defmodule SparkEx.UDFRegistration do
   The data source is registered using the `register_data_source` command with the
   `CommonInlineUserDefinedDataSource` protocol.
 
+  `:python_ver` must match the runtime that produced the bytes in
+  `python_command` — there is no portable way to derive it from Elixir,
+  so the caller is responsible for supplying it. There is no default.
+
   ## Parameters
 
   - `session` — the SparkEx session (GenServer reference).
   - `name` — the data source name.
   - `python_command` — serialized Python data source command bytes.
   - `opts` — keyword options:
-    - `:python_ver` — Python version string (default: "3.11").
+    - `:python_ver` — Python version string of the worker that produced
+      `python_command` (e.g. `"3.11"`). Required.
   """
   @spec register_data_source(GenServer.server(), String.t(), binary(), keyword()) ::
           :ok | {:error, term()}
   def register_data_source(session, name, python_command, opts \\ [])
       when is_binary(name) and is_binary(python_command) do
-    python_ver = Keyword.get(opts, :python_ver, "3.11")
+    python_ver = Keyword.fetch!(opts, :python_ver)
 
     with {:ok, normalized_python_ver} <- normalize_python_ver(python_ver) do
       command = {:register_data_source, name, python_command, normalized_python_ver}

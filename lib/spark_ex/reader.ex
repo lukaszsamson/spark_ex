@@ -338,6 +338,63 @@ defmodule SparkEx.Reader do
     data_source(session, "jdbc", [], opts)
   end
 
+  @doc """
+  Reads from JDBC with partitioned parallel reads.
+
+  Mirrors PySpark's `DataFrameReader.jdbc(url, table, column, lowerBound,
+  upperBound, numPartitions, properties)` partitioned overload. The
+  partitioning arguments are forwarded as JDBC data-source options
+  (`partitionColumn`, `lowerBound`, `upperBound`, `numPartitions`).
+
+  `properties` is a map merged into the JDBC options after the partition
+  options, matching PySpark's precedence.
+  """
+  @spec jdbc(
+          GenServer.server(),
+          String.t(),
+          String.t(),
+          String.t(),
+          integer(),
+          integer(),
+          pos_integer(),
+          map() | keyword() | nil
+        ) :: DataFrame.t()
+  def jdbc(session, url, table, column_name, lower_bound, upper_bound, num_partitions, properties)
+      when is_binary(url) and is_binary(table) and is_binary(column_name) and
+             is_integer(lower_bound) and is_integer(upper_bound) and
+             is_integer(num_partitions) and num_partitions > 0 do
+    if String.trim(column_name) == "" do
+      raise ArgumentError, "column_name must be a non-empty string"
+    end
+
+    if lower_bound > upper_bound do
+      raise ArgumentError,
+            "lowerBound (#{lower_bound}) must not exceed upperBound (#{upper_bound})"
+    end
+
+    partition_options = %{
+      "partitionColumn" => column_name,
+      "lowerBound" => Integer.to_string(lower_bound),
+      "upperBound" => Integer.to_string(upper_bound),
+      "numPartitions" => Integer.to_string(num_partitions)
+    }
+
+    extra_options =
+      case properties do
+        nil -> %{}
+        props when is_map(props) or is_list(props) -> normalize_options(props)
+      end
+
+    merged =
+      %{}
+      |> Map.merge(partition_options)
+      |> Map.merge(extra_options)
+      |> Map.put("url", url)
+      |> Map.put("dbtable", table)
+
+    data_source(session, "jdbc", [], options: merged)
+  end
+
   # --- Private ---
 
   defp load_from_builder(reader, paths, opts) do

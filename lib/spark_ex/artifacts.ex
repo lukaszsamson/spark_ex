@@ -63,11 +63,19 @@ defmodule SparkEx.Artifacts do
 
   @doc """
   Uploads Python files from local paths.
+
+  Mirrors PySpark's `addPyFile`/`addPyFiles`: each path must end in one
+  of `.py`, `.zip`, `.egg`, or `.jar`.
   """
   @spec add_pyfiles(GenServer.server(), String.t() | [String.t()]) ::
           {:ok, [{String.t(), boolean()}]} | {:error, term()}
   def add_pyfiles(session, paths) do
-    add_with_prefix(session, paths, "pyfiles/")
+    paths = normalize_paths(paths)
+
+    case validate_pyfile_extensions(paths) do
+      :ok -> add_with_prefix(session, paths, "pyfiles/")
+      {:error, _} = error -> error
+    end
   end
 
   defp add_with_prefix(session, paths, prefix) do
@@ -88,6 +96,20 @@ defmodule SparkEx.Artifacts do
 
   defp normalize_paths(_paths) do
     raise ArgumentError, "expected paths to be a string or list of strings"
+  end
+
+  @pyfile_extensions ~w(.py .zip .egg .jar)
+
+  defp validate_pyfile_extensions(paths) do
+    bad =
+      Enum.reject(paths, fn path ->
+        path |> Path.extname() |> String.downcase() |> Kernel.in(@pyfile_extensions)
+      end)
+
+    case bad do
+      [] -> :ok
+      [_ | _] -> {:error, {:invalid_pyfile_extension, bad, @pyfile_extensions}}
+    end
   end
 
   defp normalize_prefix(prefix) do

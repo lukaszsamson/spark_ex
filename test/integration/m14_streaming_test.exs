@@ -200,7 +200,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       # Stop the query first, then await termination without timeout
       :ok = StreamingQuery.stop(query)
       assert_query_eventually_inactive(query, 5000)
-      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 5000)
+      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 5)
     end
   end
 
@@ -258,7 +258,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       :ok = StreamingQuery.stop(query)
       assert_query_eventually_inactive(query, 5000)
 
-      assert {:ok, true} = StreamingQueryManager.await_any_termination(session, timeout: 5000)
+      assert {:ok, true} = StreamingQueryManager.await_any_termination(session, timeout: 5)
     end
 
     test "reset_terminated succeeds", %{session: session} do
@@ -283,7 +283,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
                )
 
       assert is_list(progress)
-      assert Enum.any?(progress, fn item -> is_binary(item) end)
+      assert Enum.any?(progress, fn item -> is_map(item) end)
 
       :ok = StreamingQuery.stop(query)
     end
@@ -300,13 +300,13 @@ defmodule SparkEx.Integration.M14.StreamingTest do
                await_condition(
                  fn -> StreamingQuery.last_progress(query) end,
                  fn
-                   {:ok, value} -> is_binary(value) and byte_size(value) > 0
+                   {:ok, value} -> is_map(value) and map_size(value) > 0
                    _ -> false
                  end,
                  5000
                )
 
-      assert is_binary(progress)
+      assert is_map(progress)
 
       :ok = StreamingQuery.stop(query)
     end
@@ -495,7 +495,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
       # No queries running + short timeout should return a result
       :ok = StreamingQueryManager.reset_terminated(session)
 
-      result = StreamingQueryManager.await_any_termination(session, timeout: 500)
+      result = StreamingQueryManager.await_any_termination(session, timeout: 1)
 
       case result do
         {:ok, false} ->
