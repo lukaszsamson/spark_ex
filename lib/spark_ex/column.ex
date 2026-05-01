@@ -432,11 +432,14 @@ defmodule SparkEx.Column do
     cast(col, type)
   end
 
-  @doc "Marks this column for lateral join / generator context."
+  @doc """
+  Marks this column for lateral join / generator context.
+
+  In Connect/PySpark this is a no-op metadata marker that the planner strips,
+  so we return the column unchanged.
+  """
   @spec outer(t()) :: t()
-  def outer(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:outer, col.expr}}
-  end
+  def outer(%__MODULE__{} = col), do: col
 
   @doc """
   Applies a transformation function to this column.

@@ -1641,12 +1641,21 @@ defmodule SparkEx.MissOpus2Test do
   # ── 15.15 Decimal precision/scale defaults ──
 
   describe "15.15 decimal precision/scale" do
-    test "inferred for plain decimal literal" do
+    test "default precision/scale for unannotated Decimal literal" do
       expr = {:lit, Decimal.new("123.45")}
       encoded = SparkEx.Connect.PlanEncoder.encode_expression(expr)
       assert %{expr_type: {:literal, %{literal_type: {:decimal, decimal}}}} = encoded
-      assert decimal.precision > 0
-      assert decimal.scale > 0
+      # Matches PySpark: unannotated Decimal literals default to (10, 0)
+      assert decimal.precision == 10
+      assert decimal.scale == 0
+    end
+
+    test "explicit precision/scale annotation is honored" do
+      expr = {:lit, {:decimal, "123.45", 10, 2}}
+      encoded = SparkEx.Connect.PlanEncoder.encode_expression(expr)
+      assert %{expr_type: {:literal, %{literal_type: {:decimal, decimal}}}} = encoded
+      assert decimal.precision == 10
+      assert decimal.scale == 2
     end
   end
 
@@ -1681,16 +1690,20 @@ defmodule SparkEx.MissOpus2Test do
       assert {:last_progress, 1} in functions
     end
 
-    test "13.4 repartition_by_id accepts numPartitions" do
+    test "13.4 repartition_by_id accepts numPartitions and wraps the column" do
       df = make_df()
       result = DataFrame.repartition_by_id(df, 10, "col1")
-      assert %DataFrame{plan: {:repartition_by_expression, _, [_], 10}} = result
+
+      assert %DataFrame{
+               plan:
+                 {:repartition_by_expression, _, [{:direct_shuffle_partition_id, _}], 10}
+             } = result
     end
 
-    test "13.4 repartition_by_id defaults numPartitions to nil" do
+    test "13.4 repartition_by_id rejects non-positive numPartitions" do
       df = make_df()
-      result = DataFrame.repartition_by_id(df, "col1")
-      assert %DataFrame{plan: {:repartition_by_expression, _, [_], nil}} = result
+      assert_raise ArgumentError, fn -> DataFrame.repartition_by_id(df, 0, "col1") end
+      assert_raise ArgumentError, fn -> DataFrame.repartition_by_id(df, nil, "col1") end
     end
 
     test "14.27 schema_of_json accepts options" do

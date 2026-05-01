@@ -92,7 +92,7 @@ defmodule SparkEx.Integration.RepartitionParityGapsTest do
           session,
           "SELECT * FROM VALUES (0, 'a'), (1, 'b'), (2, 'c') AS t(part_id, value)"
         )
-        |> DataFrame.repartition_by_id("part_id")
+        |> DataFrame.repartition_by_id(3, "part_id")
 
       assert {:ok, rows} = DataFrame.collect(df)
       assert length(rows) == 3
@@ -104,7 +104,7 @@ defmodule SparkEx.Integration.RepartitionParityGapsTest do
           session,
           "SELECT * FROM VALUES (0, 'x'), (1, 'y'), (2, 'z') AS t(part_id, val)"
         )
-        |> DataFrame.repartition_by_id("part_id")
+        |> DataFrame.repartition_by_id(3, "part_id")
         |> DataFrame.order_by(["part_id"])
 
       assert {:ok, rows} = DataFrame.collect(df)
