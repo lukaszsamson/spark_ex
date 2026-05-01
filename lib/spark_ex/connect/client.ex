@@ -633,13 +633,27 @@ defmodule SparkEx.Connect.Client do
 
   # --- Config RPCs ---
 
+  @typedoc """
+  A config key/value type that can be coerced to a string before send.
+  Strings, booleans, numbers, and non-nil atoms are accepted; anything
+  else raises `ArgumentError` from `coerce_config_string/1`.
+  """
+  @type config_value :: String.t() | boolean() | integer() | float() | atom()
+
   @doc """
   Sets Spark configuration key-value pairs.
+
+  Keys/values may be strings, booleans, numbers, or non-nil atoms; non-string
+  values are coerced to strings before send. Raises `ArgumentError` for
+  unsupported value types.
   """
-  @spec config_set(SparkEx.Session.t(), [{String.t(), String.t()}]) ::
+  @spec config_set(SparkEx.Session.t(), [{config_value(), config_value()}]) ::
           {:ok, String.t() | nil} | {:error, term()}
   def config_set(session, pairs) do
-    kv_pairs = Enum.map(pairs, fn {k, v} -> %KeyValue{key: k, value: v} end)
+    kv_pairs =
+      Enum.map(pairs, fn {k, v} ->
+        %KeyValue{key: coerce_config_string(k), value: coerce_config_string(v)}
+      end)
 
     request =
       build_config_request(session,
@@ -650,6 +664,7 @@ defmodule SparkEx.Connect.Client do
 
     case Stub.config(session.channel, request) do
       {:ok, %ConfigResponse{} = resp} ->
+        log_config_warnings(resp)
         {:ok, resp.server_side_session_id}
 
       {:error, %GRPC.RPCError{} = error} ->
@@ -665,18 +680,19 @@ defmodule SparkEx.Connect.Client do
 
   Returns a list of `{key, value}` pairs.
   """
-  @spec config_get(SparkEx.Session.t(), [String.t()]) ::
+  @spec config_get(SparkEx.Session.t(), [config_value()]) ::
           {:ok, [{String.t(), String.t() | nil}], String.t() | nil} | {:error, term()}
   def config_get(session, keys) do
     request =
       build_config_request(session,
         operation: %ConfigRequest.Operation{
-          op_type: {:get, %ConfigRequest.Get{keys: keys}}
+          op_type: {:get, %ConfigRequest.Get{keys: Enum.map(keys, &coerce_config_string/1)}}
         }
       )
 
     case Stub.config(session.channel, request) do
       {:ok, %ConfigResponse{pairs: pairs} = resp} ->
+        log_config_warnings(resp)
         result = Enum.map(pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
         {:ok, result, resp.server_side_session_id}
 
@@ -694,10 +710,13 @@ defmodule SparkEx.Connect.Client do
   When the config key has no value set, the provided default is returned.
   Returns a list of `{key, value}` pairs.
   """
-  @spec config_get_with_default(SparkEx.Session.t(), [{String.t(), String.t()}]) ::
+  @spec config_get_with_default(SparkEx.Session.t(), [{config_value(), config_value()}]) ::
           {:ok, [{String.t(), String.t() | nil}], String.t() | nil} | {:error, term()}
   def config_get_with_default(session, pairs) do
-    kv_pairs = Enum.map(pairs, fn {k, v} -> %KeyValue{key: k, value: v} end)
+    kv_pairs =
+      Enum.map(pairs, fn {k, v} ->
+        %KeyValue{key: coerce_config_string(k), value: coerce_config_string(v)}
+      end)
 
     request =
       build_config_request(session,
@@ -708,6 +727,7 @@ defmodule SparkEx.Connect.Client do
 
     case Stub.config(session.channel, request) do
       {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
+        log_config_warnings(resp)
         result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
         {:ok, result, resp.server_side_session_id}
 
@@ -725,18 +745,20 @@ defmodule SparkEx.Connect.Client do
   Returns a list of `{key, value}` pairs. When a key is not set, the value
   is nil (unlike `config_get/2` which may raise on the server).
   """
-  @spec config_get_option(SparkEx.Session.t(), [String.t()]) ::
+  @spec config_get_option(SparkEx.Session.t(), [config_value()]) ::
           {:ok, [{String.t(), String.t() | nil}], String.t() | nil} | {:error, term()}
   def config_get_option(session, keys) do
     request =
       build_config_request(session,
         operation: %ConfigRequest.Operation{
-          op_type: {:get_option, %ConfigRequest.GetOption{keys: keys}}
+          op_type:
+            {:get_option, %ConfigRequest.GetOption{keys: Enum.map(keys, &coerce_config_string/1)}}
         }
       )
 
     case Stub.config(session.channel, request) do
       {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
+        log_config_warnings(resp)
         result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
         {:ok, result, resp.server_side_session_id}
 
@@ -772,6 +794,7 @@ defmodule SparkEx.Connect.Client do
 
     case Stub.config(session.channel, request) do
       {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
+        log_config_warnings(resp)
         result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
         {:ok, result, resp.server_side_session_id}
 
@@ -786,18 +809,19 @@ defmodule SparkEx.Connect.Client do
   @doc """
   Unsets Spark configuration values for the given keys.
   """
-  @spec config_unset(SparkEx.Session.t(), [String.t()]) ::
+  @spec config_unset(SparkEx.Session.t(), [config_value()]) ::
           {:ok, String.t() | nil} | {:error, term()}
   def config_unset(session, keys) do
     request =
       build_config_request(session,
         operation: %ConfigRequest.Operation{
-          op_type: {:unset, %ConfigRequest.Unset{keys: keys}}
+          op_type: {:unset, %ConfigRequest.Unset{keys: Enum.map(keys, &coerce_config_string/1)}}
         }
       )
 
     case Stub.config(session.channel, request) do
       {:ok, %ConfigResponse{} = resp} ->
+        log_config_warnings(resp)
         {:ok, resp.server_side_session_id}
 
       {:error, %GRPC.RPCError{} = error} ->
@@ -813,20 +837,26 @@ defmodule SparkEx.Connect.Client do
 
   Returns a list of `{key, value}` pairs where value is `"true"` or `"false"`.
   """
-  @spec config_is_modifiable(SparkEx.Session.t(), [String.t()]) ::
-          {:ok, [{String.t(), String.t()}], String.t() | nil} | {:error, term()}
+  @spec config_is_modifiable(SparkEx.Session.t(), [config_value()]) ::
+          {:ok, [{String.t(), boolean() | nil}], String.t() | nil} | {:error, term()}
   def config_is_modifiable(session, keys) do
     request =
       build_config_request(session,
         operation: %ConfigRequest.Operation{
-          op_type: {:is_modifiable, %ConfigRequest.IsModifiable{keys: keys}}
+          op_type:
+            {:is_modifiable,
+             %ConfigRequest.IsModifiable{keys: Enum.map(keys, &coerce_config_string/1)}}
         }
       )
 
     case Stub.config(session.channel, request) do
       {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
-        result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)
-        {:ok, result, resp.server_side_session_id}
+        log_config_warnings(resp)
+
+        case parse_is_modifiable_pairs(resp_pairs) do
+          {:ok, result} -> {:ok, result, resp.server_side_session_id}
+          {:error, _} = err -> err
+        end
 
       {:error, %GRPC.RPCError{} = error} ->
         {:error, Errors.from_grpc_error(error, session)}
@@ -835,6 +865,49 @@ defmodule SparkEx.Connect.Client do
         {:error, reason}
     end
   end
+
+  defp parse_is_modifiable_pairs(pairs) do
+    Enum.reduce_while(pairs, {:ok, []}, fn %KeyValue{key: k, value: v}, {:ok, acc} ->
+      case parse_is_modifiable_value(v) do
+        {:ok, parsed} -> {:cont, {:ok, [{k, parsed} | acc]}}
+        {:error, reason} -> {:halt, {:error, {:value_not_allowed, k, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, rev} -> {:ok, Enum.reverse(rev)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp parse_is_modifiable_value(nil), do: {:ok, nil}
+
+  defp parse_is_modifiable_value(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "" -> {:ok, nil}
+      "true" -> {:ok, true}
+      "false" -> {:ok, false}
+      _ -> {:error, value}
+    end
+  end
+
+  defp coerce_config_string(value) when is_binary(value), do: value
+  defp coerce_config_string(value) when is_boolean(value), do: to_string(value)
+  defp coerce_config_string(value) when is_integer(value), do: Integer.to_string(value)
+  defp coerce_config_string(value) when is_float(value), do: Float.to_string(value)
+  defp coerce_config_string(value) when is_atom(value), do: Atom.to_string(value)
+
+  defp coerce_config_string(value) do
+    raise ArgumentError,
+          "expected config key/value to be a string, boolean, integer, float, or atom, got: #{inspect(value)}"
+  end
+
+  defp log_config_warnings(%ConfigResponse{warnings: warnings}) when is_list(warnings) do
+    Enum.each(warnings, fn warning ->
+      Logger.warning("Spark Connect config warning: #{warning}")
+    end)
+  end
+
+  defp log_config_warnings(_), do: :ok
 
   # --- Session Lifecycle RPCs ---
 

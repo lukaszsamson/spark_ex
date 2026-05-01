@@ -357,7 +357,7 @@ defmodule SparkEx.Session do
   Checks whether configuration keys are modifiable at runtime.
   """
   @spec config_is_modifiable(GenServer.server(), String.t() | [String.t()]) ::
-          {:ok, [{String.t(), String.t()}]} | {:error, term()}
+          {:ok, [{String.t(), boolean() | nil}]} | {:error, term()}
   def config_is_modifiable(session, key) when is_binary(key) do
     config_is_modifiable(session, [key])
   end
@@ -372,33 +372,44 @@ defmodule SparkEx.Session do
 
   defp validate_config_pairs!(pairs, _fun_name) when is_list(pairs) do
     if Enum.all?(pairs, fn
-         {k, v} when is_binary(k) and is_binary(v) -> true
+         {k, v} -> coercible_config_key?(k) and coercible_config_value?(v)
          _ -> false
        end) do
       :ok
     else
       raise ArgumentError,
-            "config_set/config_get_with_default pairs must be {string_key, string_value}, got: #{inspect(pairs, charlists: :as_lists)}"
+            "config_set/config_get_with_default pairs must be {key, value} where key/value are strings, booleans, integers, floats, or atoms, got: #{inspect(pairs, charlists: :as_lists)}"
     end
   end
 
   defp validate_config_pairs!(pairs, fun_name) do
     raise ArgumentError,
-          "#{fun_name} expects a list of {string_key, string_value} pairs, got: #{inspect(pairs)}"
+          "#{fun_name} expects a list of {key, value} pairs, got: #{inspect(pairs)}"
   end
 
   defp validate_config_keys!(keys, _fun_name) when is_list(keys) do
-    if Enum.all?(keys, &is_binary/1) do
+    if Enum.all?(keys, &coercible_config_key?/1) do
       :ok
     else
       raise ArgumentError,
-            "config keys must be strings, got: #{inspect(keys, charlists: :as_lists)}"
+            "config keys must be strings or atoms, got: #{inspect(keys, charlists: :as_lists)}"
     end
   end
 
   defp validate_config_keys!(keys, fun_name) do
     raise ArgumentError, "#{fun_name} expects a list of string keys, got: #{inspect(keys)}"
   end
+
+  defp coercible_config_key?(key) when is_binary(key), do: true
+  defp coercible_config_key?(key) when is_atom(key) and not is_nil(key), do: true
+  defp coercible_config_key?(_), do: false
+
+  defp coercible_config_value?(value)
+       when is_binary(value) or is_boolean(value) or is_integer(value) or is_float(value),
+       do: true
+
+  defp coercible_config_value?(value) when is_atom(value) and not is_nil(value), do: true
+  defp coercible_config_value?(_), do: false
 
   defp validate_config_prefix!(nil), do: :ok
   defp validate_config_prefix!(prefix) when is_binary(prefix), do: :ok
@@ -3498,12 +3509,18 @@ defmodule SparkEx.Session do
 
   defp infer_single_type(nil), do: :null
   defp infer_single_type(v) when is_boolean(v), do: :boolean
-  defp infer_single_type(v) when is_integer(v), do: :long
+  defp infer_single_type(v) when is_integer(v), do: {:int, smallest_int_bits(v)}
   defp infer_single_type(v) when is_float(v), do: :double
-  defp infer_single_type(%Decimal{}), do: :double
+
+  defp infer_single_type(%Decimal{} = d) do
+    {p, s} = decimal_precision_scale(d)
+    {:decimal, p, s}
+  end
+
   defp infer_single_type(%Date{}), do: :date
   defp infer_single_type(%DateTime{}), do: :timestamp
   defp infer_single_type(%NaiveDateTime{}), do: :timestamp
+  defp infer_single_type({:binary, v}) when is_binary(v), do: :binary
   defp infer_single_type(v) when is_binary(v), do: :string
 
   defp infer_single_type(v) when is_list(v) do
@@ -3512,43 +3529,94 @@ defmodule SparkEx.Session do
 
   defp infer_single_type(v) when is_map(v) and not is_struct(v) do
     fields =
-      v
-      |> Enum.map(fn {k, value} -> {to_string(k), infer_single_type(value)} end)
-      |> Map.new()
+      Enum.map(v, fn {k, value} -> {to_string(k), infer_single_type(value)} end)
 
     {:struct, fields}
   end
 
   defp infer_single_type(_), do: :string
 
+  defp smallest_int_bits(v) when v >= -128 and v <= 127, do: 8
+  defp smallest_int_bits(v) when v >= -32_768 and v <= 32_767, do: 16
+  defp smallest_int_bits(v) when v >= -2_147_483_648 and v <= 2_147_483_647, do: 32
+  defp smallest_int_bits(_), do: 64
+
+  defp decimal_precision_scale(%Decimal{coef: coef, exp: exp}) when is_integer(coef) do
+    digits =
+      case coef do
+        0 -> 1
+        c when is_integer(c) -> c |> abs() |> Integer.digits() |> length()
+      end
+
+    scale = max(-exp, 0)
+    precision = max(digits, scale + 1)
+    {precision, scale}
+  end
+
+  defp decimal_precision_scale(_), do: {10, 0}
+
   defp merge_inferred_types(:null, type), do: type
   defp merge_inferred_types(type, :null), do: type
   defp merge_inferred_types(type, type), do: type
-  defp merge_inferred_types(:long, :double), do: :double
-  defp merge_inferred_types(:double, :long), do: :double
+  defp merge_inferred_types({:int, a}, {:int, b}), do: {:int, max(a, b)}
+  defp merge_inferred_types({:int, _}, :double), do: :double
+  defp merge_inferred_types(:double, {:int, _}), do: :double
+
+  defp merge_inferred_types({:int, bits}, {:decimal, p, s}),
+    do: widen_decimal_for_int(p, s, bits)
+
+  defp merge_inferred_types({:decimal, p, s}, {:int, bits}),
+    do: widen_decimal_for_int(p, s, bits)
+
+  defp merge_inferred_types({:decimal, p1, s1}, {:decimal, p2, s2}) do
+    scale = max(s1, s2)
+    precision = max(p1 - s1, p2 - s2) + scale
+    {:decimal, precision, scale}
+  end
+
   defp merge_inferred_types({:array, a}, {:array, b}), do: {:array, merge_inferred_types(a, b)}
 
   defp merge_inferred_types({:struct, a}, {:struct, b}) do
-    keys = (Map.keys(a) ++ Map.keys(b)) |> Enum.uniq()
+    a_map = Map.new(a)
+    b_map = Map.new(b)
+    a_keys = Enum.map(a, fn {k, _} -> k end)
+    a_key_set = MapSet.new(a_keys)
+    extra_keys = for {k, _} <- b, not MapSet.member?(a_key_set, k), do: k
+    ordered_keys = a_keys ++ extra_keys
 
     merged =
-      Enum.map(keys, fn key ->
-        {key, merge_inferred_types(Map.get(a, key, :null), Map.get(b, key, :null))}
+      Enum.map(ordered_keys, fn key ->
+        {key, merge_inferred_types(Map.get(a_map, key, :null), Map.get(b_map, key, :null))}
       end)
-      |> Map.new()
 
     {:struct, merged}
   end
 
   defp merge_inferred_types(_a, _b), do: :string
 
+  defp widen_decimal_for_int(p, s, bits) do
+    int_digits = max_int_digits(bits)
+    {:decimal, max(p, int_digits + s), s}
+  end
+
+  defp max_int_digits(8), do: 3
+  defp max_int_digits(16), do: 5
+  defp max_int_digits(32), do: 10
+  defp max_int_digits(64), do: 19
+  defp max_int_digits(_), do: 19
+
   defp type_to_inferred_ddl(:null), do: "STRING"
   defp type_to_inferred_ddl(:boolean), do: "BOOLEAN"
-  defp type_to_inferred_ddl(:long), do: "BIGINT"
+  defp type_to_inferred_ddl({:int, 8}), do: "TINYINT"
+  defp type_to_inferred_ddl({:int, 16}), do: "SMALLINT"
+  defp type_to_inferred_ddl({:int, 32}), do: "INT"
+  defp type_to_inferred_ddl({:int, 64}), do: "BIGINT"
   defp type_to_inferred_ddl(:double), do: "DOUBLE"
+  defp type_to_inferred_ddl({:decimal, p, s}), do: "DECIMAL(#{p}, #{s})"
   defp type_to_inferred_ddl(:date), do: "DATE"
   defp type_to_inferred_ddl(:timestamp), do: "TIMESTAMP"
   defp type_to_inferred_ddl(:string), do: "STRING"
+  defp type_to_inferred_ddl(:binary), do: "BINARY"
 
   defp type_to_inferred_ddl({:array, element_type}) do
     "ARRAY<#{type_to_inferred_ddl(element_type)}>"
@@ -3557,7 +3625,6 @@ defmodule SparkEx.Session do
   defp type_to_inferred_ddl({:struct, fields}) do
     inner =
       fields
-      |> Enum.sort_by(fn {name, _} -> name end)
       |> Enum.map(fn {name, type} -> "#{name}: #{type_to_inferred_ddl(type)}" end)
       |> Enum.join(", ")
 

@@ -10,7 +10,7 @@ defmodule SparkEx.Unit.CreateDataFrameTest do
       ddl = TypeMapper.explorer_schema_to_ddl(dtypes)
 
       # Explorer infers s64 for integers, string for strings
-      assert ddl =~ "id LONG"
+      assert ddl =~ "id BIGINT"
       assert ddl =~ "name STRING"
     end
 

@@ -1076,7 +1076,7 @@ defmodule SparkEx.M14.StreamingTest do
           struct_field("name", :string)
         ])
 
-      assert to_ddl(schema) == "id LONG, name STRING"
+      assert to_ddl(schema) == "id BIGINT, name STRING"
     end
 
     test "to_ddl handles complex types" do
@@ -1089,7 +1089,7 @@ defmodule SparkEx.M14.StreamingTest do
 
       ddl = to_ddl(schema)
       assert ddl =~ "tags ARRAY<STRING>"
-      assert ddl =~ "meta MAP<STRING, LONG>"
+      assert ddl =~ "meta MAP<STRING, BIGINT>"
       assert ddl =~ "amount DECIMAL(10, 2)"
     end
 
@@ -1116,7 +1116,7 @@ defmodule SparkEx.M14.StreamingTest do
 
     test "schema_to_string converts struct type to DDL" do
       schema = struct_type([struct_field("id", :long)])
-      assert schema_to_string(schema) == "id LONG"
+      assert schema_to_string(schema) == "id BIGINT"
     end
 
     test "Reader.schema accepts struct type as JSON schema" do

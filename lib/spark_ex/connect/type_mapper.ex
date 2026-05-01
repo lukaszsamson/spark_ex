@@ -143,10 +143,10 @@ defmodule SparkEx.Connect.TypeMapper do
 
   defp direct_ddl(:null, _), do: "VOID"
   defp direct_ddl(:boolean, _), do: "BOOLEAN"
-  defp direct_ddl(:byte, _), do: "BYTE"
-  defp direct_ddl(:short, _), do: "SHORT"
+  defp direct_ddl(:byte, _), do: "TINYINT"
+  defp direct_ddl(:short, _), do: "SMALLINT"
   defp direct_ddl(:integer, _), do: "INT"
-  defp direct_ddl(:long, _), do: "LONG"
+  defp direct_ddl(:long, _), do: "BIGINT"
   defp direct_ddl(:float, _), do: "FLOAT"
   defp direct_ddl(:double, _), do: "DOUBLE"
   defp direct_ddl(:string, _), do: "STRING"
@@ -209,16 +209,16 @@ defmodule SparkEx.Connect.TypeMapper do
   @spec to_spark_ddl_type(atom() | {atom(), term()}) :: String.t()
   def to_spark_ddl_type(:null), do: "VOID"
   def to_spark_ddl_type(:boolean), do: "BOOLEAN"
-  def to_spark_ddl_type({:s, 8}), do: "BYTE"
-  def to_spark_ddl_type({:s, 16}), do: "SHORT"
+  def to_spark_ddl_type({:s, 8}), do: "TINYINT"
+  def to_spark_ddl_type({:s, 16}), do: "SMALLINT"
   def to_spark_ddl_type({:s, 32}), do: "INT"
-  def to_spark_ddl_type({:s, 64}), do: "LONG"
-  def to_spark_ddl_type({:u, 8}), do: "SHORT"
+  def to_spark_ddl_type({:s, 64}), do: "BIGINT"
+  def to_spark_ddl_type({:u, 8}), do: "SMALLINT"
   def to_spark_ddl_type({:u, 16}), do: "INT"
-  def to_spark_ddl_type({:u, 32}), do: "LONG"
-  # Note: {:u, 64} (max 2^64-1) mapped to LONG (signed, max 2^63-1) is lossy.
+  def to_spark_ddl_type({:u, 32}), do: "BIGINT"
+  # Note: {:u, 64} (max 2^64-1) mapped to BIGINT (signed, max 2^63-1) is lossy.
   # Values above 2^63-1 will overflow. Spark has no unsigned 64-bit integer type.
-  def to_spark_ddl_type({:u, 64}), do: "LONG"
+  def to_spark_ddl_type({:u, 64}), do: "BIGINT"
   def to_spark_ddl_type({:f, 32}), do: "FLOAT"
   def to_spark_ddl_type({:f, 64}), do: "DOUBLE"
   def to_spark_ddl_type({:decimal, precision, scale}), do: "DECIMAL(#{precision}, #{scale})"

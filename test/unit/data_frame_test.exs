@@ -206,7 +206,7 @@ defmodule SparkEx.DataFrameTest do
       {:ok, session} = SchemaSession.start_link(schema)
       df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
 
-      assert {:ok, [{"id", "LONG"}]} = DataFrame.dtypes(df)
+      assert {:ok, [{"id", "BIGINT"}]} = DataFrame.dtypes(df)
     end
 
     test "accepts {:ok, dataframe} for create_dataframe-style pipelines" do
@@ -223,7 +223,7 @@ defmodule SparkEx.DataFrameTest do
       {:ok, session} = SchemaSession.start_link(schema)
       df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
 
-      assert {:ok, [{"id", "LONG"}]} = DataFrame.dtypes({:ok, df})
+      assert {:ok, [{"id", "BIGINT"}]} = DataFrame.dtypes({:ok, df})
     end
   end
 

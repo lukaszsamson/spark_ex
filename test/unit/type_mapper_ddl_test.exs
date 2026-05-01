@@ -13,17 +13,17 @@ defmodule SparkEx.Unit.TypeMapperDDLTest do
     end
 
     test "maps signed integer types" do
-      assert TypeMapper.to_spark_ddl_type({:s, 8}) == "BYTE"
-      assert TypeMapper.to_spark_ddl_type({:s, 16}) == "SHORT"
+      assert TypeMapper.to_spark_ddl_type({:s, 8}) == "TINYINT"
+      assert TypeMapper.to_spark_ddl_type({:s, 16}) == "SMALLINT"
       assert TypeMapper.to_spark_ddl_type({:s, 32}) == "INT"
-      assert TypeMapper.to_spark_ddl_type({:s, 64}) == "LONG"
+      assert TypeMapper.to_spark_ddl_type({:s, 64}) == "BIGINT"
     end
 
     test "maps unsigned integer types to widened signed types" do
-      assert TypeMapper.to_spark_ddl_type({:u, 8}) == "SHORT"
+      assert TypeMapper.to_spark_ddl_type({:u, 8}) == "SMALLINT"
       assert TypeMapper.to_spark_ddl_type({:u, 16}) == "INT"
-      assert TypeMapper.to_spark_ddl_type({:u, 32}) == "LONG"
-      assert TypeMapper.to_spark_ddl_type({:u, 64}) == "LONG"
+      assert TypeMapper.to_spark_ddl_type({:u, 32}) == "BIGINT"
+      assert TypeMapper.to_spark_ddl_type({:u, 64}) == "BIGINT"
     end
 
     test "maps float types" do
@@ -48,7 +48,7 @@ defmodule SparkEx.Unit.TypeMapperDDLTest do
 
   describe "explorer_schema_to_ddl/1" do
     test "converts single column schema" do
-      assert TypeMapper.explorer_schema_to_ddl(%{"id" => {:s, 64}}) == "id LONG"
+      assert TypeMapper.explorer_schema_to_ddl(%{"id" => {:s, 64}}) == "id BIGINT"
     end
 
     test "converts multi-column schema preserving explicit list order" do

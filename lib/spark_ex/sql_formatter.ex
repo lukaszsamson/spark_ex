@@ -1,6 +1,19 @@
 defmodule SparkEx.SqlFormatter do
   @moduledoc """
-  Formats SQL strings with auto-quoting of parameters.
+  Client-side SQL string formatter with auto-quoting of parameters.
+
+  > #### Server-side parameter binding is preferred {: .info}
+  >
+  > Prefer passing `args:` to `SparkEx.sql/3`. That sends the parameters
+  > to Spark as `pos_arguments` / `named_arguments` and lets the server
+  > bind them safely.
+  >
+  > This module is a *client-side* helper that splices values directly
+  > into the SQL text. It is **not** PySpark's `SQLStringFormatter`
+  > (which is used internally by `pyspark.sql.functions.lit`-style
+  > injection). It exists for callers that need to pre-render SQL
+  > before sending — e.g. for logging, testing, or building queries
+  > that will be executed by something other than Spark Connect.
 
   Performs token-aware replacement that respects SQL string literals
   (single-quoted strings), double-quoted identifiers, backtick-quoted
@@ -328,16 +341,33 @@ defmodule SparkEx.SqlFormatter do
   defp quote_value(%Date{} = date), do: "DATE '#{Date.to_iso8601(date)}'"
   defp quote_value(%NaiveDateTime{} = dt), do: "TIMESTAMP '#{NaiveDateTime.to_iso8601(dt)}'"
   defp quote_value(%DateTime{} = dt), do: "TIMESTAMP '#{DateTime.to_iso8601(dt)}'"
+  defp quote_value(%Decimal{} = decimal), do: Decimal.to_string(decimal, :normal)
   defp quote_value(value) when is_integer(value), do: Integer.to_string(value)
   defp quote_value(value) when is_float(value), do: Float.to_string(value)
 
   defp quote_value(value) when is_binary(value) do
-    escaped = String.replace(value, "'", "''")
+    escaped = value |> String.replace("\\", "\\\\") |> String.replace("'", "''")
     "'#{escaped}'"
   end
 
+  defp quote_value(value) when is_list(value) do
+    "array(" <> Enum.map_join(value, ", ", &quote_value/1) <> ")"
+  end
+
+  defp quote_value(value) when is_map(value) and not is_struct(value) do
+    pairs =
+      Enum.flat_map(value, fn {k, v} -> [quote_value(to_string(k)), quote_value(v)] end)
+
+    "map(" <> Enum.join(pairs, ", ") <> ")"
+  end
+
   defp quote_value(value) do
-    escaped = value |> to_string() |> String.replace("'", "''")
+    escaped =
+      value
+      |> to_string()
+      |> String.replace("\\", "\\\\")
+      |> String.replace("'", "''")
+
     "'#{escaped}'"
   end
 end

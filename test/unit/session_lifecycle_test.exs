@@ -339,8 +339,8 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       assert :ok = SparkEx.Session.config_set(session, [{"k", "v"}])
       assert_receive {:config_set_called, [{"k", "v"}]}
 
-      assert_raise ArgumentError, ~r/pairs must be \{string_key, string_value\}/, fn ->
-        SparkEx.Session.config_set(session, [{42, "v"}])
+      assert_raise ArgumentError, ~r/pairs must be \{key, value\}/, fn ->
+        SparkEx.Session.config_set(session, [{[1, 2], "v"}])
       end
     end
 
@@ -366,9 +366,9 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       assert_receive {:config_get_with_default_called, [{"k", "v"}]}
 
       assert_raise ArgumentError,
-                   ~r/pairs must be \{string_key, string_value\}/,
+                   ~r/pairs must be \{key, value\}/,
                    fn ->
-                     SparkEx.Session.config_get_with_default(session, [{"k", 42}])
+                     SparkEx.Session.config_get_with_default(session, [{"k", [1, 2]}])
                    end
     end
 
@@ -403,7 +403,7 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, nil}}}, %{}} =
                SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
 
-      assert query =~ "from_json(_spark_ex_json, 'id LONG'"
+      assert query =~ "from_json(_spark_ex_json, 'id BIGINT'"
     end
   end
 

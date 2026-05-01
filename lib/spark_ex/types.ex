@@ -203,10 +203,10 @@ defmodule SparkEx.Types do
 
   defp type_to_ddl(:null), do: "VOID"
   defp type_to_ddl(:boolean), do: "BOOLEAN"
-  defp type_to_ddl(:byte), do: "BYTE"
-  defp type_to_ddl(:short), do: "SHORT"
+  defp type_to_ddl(:byte), do: "TINYINT"
+  defp type_to_ddl(:short), do: "SMALLINT"
   defp type_to_ddl(:integer), do: "INT"
-  defp type_to_ddl(:long), do: "LONG"
+  defp type_to_ddl(:long), do: "BIGINT"
   defp type_to_ddl(:float), do: "FLOAT"
   defp type_to_ddl(:double), do: "DOUBLE"
   defp type_to_ddl(:string), do: "STRING"
@@ -559,4 +559,76 @@ defmodule SparkEx.Types do
   @spec schema_to_string(struct_type() | String.t()) :: String.t()
   def schema_to_string(schema) when is_binary(schema), do: schema
   def schema_to_string({:struct, _} = schema), do: to_ddl(schema)
+
+  @doc """
+  Parses a Spark DDL data-type string into a Spark Connect `DataType` protobuf
+  for the simple primitive cases without a server round-trip.
+
+  Supports primitive type names (e.g. `"INT"`, `"BIGINT"`, `"STRING"`),
+  `DECIMAL(p, s)`, `DECIMAL(p)`, and `DECIMAL`. Returns `:error` for
+  expressions outside that subset (arrays, structs, maps, intervals, etc.) so
+  callers can fall back to the server's DDL parser.
+  """
+  @spec parse_ddl_type(String.t()) :: {:ok, data_type_proto()} | :error
+  def parse_ddl_type(ddl) when is_binary(ddl) do
+    trimmed = ddl |> String.trim() |> String.upcase()
+
+    case trimmed do
+      "" -> :error
+      "VOID" -> {:ok, type_to_proto(:null)}
+      "NULL" -> {:ok, type_to_proto(:null)}
+      "BOOLEAN" -> {:ok, type_to_proto(:boolean)}
+      "BOOL" -> {:ok, type_to_proto(:boolean)}
+      "TINYINT" -> {:ok, type_to_proto(:byte)}
+      "BYTE" -> {:ok, type_to_proto(:byte)}
+      "SMALLINT" -> {:ok, type_to_proto(:short)}
+      "SHORT" -> {:ok, type_to_proto(:short)}
+      "INT" -> {:ok, type_to_proto(:integer)}
+      "INTEGER" -> {:ok, type_to_proto(:integer)}
+      "BIGINT" -> {:ok, type_to_proto(:long)}
+      "LONG" -> {:ok, type_to_proto(:long)}
+      "FLOAT" -> {:ok, type_to_proto(:float)}
+      "REAL" -> {:ok, type_to_proto(:float)}
+      "DOUBLE" -> {:ok, type_to_proto(:double)}
+      "STRING" -> {:ok, type_to_proto(:string)}
+      "BINARY" -> {:ok, type_to_proto(:binary)}
+      "DATE" -> {:ok, type_to_proto(:date)}
+      "TIME" -> {:ok, type_to_proto(:time)}
+      "TIMESTAMP" -> {:ok, type_to_proto(:timestamp)}
+      "TIMESTAMP_NTZ" -> {:ok, type_to_proto(:timestamp_ntz)}
+      "VARIANT" -> {:ok, type_to_proto(:variant)}
+      "GEOMETRY" -> {:ok, type_to_proto(:geometry)}
+      "GEOGRAPHY" -> {:ok, type_to_proto(:geography)}
+      _ -> parse_decimal_ddl(trimmed)
+    end
+  end
+
+  defp parse_decimal_ddl("DECIMAL"), do: {:ok, type_to_proto({:decimal, 10, 0})}
+  defp parse_decimal_ddl("NUMERIC"), do: {:ok, type_to_proto({:decimal, 10, 0})}
+  defp parse_decimal_ddl("DEC"), do: {:ok, type_to_proto({:decimal, 10, 0})}
+
+  defp parse_decimal_ddl(ddl) do
+    cond do
+      result = decimal_match(ddl, "DECIMAL") -> result
+      result = decimal_match(ddl, "NUMERIC") -> result
+      result = decimal_match(ddl, "DEC") -> result
+      true -> :error
+    end
+  end
+
+  defp decimal_match(ddl, prefix) do
+    case Regex.run(~r/^#{prefix}\s*\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)$/, ddl) do
+      [_, p_str] ->
+        p = String.to_integer(p_str)
+        {:ok, type_to_proto({:decimal, p, 0})}
+
+      [_, p_str, s_str] ->
+        p = String.to_integer(p_str)
+        s = String.to_integer(s_str)
+        {:ok, type_to_proto({:decimal, p, s})}
+
+      _ ->
+        nil
+    end
+  end
 end
