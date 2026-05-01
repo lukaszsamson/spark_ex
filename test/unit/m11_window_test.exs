@@ -42,7 +42,7 @@ defmodule SparkEx.M11.WindowTest do
 
     test "range_between/2" do
       spec = Window.range_between(:unbounded, :current_row)
-      assert %WindowSpec{frame_spec: {:range, :unbounded, :current_row}} = spec
+      assert %WindowSpec{frame_spec: {:range, :unbounded_preceding, :current_row}} = spec
     end
 
     test "order_by/2 chains from existing spec (PySpark parity)" do
@@ -61,7 +61,7 @@ defmodule SparkEx.M11.WindowTest do
         Window.order_by(["ts"])
         |> Window.rows_between(:unbounded, :current_row)
 
-      assert %WindowSpec{frame_spec: {:rows, :unbounded, :current_row}} = spec
+      assert %WindowSpec{frame_spec: {:rows, :unbounded_preceding, :current_row}} = spec
     end
 
     test "range_between/3 chains from existing spec" do
@@ -69,12 +69,12 @@ defmodule SparkEx.M11.WindowTest do
         Window.order_by(["ts"])
         |> Window.range_between(:unbounded, :current_row)
 
-      assert %WindowSpec{frame_spec: {:range, :unbounded, :current_row}} = spec
+      assert %WindowSpec{frame_spec: {:range, :unbounded_preceding, :current_row}} = spec
     end
 
     test "boundary constants" do
-      assert Window.unbounded_preceding() == :unbounded
-      assert Window.unbounded_following() == :unbounded
+      assert Window.unbounded_preceding() == :unbounded_preceding
+      assert Window.unbounded_following() == :unbounded_following
       assert Window.current_row() == :current_row
     end
   end
@@ -111,7 +111,7 @@ defmodule SparkEx.M11.WindowTest do
         |> WindowSpec.range_between(:unbounded, :current_row)
 
       assert %WindowSpec{
-               frame_spec: {:range, :unbounded, :current_row}
+               frame_spec: {:range, :unbounded_preceding, :current_row}
              } = spec
     end
   end
