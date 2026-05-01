@@ -3539,13 +3539,41 @@ defmodule SparkEx.Session do
   end
 
   defp parse_schema_field(field) do
-    case Regex.run(~r/^\s*(`?[^`\s]+`?)\s+(.+)$/, field) do
-      [_, raw_name, raw_type] ->
-        name = raw_name |> String.trim_leading("`") |> String.trim_trailing("`")
-        {name, String.trim(raw_type)}
+    case String.trim_leading(field) do
+      <<"`", rest::binary>> -> parse_backtick_quoted_field(rest)
+      other -> parse_unquoted_field(other)
+    end
+  end
 
-      _ ->
+  defp parse_backtick_quoted_field(after_open_backtick) do
+    case consume_backtick_identifier(after_open_backtick, []) do
+      {:ok, name, after_close} ->
+        type = String.trim(after_close)
+        if type == "", do: :error, else: {name, type}
+
+      :error ->
         :error
+    end
+  end
+
+  # Consumes a backtick-quoted identifier body, treating `` `` `` as
+  # an escaped literal backtick. Returns the decoded name and the
+  # remainder of the input after the closing backtick.
+  defp consume_backtick_identifier(<<"``", rest::binary>>, acc),
+    do: consume_backtick_identifier(rest, ["`" | acc])
+
+  defp consume_backtick_identifier(<<"`", rest::binary>>, acc),
+    do: {:ok, IO.iodata_to_binary(Enum.reverse(acc)), rest}
+
+  defp consume_backtick_identifier(<<ch::utf8, rest::binary>>, acc),
+    do: consume_backtick_identifier(rest, [<<ch::utf8>> | acc])
+
+  defp consume_backtick_identifier(<<>>, _acc), do: :error
+
+  defp parse_unquoted_field(field) do
+    case Regex.run(~r/^(\S+)\s+(.+)$/s, field) do
+      [_, name, type] -> {name, String.trim(type)}
+      _ -> :error
     end
   end
 
@@ -3812,32 +3840,25 @@ defmodule SparkEx.Session do
     end
   end
 
-  # Reject schema DDL strings that would let user input escape from the
-  # `from_json('<ddl>', …)` literal context: unbalanced quoting, comment
-  # markers, or statement terminators. `sql_escape_string/1` handles a
-  # single quote/backslash, but stops short of catching `\` followed by
-  # `'` (which the Spark parser treats as an escaped quote when
-  # `escapedStringLiterals=true`) and is no defence against `--`, `/*`,
-  # `*/`, or `;` injecting a separate clause.
+  # Reject schema DDL strings that are syntactically malformed before
+  # they are interpolated into the `from_json('<ddl>', …)` literal.
+  # `sql_escape_string/1` handles `'` and `\` so the literal stays
+  # well-formed, but a schema with unterminated quoting or a stray
+  # comment/statement-terminator outside any quoted context indicates
+  # a malformed (or attacker-influenced) input and should be surfaced
+  # as a clean error instead of being passed through to the server.
+  #
+  # Validation is token-aware: `;`, `--`, `/*`, and `*/` are only
+  # rejected when they appear *outside* a backtick-quoted identifier
+  # or single-quoted string literal. That keeps legitimate Spark DDL
+  # like `` `weird;name` STRING COMMENT 'has -- dashes' `` working
+  # while still catching ` id INT; DROP TABLE x ` and friends.
+  # Backslash escapes (`\\`, `\'`) inside single-quoted strings are
+  # consumed as a single token so they do not skew quote balance.
   defp validate_schema_ddl_for_sql_relation(schema_ddl) when is_binary(schema_ddl) do
-    cond do
-      String.contains?(schema_ddl, ";") ->
-        {:error, {:invalid_schema_ddl, "schema contains ';'"}}
-
-      String.contains?(schema_ddl, "--") ->
-        {:error, {:invalid_schema_ddl, "schema contains '--' comment marker"}}
-
-      String.contains?(schema_ddl, "/*") or String.contains?(schema_ddl, "*/") ->
-        {:error, {:invalid_schema_ddl, "schema contains block comment marker"}}
-
-      not balanced_quotes?(schema_ddl, "`") ->
-        {:error, {:invalid_schema_ddl, "schema has unbalanced backticks"}}
-
-      not balanced_quotes?(schema_ddl, "'") ->
-        {:error, {:invalid_schema_ddl, "schema has unbalanced single quotes"}}
-
-      true ->
-        {:ok, schema_ddl}
+    case scan_schema_ddl(schema_ddl, :outside) do
+      :ok -> {:ok, schema_ddl}
+      {:error, reason} -> {:error, {:invalid_schema_ddl, reason}}
     end
   end
 
@@ -3845,13 +3866,48 @@ defmodule SparkEx.Session do
     {:error, {:invalid_schema_ddl, "expected DDL string, got: #{inspect(other)}"}}
   end
 
-  defp balanced_quotes?(string, quote_char) when is_binary(string) and is_binary(quote_char) do
-    string
-    |> String.graphemes()
-    |> Enum.count(&(&1 == quote_char))
-    |> rem(2)
-    |> Kernel.==(0)
-  end
+  defp scan_schema_ddl(<<>>, :outside), do: :ok
+  defp scan_schema_ddl(<<>>, :backtick), do: {:error, "unterminated backtick-quoted identifier"}
+  defp scan_schema_ddl(<<>>, :single_quote), do: {:error, "unterminated single-quoted string"}
+
+  defp scan_schema_ddl(<<";", _::binary>>, :outside), do: {:error, "schema contains ';'"}
+
+  defp scan_schema_ddl(<<"--", _::binary>>, :outside),
+    do: {:error, "schema contains '--' comment marker"}
+
+  defp scan_schema_ddl(<<"/*", _::binary>>, :outside),
+    do: {:error, "schema contains '/*' block comment marker"}
+
+  defp scan_schema_ddl(<<"*/", _::binary>>, :outside),
+    do: {:error, "schema contains '*/' block comment marker"}
+
+  defp scan_schema_ddl(<<"`", rest::binary>>, :outside), do: scan_schema_ddl(rest, :backtick)
+  defp scan_schema_ddl(<<"'", rest::binary>>, :outside), do: scan_schema_ddl(rest, :single_quote)
+  defp scan_schema_ddl(<<_::utf8, rest::binary>>, :outside), do: scan_schema_ddl(rest, :outside)
+
+  # Inside a backtick-quoted identifier `…`. Spark treats a doubled
+  # backtick as an escaped backtick character.
+  defp scan_schema_ddl(<<"``", rest::binary>>, :backtick), do: scan_schema_ddl(rest, :backtick)
+  defp scan_schema_ddl(<<"`", rest::binary>>, :backtick), do: scan_schema_ddl(rest, :outside)
+  defp scan_schema_ddl(<<_::utf8, rest::binary>>, :backtick), do: scan_schema_ddl(rest, :backtick)
+
+  # Inside a single-quoted string '…'. Both `''` and the
+  # `escapedStringLiterals=true` `\\` / `\'` forms must be consumed
+  # as single tokens so they don't terminate the literal early or
+  # confuse balance accounting.
+  defp scan_schema_ddl(<<"\\\\", rest::binary>>, :single_quote),
+    do: scan_schema_ddl(rest, :single_quote)
+
+  defp scan_schema_ddl(<<"\\'", rest::binary>>, :single_quote),
+    do: scan_schema_ddl(rest, :single_quote)
+
+  defp scan_schema_ddl(<<"''", rest::binary>>, :single_quote),
+    do: scan_schema_ddl(rest, :single_quote)
+
+  defp scan_schema_ddl(<<"'", rest::binary>>, :single_quote), do: scan_schema_ddl(rest, :outside)
+
+  defp scan_schema_ddl(<<_::utf8, rest::binary>>, :single_quote),
+    do: scan_schema_ddl(rest, :single_quote)
 
   defp encode_rows_as_json(rows) do
     Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->

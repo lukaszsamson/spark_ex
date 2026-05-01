@@ -437,6 +437,16 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
                SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
     end
 
+    test "extracts backtick-quoted names with spaces from tuple schema" do
+      # parse_schema_field must handle `name with space` STRING so
+      # tuple rows can be keyed correctly.
+      rows = [{1, "a"}]
+      request = {:create_dataframe, rows, [schema: "`id` INT, `first name` STRING"]}
+
+      assert {:reply, {:ok, %SparkEx.DataFrame{}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+    end
+
     test "accepts column-name-only list as schema" do
       # LC2-14: PySpark allows passing the schema as a list of column
       # names (no types). Types are inferred from the data.
@@ -466,9 +476,9 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
 
     test "rejects DDL with statement terminator or comment markers" do
       # Regression for LC2-13: schema_ddl is interpolated into the SQL
-      # `from_json('<ddl>', …)` literal, so terminators or comment
-      # markers in user-supplied schemas would let a caller append a
-      # second SQL statement.
+      # `from_json('<ddl>', …)` literal, so unterminated quoting or a
+      # stray comment / statement-terminator outside any quoted
+      # context indicates a malformed input.
       bad_schemas = [
         "id INT; DROP TABLE users",
         "id INT -- nope",
@@ -484,6 +494,30 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
         assert {:reply, {:error, {:invalid_schema_ddl, _}}, %{}} =
                  SparkEx.Session.handle_call(request, {self(), make_ref()}, %{}),
                "expected #{inspect(ddl)} to be rejected"
+      end
+    end
+
+    test "accepts DDL with comment markers / semicolons inside quoted regions" do
+      # Validation is token-aware: characters that would terminate a
+      # statement only matter when they appear *outside* a backtick
+      # identifier or single-quoted string. Spark itself accepts these.
+      good_schemas = [
+        "`weird;name` STRING",
+        "`has--dashes` INT",
+        "`a/*b*/c` STRING",
+        "id STRING COMMENT 'has -- dashes; and /* markers */'",
+        "id STRING COMMENT 'with \\'escaped\\' quote'",
+        "id STRING COMMENT 'doubled '' quote'",
+        "`with``backtick` STRING"
+      ]
+
+      for ddl <- good_schemas do
+        request = {:create_dataframe, [%{}], [schema: ddl]}
+
+        result = SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+
+        refute match?({:reply, {:error, {:invalid_schema_ddl, _}}, _}, result),
+               "expected #{inspect(ddl)} to pass schema validation, got: #{inspect(result)}"
       end
     end
   end
