@@ -551,6 +551,21 @@ defmodule SparkEx.Catalog do
      {:invalid_options, "expected :options to be a map or keyword list, got: #{inspect(other)}"}}
   end
 
+  # Mirrors pyspark/storagelevel.py: each preset is
+  # StorageLevel(useDisk, useMemory, useOffHeap, deserialized, replication).
+  @storage_level_presets %{
+    "NONE" => {false, false, false, false, 1},
+    "DISK_ONLY" => {true, false, false, false, 1},
+    "DISK_ONLY_2" => {true, false, false, false, 2},
+    "DISK_ONLY_3" => {true, false, false, false, 3},
+    "MEMORY_ONLY" => {false, true, false, false, 1},
+    "MEMORY_ONLY_2" => {false, true, false, false, 2},
+    "MEMORY_AND_DISK" => {true, true, false, false, 1},
+    "MEMORY_AND_DISK_2" => {true, true, false, false, 2},
+    "OFF_HEAP" => {true, true, true, false, 1},
+    "MEMORY_AND_DISK_DESER" => {true, true, false, true, 1}
+  }
+
   defp normalize_cache_storage_level(nil), do: {:ok, nil}
 
   defp normalize_cache_storage_level(%Spark.Connect.StorageLevel{} = storage_level),
@@ -561,54 +576,18 @@ defmodule SparkEx.Catalog do
   end
 
   defp normalize_cache_storage_level(storage_level) when is_binary(storage_level) do
-    case String.upcase(storage_level) do
-      "NONE" ->
-        {:ok, %Spark.Connect.StorageLevel{}}
-
-      "DISK_ONLY" ->
-        {:ok, %Spark.Connect.StorageLevel{use_disk: true, replication: 1}}
-
-      "DISK_ONLY_2" ->
-        {:ok, %Spark.Connect.StorageLevel{use_disk: true, replication: 2}}
-
-      "MEMORY_ONLY" ->
-        {:ok, %Spark.Connect.StorageLevel{use_memory: true, deserialized: true, replication: 1}}
-
-      "MEMORY_ONLY_2" ->
-        {:ok, %Spark.Connect.StorageLevel{use_memory: true, deserialized: true, replication: 2}}
-
-      "MEMORY_AND_DISK" ->
+    case Map.fetch(@storage_level_presets, String.upcase(storage_level)) do
+      {:ok, {use_disk, use_memory, use_off_heap, deserialized, replication}} ->
         {:ok,
          %Spark.Connect.StorageLevel{
-           use_disk: true,
-           use_memory: true,
-           deserialized: true,
-           replication: 1
+           use_disk: use_disk,
+           use_memory: use_memory,
+           use_off_heap: use_off_heap,
+           deserialized: deserialized,
+           replication: replication
          }}
 
-      "MEMORY_AND_DISK_2" ->
-        {:ok,
-         %Spark.Connect.StorageLevel{
-           use_disk: true,
-           use_memory: true,
-           deserialized: true,
-           replication: 2
-         }}
-
-      "OFF_HEAP" ->
-        {:ok, %Spark.Connect.StorageLevel{use_off_heap: true, replication: 1}}
-
-      "MEMORY_AND_DISK_DESER" ->
-        {:ok,
-         %Spark.Connect.StorageLevel{
-           use_disk: true,
-           use_memory: true,
-           use_off_heap: true,
-           deserialized: false,
-           replication: 1
-         }}
-
-      _ ->
+      :error ->
         {:error, {:invalid_storage_level, storage_level}}
     end
   end

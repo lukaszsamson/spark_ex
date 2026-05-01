@@ -285,8 +285,55 @@ defmodule SparkEx.CatalogTest do
     assert_receive {:cache_table_called, "my_table",
                     %Spark.Connect.StorageLevel{} = storage_level}
 
-    assert storage_level.use_memory
-    assert storage_level.deserialized
+    assert %Spark.Connect.StorageLevel{
+             use_disk: false,
+             use_memory: true,
+             use_off_heap: false,
+             deserialized: false,
+             replication: 1
+           } = storage_level
+  end
+
+  # Mirrors pyspark/storagelevel.py.
+  @storage_level_cases [
+    {"NONE", false, false, false, false, 1},
+    {"DISK_ONLY", true, false, false, false, 1},
+    {"DISK_ONLY_2", true, false, false, false, 2},
+    {"DISK_ONLY_3", true, false, false, false, 3},
+    {"MEMORY_ONLY", false, true, false, false, 1},
+    {"MEMORY_ONLY_2", false, true, false, false, 2},
+    {"MEMORY_AND_DISK", true, true, false, false, 1},
+    {"MEMORY_AND_DISK_2", true, true, false, false, 2},
+    {"OFF_HEAP", true, true, true, false, 1},
+    {"MEMORY_AND_DISK_DESER", true, true, false, true, 1}
+  ]
+
+  for {name, use_disk, use_memory, use_off_heap, deserialized, replication} <-
+        @storage_level_cases do
+    test "cache_table/3 maps #{name} (string + atom) to PySpark preset" do
+      expected = %Spark.Connect.StorageLevel{
+        use_disk: unquote(use_disk),
+        use_memory: unquote(use_memory),
+        use_off_heap: unquote(use_off_heap),
+        deserialized: unquote(deserialized),
+        replication: unquote(replication)
+      }
+
+      {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
+
+      assert :ok =
+               Catalog.cache_table(session, "t", storage_level: unquote(name))
+
+      assert_receive {:cache_table_called, "t", ^expected}
+
+      atom_alias = unquote(name) |> String.downcase() |> String.to_atom()
+      {:ok, session2} = FakeCatalogSession.start_link(self(), "analytics")
+
+      assert :ok =
+               Catalog.cache_table(session2, "t", storage_level: atom_alias)
+
+      assert_receive {:cache_table_called, "t", ^expected}
+    end
   end
 
   test "cache_table/3 returns error for invalid storage_level" do

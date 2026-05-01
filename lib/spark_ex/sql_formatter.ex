@@ -115,7 +115,21 @@ defmodule SparkEx.SqlFormatter do
     do_format_positional(rest, args, [<<ch::utf8>> | acc])
   end
 
-  # Consume a single-quoted string literal (handling escaped '' inside)
+  # Consume a single-quoted string literal. Spark accepts both
+  # doubled-quote (`''`) and backslash escapes (`\\`, `\'`) inside
+  # the literal. The latter is the default with
+  # `spark.sql.parser.escapedStringLiterals=true` and is what older
+  # Hive-style queries rely on; recognising it unconditionally keeps
+  # the lexer aligned with the server while still leaving embedded
+  # `?` / `:name` tokens inside the literal untouched.
+  defp consume_string_literal(<<"\\\\", rest::binary>>, acc) do
+    consume_string_literal(rest, ["\\\\" | acc])
+  end
+
+  defp consume_string_literal(<<"\\'", rest::binary>>, acc) do
+    consume_string_literal(rest, ["\\'" | acc])
+  end
+
   defp consume_string_literal(<<"''", rest::binary>>, acc) do
     consume_string_literal(rest, ["''" | acc])
   end

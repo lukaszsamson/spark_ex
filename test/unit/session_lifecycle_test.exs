@@ -405,6 +405,121 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
 
       assert query =~ "from_json(_spark_ex_json, 'id BIGINT'"
     end
+
+    test "JSON values containing the literal substring (?) are inlined verbatim" do
+      # Regression for HC2-2 / GPT-H4: the previous implementation used
+      # String.replace(query, "(?)", "('…')", global: false) per row, so a
+      # JSON value that itself contained the substring "(?)" would be
+      # consumed as a placeholder and a row would be dropped.
+      rows = [%{"note" => "what is (?) here"}, %{"note" => "ok"}]
+
+      request = {:create_dataframe, rows, [schema: "note STRING"]}
+
+      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, nil}}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+
+      # Both rows must be present in the VALUES clause, with the JSON
+      # text — including the embedded "(?)" — escaped into the SQL.
+      assert query =~ ~s|('{\"note\":\"what is (?) here\"}')|
+      assert query =~ ~s|('{\"note\":\"ok\"}')|
+      # No literal placeholders remain.
+      refute query =~ "VALUES (?)"
+    end
+
+    test "accepts list of tuples with explicit DDL schema" do
+      # LC2-11: PySpark accepts a list of tuples paired with an
+      # explicit DDL schema. Names come from the schema; values are
+      # zipped positionally.
+      rows = [{1, "a"}, {2, "b"}]
+      request = {:create_dataframe, rows, [schema: "id INT, name STRING"]}
+
+      assert {:reply, {:ok, %SparkEx.DataFrame{}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+    end
+
+    test "extracts backtick-quoted names with spaces from tuple schema" do
+      # parse_schema_field must handle `name with space` STRING so
+      # tuple rows can be keyed correctly.
+      rows = [{1, "a"}]
+      request = {:create_dataframe, rows, [schema: "`id` INT, `first name` STRING"]}
+
+      assert {:reply, {:ok, %SparkEx.DataFrame{}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+    end
+
+    test "accepts column-name-only list as schema" do
+      # LC2-14: PySpark allows passing the schema as a list of column
+      # names (no types). Types are inferred from the data.
+      rows = [{1, "a"}, {2, "b"}]
+      request = {:create_dataframe, rows, [schema: ["id", "name"]]}
+
+      assert {:reply, {:ok, %SparkEx.DataFrame{}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+    end
+
+    test "tuple rows without a schema raise a clear error" do
+      rows = [{1, "a"}, {2, "b"}]
+      request = {:create_dataframe, rows, []}
+
+      assert {:reply, {:error, {:invalid_schema, _}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+    end
+
+    test "tuple arity mismatch with schema raises ArgumentError" do
+      rows = [{1, "a"}, {2}]
+      request = {:create_dataframe, rows, [schema: "id INT, name STRING"]}
+
+      assert_raise ArgumentError, ~r/tuple arity/, fn ->
+        SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+      end
+    end
+
+    test "rejects DDL with statement terminator or comment markers" do
+      # Regression for LC2-13: schema_ddl is interpolated into the SQL
+      # `from_json('<ddl>', …)` literal, so unterminated quoting or a
+      # stray comment / statement-terminator outside any quoted
+      # context indicates a malformed input.
+      bad_schemas = [
+        "id INT; DROP TABLE users",
+        "id INT -- nope",
+        "id INT /* comment */",
+        "id INT */",
+        "id `id\nINT",
+        "id ' INT"
+      ]
+
+      for ddl <- bad_schemas do
+        request = {:create_dataframe, [%{"id" => 1}], [schema: ddl]}
+
+        assert {:reply, {:error, {:invalid_schema_ddl, _}}, %{}} =
+                 SparkEx.Session.handle_call(request, {self(), make_ref()}, %{}),
+               "expected #{inspect(ddl)} to be rejected"
+      end
+    end
+
+    test "accepts DDL with comment markers / semicolons inside quoted regions" do
+      # Validation is token-aware: characters that would terminate a
+      # statement only matter when they appear *outside* a backtick
+      # identifier or single-quoted string. Spark itself accepts these.
+      good_schemas = [
+        "`weird;name` STRING",
+        "`has--dashes` INT",
+        "`a/*b*/c` STRING",
+        "id STRING COMMENT 'has -- dashes; and /* markers */'",
+        "id STRING COMMENT 'with \\'escaped\\' quote'",
+        "id STRING COMMENT 'doubled '' quote'",
+        "`with``backtick` STRING"
+      ]
+
+      for ddl <- good_schemas do
+        request = {:create_dataframe, [%{}], [schema: ddl]}
+
+        result = SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+
+        refute match?({:reply, {:error, {:invalid_schema_ddl, _}}, _}, result),
+               "expected #{inspect(ddl)} to pass schema validation, got: #{inspect(result)}"
+      end
+    end
   end
 
   describe "Session.is_stopped" do
