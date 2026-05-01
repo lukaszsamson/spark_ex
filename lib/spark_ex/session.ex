@@ -29,7 +29,8 @@ defmodule SparkEx.Session do
     last_execution_metrics: %{},
     tags: [],
     released: false,
-    closed: false
+    closed: false,
+    retry_policies: nil
   ]
 
   @type t :: %__MODULE__{
@@ -45,7 +46,8 @@ defmodule SparkEx.Session do
           last_execution_metrics: map(),
           tags: [String.t()],
           released: boolean(),
-          closed: boolean()
+          closed: boolean(),
+          retry_policies: %{atom() => map()} | nil
         }
 
   # --- Public API ---
@@ -61,6 +63,12 @@ defmodule SparkEx.Session do
   - `:session_id` — custom session UUID (default: auto-generated)
   - `:allow_arrow_batch_chunking` — allow server-side Arrow chunk splitting (default: `true`)
   - `:preferred_arrow_chunk_size` — preferred chunk size in bytes (default: `nil`)
+  - `:retry_policies` — per-session retry policy overrides (default: `nil`,
+    falling back to `SparkEx.RetryPolicyRegistry`'s global policies). Accepts
+    a map or keyword list keyed by `:retry`, `:reattach`, and/or `:streaming`,
+    where each value is a partial map/keyword of the same keys accepted by
+    `SparkEx.RetryPolicyRegistry.set_policies/1`. Only the keys you supply
+    override the global policy; everything else is inherited unchanged.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -92,11 +100,15 @@ defmodule SparkEx.Session do
     GenServer.call(session, :next_plan_id)
   end
 
-  @doc """
-  Updates the server-side session ID (called after every response).
-  """
-  @spec update_server_side_session_id(GenServer.server(), String.t()) :: :ok
-  def update_server_side_session_id(session, server_side_session_id) do
+  @doc false
+  # Internal helper that bypasses `SessionIntegrity` validation by design —
+  # it exists only to let integration tests force a server-session-id
+  # mismatch and exercise the failure path. The `__` prefix and `@doc
+  # false` make it clear this is not a public API; production code uses
+  # `maybe_update_server_session/2` which validates against the pinned id
+  # before accepting any change.
+  @spec __update_server_side_session_id__(GenServer.server(), String.t()) :: :ok
+  def __update_server_side_session_id__(session, server_side_session_id) do
     GenServer.cast(session, {:update_server_side_session_id, server_side_session_id})
   end
 
@@ -771,6 +783,7 @@ defmodule SparkEx.Session do
     observed_server_session_id = Keyword.get(opts, :server_side_session_id, nil)
     allow_arrow_batch_chunking = Keyword.get(opts, :allow_arrow_batch_chunking, true)
     preferred_arrow_chunk_size = Keyword.get(opts, :preferred_arrow_chunk_size, nil)
+    retry_policies = normalize_retry_policies_opt(Keyword.get(opts, :retry_policies))
 
     grpc_opts = Keyword.get(opts, :grpc_opts, [])
 
@@ -785,13 +798,26 @@ defmodule SparkEx.Session do
         user_id: session_identity.user_id,
         client_type: session_identity.client_type,
         allow_arrow_batch_chunking: allow_arrow_batch_chunking,
-        preferred_arrow_chunk_size: preferred_arrow_chunk_size
+        preferred_arrow_chunk_size: preferred_arrow_chunk_size,
+        retry_policies: retry_policies
       }
 
       {:ok, state}
     else
       {:error, reason} -> {:stop, reason}
     end
+  end
+
+  defp normalize_retry_policies_opt(nil), do: nil
+
+  defp normalize_retry_policies_opt(policies) when is_map(policies) or is_list(policies) do
+    SparkEx.RetryPolicyRegistry.normalize_session_policies!(policies)
+  end
+
+  defp normalize_retry_policies_opt(other) do
+    raise ArgumentError,
+          "expected :retry_policies to be nil, a map, or a keyword list keyed by " <>
+            ":retry | :reattach | :streaming, got: #{inspect(other)}"
   end
 
   @impl true

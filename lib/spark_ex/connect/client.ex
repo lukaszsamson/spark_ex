@@ -1058,34 +1058,44 @@ defmodule SparkEx.Connect.Client do
           {:ok, [], session.server_side_session_id}
 
         _ ->
-          stream =
-            session.channel
-            |> Stub.add_artifacts()
-            |> send_artifact_request_stream(
-              stream_artifact_requests(session, artifacts, @artifact_chunk_size)
-            )
+          # Each retry attempt rebuilds the gRPC stream from scratch by
+          # re-evaluating the lazy `stream_artifact_requests/3` enum:
+          # reusing a gRPC stream after a transient failure is not
+          # supported by the library, and the request enumerable is
+          # pure data + lazy file IO so reconstruction is cheap.
+          retry_with_backoff(
+            fn ->
+              stream =
+                session.channel
+                |> Stub.add_artifacts()
+                |> send_artifact_request_stream(
+                  stream_artifact_requests(session, artifacts, @artifact_chunk_size)
+                )
 
-          case GRPC.Stub.recv(stream) do
-            {:ok, %AddArtifactsResponse{} = resp} ->
-              case SessionIntegrity.validate_response(resp, session) do
-                {:ok, _} ->
-                  summaries =
-                    Enum.map(resp.artifacts, fn summary ->
-                      {summary.name, summary.is_crc_successful}
-                    end)
+              case GRPC.Stub.recv(stream) do
+                {:ok, %AddArtifactsResponse{} = resp} ->
+                  case SessionIntegrity.validate_response(resp, session) do
+                    {:ok, _} ->
+                      summaries =
+                        Enum.map(resp.artifacts, fn summary ->
+                          {summary.name, summary.is_crc_successful}
+                        end)
 
-                  {:ok, summaries, resp.server_side_session_id}
+                      {:ok, summaries, resp.server_side_session_id}
 
-                {:error, _} = error ->
-                  error
+                    {:error, _} = error ->
+                      error
+                  end
+
+                {:error, %GRPC.RPCError{} = error} ->
+                  {:error, Errors.from_grpc_error(error, session)}
+
+                {:error, reason} ->
+                  {:error, reason}
               end
-
-            {:error, %GRPC.RPCError{} = error} ->
-              {:error, Errors.from_grpc_error(error, session)}
-
-            {:error, reason} ->
-              {:error, reason}
-          end
+            end,
+            session: session
+          )
       end
     end)
   end
@@ -1198,16 +1208,25 @@ defmodule SparkEx.Connect.Client do
       last_response_id: last_response_id
     }
 
-    case Stub.reattach_execute(session.channel, request, timeout: timeout) do
-      {:ok, stream} ->
-        {:ok, stream}
+    # Retry only the initial RPC handshake; once the server-streaming
+    # response begins, the outer `collect_with_reattach` is responsible
+    # for mid-stream recovery and must not be double-wrapped.
+    retry_with_backoff(
+      fn ->
+        case Stub.reattach_execute(session.channel, request, timeout: timeout) do
+          {:ok, stream} ->
+            {:ok, stream}
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
+          {:error, %GRPC.RPCError{} = error} ->
+            {:error, Errors.from_grpc_error(error, session)}
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end,
+      session: session,
+      policy_type: :reattach
+    )
   end
 
   @doc """
@@ -1254,7 +1273,7 @@ defmodule SparkEx.Connect.Client do
 
   defp execute_reattachable(session, request, operation_id, timeout, opts, decode_fn) do
     policy_type = Keyword.get(opts, :reattach_policy, :reattach)
-    policy = RetryPolicyRegistry.policy(policy_type)
+    policy = RetryPolicyRegistry.policy_for(session, policy_type)
 
     policy =
       case Keyword.fetch(opts, :reattach_retries) do
@@ -2005,23 +2024,36 @@ defmodule SparkEx.Connect.Client do
         %{rpc: rpc, session_id: session.session_id}
       )
 
+    # Every unary RPC funnels through the retry wrapper so transient
+    # failures (UNAVAILABLE, server-supplied RetryInfo, INVALID_CURSOR.
+    # DISCONNECTED) are recovered uniformly without each call site
+    # needing its own retry loop. Idempotent operations: AnalyzePlan,
+    # Config, ArtifactStatus, FetchErrorDetails. Non-idempotent but
+    # safe-to-retry under transient failure: CloneSession (returns the
+    # same new id), ReleaseSession / ReleaseExecute / Interrupt (the
+    # server treats a missing handle as success).
     rpc_telemetry_span(metadata, fn ->
-      case do_unary_stub_call(rpc, session.channel, request, grpc_opts) do
-        {:ok, response} ->
-          case SessionIntegrity.validate_response(response, session) do
-            {:ok, _server_session_id} ->
-              {:ok, response}
+      retry_with_backoff(
+        fn ->
+          case do_unary_stub_call(rpc, session.channel, request, grpc_opts) do
+            {:ok, response} ->
+              case SessionIntegrity.validate_response(response, session) do
+                {:ok, _server_session_id} ->
+                  {:ok, response}
 
-            {:error, _reason} = error ->
-              error
+                {:error, _reason} = error ->
+                  error
+              end
+
+            {:error, %GRPC.RPCError{} = error} ->
+              {:error, Errors.from_grpc_error(error, session)}
+
+            {:error, reason} ->
+              {:error, reason}
           end
-
-        {:error, %GRPC.RPCError{} = error} ->
-          {:error, Errors.from_grpc_error(error, session)}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+        end,
+        session: session
+      )
     end)
   end
 
@@ -2058,8 +2090,17 @@ defmodule SparkEx.Connect.Client do
   @doc false
   @spec retry_with_backoff((-> term()), keyword()) :: term()
   def retry_with_backoff(fun, opts \\ []) when is_function(fun, 0) do
-    default_policy = RetryPolicyRegistry.policy(:retry)
-    policy = Map.merge(default_policy, opts |> Map.new() |> Map.take(Map.keys(default_policy)))
+    session = Keyword.get(opts, :session)
+    policy_type = Keyword.get(opts, :policy_type, :retry)
+    base_policy = RetryPolicyRegistry.policy_for(session, policy_type)
+
+    overrides =
+      opts
+      |> Keyword.drop([:session, :policy_type])
+      |> Map.new()
+      |> Map.take(Map.keys(base_policy))
+
+    policy = Map.merge(base_policy, overrides)
 
     do_retry(fun, 0, policy)
   end
@@ -2155,7 +2196,8 @@ defmodule SparkEx.Connect.Client do
       %Google.Protobuf.Any{type_url: @retry_info_type_url, value: value} ->
         case safe_decode_retry_info(value) do
           {:ok, %Google.Rpc.RetryInfo{retry_delay: nil}} ->
-            0
+            # No hint — caller falls back to policy backoff.
+            nil
 
           {:ok,
            %Google.Rpc.RetryInfo{

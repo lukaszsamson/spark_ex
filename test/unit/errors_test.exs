@@ -109,6 +109,28 @@ defmodule SparkEx.Connect.ErrorsTest do
       assert error.grpc_status == 14
       assert error.retry_delay_ms == 1_250
     end
+
+    test "RetryInfo with nil retry_delay leaves retry_delay_ms nil (no hint)" do
+      # Empty RetryInfo (no retry_delay) must not collapse to 0; the
+      # retry loop has to distinguish "no hint" from "retry immediately".
+      retry_info = %Google.Rpc.RetryInfo{retry_delay: nil}
+
+      details = [
+        %Google.Protobuf.Any{
+          type_url: "type.googleapis.com/google.rpc.RetryInfo",
+          value: Protobuf.encode(retry_info)
+        }
+      ]
+
+      grpc_error = %GRPC.RPCError{status: 14, message: "unavailable", details: details}
+      session = build_fake_session()
+
+      error = Errors.from_grpc_error(grpc_error, session)
+
+      assert %Remote{} = error
+      assert error.grpc_status == 14
+      assert error.retry_delay_ms == nil
+    end
   end
 
   describe "SparkEx.Error.Remote exception" do
