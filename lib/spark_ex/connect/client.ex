@@ -1764,9 +1764,11 @@ defmodule SparkEx.Connect.Client do
   #   3. Error normalization — `%GRPC.RPCError{}` is converted to
   #      `%SparkEx.Error.Remote{}` via `Errors.from_grpc_error/2`.
   #
-  # Streaming RPCs (`ExecutePlan`, `ReattachExecute`, `AddArtifacts`)
-  # do not pass through this helper; their per-message integrity check
-  # happens inside `ResultDecoder` so the validator is shared.
+  # Streaming RPCs do not pass through this helper. `ExecutePlan` and
+  # `ReattachExecute` perform per-message integrity checks inside
+  # `ResultDecoder`; `AddArtifacts` is client-streaming with a single
+  # response and is validated inline in `add_artifacts/2`. All three
+  # paths share the same `SessionIntegrity` module.
   @typep unary_rpc ::
            :analyze_plan
            | :config
@@ -1782,10 +1784,13 @@ defmodule SparkEx.Connect.Client do
     {extra_metadata, opts} = Keyword.pop(opts, :extra_metadata, %{})
     {grpc_opts, _} = Keyword.split(opts, [:timeout])
 
+    # Reserved keys (`:rpc`, `:session_id`) win over `extra_metadata` so
+    # callers can't accidentally corrupt telemetry attribution by passing
+    # a colliding key.
     metadata =
       Map.merge(
-        %{rpc: rpc, session_id: session.session_id},
-        extra_metadata
+        extra_metadata,
+        %{rpc: rpc, session_id: session.session_id}
       )
 
     rpc_telemetry_span(metadata, fn ->
