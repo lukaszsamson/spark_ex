@@ -1067,8 +1067,7 @@ defmodule SparkEx.MissOpus2Test do
         )
 
       assert %Column{
-               expr:
-                 {:fn, "try_parse_url", [{:col, "url"}, {:col, "part"}, {:col, "key"}], false}
+               expr: {:fn, "try_parse_url", [{:col, "url"}, {:col, "part"}, {:col, "key"}], false}
              } = result
     end
   end

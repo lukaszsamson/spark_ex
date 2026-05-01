@@ -172,7 +172,11 @@ defmodule SparkEx.DataFrame do
                 "drop expects column names (string/atom) or Column expressions, got: #{inspect(other)}"
       end)
 
-    %__MODULE__{df | _schema: nil, plan: {:drop, df.plan, Enum.reverse(names), Enum.reverse(col_exprs)}}
+    %__MODULE__{
+      df
+      | _schema: nil,
+        plan: {:drop, df.plan, Enum.reverse(names), Enum.reverse(col_exprs)}
+    }
   end
 
   def drop(%__MODULE__{} = df, column) do
@@ -725,7 +729,11 @@ defmodule SparkEx.DataFrame do
   """
   @spec with_columns_renamed(t(), %{String.t() => String.t()} | (String.t() -> String.t())) :: t()
   def with_columns_renamed(%__MODULE__{} = df, rename_map) when is_map(rename_map) do
-    %__MODULE__{df | _schema: nil, plan: {:with_columns_renamed, df.plan, Map.to_list(rename_map)}}
+    %__MODULE__{
+      df
+      | _schema: nil,
+        plan: {:with_columns_renamed, df.plan, Map.to_list(rename_map)}
+    }
   end
 
   def with_columns_renamed(%__MODULE__{} = df, rename_fun) when is_function(rename_fun, 1) do
@@ -846,7 +854,12 @@ defmodule SparkEx.DataFrame do
   def repartition(%__MODULE__{} = df, num_partitions, cols)
       when is_integer(num_partitions) and num_partitions > 0 and is_list(cols) do
     exprs = Enum.map(cols, &normalize_column_expr/1)
-    %__MODULE__{df | _schema: nil, plan: {:repartition_by_expression, df.plan, exprs, num_partitions}}
+
+    %__MODULE__{
+      df
+      | _schema: nil,
+        plan: {:repartition_by_expression, df.plan, exprs, num_partitions}
+    }
   end
 
   @doc """
@@ -858,7 +871,12 @@ defmodule SparkEx.DataFrame do
   def repartition_by_range(%__MODULE__{} = df, num_partitions, cols)
       when is_integer(num_partitions) and is_list(cols) do
     sort_exprs = Enum.map(cols, &normalize_sort_expr/1)
-    %__MODULE__{df | _schema: nil, plan: {:repartition_by_expression, df.plan, sort_exprs, num_partitions}}
+
+    %__MODULE__{
+      df
+      | _schema: nil,
+        plan: {:repartition_by_expression, df.plan, sort_exprs, num_partitions}
+    }
   end
 
   @doc """
@@ -1206,7 +1224,11 @@ defmodule SparkEx.DataFrame do
   """
   @spec hint(t(), String.t(), term()) :: t()
   def hint(%__MODULE__{} = df, name, parameters \\ []) when is_binary(name) do
-    %__MODULE__{df | _schema: nil, plan: {:hint, df.plan, name, normalize_hint_parameters(parameters)}}
+    %__MODULE__{
+      df
+      | _schema: nil,
+        plan: {:hint, df.plan, name, normalize_hint_parameters(parameters)}
+    }
   end
 
   @doc """
@@ -1494,7 +1516,12 @@ defmodule SparkEx.DataFrame do
   def repartition_by_id(%__MODULE__{} = df, num_partitions, col)
       when is_integer(num_partitions) and num_partitions > 0 do
     col_expr = {:direct_shuffle_partition_id, normalize_column_expr(col)}
-    %__MODULE__{df | _schema: nil, plan: {:repartition_by_expression, df.plan, [col_expr], num_partitions}}
+
+    %__MODULE__{
+      df
+      | _schema: nil,
+        plan: {:repartition_by_expression, df.plan, [col_expr], num_partitions}
+    }
   end
 
   def repartition_by_id(%__MODULE__{}, num_partitions, _col) do
@@ -2617,6 +2644,7 @@ defmodule SparkEx.DataFrame do
   end
 
   defp validate_sample_fraction!(fraction, true) when fraction >= 0.0, do: :ok
+
   defp validate_sample_fraction!(fraction, false) when fraction >= 0.0 and fraction <= 1.0,
     do: :ok
 

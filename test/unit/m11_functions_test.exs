@@ -461,15 +461,13 @@ defmodule SparkEx.M11.FunctionsTest do
 
     test "variant_get/3 emits unresolved variant_get with target_type" do
       assert %Column{
-               expr:
-                 {:fn, "variant_get", [{:col, "js"}, {:lit, "$.a"}, {:lit, "int"}], false}
+               expr: {:fn, "variant_get", [{:col, "js"}, {:lit, "$.a"}, {:lit, "int"}], false}
              } = Functions.variant_get("js", "$.a", "int")
     end
 
     test "try_variant_get/3 emits unresolved try_variant_get with target_type" do
       assert %Column{
-               expr:
-                 {:fn, "try_variant_get", [{:col, "js"}, {:lit, "$.a"}, {:lit, "int"}], false}
+               expr: {:fn, "try_variant_get", [{:col, "js"}, {:lit, "$.a"}, {:lit, "int"}], false}
              } = Functions.try_variant_get("js", "$.a", "int")
     end
 
