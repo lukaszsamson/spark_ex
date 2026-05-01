@@ -98,11 +98,13 @@ defmodule SparkEx.StreamingQuery do
 
   ## Options
 
-    * `:timeout` — timeout in milliseconds (default: no timeout)
+    * `:timeout` — timeout in seconds (default: no timeout). Must be a
+      positive number when set; `nil` means wait forever. Mirrors
+      PySpark's `awaitTermination(timeout=None)` semantics.
   """
   @spec await_termination(t(), keyword()) :: {:ok, boolean() | nil} | {:error, term()}
   def await_termination(%__MODULE__{} = query, opts \\ []) do
-    timeout_ms = Keyword.get(opts, :timeout, nil)
+    {timeout_ms, opts} = SparkEx.Internal.StreamingTimeout.resolve(opts)
     opts = Keyword.put_new(opts, :reattach_policy, :streaming)
 
     case execute_command(query, {:await_termination, timeout_ms}, opts) do
@@ -129,15 +131,18 @@ defmodule SparkEx.StreamingQuery do
   end
 
   @doc """
-  Returns a list of recent progress reports as JSON strings.
+  Returns a list of recent progress reports as parsed maps.
+
+  Each entry is the JSON-decoded `StreamingQueryProgress` reported by the
+  server. Entries that fail to parse fall back to the raw JSON string.
   """
-  @spec recent_progress(t()) :: {:ok, [String.t()]} | {:error, term()}
+  @spec recent_progress(t()) :: {:ok, [map() | String.t()]} | {:error, term()}
   def recent_progress(%__MODULE__{} = query) do
     case execute_command(query, {:recent_progress}) do
       {:ok, {:streaming_query, result}} ->
         case result.result_type do
           {:recent_progress, rp} ->
-            {:ok, rp.recent_progress_json}
+            {:ok, Enum.map(rp.recent_progress_json, &parse_progress/1)}
 
           other ->
             {:error, {:unexpected_result, other}}
@@ -149,9 +154,12 @@ defmodule SparkEx.StreamingQuery do
   end
 
   @doc """
-  Returns the most recent progress report as a JSON string, or nil.
+  Returns the most recent progress report as a parsed map, or `nil`.
+
+  If the server payload fails to parse as JSON it is returned as a raw
+  string instead.
   """
-  @spec last_progress(t()) :: {:ok, String.t() | nil} | {:error, term()}
+  @spec last_progress(t()) :: {:ok, map() | String.t() | nil} | {:error, term()}
   def last_progress(%__MODULE__{} = query) do
     case execute_command(query, {:last_progress}) do
       {:ok, {:streaming_query, result}} ->
@@ -159,7 +167,7 @@ defmodule SparkEx.StreamingQuery do
           {:recent_progress, rp} ->
             case List.last(rp.recent_progress_json) do
               nil -> {:ok, nil}
-              json -> {:ok, json}
+              json -> {:ok, parse_progress(json)}
             end
 
           other ->
@@ -207,11 +215,15 @@ defmodule SparkEx.StreamingQuery do
       {:ok, {:streaming_query, result}} ->
         case result.result_type do
           {:exception, ex} ->
-            if ex.exception_message do
+            # `exception_message`, `error_class`, and `stack_trace` are
+            # `proto3_optional` fields. Use HasField semantics (nil ==
+            # unset) so that an explicitly empty exception message is not
+            # treated as "no exception".
+            if is_binary(ex.exception_message) do
               message = strip_exception_type_prefix(ex.exception_message)
 
               message =
-                if ex.stack_trace do
+                if is_binary(ex.stack_trace) do
                   message <> "\n\n" <> "JVM stacktrace:\n" <> ex.stack_trace
                 else
                   message
@@ -258,4 +270,13 @@ defmodule SparkEx.StreamingQuery do
       [msg] -> msg
     end
   end
+
+  defp parse_progress(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, parsed} -> parsed
+      {:error, _} -> json
+    end
+  end
+
+  defp parse_progress(other), do: other
 end

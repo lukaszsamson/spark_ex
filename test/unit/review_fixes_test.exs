@@ -188,13 +188,25 @@ defmodule SparkEx.ReviewFixesTest do
     end
   end
 
-  describe "StreamWriter.output_mode catch-all (REV_OPUS #57)" do
-    test "rejects invalid output mode string" do
+  describe "StreamWriter.output_mode (M16/F2)" do
+    test "forwards raw mode string for server-side normalization" do
       df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
       writer = %SparkEx.StreamWriter{df: df}
 
-      assert_raise ArgumentError, ~r/must be one of/, fn ->
-        SparkEx.StreamWriter.output_mode(writer, "invalid")
+      assert SparkEx.StreamWriter.output_mode(writer, "Append").output_mode == "Append"
+      assert SparkEx.StreamWriter.output_mode(writer, "default").output_mode == "default"
+    end
+
+    test "rejects empty / non-string output mode" do
+      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      writer = %SparkEx.StreamWriter{df: df}
+
+      assert_raise ArgumentError, ~r/non-empty string/, fn ->
+        SparkEx.StreamWriter.output_mode(writer, "")
+      end
+
+      assert_raise ArgumentError, ~r/must be a string/, fn ->
+        SparkEx.StreamWriter.output_mode(writer, :append)
       end
     end
   end

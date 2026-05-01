@@ -116,7 +116,7 @@ defmodule SparkEx.Integration.StreamingListenerGapsTest do
       assert is_map(received_event.data) or is_binary(received_event.data)
 
       :ok = StreamingQuery.stop(query)
-      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
+      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20)
     end
   end
 
@@ -164,7 +164,7 @@ defmodule SparkEx.Integration.StreamingListenerGapsTest do
       assert_receive {:progress2, _}, 5_000
 
       :ok = StreamingQuery.stop(query)
-      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
+      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20)
     end
   end
 
@@ -199,7 +199,7 @@ defmodule SparkEx.Integration.StreamingListenerGapsTest do
       refute_receive {:progress, _}, 5_000
 
       :ok = StreamingQuery.stop(query)
-      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
+      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20)
     end
   end
 
@@ -260,7 +260,7 @@ defmodule SparkEx.Integration.StreamingListenerGapsTest do
       assert StreamingQuery.name(query) == name
 
       # Wait for once trigger to complete
-      assert {:ok, _} = StreamingQuery.await_termination(query, timeout: 20_000)
+      assert {:ok, _} = StreamingQuery.await_termination(query, timeout: 20)
     end
   end
 end

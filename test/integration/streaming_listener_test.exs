@@ -129,7 +129,7 @@ defmodule SparkEx.Integration.StreamingListenerTest do
     assert_receive {:listener_progress, %{type: :progress, raw_json: raw_json}}, 15_000
     assert is_binary(raw_json)
     :ok = StreamingQuery.stop(query)
-    assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20_000)
+    assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 20)
     assert_receive {:listener_terminated, %{type: :terminated}}, 15_000
 
     assert {:ok, listeners} = StreamingQueryManager.list_listeners(session)
@@ -156,6 +156,6 @@ defmodule SparkEx.Integration.StreamingListenerTest do
     assert is_binary(StreamingQuery.run_id(query))
     assert StreamingQuery.name(query) == name
 
-    assert {:ok, _} = StreamingQuery.await_termination(query, timeout: 20_000)
+    assert {:ok, _} = StreamingQuery.await_termination(query, timeout: 20)
   end
 end

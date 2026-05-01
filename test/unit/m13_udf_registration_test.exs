@@ -115,13 +115,15 @@ defmodule SparkEx.M13.UDFRegistrationTest do
                  session,
                  "my_udtf",
                  <<1, 2, 3>>,
-                 return_type: "id INT"
+                 return_type: "id INT",
+                 eval_type: 300,
+                 python_ver: "3.11"
                )
 
       assert_receive {:analyze_ddl_parse_called, "id INT"}
 
       assert_receive {:execute_command_called,
-                      {:register_udtf, "my_udtf", <<1, 2, 3>>, %Spark.Connect.DataType{}, 0,
+                      {:register_udtf, "my_udtf", <<1, 2, 3>>, %Spark.Connect.DataType{}, 300,
                        "3.11", true}}
     end
 
@@ -133,6 +135,8 @@ defmodule SparkEx.M13.UDFRegistrationTest do
                  session,
                  "my_udtf",
                  <<1, 2, 3>>,
+                 eval_type: 300,
+                 python_ver: "3.11",
                  deterministic: "yes"
                )
     end
@@ -145,8 +149,35 @@ defmodule SparkEx.M13.UDFRegistrationTest do
                  session,
                  "my_udtf",
                  <<1, 2, 3>>,
-                 eval_type: "oops"
+                 eval_type: "oops",
+                 python_ver: "3.11"
                )
+    end
+
+    test "register_udtf raises when eval_type is missing" do
+      {:ok, session} = FakeUDFSession.start_link(self())
+
+      assert_raise ArgumentError, ~r/requires the :eval_type option/, fn ->
+        SparkEx.UDFRegistration.register_udtf(
+          session,
+          "my_udtf",
+          <<1, 2, 3>>,
+          python_ver: "3.11"
+        )
+      end
+    end
+
+    test "register_udtf raises when python_ver is missing" do
+      {:ok, session} = FakeUDFSession.start_link(self())
+
+      assert_raise ArgumentError, ~r/requires the :python_ver option/, fn ->
+        SparkEx.UDFRegistration.register_udtf(
+          session,
+          "my_udtf",
+          <<1, 2, 3>>,
+          eval_type: 300
+        )
+      end
     end
 
     test "register_data_source returns error for non-string python_ver" do

@@ -175,9 +175,9 @@ defmodule SparkEx.Integration.StreamingSinksTest do
       {:ok, query} = StreamWriter.start(writer)
       on_exit(fn -> StreamingQuery.stop(query) end)
 
-      assert {:ok, _} = StreamingQuery.await_termination(query, timeout: 20_000)
+      assert {:ok, _} = StreamingQuery.await_termination(query, timeout: 20)
       assert {:ok, progress} = StreamingQuery.last_progress(query)
-      assert is_binary(progress)
+      assert is_map(progress)
 
       assert :ok = StreamingQuery.stop(query)
     end

@@ -64,12 +64,14 @@ defmodule SparkEx.StreamingQueryManager do
 
   ## Options
 
-    * `:timeout` — timeout in milliseconds (default: no timeout)
+    * `:timeout` — timeout in seconds (default: no timeout). Must be a
+      positive number when set; `nil` means wait forever. Mirrors
+      PySpark's `awaitAnyTermination(timeout=None)` semantics.
   """
   @spec await_any_termination(GenServer.server(), keyword()) ::
           {:ok, boolean() | nil} | {:error, term()}
   def await_any_termination(session, opts \\ []) do
-    timeout_ms = Keyword.get(opts, :timeout, nil)
+    {timeout_ms, opts} = SparkEx.Internal.StreamingTimeout.resolve(opts)
     opts = Keyword.put_new(opts, :reattach_policy, :streaming)
 
     case execute_command(session, {:await_any_termination, timeout_ms}, opts) do
@@ -96,14 +98,35 @@ defmodule SparkEx.StreamingQueryManager do
   end
 
   # ── Listener Management ──
+  #
+  # PySpark's `StreamingQueryManager.addListener` cloudpickles a Python
+  # `StreamingQueryListener` and ships the bytes to the server, where they
+  # are deserialized and run inside a Python worker. There is no portable
+  # way to produce that payload from Elixir, so the
+  # `add_listener`/`remove_listener` pair below is intentionally limited
+  # to expert callers that have constructed the payload externally
+  # (typically a Java listener jar or a pre-pickled Python listener).
+  #
+  # For the normal Elixir flow — receiving streaming-query events on the
+  # client and dispatching them to Elixir callback modules — use
+  # `SparkEx.StreamingQueryListenerBus`, which speaks the
+  # `addListenerBusListener` RPC.
 
   @doc """
-  Registers a streaming query listener on the server.
+  Registers a pre-serialized streaming-query listener on the server.
+
+  > #### Unsupported from Elixir {: .warning}
+  >
+  > This wraps PySpark's `addListener` RPC, which expects a
+  > cloudpickled Python listener (or a serialized Java listener) as its
+  > payload. There is no portable way to produce such a payload from
+  > Elixir. Use `SparkEx.StreamingQueryListenerBus.add_listener/2` for
+  > the supported Elixir-callback flow.
 
   ## Parameters
 
     * `listener_id` — unique identifier for the listener
-    * `listener_payload` — serialized listener payload (bytes)
+    * `listener_payload` — pre-serialized listener payload bytes
   """
   @spec add_listener(GenServer.server(), String.t(), binary()) ::
           {:ok, boolean()} | {:error, term()}
@@ -122,12 +145,18 @@ defmodule SparkEx.StreamingQueryManager do
   end
 
   @doc """
-  Removes a streaming query listener from the server.
+  Removes a pre-serialized streaming-query listener from the server.
+
+  > #### Unsupported from Elixir {: .warning}
+  >
+  > Companion to `add_listener/3`; same caveats apply. Use
+  > `SparkEx.StreamingQueryListenerBus.remove_listener/2` for the
+  > supported Elixir-callback flow.
 
   ## Parameters
 
     * `listener_id` — unique identifier of the listener to remove
-    * `listener_payload` — serialized listener payload (bytes)
+    * `listener_payload` — pre-serialized listener payload bytes
   """
   @spec remove_listener(GenServer.server(), String.t(), binary()) ::
           {:ok, boolean()} | {:error, term()}
@@ -146,7 +175,11 @@ defmodule SparkEx.StreamingQueryManager do
   end
 
   @doc """
-  Lists all registered streaming query listener IDs.
+  Lists all registered streaming-query listener IDs on the server.
+
+  Returns IDs registered via `add_listener/3` only. Listeners registered
+  through `SparkEx.StreamingQueryListenerBus` use the separate
+  `addListenerBusListener` RPC and are not reflected here.
   """
   @spec list_listeners(GenServer.server()) :: {:ok, [String.t()]} | {:error, term()}
   def list_listeners(session) do
