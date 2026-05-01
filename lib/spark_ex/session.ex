@@ -3004,7 +3004,13 @@ defmodule SparkEx.Session do
   defp prepare_local_data(data, opts) when is_map(data) and not is_struct(data) do
     with {:ok, schema_ddl} <- normalize_create_dataframe_schema(opts) do
       # Column-oriented data: %{"col1" => [1,2,3], "col2" => ["a","b","c"]}
-      case safe_explorer_new(data) do
+      # Map iteration order is undefined for maps with >32 keys; sort by
+      # column name so the encoded relation is deterministic regardless
+      # of insertion order. Callers needing user-controlled order should
+      # pass a keyword list of `{name, values}` pairs instead.
+      ordered = data |> Enum.sort_by(fn {key, _} -> to_string(key) end)
+
+      case safe_explorer_new(ordered) do
         {:ok, explorer_df} ->
           effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
           prepare_local_data(explorer_df, Keyword.put(opts, :schema, effective_schema))

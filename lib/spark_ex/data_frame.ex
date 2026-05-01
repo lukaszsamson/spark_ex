@@ -32,14 +32,15 @@ defmodule SparkEx.DataFrame do
   alias SparkEx.Column
   alias SparkEx.Internal.Tag
 
-  defstruct [:session, :plan, tags: []]
+  defstruct [:session, :plan, tags: [], _schema: nil]
 
   @type plan :: term()
 
   @type t :: %__MODULE__{
           session: GenServer.server(),
           plan: plan(),
-          tags: [String.t()]
+          tags: [String.t()],
+          _schema: term() | nil
         }
 
   # ── Transforms (lazy — return new DataFrame) ──
@@ -63,7 +64,7 @@ defmodule SparkEx.DataFrame do
   @spec select(t(), Column.t() | String.t() | atom() | [Column.t() | String.t() | atom()]) :: t()
   def select(%__MODULE__{} = df, columns) when is_list(columns) do
     exprs = Enum.map(columns, &normalize_column_expr/1)
-    %__MODULE__{df | plan: {:project, df.plan, exprs}}
+    %__MODULE__{df | _schema: nil, plan: {:project, df.plan, exprs}}
   end
 
   def select(%__MODULE__{} = df, column) do
@@ -119,11 +120,11 @@ defmodule SparkEx.DataFrame do
   """
   @spec filter(t(), Column.t() | String.t()) :: t()
   def filter(%__MODULE__{} = df, %Column{} = condition) do
-    %__MODULE__{df | plan: {:filter, df.plan, condition.expr}}
+    %__MODULE__{df | _schema: nil, plan: {:filter, df.plan, condition.expr}}
   end
 
   def filter(%__MODULE__{} = df, condition) when is_binary(condition) do
-    %__MODULE__{df | plan: {:filter, df.plan, {:expr, condition}}}
+    %__MODULE__{df | _schema: nil, plan: {:filter, df.plan, {:expr, condition}}}
   end
 
   @doc """
@@ -137,7 +138,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec with_column(t(), String.t(), Column.t()) :: t()
   def with_column(%__MODULE__{} = df, name, %Column{} = col) when is_binary(name) do
-    %__MODULE__{df | plan: {:with_columns, df.plan, [{:alias, col.expr, name}]}}
+    %__MODULE__{df | _schema: nil, plan: {:with_columns, df.plan, [{:alias, col.expr, name}]}}
   end
 
   @doc """
@@ -171,7 +172,7 @@ defmodule SparkEx.DataFrame do
                 "drop expects column names (string/atom) or Column expressions, got: #{inspect(other)}"
       end)
 
-    %__MODULE__{df | plan: {:drop, df.plan, Enum.reverse(names), Enum.reverse(col_exprs)}}
+    %__MODULE__{df | _schema: nil, plan: {:drop, df.plan, Enum.reverse(names), Enum.reverse(col_exprs)}}
   end
 
   def drop(%__MODULE__{} = df, column) do
@@ -261,7 +262,7 @@ defmodule SparkEx.DataFrame do
                 "ascending must be a boolean, a list of booleans, or nil, got: #{inspect(other)}"
       end
 
-    %__MODULE__{df | plan: {:sort, df.plan, sort_exprs}}
+    %__MODULE__{df | _schema: nil, plan: {:sort, df.plan, sort_exprs}}
   end
 
   @doc """
@@ -273,7 +274,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec limit(t(), non_neg_integer()) :: t()
   def limit(%__MODULE__{} = df, n) when is_integer(n) and n >= 0 do
-    %__MODULE__{df | plan: {:limit, df.plan, n}}
+    %__MODULE__{df | _schema: nil, plan: {:limit, df.plan, n}}
   end
 
   @doc """
@@ -424,7 +425,8 @@ defmodule SparkEx.DataFrame do
 
     %__MODULE__{
       left
-      | plan: {:join, left.plan, right.plan, condition, canonical_join_type, using_columns}
+      | _schema: nil,
+        plan: {:join, left.plan, right.plan, condition, canonical_join_type, using_columns}
     }
   end
 
@@ -488,7 +490,8 @@ defmodule SparkEx.DataFrame do
 
     %__MODULE__{
       left
-      | plan:
+      | _schema: nil,
+        plan:
           {:as_of_join, left.plan, right.plan, left_as_of.expr, right_as_of.expr, join_expr,
            using_columns, join_type, tolerance_expr, allow_exact_matches, direction}
     }
@@ -527,7 +530,7 @@ defmodule SparkEx.DataFrame do
         {:lateral_join, left.plan, right.plan, cond_expr, canonical}
       end
 
-    %__MODULE__{left | plan: join_plan}
+    %__MODULE__{left | _schema: nil, plan: join_plan}
   end
 
   @doc """
@@ -539,7 +542,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec distinct(t()) :: t()
   def distinct(%__MODULE__{} = df) do
-    %__MODULE__{df | plan: {:deduplicate, df.plan, [], true}}
+    %__MODULE__{df | _schema: nil, plan: {:deduplicate, df.plan, [], true}}
   end
 
   @doc """
@@ -558,7 +561,8 @@ defmodule SparkEx.DataFrame do
 
     %__MODULE__{
       left
-      | plan: {:set_operation, left.plan, right.plan, :union, true}
+      | _schema: nil,
+        plan: {:set_operation, left.plan, right.plan, :union, true}
     }
   end
 
@@ -576,7 +580,8 @@ defmodule SparkEx.DataFrame do
 
     %__MODULE__{
       left
-      | plan: {:set_operation, left.plan, right.plan, :union, false}
+      | _schema: nil,
+        plan: {:set_operation, left.plan, right.plan, :union, false}
     }
   end
 
@@ -593,7 +598,8 @@ defmodule SparkEx.DataFrame do
 
     %__MODULE__{
       left
-      | plan: {:set_operation, left.plan, right.plan, :intersect, false}
+      | _schema: nil,
+        plan: {:set_operation, left.plan, right.plan, :intersect, false}
     }
   end
 
@@ -610,7 +616,8 @@ defmodule SparkEx.DataFrame do
 
     %__MODULE__{
       left
-      | plan: {:set_operation, left.plan, right.plan, :except, false}
+      | _schema: nil,
+        plan: {:set_operation, left.plan, right.plan, :except, false}
     }
   end
 
@@ -632,7 +639,7 @@ defmodule SparkEx.DataFrame do
     end
 
     expr_nodes = Enum.map(exprs, fn e -> {:expr, e} end)
-    %__MODULE__{df | plan: {:project, df.plan, expr_nodes}}
+    %__MODULE__{df | _schema: nil, plan: {:project, df.plan, expr_nodes}}
   end
 
   def select_expr(%__MODULE__{} = df, expr) when is_binary(expr) do
@@ -662,7 +669,7 @@ defmodule SparkEx.DataFrame do
         %Column{expr: {:alias, _, _} = expr} -> expr
       end)
 
-    %__MODULE__{df | plan: {:with_columns, df.plan, aliases}}
+    %__MODULE__{df | _schema: nil, plan: {:with_columns, df.plan, aliases}}
   end
 
   def with_columns(%__MODULE__{} = df, columns) when is_map(columns) do
@@ -673,7 +680,7 @@ defmodule SparkEx.DataFrame do
         {name, value} when is_binary(name) -> {:alias, {:lit, value}, name}
       end)
 
-    %__MODULE__{df | plan: {:with_columns, df.plan, aliases}}
+    %__MODULE__{df | _schema: nil, plan: {:with_columns, df.plan, aliases}}
   end
 
   @doc """
@@ -689,7 +696,7 @@ defmodule SparkEx.DataFrame do
       raise ArgumentError, "column_names must all be strings"
     end
 
-    %__MODULE__{df | plan: {:to_df, df.plan, column_names}}
+    %__MODULE__{df | _schema: nil, plan: {:to_df, df.plan, column_names}}
   end
 
   @doc """
@@ -702,7 +709,7 @@ defmodule SparkEx.DataFrame do
   @spec with_column_renamed(t(), String.t(), String.t()) :: t()
   def with_column_renamed(%__MODULE__{} = df, existing, new_name)
       when is_binary(existing) and is_binary(new_name) do
-    %__MODULE__{df | plan: {:with_columns_renamed, df.plan, [{existing, new_name}]}}
+    %__MODULE__{df | _schema: nil, plan: {:with_columns_renamed, df.plan, [{existing, new_name}]}}
   end
 
   @doc """
@@ -718,7 +725,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec with_columns_renamed(t(), %{String.t() => String.t()} | (String.t() -> String.t())) :: t()
   def with_columns_renamed(%__MODULE__{} = df, rename_map) when is_map(rename_map) do
-    %__MODULE__{df | plan: {:with_columns_renamed, df.plan, Map.to_list(rename_map)}}
+    %__MODULE__{df | _schema: nil, plan: {:with_columns_renamed, df.plan, Map.to_list(rename_map)}}
   end
 
   def with_columns_renamed(%__MODULE__{} = df, rename_fun) when is_function(rename_fun, 1) do
@@ -736,7 +743,7 @@ defmodule SparkEx.DataFrame do
             end
           end)
 
-        %__MODULE__{df | plan: {:with_columns_renamed, df.plan, renames}}
+        %__MODULE__{df | _schema: nil, plan: {:with_columns_renamed, df.plan, renames}}
 
       {:error, reason} ->
         raise ArgumentError,
@@ -778,7 +785,8 @@ defmodule SparkEx.DataFrame do
 
     %__MODULE__{
       left
-      | plan:
+      | _schema: nil,
+        plan:
           {:set_operation, left.plan, right.plan, :union, true,
            by_name: true, allow_missing_columns: allow_missing}
     }
@@ -827,18 +835,18 @@ defmodule SparkEx.DataFrame do
 
   def repartition(%__MODULE__{} = df, cols, []) when is_list(cols) and cols != [] do
     exprs = Enum.map(cols, &normalize_column_expr/1)
-    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, exprs, nil}}
+    %__MODULE__{df | _schema: nil, plan: {:repartition_by_expression, df.plan, exprs, nil}}
   end
 
   def repartition(%__MODULE__{} = df, num_partitions, [])
       when is_integer(num_partitions) and num_partitions > 0 do
-    %__MODULE__{df | plan: {:repartition, df.plan, num_partitions, true}}
+    %__MODULE__{df | _schema: nil, plan: {:repartition, df.plan, num_partitions, true}}
   end
 
   def repartition(%__MODULE__{} = df, num_partitions, cols)
       when is_integer(num_partitions) and num_partitions > 0 and is_list(cols) do
     exprs = Enum.map(cols, &normalize_column_expr/1)
-    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, exprs, num_partitions}}
+    %__MODULE__{df | _schema: nil, plan: {:repartition_by_expression, df.plan, exprs, num_partitions}}
   end
 
   @doc """
@@ -850,7 +858,7 @@ defmodule SparkEx.DataFrame do
   def repartition_by_range(%__MODULE__{} = df, num_partitions, cols)
       when is_integer(num_partitions) and is_list(cols) do
     sort_exprs = Enum.map(cols, &normalize_sort_expr/1)
-    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, sort_exprs, num_partitions}}
+    %__MODULE__{df | _schema: nil, plan: {:repartition_by_expression, df.plan, sort_exprs, num_partitions}}
   end
 
   @doc """
@@ -863,7 +871,7 @@ defmodule SparkEx.DataFrame do
     end
 
     sort_exprs = Enum.map(cols, &normalize_sort_expr/1)
-    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, sort_exprs, nil}}
+    %__MODULE__{df | _schema: nil, plan: {:repartition_by_expression, df.plan, sort_exprs, nil}}
   end
 
   @doc """
@@ -876,7 +884,7 @@ defmodule SparkEx.DataFrame do
   @spec coalesce(t(), pos_integer()) :: t()
   def coalesce(%__MODULE__{} = df, num_partitions)
       when is_integer(num_partitions) and num_partitions > 0 do
-    %__MODULE__{df | plan: {:repartition, df.plan, num_partitions, false}}
+    %__MODULE__{df | _schema: nil, plan: {:repartition, df.plan, num_partitions, false}}
   end
 
   @doc """
@@ -946,7 +954,7 @@ defmodule SparkEx.DataFrame do
                 "ascending must be a boolean, a list of booleans, or nil, got: #{inspect(other)}"
       end
 
-    %__MODULE__{df | plan: {:sort, df.plan, sort_exprs, false}}
+    %__MODULE__{df | _schema: nil, plan: {:sort, df.plan, sort_exprs, false}}
   end
 
   # ── M10: Sampling ──
@@ -969,30 +977,37 @@ defmodule SparkEx.DataFrame do
 
   def sample(%__MODULE__{} = df, with_replacement, fraction, seed)
       when is_boolean(with_replacement) and is_float(fraction) and is_integer(seed) do
+    validate_sample_fraction!(fraction, with_replacement)
+
     %__MODULE__{
       df
-      | plan: {:sample, df.plan, 0.0, fraction, with_replacement, seed, false}
+      | _schema: nil,
+        plan: {:sample, df.plan, 0.0, fraction, with_replacement, seed, false}
     }
   end
 
   def sample(%__MODULE__{} = df, with_replacement, fraction, opts)
       when is_boolean(with_replacement) and is_float(fraction) and is_list(opts) do
+    validate_sample_fraction!(fraction, with_replacement)
     seed = normalize_sample_seed!(Keyword.get(opts, :seed, nil))
 
     %__MODULE__{
       df
-      | plan: {:sample, df.plan, 0.0, fraction, with_replacement, seed, false}
+      | _schema: nil,
+        plan: {:sample, df.plan, 0.0, fraction, with_replacement, seed, false}
     }
   end
 
   def sample(%__MODULE__{} = df, fraction, opts, _ignored)
       when is_float(fraction) and is_list(opts) do
     with_replacement = normalize_with_replacement!(Keyword.get(opts, :with_replacement, false))
+    validate_sample_fraction!(fraction, with_replacement)
     seed = normalize_sample_seed!(Keyword.get(opts, :seed, nil))
 
     %__MODULE__{
       df
-      | plan: {:sample, df.plan, 0.0, fraction, with_replacement, seed, false}
+      | _schema: nil,
+        plan: {:sample, df.plan, 0.0, fraction, with_replacement, seed, false}
     }
   end
 
@@ -1059,7 +1074,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec offset(t(), non_neg_integer()) :: t()
   def offset(%__MODULE__{} = df, n) when is_integer(n) and n >= 0 do
-    %__MODULE__{df | plan: {:offset, df.plan, n}}
+    %__MODULE__{df | _schema: nil, plan: {:offset, df.plan, n}}
   end
 
   @doc """
@@ -1081,7 +1096,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec tail_df(t(), non_neg_integer()) :: t()
   def tail_df(%__MODULE__{} = df, n) when is_integer(n) and n >= 0 do
-    %__MODULE__{df | plan: {:tail, df.plan, n}}
+    %__MODULE__{df | _schema: nil, plan: {:tail, df.plan, n}}
   end
 
   @doc """
@@ -1110,7 +1125,7 @@ defmodule SparkEx.DataFrame do
     ensure_observe_supported!(df)
     metric_exprs = Enum.map(exprs, &normalize_column_expr/1)
     SparkEx.Observation.register_observation(obs, metric_exprs)
-    %__MODULE__{df | plan: {:collect_metrics, df.plan, name, metric_exprs}}
+    %__MODULE__{df | _schema: nil, plan: {:collect_metrics, df.plan, name, metric_exprs}}
   end
 
   def observe(%__MODULE__{} = df, name, exprs) when is_binary(name) and is_list(exprs) do
@@ -1121,7 +1136,7 @@ defmodule SparkEx.DataFrame do
     ensure_observe_supported!(df)
     metric_exprs = Enum.map(exprs, &normalize_column_expr/1)
     SparkEx.Observation.register_metric_aliases(name, metric_exprs)
-    %__MODULE__{df | plan: {:collect_metrics, df.plan, name, metric_exprs}}
+    %__MODULE__{df | _schema: nil, plan: {:collect_metrics, df.plan, name, metric_exprs}}
   end
 
   @doc """
@@ -1191,7 +1206,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec hint(t(), String.t(), term()) :: t()
   def hint(%__MODULE__{} = df, name, parameters \\ []) when is_binary(name) do
-    %__MODULE__{df | plan: {:hint, df.plan, name, normalize_hint_parameters(parameters)}}
+    %__MODULE__{df | _schema: nil, plan: {:hint, df.plan, name, normalize_hint_parameters(parameters)}}
   end
 
   @doc """
@@ -1221,7 +1236,8 @@ defmodule SparkEx.DataFrame do
 
     %__MODULE__{
       df
-      | plan:
+      | _schema: nil,
+        plan:
           {:with_columns, df.plan, [{:alias, {:col, column_name}, column_name, metadata_json}]}
     }
   end
@@ -1244,7 +1260,7 @@ defmodule SparkEx.DataFrame do
       raise ArgumentError, "delay_threshold should not be empty or blank"
     end
 
-    %__MODULE__{df | plan: {:with_watermark, df.plan, event_time, delay_threshold}}
+    %__MODULE__{df | _schema: nil, plan: {:with_watermark, df.plan, event_time, delay_threshold}}
   end
 
   @doc """
@@ -1260,12 +1276,12 @@ defmodule SparkEx.DataFrame do
   def drop_duplicates(df, subset \\ nil)
 
   def drop_duplicates(%__MODULE__{} = df, nil) do
-    %__MODULE__{df | plan: {:deduplicate, df.plan, [], true}}
+    %__MODULE__{df | _schema: nil, plan: {:deduplicate, df.plan, [], true}}
   end
 
   def drop_duplicates(%__MODULE__{} = df, subset) when is_list(subset) do
     names = Enum.map(subset, &normalize_dedup_column/1)
-    %__MODULE__{df | plan: {:deduplicate, df.plan, names, false}}
+    %__MODULE__{df | _schema: nil, plan: {:deduplicate, df.plan, names, false}}
   end
 
   @doc """
@@ -1275,11 +1291,11 @@ defmodule SparkEx.DataFrame do
   def drop_duplicates_within_watermark(%__MODULE__{} = df, subset \\ []) when is_list(subset) do
     case subset do
       [] ->
-        %__MODULE__{df | plan: {:deduplicate, df.plan, [], true, true}}
+        %__MODULE__{df | _schema: nil, plan: {:deduplicate, df.plan, [], true, true}}
 
       cols ->
         names = Enum.map(cols, &normalize_dedup_column/1)
-        %__MODULE__{df | plan: {:deduplicate, df.plan, names, false, true}}
+        %__MODULE__{df | _schema: nil, plan: {:deduplicate, df.plan, names, false, true}}
     end
   end
 
@@ -1329,7 +1345,8 @@ defmodule SparkEx.DataFrame do
 
     %__MODULE__{
       df
-      | plan: {:unpivot, df.plan, id_exprs, value_exprs, variable_column_name, value_column_name}
+      | _schema: nil,
+        plan: {:unpivot, df.plan, id_exprs, value_exprs, variable_column_name, value_column_name}
     }
   end
 
@@ -1356,11 +1373,11 @@ defmodule SparkEx.DataFrame do
   def transpose(df, opts \\ [])
 
   def transpose(%__MODULE__{} = df, %Column{} = col) do
-    %__MODULE__{df | plan: {:transpose, df.plan, [col.expr]}}
+    %__MODULE__{df | _schema: nil, plan: {:transpose, df.plan, [col.expr]}}
   end
 
   def transpose(%__MODULE__{} = df, index_col) when is_binary(index_col) do
-    %__MODULE__{df | plan: {:transpose, df.plan, [{:col, index_col}]}}
+    %__MODULE__{df | _schema: nil, plan: {:transpose, df.plan, [{:col, index_col}]}}
   end
 
   def transpose(%__MODULE__{} = df, opts) when is_list(opts) do
@@ -1371,7 +1388,7 @@ defmodule SparkEx.DataFrame do
         normalize_transpose_index_columns(opts)
       end
 
-    %__MODULE__{df | plan: {:transpose, df.plan, index_columns}}
+    %__MODULE__{df | _schema: nil, plan: {:transpose, df.plan, index_columns}}
   end
 
   @doc """
@@ -1383,7 +1400,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec alias_(t(), String.t()) :: t()
   def alias_(%__MODULE__{} = df, name) when is_binary(name) do
-    %__MODULE__{df | plan: {:subquery_alias, df.plan, name}}
+    %__MODULE__{df | _schema: nil, plan: {:subquery_alias, df.plan, name}}
   end
 
   # ── M10: Convenience Aliases ──
@@ -1445,7 +1462,7 @@ defmodule SparkEx.DataFrame do
           t()
   def parse(%__MODULE__{} = df, format, schema \\ nil, options \\ nil)
       when format in [:csv, :json] do
-    %__MODULE__{df | plan: {:parse, df.plan, format, schema, options}}
+    %__MODULE__{df | _schema: nil, plan: {:parse, df.plan, format, schema, options}}
   end
 
   @doc """
@@ -1460,7 +1477,7 @@ defmodule SparkEx.DataFrame do
   @spec to_json_rows(t()) :: t()
   def to_json_rows(%__MODULE__{} = df) do
     to_json_expr = {:fn, "to_json", [{:fn, "struct", [{:star, nil, df.plan}], false}], false}
-    %__MODULE__{df | plan: {:project, df.plan, [{:alias, to_json_expr, "value"}]}}
+    %__MODULE__{df | _schema: nil, plan: {:project, df.plan, [{:alias, to_json_expr, "value"}]}}
   end
 
   @doc """
@@ -1477,7 +1494,7 @@ defmodule SparkEx.DataFrame do
   def repartition_by_id(%__MODULE__{} = df, num_partitions, col)
       when is_integer(num_partitions) and num_partitions > 0 do
     col_expr = {:direct_shuffle_partition_id, normalize_column_expr(col)}
-    %__MODULE__{df | plan: {:repartition_by_expression, df.plan, [col_expr], num_partitions}}
+    %__MODULE__{df | _schema: nil, plan: {:repartition_by_expression, df.plan, [col_expr], num_partitions}}
   end
 
   def repartition_by_id(%__MODULE__{}, num_partitions, _col) do
@@ -1775,7 +1792,7 @@ defmodule SparkEx.DataFrame do
         {:ok, {:checkpoint, %Spark.Connect.CheckpointCommandResult{relation: relation}}} ->
           case relation do
             %{relation_id: relation_id} when is_binary(relation_id) and relation_id != "" ->
-              %__MODULE__{df | plan: {:cached_remote_relation, relation_id}}
+              %__MODULE__{df | _schema: nil, plan: {:cached_remote_relation, relation_id}}
 
             _ ->
               {:error, {:unexpected_result, :missing_checkpoint_relation}}
@@ -1815,7 +1832,7 @@ defmodule SparkEx.DataFrame do
         {:ok, {:checkpoint, %Spark.Connect.CheckpointCommandResult{relation: relation}}} ->
           case relation do
             %{relation_id: relation_id} when is_binary(relation_id) and relation_id != "" ->
-              %__MODULE__{df | plan: {:cached_remote_relation, relation_id}}
+              %__MODULE__{df | _schema: nil, plan: {:cached_remote_relation, relation_id}}
 
             _ ->
               {:error, {:unexpected_result, :missing_checkpoint_relation}}
@@ -1851,7 +1868,7 @@ defmodule SparkEx.DataFrame do
             "expected schema to be a DDL string, Spark DataType, or SparkEx.Types struct, got: #{inspect(schema)}"
     end
 
-    %__MODULE__{df | plan: {:to_schema, df.plan, schema}}
+    %__MODULE__{df | _schema: nil, plan: {:to_schema, df.plan, schema}}
   end
 
   @doc """
@@ -1979,10 +1996,19 @@ defmodule SparkEx.DataFrame do
   defp collect_as_map_columns(_), do: {:error, :collect_as_map_requires_two_columns}
 
   @doc """
-  Applies a function to each row on the driver.
+  Applies a function to each row on the **driver**.
+
+  Unlike PySpark's `DataFrame.foreach`, this does not run on Spark
+  executors. SparkEx cannot ship arbitrary Elixir functions to the JVM,
+  so the DataFrame is collected to the driver and the function is
+  applied to each row locally. The `_local` suffix is intentional —
+  callers should be aware of the memory and performance implications
+  versus a true distributed `foreach`.
+
+  For partition-shaped iteration use `foreach_partition_local/3`.
   """
-  @spec foreach(t(), (map() -> term()), keyword()) :: :ok | {:error, term()}
-  def foreach(%__MODULE__{} = df, fun, opts \\ []) when is_function(fun, 1) do
+  @spec foreach_local(t(), (map() -> term()), keyword()) :: :ok | {:error, term()}
+  def foreach_local(%__MODULE__{} = df, fun, opts \\ []) when is_function(fun, 1) do
     case collect(df, opts) do
       {:ok, rows} ->
         Enum.each(rows, fun)
@@ -1994,10 +2020,18 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
-  Applies a function to each partition (driver-side shim).
+  Applies a function to all collected rows as a single partition on the
+  **driver**.
+
+  Like `foreach_local/3`, this is not a distributed operation: the
+  DataFrame is collected to the driver and the user function receives
+  the rows as a single enumerable. The Spark Connect proto only
+  supports a `MapPartitions` relation when the mapper is a Java or
+  Python UDF, which SparkEx cannot supply.
   """
-  @spec foreach_partition(t(), (Enumerable.t() -> term()), keyword()) :: :ok | {:error, term()}
-  def foreach_partition(%__MODULE__{} = df, fun, opts \\ []) when is_function(fun, 1) do
+  @spec foreach_partition_local(t(), (Enumerable.t() -> term()), keyword()) ::
+          :ok | {:error, term()}
+  def foreach_partition_local(%__MODULE__{} = df, fun, opts \\ []) when is_function(fun, 1) do
     case collect(df, opts) do
       {:ok, rows} ->
         fun.(rows)
@@ -2044,10 +2078,19 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
-  Returns the number of partitions in the underlying RDD.
+  Approximate count of partitions in the underlying RDD.
+
+  Spark Connect does not expose the planned partition count via
+  AnalyzePlan, so this is computed by counting distinct values of
+  `spark_partition_id()` over the data. **Empty partitions are not
+  observed** by this query and therefore the result can undercount the
+  true planned partition count.
+
+  This is the closest portable approximation the Connect protocol
+  affords; for exact counts use the classic Spark driver API.
   """
-  @spec rdd_num_partitions(t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def rdd_num_partitions(%__MODULE__{} = df) do
+  @spec rdd_num_partitions_approx(t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def rdd_num_partitions_approx(%__MODULE__{} = df) do
     partition_id = %Column{expr: {:fn, "spark_partition_id", [], false}}
 
     df
@@ -2067,10 +2110,37 @@ defmodule SparkEx.DataFrame do
 
   @doc """
   Returns the schema of the DataFrame via AnalyzePlan.
+
+  If a cached schema is present (see `prefetch_schema/1`), it is
+  returned without a round-trip to the server.
   """
   @spec schema(t()) :: {:ok, term()} | {:error, term()}
+  def schema(%__MODULE__{_schema: cached}) when not is_nil(cached) do
+    {:ok, cached}
+  end
+
   def schema(%__MODULE__{} = df) do
     SparkEx.Session.analyze_schema(df.session, df.plan)
+  end
+
+  @doc """
+  Returns the DataFrame with its schema fetched and cached on the
+  struct's `:_schema` slot.
+
+  Subsequent calls to `schema/1`, `columns/1`, `dtypes/1`, etc. on the
+  returned DataFrame skip the analyze round-trip. Any transform
+  produces a new DataFrame whose cache is reset to `nil`.
+  """
+  @spec prefetch_schema(t()) :: {:ok, t()} | {:error, term()}
+  def prefetch_schema(%__MODULE__{_schema: cached} = df) when not is_nil(cached) do
+    {:ok, df}
+  end
+
+  def prefetch_schema(%__MODULE__{} = df) do
+    case SparkEx.Session.analyze_schema(df.session, df.plan) do
+      {:ok, schema} -> {:ok, %__MODULE__{df | _schema: schema}}
+      {:error, _} = error -> error
+    end
   end
 
   @doc """
@@ -2449,7 +2519,17 @@ defmodule SparkEx.DataFrame do
   defp unwrap_single_list_parameter([single]) when is_list(single), do: single
   defp unwrap_single_list_parameter(other), do: other
 
-  defp primitive_hint?(v), do: is_binary(v) or is_integer(v) or is_float(v)
+  defp primitive_hint?(%Decimal{}), do: true
+  defp primitive_hint?(v) when is_binary(v) or is_integer(v) or is_float(v), do: true
+
+  defp primitive_hint?(v) when is_list(v) do
+    Enum.all?(v, fn
+      %Column{} -> true
+      elem -> primitive_hint?(elem)
+    end)
+  end
+
+  defp primitive_hint?(_), do: false
 
   defp normalize_to_column(%Column{} = col), do: col
   defp normalize_to_column(name) when is_binary(name), do: %Column{expr: {:col, name}}
@@ -2534,6 +2614,20 @@ defmodule SparkEx.DataFrame do
   defp normalize_with_replacement!(value) do
     raise ArgumentError,
           "expected :with_replacement to be a boolean, got: #{inspect(value)}"
+  end
+
+  defp validate_sample_fraction!(fraction, true) when fraction >= 0.0, do: :ok
+  defp validate_sample_fraction!(fraction, false) when fraction >= 0.0 and fraction <= 1.0,
+    do: :ok
+
+  defp validate_sample_fraction!(fraction, true) do
+    raise ArgumentError,
+          "sample fraction must be >= 0 when with_replacement is true, got: #{inspect(fraction)}"
+  end
+
+  defp validate_sample_fraction!(fraction, false) do
+    raise ArgumentError,
+          "sample fraction must be in [0, 1] when with_replacement is false, got: #{inspect(fraction)}"
   end
 
   defp fetch_non_neg_integer_option(opts, key, default) do

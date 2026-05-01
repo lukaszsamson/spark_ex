@@ -75,11 +75,18 @@ defmodule SparkEx.MergeIntoWriter do
   @doc """
   Updates specific columns of matched rows.
 
-  `assignments` is a map of `%{"target_col" => Column.t()}`.
+  `assignments` is a `%{"target_col" => Column.t()}` map or a keyword
+  list of `{"target_col", Column.t()}` pairs. Map inputs are sorted by
+  column name to give a deterministic encoding order; pass a keyword
+  list when you need to control the assignment order yourself.
   """
-  @spec when_matched_update(t(), %{String.t() => Column.t()}, Column.t() | nil) :: t()
+  @spec when_matched_update(
+          t(),
+          %{String.t() => Column.t()} | [{String.t(), Column.t()}],
+          Column.t() | nil
+        ) :: t()
   def when_matched_update(%__MODULE__{} = m, assignments, condition \\ nil)
-      when is_map(assignments) do
+      when is_map(assignments) or is_list(assignments) do
     action = {:update, normalize_condition(condition), normalize_assignments(assignments)}
     %{m | match_actions: [action | m.match_actions]}
   end
@@ -96,11 +103,17 @@ defmodule SparkEx.MergeIntoWriter do
   @doc """
   Inserts specific columns for non-matched source rows.
 
-  `assignments` is a map of `%{"target_col" => Column.t()}`.
+  `assignments` is a `%{"target_col" => Column.t()}` map or a keyword
+  list of `{"target_col", Column.t()}` pairs. See `when_matched_update/3`
+  for ordering details.
   """
-  @spec when_not_matched_insert(t(), %{String.t() => Column.t()}, Column.t() | nil) :: t()
+  @spec when_not_matched_insert(
+          t(),
+          %{String.t() => Column.t()} | [{String.t(), Column.t()}],
+          Column.t() | nil
+        ) :: t()
   def when_not_matched_insert(%__MODULE__{} = m, assignments, condition \\ nil)
-      when is_map(assignments) do
+      when is_map(assignments) or is_list(assignments) do
     action = {:insert, normalize_condition(condition), normalize_assignments(assignments)}
     %{m | not_matched_actions: [action | m.not_matched_actions]}
   end
@@ -124,12 +137,17 @@ defmodule SparkEx.MergeIntoWriter do
   @doc """
   Updates specific columns of target rows not matched by source.
 
-  `assignments` is a map of `%{"target_col" => Column.t()}`.
+  `assignments` is a `%{"target_col" => Column.t()}` map or a keyword
+  list of `{"target_col", Column.t()}` pairs. See `when_matched_update/3`
+  for ordering details.
   """
-  @spec when_not_matched_by_source_update(t(), %{String.t() => Column.t()}, Column.t() | nil) ::
-          t()
+  @spec when_not_matched_by_source_update(
+          t(),
+          %{String.t() => Column.t()} | [{String.t(), Column.t()}],
+          Column.t() | nil
+        ) :: t()
   def when_not_matched_by_source_update(%__MODULE__{} = m, assignments, condition \\ nil)
-      when is_map(assignments) do
+      when is_map(assignments) or is_list(assignments) do
     action = {:update, normalize_condition(condition), normalize_assignments(assignments)}
     %{m | not_matched_by_source_actions: [action | m.not_matched_by_source_actions]}
   end
@@ -165,13 +183,27 @@ defmodule SparkEx.MergeIntoWriter do
   defp normalize_condition(%Column{expr: e}), do: e
 
   defp normalize_assignments(assignments) when is_map(assignments) do
-    Enum.map(assignments, fn
+    assignments
+    |> Enum.sort_by(fn {col_name, _} -> col_name end)
+    |> normalize_assignment_pairs()
+  end
+
+  defp normalize_assignments(assignments) when is_list(assignments) do
+    normalize_assignment_pairs(assignments)
+  end
+
+  defp normalize_assignment_pairs(pairs) do
+    Enum.map(pairs, fn
       {col_name, %Column{expr: value_expr}} when is_binary(col_name) ->
         {{:col, col_name}, value_expr}
 
-      {col_name, _} when not is_binary(col_name) ->
+      {col_name, _value} when not is_binary(col_name) ->
         raise ArgumentError,
               "merge assignment keys must be strings, got: #{inspect(col_name)}"
+
+      {col_name, other} ->
+        raise ArgumentError,
+              "merge assignment for #{inspect(col_name)} must be a SparkEx.Column, got: #{inspect(other)}"
     end)
   end
 end

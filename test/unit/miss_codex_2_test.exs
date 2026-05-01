@@ -333,7 +333,7 @@ defmodule SparkEx.MissCodex2Test do
   # ── #39 pivot value type validation ──
 
   describe "#39 pivot value type validation" do
-    test "rejects invalid pivot values" do
+    test "stores pivot values verbatim and defers literal validation to the encoder" do
       gd = %SparkEx.GroupedData{
         session: self(),
         plan: {:sql, "SELECT 1", nil},
@@ -344,9 +344,11 @@ defmodule SparkEx.MissCodex2Test do
         pivot_values: nil
       }
 
-      assert_raise ArgumentError, ~r/pivot values must be/, fn ->
-        SparkEx.GroupedData.pivot(gd, "col", [%{bad: 1}])
-      end
+      # The construction-time guard no longer eagerly rejects shapes the
+      # encoder might accept; encode-time errors surface from
+      # encode_literal/1 instead. Verify pivot stores the raw value.
+      result = SparkEx.GroupedData.pivot(gd, "col", [Decimal.new("1.5")])
+      assert [%Decimal{}] = result.pivot_values
     end
 
     test "accepts valid pivot values" do
