@@ -3,6 +3,7 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   alias Spark.Connect.ExecutePlanResponse
   alias SparkEx.Connect.Errors
+  alias SparkEx.Connect.SessionIntegrity
   alias SparkEx.Connect.TypeMapper
 
   @type decode_result :: %{
@@ -68,79 +69,83 @@ defmodule SparkEx.Connect.ResultDecoder do
     result =
       Enum.reduce_while(stream, {:ok, state}, fn
         {:ok, %ExecutePlanResponse{} = resp}, {:ok, state} ->
-          state = %{
-            state
-            | server_side_session_id: resp.server_side_session_id || state.server_side_session_id
-          }
+          case check_response_integrity(resp, session, state) do
+            {:ok, state} ->
+              state = if resp.schema, do: %{state | schema: resp.schema}, else: state
 
-          state = if resp.schema, do: %{state | schema: resp.schema}, else: state
+              observed_metrics =
+                merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
 
-          observed_metrics = merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
-          execution_metrics = merge_execution_metrics(state.execution_metrics, resp.metrics)
+              execution_metrics =
+                merge_execution_metrics(state.execution_metrics, resp.metrics)
 
-          state = %{
-            state
-            | observed_metrics: observed_metrics,
-              execution_metrics: execution_metrics
-          }
+              state = %{
+                state
+                | observed_metrics: observed_metrics,
+                  execution_metrics: execution_metrics
+              }
 
-          case resp.response_type do
-            {:arrow_batch, batch} ->
-              case handle_arrow_batch(state, batch) do
-                {:ok, state} -> {:cont, {:ok, state}}
-                {:error, _} = error -> {:halt, error}
+              case resp.response_type do
+                {:arrow_batch, batch} ->
+                  case handle_arrow_batch(state, batch) do
+                    {:ok, state} -> {:cont, {:ok, state}}
+                    {:error, _} = error -> {:halt, error}
+                  end
+
+                {:result_complete, _} ->
+                  {:cont, {:ok, state}}
+
+                {:sql_command_result, _} ->
+                  {:cont, {:ok, state}}
+
+                {:write_stream_operation_start_result, result} ->
+                  {:cont, {:ok, %{state | command_result: {:write_stream_start, result}}}}
+
+                {:streaming_query_command_result, result} ->
+                  {:cont, {:ok, %{state | command_result: {:streaming_query, result}}}}
+
+                {:streaming_query_manager_command_result, result} ->
+                  {:cont, {:ok, %{state | command_result: {:streaming_query_manager, result}}}}
+
+                {:streaming_query_listener_events_result, result} ->
+                  {:cont, {:ok, %{state | command_result: {:listener_events, result}}}}
+
+                {:checkpoint_command_result, result} ->
+                  {:cont, {:ok, %{state | command_result: {:checkpoint, result}}}}
+
+                {:execution_progress, progress} ->
+                  :telemetry.execute(
+                    [:spark_ex, :result, :progress],
+                    %{num_inflight_tasks: progress.num_inflight_tasks || 0},
+                    %{
+                      session_id: session && session.session_id,
+                      stages:
+                        Enum.map(progress.stages || [], fn stage ->
+                          %{
+                            stage_id: stage.stage_id,
+                            num_tasks: stage.num_tasks,
+                            num_completed_tasks: stage.num_completed_tasks,
+                            input_bytes_read: stage.input_bytes_read,
+                            done: stage.done
+                          }
+                        end)
+                    }
+                  )
+
+                  {:cont, {:ok, state}}
+
+                {:metrics, _} ->
+                  {:cont, {:ok, state}}
+
+                nil ->
+                  {:cont, {:ok, state}}
+
+                _other ->
+                  {:cont, {:ok, state}}
               end
 
-            {:result_complete, _} ->
-              {:cont, {:ok, state}}
-
-            {:sql_command_result, _} ->
-              {:cont, {:ok, state}}
-
-            {:write_stream_operation_start_result, result} ->
-              {:cont, {:ok, %{state | command_result: {:write_stream_start, result}}}}
-
-            {:streaming_query_command_result, result} ->
-              {:cont, {:ok, %{state | command_result: {:streaming_query, result}}}}
-
-            {:streaming_query_manager_command_result, result} ->
-              {:cont, {:ok, %{state | command_result: {:streaming_query_manager, result}}}}
-
-            {:streaming_query_listener_events_result, result} ->
-              {:cont, {:ok, %{state | command_result: {:listener_events, result}}}}
-
-            {:checkpoint_command_result, result} ->
-              {:cont, {:ok, %{state | command_result: {:checkpoint, result}}}}
-
-            {:execution_progress, progress} ->
-              :telemetry.execute(
-                [:spark_ex, :result, :progress],
-                %{num_inflight_tasks: progress.num_inflight_tasks || 0},
-                %{
-                  session_id: session && session.session_id,
-                  stages:
-                    Enum.map(progress.stages || [], fn stage ->
-                      %{
-                        stage_id: stage.stage_id,
-                        num_tasks: stage.num_tasks,
-                        num_completed_tasks: stage.num_completed_tasks,
-                        input_bytes_read: stage.input_bytes_read,
-                        done: stage.done
-                      }
-                    end)
-                }
-              )
-
-              {:cont, {:ok, state}}
-
-            {:metrics, _} ->
-              {:cont, {:ok, state}}
-
-            nil ->
-              {:cont, {:ok, state}}
-
-            _other ->
-              {:cont, {:ok, state}}
+            {:error, _} = error ->
+              {:halt, error}
           end
 
         {:error, %GRPC.RPCError{} = error}, {:ok, _state} ->
@@ -272,52 +277,56 @@ defmodule SparkEx.Connect.ResultDecoder do
     result =
       Enum.reduce_while(stream, {:ok, state}, fn
         {:ok, %ExecutePlanResponse{} = resp}, {:ok, state} ->
-          state = %{
-            state
-            | server_side_session_id: resp.server_side_session_id || state.server_side_session_id
-          }
+          case check_response_integrity(resp, session, state) do
+            {:ok, state} ->
+              state = if resp.schema, do: %{state | schema: resp.schema}, else: state
 
-          state = if resp.schema, do: %{state | schema: resp.schema}, else: state
+              observed_metrics =
+                merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
 
-          observed_metrics = merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
-          execution_metrics = merge_execution_metrics(state.execution_metrics, resp.metrics)
+              execution_metrics =
+                merge_execution_metrics(state.execution_metrics, resp.metrics)
 
-          state = %{
-            state
-            | observed_metrics: observed_metrics,
-              execution_metrics: execution_metrics
-          }
+              state = %{
+                state
+                | observed_metrics: observed_metrics,
+                  execution_metrics: execution_metrics
+              }
 
-          case resp.response_type do
-            {:arrow_batch, batch} ->
-              case handle_arrow_batch_explorer(state, batch) do
-                {:ok, state} -> {:cont, {:ok, state}}
-                {:error, _} = error -> {:halt, error}
+              case resp.response_type do
+                {:arrow_batch, batch} ->
+                  case handle_arrow_batch_explorer(state, batch) do
+                    {:ok, state} -> {:cont, {:ok, state}}
+                    {:error, _} = error -> {:halt, error}
+                  end
+
+                {:execution_progress, progress} ->
+                  :telemetry.execute(
+                    [:spark_ex, :result, :progress],
+                    %{num_inflight_tasks: progress.num_inflight_tasks || 0},
+                    %{
+                      session_id: session && session.session_id,
+                      stages:
+                        Enum.map(progress.stages || [], fn stage ->
+                          %{
+                            stage_id: stage.stage_id,
+                            num_tasks: stage.num_tasks,
+                            num_completed_tasks: stage.num_completed_tasks,
+                            input_bytes_read: stage.input_bytes_read,
+                            done: stage.done
+                          }
+                        end)
+                    }
+                  )
+
+                  {:cont, {:ok, state}}
+
+                _ ->
+                  {:cont, {:ok, state}}
               end
 
-            {:execution_progress, progress} ->
-              :telemetry.execute(
-                [:spark_ex, :result, :progress],
-                %{num_inflight_tasks: progress.num_inflight_tasks || 0},
-                %{
-                  session_id: session && session.session_id,
-                  stages:
-                    Enum.map(progress.stages || [], fn stage ->
-                      %{
-                        stage_id: stage.stage_id,
-                        num_tasks: stage.num_tasks,
-                        num_completed_tasks: stage.num_completed_tasks,
-                        input_bytes_read: stage.input_bytes_read,
-                        done: stage.done
-                      }
-                    end)
-                }
-              )
-
-              {:cont, {:ok, state}}
-
-            _ ->
-              {:cont, {:ok, state}}
+            {:error, _} = error ->
+              {:halt, error}
           end
 
         {:error, %GRPC.RPCError{} = error}, {:ok, _state} ->
@@ -391,40 +400,49 @@ defmodule SparkEx.Connect.ResultDecoder do
     result =
       Enum.reduce_while(stream, {:ok, state}, fn
         {:ok, %ExecutePlanResponse{} = resp}, {:ok, state} ->
-          state = maybe_set_schema(state, resp.schema)
-          state = maybe_set_server_session(state, resp)
-          observed_metrics = merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
-          execution_metrics = merge_execution_metrics(state.execution_metrics, resp.metrics)
+          case check_response_integrity(resp, session, state) do
+            {:ok, state} ->
+              state = maybe_set_schema(state, resp.schema)
 
-          state = %{
-            state
-            | observed_metrics: observed_metrics,
-              execution_metrics: execution_metrics
-          }
+              observed_metrics =
+                merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
 
-          case resp.response_type do
-            {:arrow_batch, %ExecutePlanResponse.ArrowBatch{} = batch} ->
-              case handle_arrow_batch_arrow(state, batch) do
-                {:ok, state} -> {:cont, {:ok, state}}
-                {:error, _} = error -> {:halt, error}
+              execution_metrics =
+                merge_execution_metrics(state.execution_metrics, resp.metrics)
+
+              state = %{
+                state
+                | observed_metrics: observed_metrics,
+                  execution_metrics: execution_metrics
+              }
+
+              case resp.response_type do
+                {:arrow_batch, %ExecutePlanResponse.ArrowBatch{} = batch} ->
+                  case handle_arrow_batch_arrow(state, batch) do
+                    {:ok, state} -> {:cont, {:ok, state}}
+                    {:error, _} = error -> {:halt, error}
+                  end
+
+                {:result_complete, _} ->
+                  case state.current_chunked_batch do
+                    nil ->
+                      arrow_state =
+                        state
+                        |> Map.put_new(:arrow_parts, [])
+                        |> Map.put(:current_chunked_batch, nil)
+
+                      {:halt, finalize_arrow_result(arrow_state)}
+
+                    current ->
+                      {:halt, {:error, incomplete_arrow_batch_error(current)}}
+                  end
+
+                _ ->
+                  {:cont, {:ok, state}}
               end
 
-            {:result_complete, _} ->
-              case state.current_chunked_batch do
-                nil ->
-                  arrow_state =
-                    state
-                    |> Map.put_new(:arrow_parts, [])
-                    |> Map.put(:current_chunked_batch, nil)
-
-                  {:halt, finalize_arrow_result(arrow_state)}
-
-                current ->
-                  {:halt, {:error, incomplete_arrow_batch_error(current)}}
-              end
-
-            _ ->
-              {:cont, {:ok, state}}
+            {:error, _} = error ->
+              {:halt, error}
           end
 
         {:error, %GRPC.RPCError{} = error}, {:ok, _state} ->
@@ -677,6 +695,41 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp incomplete_arrow_batch_error(current) do
     {:incomplete_arrow_batch,
      %{expected_chunks: current.expected_chunks, received_chunks: length(current.parts)}}
+  end
+
+  # Validates the per-response session integrity invariants and updates
+  # the running server-side-session-id pin in the decoder state.
+  #
+  # Returns `{:ok, state}` (with `server_side_session_id` populated when
+  # the response carries one) or `{:error, reason}` to halt the stream.
+  # When `session` is `nil` (used by tests / the bare 1-arity entrypoint)
+  # the cross-session checks are skipped.
+  defp check_response_integrity(resp, session, state) do
+    response_server_id = Map.get(resp, :server_side_session_id)
+
+    case do_validate(resp, session, state) do
+      :ok ->
+        new_state_server_id =
+          response_server_id || state.server_side_session_id
+
+        {:ok, %{state | server_side_session_id: new_state_server_id}}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp do_validate(_resp, nil, _state), do: :ok
+
+  defp do_validate(resp, %{} = session, state) do
+    with :ok <- SessionIntegrity.validate_session_id(resp, session) do
+      baseline = session.server_side_session_id || state.server_side_session_id
+
+      case SessionIntegrity.validate_server_session_id(resp.server_side_session_id, baseline) do
+        {:ok, _} -> :ok
+        {:error, _} = error -> error
+      end
+    end
   end
 
   defp maybe_set_schema(state, nil), do: state
