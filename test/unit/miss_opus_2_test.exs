@@ -1695,8 +1695,7 @@ defmodule SparkEx.MissOpus2Test do
       result = DataFrame.repartition_by_id(df, 10, "col1")
 
       assert %DataFrame{
-               plan:
-                 {:repartition_by_expression, _, [{:direct_shuffle_partition_id, _}], 10}
+               plan: {:repartition_by_expression, _, [{:direct_shuffle_partition_id, _}], 10}
              } = result
     end
 

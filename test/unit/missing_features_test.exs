@@ -729,8 +729,8 @@ defmodule SparkEx.MissingFeaturesTest do
 
       assert %DataFrame{
                plan:
-                 {:repartition_by_expression, _,
-                  [{:direct_shuffle_partition_id, {:col, "part"}}], 4}
+                 {:repartition_by_expression, _, [{:direct_shuffle_partition_id, {:col, "part"}}],
+                  4}
              } = result
     end
 
