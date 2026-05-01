@@ -17,6 +17,7 @@ defmodule SparkEx.Connect.RetryTest do
         max_retries: 3,
         initial_backoff_ms: 10,
         max_backoff_ms: 40,
+        backoff_multiplier: 2.0,
         jitter_fun: jitter_fun,
         sleep_fun: sleep_fun
       }
@@ -70,6 +71,7 @@ defmodule SparkEx.Connect.RetryTest do
         max_retries: 2,
         initial_backoff_ms: 5,
         max_backoff_ms: 20,
+        backoff_multiplier: 2.0,
         jitter_fun: jitter_fun,
         sleep_fun: sleep_fun
       }
@@ -104,6 +106,7 @@ defmodule SparkEx.Connect.RetryTest do
         max_retries: 5,
         initial_backoff_ms: 10,
         max_backoff_ms: 80,
+        backoff_multiplier: 2.0,
         jitter_fun: jitter_fun,
         sleep_fun: sleep_fun
       }
@@ -134,6 +137,102 @@ defmodule SparkEx.Connect.RetryTest do
     assert_received {:slept, 40}
     assert_received {:slept, 80}
     assert_received {:slept, 80}
+  end
+
+  test "does not retry DEADLINE_EXCEEDED" do
+    sleep_fun = fn _ms -> flunk("sleep should not be called") end
+
+    on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
+    SparkEx.RetryPolicyRegistry.set_policies(retry: %{sleep_fun: sleep_fun})
+
+    result =
+      Client.retry_with_backoff(fn ->
+        {:error, %Remote{message: "deadline exceeded", grpc_status: 4}}
+      end)
+
+    assert {:error, %Remote{grpc_status: 4}} = result
+  end
+
+  test "retries INTERNAL with INVALID_CURSOR.DISCONNECTED error class" do
+    parent = self()
+    sleep_fun = fn ms -> send(parent, {:slept, ms}) end
+
+    on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
+
+    SparkEx.RetryPolicyRegistry.set_policies(
+      retry: %{
+        max_retries: 1,
+        initial_backoff_ms: 1,
+        max_backoff_ms: 1,
+        sleep_fun: sleep_fun
+      }
+    )
+
+    result =
+      Client.retry_with_backoff(fn ->
+        {:error,
+         %Remote{
+           message: "cursor dropped",
+           grpc_status: 13,
+           error_class: "INVALID_CURSOR.DISCONNECTED"
+         }}
+      end)
+
+    assert {:error, %Remote{grpc_status: 13}} = result
+    assert_received {:slept, _}
+  end
+
+  test "does not retry INTERNAL without INVALID_CURSOR.DISCONNECTED" do
+    sleep_fun = fn _ms -> flunk("sleep should not be called") end
+
+    on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
+    SparkEx.RetryPolicyRegistry.set_policies(retry: %{sleep_fun: sleep_fun})
+
+    result =
+      Client.retry_with_backoff(fn ->
+        {:error, %Remote{message: "internal", grpc_status: 13, error_class: "OTHER"}}
+      end)
+
+    assert {:error, %Remote{grpc_status: 13}} = result
+  end
+
+  test "retries when RetryInfo retry_delay_ms is set even on non-default status" do
+    parent = self()
+    sleep_fun = fn ms -> send(parent, {:slept, ms}) end
+
+    on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
+
+    SparkEx.RetryPolicyRegistry.set_policies(
+      retry: %{
+        max_retries: 1,
+        initial_backoff_ms: 1,
+        max_backoff_ms: 1,
+        sleep_fun: sleep_fun
+      }
+    )
+
+    result =
+      Client.retry_with_backoff(fn ->
+        {:error,
+         %Remote{
+           message: "resource exhausted",
+           grpc_status: 8,
+           retry_delay_ms: 25
+         }}
+      end)
+
+    assert {:error, %Remote{grpc_status: 8}} = result
+    assert_received {:slept, 25}
+  end
+
+  test "uses PySpark DefaultPolicy fields by default" do
+    policy = SparkEx.RetryPolicyRegistry.default_policy_template()
+    assert policy.max_retries == 15
+    assert policy.initial_backoff_ms == 50
+    assert policy.max_backoff_ms == 60_000
+    assert policy.backoff_multiplier == 4.0
+    assert policy.jitter_ms == 500
+    assert policy.min_jitter_threshold_ms == 2_000
   end
 
   test "caps retry_delay_ms using max_server_retry_delay" do

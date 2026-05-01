@@ -28,7 +28,8 @@ defmodule SparkEx.Session do
     plan_id_counter: 0,
     last_execution_metrics: %{},
     tags: [],
-    released: false
+    released: false,
+    closed: false
   ]
 
   @type t :: %__MODULE__{
@@ -43,7 +44,8 @@ defmodule SparkEx.Session do
           plan_id_counter: non_neg_integer(),
           last_execution_metrics: map(),
           tags: [String.t()],
-          released: boolean()
+          released: boolean(),
+          closed: boolean()
         }
 
   # --- Public API ---
@@ -866,6 +868,22 @@ defmodule SparkEx.Session do
     end
   end
 
+  # --- Closed guard: reject RPCs after server session change ---
+  # Allow :release_session, :get_state, :is_stopped, :get_session_id, :get_tags
+  # so callers can still introspect and dispose of the session cleanly.
+
+  def handle_call(msg, _from, %{closed: true} = state)
+      when msg not in [
+             :release_session,
+             :get_state,
+             :is_stopped,
+             :get_session_id,
+             :get_tags,
+             :last_execution_metrics
+           ] do
+    {:reply, {:error, :session_closed}, state}
+  end
+
   # --- Released guard: reject RPCs after session release ---
 
   def handle_call(_msg, _from, %{released: true} = state) do
@@ -1599,23 +1617,11 @@ defmodule SparkEx.Session do
 
   @doc false
   @spec safe_disconnect(term()) :: :ok
-  def safe_disconnect(%GRPC.Channel{} = channel) do
-    require Logger
-
-    if grpc_disconnect_bug_risk?(channel) do
-      Logger.warning(
-        "spark_ex session channel disconnect skipped due grpc connection state containing unresolved channels"
-      )
-
-      :ok
-    else
-      do_safe_disconnect(channel)
-    end
-  end
-
   def safe_disconnect(channel) do
     do_safe_disconnect(channel)
   end
+
+  defp do_safe_disconnect(nil), do: :ok
 
   defp do_safe_disconnect(channel) do
     require Logger
@@ -1642,35 +1648,6 @@ defmodule SparkEx.Session do
 
         :ok
     end
-  end
-
-  # grpc-elixir 0.11.5 can crash during disconnect when the connection manager
-  # state contains unresolved real_channels entries ({:error, reason}).
-  # Detect that shape and skip disconnect to avoid noisy error logs on release.
-  defp grpc_disconnect_bug_risk?(%GRPC.Channel{ref: ref}) when is_reference(ref) do
-    case :global.whereis_name({GRPC.Client.Connection, ref}) do
-      pid when is_pid(pid) ->
-        case safe_connection_state(pid) do
-          %{real_channels: real_channels} when is_map(real_channels) ->
-            Enum.any?(real_channels, fn {_k, value} -> match?({:error, _}, value) end)
-
-          _ ->
-            false
-        end
-
-      _ ->
-        false
-    end
-  end
-
-  defp grpc_disconnect_bug_risk?(_), do: false
-
-  defp safe_connection_state(pid) do
-    :sys.get_state(pid)
-  rescue
-    _ -> :unknown
-  catch
-    _, _ -> :unknown
   end
 
   # --- Private ---
@@ -2909,7 +2886,24 @@ defmodule SparkEx.Session do
   defp maybe_update_server_session(state, ""), do: state
 
   defp maybe_update_server_session(state, id) do
-    %{state | server_side_session_id: id}
+    case SparkEx.Connect.SessionIntegrity.validate_server_session_id(
+           id,
+           state.server_side_session_id
+         ) do
+      {:ok, ^id} ->
+        %{state | server_side_session_id: id}
+
+      {:ok, current} ->
+        %{state | server_side_session_id: current}
+
+      {:error, {:server_session_changed, ctx}} ->
+        Logger.warning(
+          "spark_ex session #{state.session_id} closed: server-side session id changed " <>
+            "(pinned=#{ctx.pinned}, got=#{ctx.got})"
+        )
+
+        %{state | closed: true}
+    end
   end
 
   @spark_ex_version Mix.Project.config()[:version]
@@ -3779,7 +3773,8 @@ defmodule SparkEx.Session do
   end
 
   defp resolve_session_identity(opts, connect_opts) do
-    user_id = Keyword.get(opts, :user_id) || Map.get(connect_opts, :user_id) || "spark_ex"
+    user_id =
+      Keyword.get(opts, :user_id) || Map.get(connect_opts, :user_id) || default_user_id()
 
     client_type =
       Keyword.get(opts, :client_type) || Map.get(connect_opts, :user_agent) ||
@@ -3794,6 +3789,25 @@ defmodule SparkEx.Session do
       {:error, {:invalid_session_id, session_id}}
     end
   end
+
+  # PySpark uses, in order: SPARK_USER → OS user → "anonymous". We follow the
+  # same precedence but fall back to "spark_ex" to preserve the historical
+  # behavior when no env hints are available.
+  defp default_user_id() do
+    case nonempty(System.get_env("SPARK_USER")) do
+      {:ok, value} ->
+        value
+
+      :empty ->
+        case nonempty(System.get_env("USER")) do
+          {:ok, value} -> value
+          :empty -> "spark_ex"
+        end
+    end
+  end
+
+  defp nonempty(value) when is_binary(value) and value != "", do: {:ok, value}
+  defp nonempty(_), do: :empty
 
   defp session_id_for(session) do
     if is_pid(session) do

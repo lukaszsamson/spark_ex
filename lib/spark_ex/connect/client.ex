@@ -43,8 +43,6 @@ defmodule SparkEx.Connect.Client do
   @status_not_found 5
 
   @artifact_chunk_size 32 * 1024
-  @release_checkpoint_max_concurrency 8
-  @release_checkpoint_timeout 15_000
   @release_execute_timeout 5_000
 
   # --- AnalyzePlan RPCs ---
@@ -1596,31 +1594,30 @@ defmodule SparkEx.Connect.Client do
 
   defp benign_release_execute_error?(_), do: false
 
+  # `until_response_id` is a checkpoint: it implicitly releases everything
+  # the server has produced up to and including that id. Only the last
+  # consumed (non-result_complete) response_id needs to be released —
+  # fanning out one ReleaseExecute per response is redundant work that the
+  # server interprets identically to a single call against the highest id.
   defp release_checkpoints_best_effort(release_execute_fun, responses) do
-    response_ids =
+    last_response_id =
       responses
       |> Enum.reject(fn resp -> match?({:result_complete, _}, resp.response_type) end)
       |> Enum.map(&response_id_or_nil(&1.response_id))
       |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
+      |> List.last()
 
-    case response_ids do
-      [] ->
+    case last_response_id do
+      nil ->
         :ok
 
-      ids ->
+      response_id ->
         Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
-          ids
-          |> Task.async_stream(
-            fn response_id ->
-              release_execute_fun.(until_response_id: response_id)
-            end,
-            max_concurrency: @release_checkpoint_max_concurrency,
-            ordered: false,
-            timeout: @release_checkpoint_timeout,
-            on_timeout: :kill_task
-          )
-          |> Stream.run()
+          try do
+            release_execute_fun.(until_response_id: response_id)
+          catch
+            _, _ -> :ok
+          end
         end)
 
         :ok
@@ -1692,13 +1689,7 @@ defmodule SparkEx.Connect.Client do
       telemetry_metadata
     )
 
-    computed_backoff =
-      backoff_ms(
-        attempt,
-        policy.initial_backoff_ms,
-        policy.max_backoff_ms,
-        policy.jitter_fun
-      )
+    computed_backoff = backoff_ms(attempt, policy)
 
     sleep_ms =
       case server_retry_delay_ms do
@@ -1711,6 +1702,15 @@ defmodule SparkEx.Connect.Client do
       end
 
     policy.sleep_fun.(sleep_ms)
+
+    # Graceful EOF is the server saying "no more data on this stream right
+    # now." It's not a transient failure, so it shouldn't consume the retry
+    # budget the same way — only count attempts caused by errors.
+    next_attempt =
+      case reason do
+        {:graceful_eof, _} -> attempt
+        _ -> attempt + 1
+      end
 
     case reattach_stream_fun.(final_last_id) do
       {:ok, new_stream} ->
@@ -1726,15 +1726,29 @@ defmodule SparkEx.Connect.Client do
           policy,
           all_items,
           final_last_id,
-          attempt + 1
+          next_attempt
         )
 
+      # Recover from missing operation/session by re-issuing ExecutePlan,
+      # *regardless of how many items have arrived* — once the operation is
+      # gone, partial progress is worthless and the only path forward is a
+      # fresh execution. Surface RESPONSE_ALREADY_RECEIVED separately so the
+      # caller knows the previous response was already consumed by another
+      # client and reattach is unrecoverable.
+      {:error,
+       %SparkEx.Error.Remote{error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED"} =
+           remote} ->
+        {:error, remote}
+
       {:error, %SparkEx.Error.Remote{} = remote}
-      when length(all_items) == 0 and
-             remote.error_class in [
-               "INVALID_HANDLE.OPERATION_NOT_FOUND",
-               "INVALID_HANDLE.SESSION_NOT_FOUND"
-             ] ->
+      when remote.error_class in [
+             "INVALID_HANDLE.OPERATION_NOT_FOUND",
+             "INVALID_HANDLE.SESSION_NOT_FOUND"
+           ] ->
+        # The operation/session is gone server-side. Whatever responses we
+        # already collected are now orphaned: re-issuing ExecutePlan will
+        # regenerate all of them, so we must drop our buffer to avoid
+        # duplicates. Reset `all_items` to [] and `final_last_id` to nil.
         case execute_stream_fun.(request, timeout) do
           {:ok, fresh_stream} ->
             collect_with_reattach(
@@ -1747,8 +1761,8 @@ defmodule SparkEx.Connect.Client do
               operation_id,
               timeout,
               policy,
-              all_items,
-              final_last_id,
+              [],
+              nil,
               attempt + 1
             )
 
@@ -1815,85 +1829,93 @@ defmodule SparkEx.Connect.Client do
   @spec retry_with_backoff((-> term()), keyword()) :: term()
   def retry_with_backoff(fun, opts \\ []) when is_function(fun, 0) do
     default_policy = RetryPolicyRegistry.policy(:retry)
+    policy = Map.merge(default_policy, opts |> Map.new() |> Map.take(Map.keys(default_policy)))
 
-    max_retries = Keyword.get(opts, :max_retries, default_policy.max_retries)
-    initial_backoff = Keyword.get(opts, :initial_backoff_ms, default_policy.initial_backoff_ms)
-    max_backoff = Keyword.get(opts, :max_backoff_ms, default_policy.max_backoff_ms)
-    sleep_fun = Keyword.get(opts, :sleep_fun, default_policy.sleep_fun)
-    jitter_fun = Keyword.get(opts, :jitter_fun, default_policy.jitter_fun)
-
-    max_server_retry_delay =
-      Keyword.get(opts, :max_server_retry_delay, default_policy.max_server_retry_delay)
-
-    do_retry(
-      fun,
-      0,
-      max_retries,
-      initial_backoff,
-      max_backoff,
-      sleep_fun,
-      jitter_fun,
-      max_server_retry_delay
-    )
+    do_retry(fun, 0, policy)
   end
 
-  defp do_retry(
-         fun,
-         attempt,
-         max_retries,
-         initial_backoff,
-         max_backoff,
-         sleep_fun,
-         jitter_fun,
-         max_server_retry_delay
-       ) do
+  defp do_retry(fun, attempt, policy) do
     case fun.() do
-      {:error, %SparkEx.Error.Remote{grpc_status: status} = error}
-      when status in [@status_unavailable, @status_deadline_exceeded] and
-             attempt < max_retries ->
-        sleep_ms =
-          backoff_with_retry_info(
-            attempt,
-            initial_backoff,
-            max_backoff,
-            max_server_retry_delay,
-            jitter_fun,
-            error.retry_delay_ms
+      {:error, %SparkEx.Error.Remote{} = error} = result ->
+        if attempt < policy.max_retries and retryable_error?(error) do
+          sleep_ms =
+            backoff_with_retry_info(
+              attempt,
+              policy,
+              error.retry_delay_ms
+            )
+
+          :telemetry.execute(
+            [:spark_ex, :retry, :attempt],
+            %{attempt: attempt + 1, backoff_ms: sleep_ms},
+            %{
+              grpc_status: error.grpc_status,
+              error: error,
+              max_retries: policy.max_retries,
+              retry_delay_ms: error.retry_delay_ms
+            }
           )
 
-        :telemetry.execute(
-          [:spark_ex, :retry, :attempt],
-          %{attempt: attempt + 1, backoff_ms: sleep_ms},
-          %{
-            grpc_status: status,
-            error: error,
-            max_retries: max_retries,
-            retry_delay_ms: error.retry_delay_ms
-          }
-        )
-
-        sleep_fun.(sleep_ms)
-
-        do_retry(
-          fun,
-          attempt + 1,
-          max_retries,
-          initial_backoff,
-          max_backoff,
-          sleep_fun,
-          jitter_fun,
-          max_server_retry_delay
-        )
+          policy.sleep_fun.(sleep_ms)
+          do_retry(fun, attempt + 1, policy)
+        else
+          result
+        end
 
       result ->
         result
     end
   end
 
-  defp backoff_ms(attempt, initial_backoff, max_backoff, jitter_fun) do
-    base = initial_backoff * Integer.pow(2, attempt)
-    capped = Kernel.min(base, max_backoff)
-    jitter_fun.(capped)
+  # PySpark DefaultPolicy retryable predicate.
+  # Retries:
+  #   * gRPC UNAVAILABLE
+  #   * gRPC INTERNAL with INVALID_CURSOR.DISCONNECTED errorClass
+  #   * Any error that carries a server-supplied retry_delay (RetryInfo)
+  # Explicitly does NOT retry DEADLINE_EXCEEDED — Spark client treats it as terminal.
+  @doc false
+  @spec retryable_error?(SparkEx.Error.Remote.t()) :: boolean()
+  def retryable_error?(%SparkEx.Error.Remote{} = error) do
+    cond do
+      is_integer(error.retry_delay_ms) and error.retry_delay_ms >= 0 ->
+        true
+
+      error.grpc_status == @status_unavailable ->
+        true
+
+      error.grpc_status == @status_internal and
+          error.error_class == "INVALID_CURSOR.DISCONNECTED" ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp backoff_ms(attempt, policy) do
+    multiplier = Map.get(policy, :backoff_multiplier, 2.0)
+    base = policy.initial_backoff_ms * :math.pow(multiplier, attempt)
+    capped = Kernel.min(round(base), policy.max_backoff_ms)
+    capped + jitter_amount(capped, policy)
+  end
+
+  defp jitter_amount(capped, policy) do
+    jitter_fun = Map.get(policy, :jitter_fun)
+    jitter_ms = Map.get(policy, :jitter_ms)
+    threshold = Map.get(policy, :min_jitter_threshold_ms, 0)
+
+    cond do
+      is_integer(jitter_ms) and capped >= threshold ->
+        :rand.uniform(jitter_ms + 1) - 1
+
+      is_function(jitter_fun, 1) and capped >= threshold ->
+        # Legacy callers may have configured jitter_fun directly; preserve
+        # behavior but only apply once we cross the threshold.
+        max(0, jitter_fun.(capped) - capped)
+
+      true ->
+        0
+    end
   end
 
   @retry_info_type_url "type.googleapis.com/google.rpc.RetryInfo"
@@ -1901,14 +1923,18 @@ defmodule SparkEx.Connect.Client do
   defp extract_server_retry_delay(%GRPC.RPCError{details: details}) when is_list(details) do
     Enum.find_value(details, nil, fn
       %Google.Protobuf.Any{type_url: @retry_info_type_url, value: value} ->
-        info = Protobuf.decode(value, Google.Rpc.RetryInfo)
+        case safe_decode_retry_info(value) do
+          {:ok, %Google.Rpc.RetryInfo{retry_delay: nil}} ->
+            0
 
-        case info.retry_delay do
-          %Google.Protobuf.Duration{seconds: seconds, nanos: nanos} ->
+          {:ok,
+           %Google.Rpc.RetryInfo{
+             retry_delay: %Google.Protobuf.Duration{seconds: seconds, nanos: nanos}
+           }} ->
             seconds * 1000 + div(nanos, 1_000_000)
 
-          nil ->
-            0
+          :error ->
+            nil
         end
 
       _ ->
@@ -1918,42 +1944,25 @@ defmodule SparkEx.Connect.Client do
 
   defp extract_server_retry_delay(_), do: nil
 
+  defp safe_decode_retry_info(value) do
+    {:ok, Protobuf.decode(value, Google.Rpc.RetryInfo)}
+  rescue
+    _ -> :error
+  end
+
   defp prepend_items(acc, items) do
     Enum.reduce(items, acc, fn item, rev_acc ->
       [item | rev_acc]
     end)
   end
 
-  defp backoff_with_retry_info(
-         attempt,
-         initial_backoff,
-         max_backoff,
-         max_server_retry_delay,
-         jitter_fun,
-         retry_delay_ms
-       )
-
-  defp backoff_with_retry_info(
-         _attempt,
-         _initial_backoff,
-         _max_backoff,
-         max_server_retry_delay,
-         _jitter_fun,
-         retry_delay_ms
-       )
+  defp backoff_with_retry_info(_attempt, policy, retry_delay_ms)
        when is_integer(retry_delay_ms) and retry_delay_ms > 0 do
-    Kernel.min(retry_delay_ms, max_server_retry_delay)
+    Kernel.min(retry_delay_ms, policy.max_server_retry_delay)
   end
 
-  defp backoff_with_retry_info(
-         attempt,
-         initial_backoff,
-         max_backoff,
-         _max_server_retry_delay,
-         jitter_fun,
-         _retry_delay_ms
-       ) do
-    backoff_ms(attempt, initial_backoff, max_backoff, jitter_fun)
+  defp backoff_with_retry_info(attempt, policy, _retry_delay_ms) do
+    backoff_ms(attempt, policy)
   end
 
   # --- Telemetry ---

@@ -30,6 +30,13 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
 
     @impl true
     def init(state), do: {:ok, state}
+
+    # Catch-all: GRPC.Stub.disconnect/1 issues a GenServer.call to the
+    # registered grpc connection process. Reply with an error so the call
+    # returns cleanly instead of crashing this fake (which would propagate
+    # an EXIT to the test via the start_link link).
+    @impl true
+    def handle_call(_msg, _from, state), do: {:reply, {:error, :not_supported}, state}
   end
 
   describe "Session interrupt helpers" do
@@ -415,7 +422,10 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       assert :ok = SparkEx.Session.safe_disconnect(:invalid_channel)
     end
 
-    test "skips disconnect when grpc connection has unresolved channels" do
+    test "does best-effort disconnect even when grpc raises" do
+      # The removed bug-risk hack inspected grpc-elixir private state. Verify
+      # the replacement: on any failure path, safe_disconnect logs and returns
+      # :ok without leaking the exception to the caller.
       ref = make_ref()
 
       {:ok, pid} =
@@ -432,8 +442,11 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
           assert :ok = SparkEx.Session.safe_disconnect(%GRPC.Channel{ref: ref})
         end)
 
-      assert log =~ "disconnect skipped due grpc connection state containing unresolved channels"
-      assert Process.alive?(pid)
+      assert log =~ "spark_ex session channel disconnect"
+    end
+
+    test "no-ops on a nil channel" do
+      assert :ok = SparkEx.Session.safe_disconnect(nil)
     end
   end
 end

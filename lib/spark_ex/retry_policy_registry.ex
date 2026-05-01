@@ -45,29 +45,27 @@ defmodule SparkEx.RetryPolicyRegistry do
     }
   end
 
+  @doc false
+  @spec default_policy_template() :: map()
+  def default_policy_template, do: default_policy()
+
+  # Matches PySpark's DefaultPolicy: 15 retries, 50ms initial backoff,
+  # 4x multiplier, 60s max backoff, 500ms jitter, 2000ms min-delay threshold.
   defp default_policy() do
     %{
-      max_retries: 3,
-      initial_backoff_ms: 100,
-      max_backoff_ms: 5_000,
+      max_retries: 15,
+      initial_backoff_ms: 50,
+      max_backoff_ms: 60_000,
+      backoff_multiplier: 4.0,
+      jitter_ms: 500,
+      min_jitter_threshold_ms: 2_000,
       max_server_retry_delay: 10 * 60 * 1000,
       jitter_fun: &default_jitter/1,
       sleep_fun: &Process.sleep/1
     }
   end
 
-  # Matches PySpark's DefaultPolicy: 15 retries, 4x multiplier, 60s max backoff,
-  # tolerating at least 10 minutes of repeated ALB/proxy disconnections.
-  defp streaming_policy() do
-    %{
-      max_retries: 15,
-      initial_backoff_ms: 50,
-      max_backoff_ms: 60_000,
-      max_server_retry_delay: 10 * 60 * 1000,
-      jitter_fun: &default_jitter/1,
-      sleep_fun: &Process.sleep/1
-    }
-  end
+  defp streaming_policy(), do: default_policy()
 
   defp normalize_policies(policies) do
     map = if is_list(policies), do: Map.new(policies), else: policies
@@ -88,6 +86,9 @@ defmodule SparkEx.RetryPolicyRegistry do
       :max_retries,
       :initial_backoff_ms,
       :max_backoff_ms,
+      :backoff_multiplier,
+      :jitter_ms,
+      :min_jitter_threshold_ms,
       :max_server_retry_delay,
       :jitter_fun,
       :sleep_fun
@@ -102,10 +103,27 @@ defmodule SparkEx.RetryPolicyRegistry do
     validate_nonneg_int!(policy, :max_retries)
     validate_nonneg_int!(policy, :initial_backoff_ms)
     validate_nonneg_int!(policy, :max_backoff_ms)
+    validate_nonneg_int!(policy, :jitter_ms)
+    validate_nonneg_int!(policy, :min_jitter_threshold_ms)
     validate_nonneg_int!(policy, :max_server_retry_delay)
+    validate_pos_number!(policy, :backoff_multiplier)
     validate_fun!(policy, :jitter_fun, 1)
     validate_fun!(policy, :sleep_fun, 1)
     :ok
+  end
+
+  defp validate_pos_number!(policy, key) do
+    case Map.get(policy, key) do
+      nil ->
+        :ok
+
+      value when is_number(value) and value > 0 ->
+        :ok
+
+      other ->
+        raise ArgumentError,
+              "expected #{inspect(key)} to be a positive number, got: #{inspect(other)}"
+    end
   end
 
   defp validate_nonneg_int!(policy, key) do

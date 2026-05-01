@@ -262,11 +262,30 @@ defmodule SparkEx.Unit.ReattachTest do
                )
     end
 
-    test "operation-not-found during reattach fails after partial responses exist", %{
-      session: session
-    } do
+    test "operation-not-found during reattach re-executes from scratch and discards partial buffer",
+         %{session: session} do
+      # We recover from OPERATION/SESSION_NOT_FOUND even when items have
+      # arrived. Buffered responses are dropped — they would be regenerated
+      # by the fresh ExecutePlan, causing duplicates.
+      parent = self()
+      result_complete = {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+
+      counter = :counters.new(1, [])
+
       execute_stream_fun = fn _request, _timeout ->
-        {:ok, [{:ok, %ExecutePlanResponse{response_id: "r1"}}]}
+        attempt = :counters.get(counter, 1)
+        :counters.add(counter, 1, 1)
+        send(parent, {:execute_attempt, attempt})
+
+        if attempt == 0 do
+          {:ok, [{:ok, %ExecutePlanResponse{response_id: "r1"}}]}
+        else
+          {:ok,
+           [
+             {:ok, %ExecutePlanResponse{response_id: "fresh-1"}},
+             {:ok, %ExecutePlanResponse{response_id: "fresh-2", response_type: result_complete}}
+           ]}
+        end
       end
 
       reattach_stream_fun = fn _last_response_id ->
@@ -279,7 +298,36 @@ defmodule SparkEx.Unit.ReattachTest do
 
       release_execute_fun = fn _opts -> {:ok, nil} end
 
-      assert {:error, %SparkEx.Error.Remote{error_class: "INVALID_HANDLE.OPERATION_NOT_FOUND"}} =
+      assert {:ok, _} =
+               Client.execute_plan(session, %Plan{},
+                 execute_stream_fun: execute_stream_fun,
+                 reattach_stream_fun: reattach_stream_fun,
+                 release_execute_fun: release_execute_fun
+               )
+
+      assert_received {:execute_attempt, 0}
+      assert_received {:execute_attempt, 1}
+    end
+
+    test "RESPONSE_ALREADY_RECEIVED during reattach surfaces a non-retryable error", %{
+      session: session
+    } do
+      execute_stream_fun = fn _request, _timeout ->
+        {:ok, [{:ok, %ExecutePlanResponse{response_id: "r1"}}]}
+      end
+
+      reattach_stream_fun = fn _last_response_id ->
+        {:error,
+         %SparkEx.Error.Remote{
+           error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED",
+           message: "already consumed"
+         }}
+      end
+
+      release_execute_fun = fn _opts -> {:ok, nil} end
+
+      assert {:error,
+              %SparkEx.Error.Remote{error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED"}} =
                Client.execute_plan(session, %Plan{},
                  execute_stream_fun: execute_stream_fun,
                  reattach_stream_fun: reattach_stream_fun,

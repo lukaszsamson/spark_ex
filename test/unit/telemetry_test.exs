@@ -259,7 +259,7 @@ defmodule SparkEx.TelemetryTest do
       assert measurements.attempt == 1
       assert is_integer(measurements.backoff_ms)
       assert metadata.grpc_status == 14
-      assert metadata.max_retries == 3
+      assert metadata.max_retries == 15
       assert metadata.retry_delay_ms == nil
     end
 

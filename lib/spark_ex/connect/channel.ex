@@ -2,6 +2,8 @@ defmodule SparkEx.Connect.Channel do
   @moduledoc false
 
   @default_port 15002
+  # Spark Connect / PySpark default: 128 MiB for both directions.
+  @default_max_message_size 128 * 1024 * 1024
 
   @type connect_opts :: %{
           host: String.t(),
@@ -12,10 +14,18 @@ defmodule SparkEx.Connect.Channel do
           user_agent: String.t() | nil,
           session_id: String.t() | nil,
           auth_transport: :auto | :metadata,
-          extra_params: %{String.t() => String.t()}
+          extra_params: %{String.t() => String.t()},
+          max_message_size: pos_integer(),
+          keepalive: %{optional(atom()) => term()}
         }
 
-  @reserved_metadata_keys ~w(token use_ssl user_id user_agent session_id)
+  @reserved_metadata_keys ~w(token use_ssl user_id user_agent session_id grpc_max_message_size grpc_keepalive_time_ms grpc_keepalive_timeout_ms grpc_keepalive_permit_without_calls)
+
+  @doc """
+  Default max gRPC message size (bytes).
+  """
+  @spec default_max_message_size() :: pos_integer()
+  def default_max_message_size, do: @default_max_message_size
 
   @doc """
   Parses a Spark Connect URI string into connection options.
@@ -28,14 +38,19 @@ defmodule SparkEx.Connect.Channel do
   - `use_ssl` — `"true"` enables TLS (default: `false`)
   - `token` — bearer token for auth
   - `auth_transport` — `"auto"` (default) or `"metadata"`
+  - `grpc_max_message_size` — max gRPC message size in bytes (default: 128 MiB)
+  - `grpc_keepalive_time_ms`, `grpc_keepalive_timeout_ms`,
+    `grpc_keepalive_permit_without_calls` — keepalive surface for follow-up
 
   ## Examples
 
-      iex> SparkEx.Connect.Channel.parse_uri("sc://localhost:15002")
-      {:ok, %{host: "localhost", port: 15002, use_ssl: false, token: nil, extra_params: %{}}}
+      iex> {:ok, opts} = SparkEx.Connect.Channel.parse_uri("sc://localhost:15002")
+      iex> {opts.host, opts.port, opts.use_ssl, opts.token, opts.extra_params}
+      {"localhost", 15002, false, nil, %{}}
 
-      iex> SparkEx.Connect.Channel.parse_uri("sc://spark-host:15002/;use_ssl=true;token=abc123")
-      {:ok, %{host: "spark-host", port: 15002, use_ssl: true, token: "abc123", extra_params: %{}}}
+      iex> {:ok, opts} = SparkEx.Connect.Channel.parse_uri("sc://spark-host:15002/;use_ssl=true;token=abc123")
+      iex> {opts.host, opts.port, opts.use_ssl, opts.token}
+      {"spark-host", 15002, true, "abc123"}
   """
   @spec parse_uri(String.t()) :: {:ok, connect_opts()} | {:error, term()}
   def parse_uri(uri_string) when is_binary(uri_string) do
@@ -43,7 +58,9 @@ defmodule SparkEx.Connect.Channel do
          {:ok, params} <- parse_params(params_string),
          {:ok, auth_transport, params} <- pop_auth_transport(params),
          :ok <- validate_token(params),
-         :ok <- validate_session_id(params) do
+         :ok <- validate_session_id(params),
+         {:ok, max_message_size, params} <- pop_max_message_size(params),
+         {:ok, keepalive, params} <- pop_keepalive(params) do
       {parsed_token, rest} = Map.pop(params, "token")
       {use_ssl_str, rest} = Map.pop(rest, "use_ssl", "false")
       {user_id, rest} = Map.pop(rest, "user_id")
@@ -61,13 +78,18 @@ defmodule SparkEx.Connect.Channel do
          user_agent: user_agent,
          session_id: session_id,
          auth_transport: auth_transport,
-         extra_params: rest
+         extra_params: rest,
+         max_message_size: max_message_size,
+         keepalive: keepalive
        }}
     end
   end
 
   @doc """
   Opens a gRPC channel to the given connection options.
+
+  Explicit `extra_grpc_opts` win over the channel-level defaults built from
+  `opts` (e.g. you can override `:adapter_opts`, `:cred`, or `:metadata`).
   """
   @spec connect(connect_opts(), keyword()) :: {:ok, GRPC.Channel.t()} | {:error, term()}
   def connect(opts, extra_grpc_opts \\ []) do
@@ -118,6 +140,7 @@ defmodule SparkEx.Connect.Channel do
       end
 
     grpc_opts
+    |> Keyword.put(:adapter_opts, build_adapter_opts(opts))
   end
 
   @doc """
@@ -129,6 +152,37 @@ defmodule SparkEx.Connect.Channel do
   end
 
   # --- Private ---
+
+  # HTTP/2 SETTINGS_MAX_FRAME_SIZE valid range (RFC 7540 §6.5.2):
+  #   min 16,384 (2^14), max 16,777,215 (2^24 - 1).
+  @http2_min_frame_size 16_384
+  @http2_max_frame_size 16_777_215
+
+  defp build_adapter_opts(opts) do
+    max_size = Map.get(opts, :max_message_size) || @default_max_message_size
+
+    # Frame size advertised to the peer. Independently clamped to the
+    # HTTP/2 valid range so an unusually small `grpc_max_message_size`
+    # can't produce an invalid SETTINGS value and break negotiation.
+    frame_size =
+      max_size
+      |> min(@http2_max_frame_size)
+      |> max(@http2_min_frame_size)
+
+    # Window size advertised by us controls how much the peer can send
+    # without an explicit WINDOW_UPDATE; raise it to the max message
+    # size so large server responses (Arrow batches, plan results)
+    # don't stall on default 64 KiB windows.
+    window_size = max(max_size, 65_535)
+
+    http2_opts = %{
+      max_frame_size_received: frame_size,
+      initial_connection_window_size: window_size,
+      initial_stream_window_size: window_size
+    }
+
+    [http2_opts: http2_opts]
+  end
 
   defp split_uri(uri_string) do
     authority =
@@ -204,6 +258,73 @@ defmodule SparkEx.Connect.Channel do
       invalid -> {:error, {:invalid_auth_transport, invalid}}
     end
   end
+
+  defp pop_max_message_size(params) do
+    case Map.pop(params, "grpc_max_message_size") do
+      {nil, rest} ->
+        {:ok, @default_max_message_size, rest}
+
+      {value, rest} ->
+        case Integer.parse(value) do
+          {bytes, ""} when bytes > 0 ->
+            {:ok, bytes, rest}
+
+          _ ->
+            {:error, {:invalid_param, "grpc_max_message_size=#{value}"}}
+        end
+    end
+  end
+
+  defp pop_keepalive(params) do
+    {time_ms, params} = pop_pos_int(params, "grpc_keepalive_time_ms")
+    {timeout_ms, params} = pop_pos_int(params, "grpc_keepalive_timeout_ms")
+    {permit, params} = pop_bool(params, "grpc_keepalive_permit_without_calls")
+
+    case {time_ms, timeout_ms, permit} do
+      {{:error, _} = err, _, _} ->
+        err
+
+      {_, {:error, _} = err, _} ->
+        err
+
+      {_, _, {:error, _} = err} ->
+        err
+
+      {{:ok, t}, {:ok, to}, {:ok, p}} ->
+        keepalive =
+          %{}
+          |> maybe_put(:time_ms, t)
+          |> maybe_put(:timeout_ms, to)
+          |> maybe_put(:permit_without_calls, p)
+
+        {:ok, keepalive, params}
+    end
+  end
+
+  defp pop_pos_int(params, key) do
+    case Map.pop(params, key) do
+      {nil, rest} ->
+        {{:ok, nil}, rest}
+
+      {value, rest} ->
+        case Integer.parse(value) do
+          {n, ""} when n > 0 -> {{:ok, n}, rest}
+          _ -> {{:error, {:invalid_param, "#{key}=#{value}"}}, rest}
+        end
+    end
+  end
+
+  defp pop_bool(params, key) do
+    case Map.pop(params, key) do
+      {nil, rest} -> {{:ok, nil}, rest}
+      {"true", rest} -> {{:ok, true}, rest}
+      {"false", rest} -> {{:ok, false}, rest}
+      {value, rest} -> {{:error, {:invalid_param, "#{key}=#{value}"}}, rest}
+    end
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp auth_metadata_fallback(opts, token) when is_binary(token) do
     case Map.get(opts, :auth_transport, :auto) do
