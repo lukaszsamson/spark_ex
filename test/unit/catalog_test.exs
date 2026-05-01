@@ -163,32 +163,32 @@ defmodule SparkEx.CatalogTest do
     end
   end
 
-  test "list_tables/3 resolves nil db_name from current_database" do
+  test "list_tables/3 passes nil db_name through for server-side resolution" do
     {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
 
     assert {:ok, []} = Catalog.list_tables(session, nil, "emp*")
-    assert_receive {:list_tables_called, "analytics", "emp*"}
+    assert_receive {:list_tables_called, nil, "emp*"}
   end
 
-  test "list_functions/3 resolves nil db_name from current_database" do
+  test "list_functions/3 passes nil db_name through for server-side resolution" do
     {:ok, session} = FakeCatalogSession.start_link(self(), "analytics")
 
     assert {:ok, []} = Catalog.list_functions(session, nil, "abs*")
-    assert_receive {:list_functions_called, "analytics", "abs*"}
+    assert_receive {:list_functions_called, nil, "abs*"}
   end
 
-  test "list_tables/3 falls back to first database when current_database is empty" do
+  test "list_tables/3 passes nil db_name through when current_database is empty" do
     {:ok, session} = FakeCatalogSession.start_link(self(), "", ["warehouse", "sandbox"])
 
     assert {:ok, []} = Catalog.list_tables(session, nil, nil)
-    assert_receive {:list_tables_called, "warehouse", nil}
+    assert_receive {:list_tables_called, nil, nil}
   end
 
-  test "list_functions/3 falls back to first database when current_database is empty" do
+  test "list_functions/3 passes nil db_name through when current_database is empty" do
     {:ok, session} = FakeCatalogSession.start_link(self(), "", ["warehouse", "sandbox"])
 
     assert {:ok, []} = Catalog.list_functions(session, nil, nil)
-    assert_receive {:list_functions_called, "warehouse", nil}
+    assert_receive {:list_functions_called, nil, nil}
   end
 
   test "table_exists?/3 matches direct TableExists RPC behavior" do
@@ -199,24 +199,24 @@ defmodule SparkEx.CatalogTest do
     refute_receive {:list_tables_called, "warehouse", "orders"}
   end
 
-  test "get_table/3 qualifies db_name with current catalog" do
+  test "get_table/3 passes table_name and db_name through unchanged" do
     {:ok, session} =
       FakeCatalogSession.start_link(self(), "sfx_dev_warehouse", ["sfx_dev_warehouse"], "sfx")
 
     assert {:ok, %Catalog.Table{name: "orders"}} =
              Catalog.get_table(session, "orders", "sfx_dev_warehouse")
 
-    assert_receive {:get_table_called, "sfx.sfx_dev_warehouse.orders", nil}
+    assert_receive {:get_table_called, "orders", "sfx_dev_warehouse"}
   end
 
-  test "list_columns/3 qualifies db_name with current catalog" do
+  test "list_columns/3 passes table_name and db_name through unchanged" do
     {:ok, session} =
       FakeCatalogSession.start_link(self(), "sfx_dev_warehouse", ["sfx_dev_warehouse"], "sfx")
 
     assert {:ok, [%Catalog.ColumnInfo{name: "id"}]} =
              Catalog.list_columns(session, "orders", "sfx_dev_warehouse")
 
-    assert_receive {:list_columns_called, "sfx.sfx_dev_warehouse.orders", nil}
+    assert_receive {:list_columns_called, "orders", "sfx_dev_warehouse"}
   end
 
   test "function_exists?/3 passes provided db_name to catalog RPC" do

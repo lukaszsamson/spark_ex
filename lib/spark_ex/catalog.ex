@@ -266,21 +266,7 @@ defmodule SparkEx.Catalog do
           {:ok, boolean()} | {:error, term()}
   def function_exists?(session, function_name, db_name \\ nil) when is_binary(function_name) do
     with {:ok, db_name} <- normalize_optional_db_name(db_name) do
-      case execute_scalar(session, {:function_exists, function_name, db_name}) do
-        {:ok, _} = ok ->
-          ok
-
-        {:error, %SparkEx.Error.Remote{message: message} = remote}
-        when is_binary(db_name) and is_binary(message) ->
-          if String.contains?(message, "SCHEMA_NOT_FOUND") do
-            execute_scalar(session, {:function_exists, function_name, nil})
-          else
-            {:error, remote}
-          end
-
-        {:error, _} = err ->
-          err
-      end
+      execute_scalar(session, {:function_exists, function_name, db_name})
     end
   end
 
@@ -458,32 +444,8 @@ defmodule SparkEx.Catalog do
   end
 
   defp resolve_catalog_db_name(_session, db_name) when is_binary(db_name), do: {:ok, db_name}
-
-  defp resolve_catalog_db_name(session, nil) do
-    case current_database(session) do
-      {:ok, db_name} when is_binary(db_name) and db_name != "" -> {:ok, db_name}
-      {:ok, _} -> resolve_fallback_catalog_db_name(session)
-      {:error, _} = err -> err
-    end
-  end
-
+  defp resolve_catalog_db_name(_session, nil), do: {:ok, nil}
   defp resolve_catalog_db_name(_session, db_name), do: {:error, {:invalid_db_name, db_name}}
-
-  defp resolve_fallback_catalog_db_name(session) do
-    case execute_catalog(session, {:list_databases, nil}) do
-      {:ok, [first | _]} when is_map(first) ->
-        case first["name"] do
-          db_name when is_binary(db_name) and db_name != "" -> {:ok, db_name}
-          _ -> {:ok, nil}
-        end
-
-      {:ok, _} ->
-        {:ok, nil}
-
-      {:error, _} = err ->
-        err
-    end
-  end
 
   defp normalize_catalog_pattern(pattern) when is_nil(pattern) or is_binary(pattern),
     do: {:ok, pattern}
@@ -548,40 +510,25 @@ defmodule SparkEx.Catalog do
 
   defp resolve_table_lookup(_session, table_name, nil), do: {:ok, {table_name, nil}}
 
-  defp resolve_table_lookup(session, table_name, db_name)
+  defp resolve_table_lookup(_session, table_name, db_name)
        when is_binary(table_name) and is_binary(db_name) do
-    cond do
-      table_name != "" and String.contains?(table_name, ".") ->
-        {:ok, {table_name, nil}}
-
-      db_name != "" and String.contains?(db_name, ".") ->
-        {:ok, {"#{db_name}.#{table_name}", nil}}
-
-      true ->
-        case current_catalog(session) do
-          {:ok, "spark_catalog"} ->
-            {:ok, {table_name, db_name}}
-
-          {:ok, catalog} when is_binary(catalog) and catalog != "" ->
-            {:ok, {"#{catalog}.#{db_name}.#{table_name}", nil}}
-
-          {:ok, _} ->
-            {:ok, {table_name, db_name}}
-
-          {:error, _} = err ->
-            err
-        end
-    end
+    {:ok, {table_name, db_name}}
   end
 
   defp normalize_table_schema(_session, nil), do: {:ok, nil}
   defp normalize_table_schema(_session, %Spark.Connect.DataType{} = schema), do: {:ok, schema}
 
   defp normalize_table_schema(session, schema) when is_binary(schema) do
-    case SparkEx.Session.analyze_ddl_parse(session, schema) do
-      {:ok, %Spark.Connect.DataType{} = parsed} -> {:ok, parsed}
-      {:ok, other} -> {:error, {:invalid_schema_type, other}}
-      {:error, _} = err -> err
+    case SparkEx.Types.parse_ddl_type(schema) do
+      {:ok, parsed} ->
+        {:ok, parsed}
+
+      :error ->
+        case SparkEx.Session.analyze_ddl_parse(session, schema) do
+          {:ok, %Spark.Connect.DataType{} = parsed} -> {:ok, parsed}
+          {:ok, other} -> {:error, {:invalid_schema_type, other}}
+          {:error, _} = err -> err
+        end
     end
   end
 
@@ -757,7 +704,7 @@ defmodule SparkEx.Catalog do
       []
       |> maybe_add("IF EXISTS", if_exists)
 
-    base = ["DROP", "TABLE"] ++ clauses ++ [quote_identifier(table_name)]
+    base = ["DROP", "TABLE"] ++ clauses ++ [quote_qualified_name(table_name)]
 
     if purge do
       join_sql(base ++ ["PURGE"])
@@ -779,10 +726,10 @@ defmodule SparkEx.Catalog do
         join_sql([
           "ALTER",
           "TABLE",
-          quote_identifier(table_name),
+          quote_qualified_name(table_name),
           "RENAME",
           "TO",
-          quote_identifier(new_name)
+          quote_qualified_name(new_name)
         ])
 
       {nil, props} when is_map(props) ->
@@ -791,7 +738,7 @@ defmodule SparkEx.Catalog do
         join_sql([
           "ALTER",
           "TABLE",
-          quote_identifier(table_name),
+          quote_qualified_name(table_name),
           "SET",
           "TBLPROPERTIES",
           props_sql
@@ -834,7 +781,7 @@ defmodule SparkEx.Catalog do
     join_sql(
       ["CREATE"] ++
         clauses ++
-        ["FUNCTION", quote_identifier(function_name), "AS", sql_string(class_name)] ++
+        ["FUNCTION", quote_qualified_name(function_name), "AS", sql_string(class_name)] ++
         using_clause
     )
   end
@@ -847,7 +794,8 @@ defmodule SparkEx.Catalog do
     join_sql(
       ["DROP"] ++
         maybe_add([], "TEMPORARY", temporary) ++
-        ["FUNCTION"] ++ maybe_add([], "IF EXISTS", if_exists) ++ [quote_identifier(function_name)]
+        ["FUNCTION"] ++
+        maybe_add([], "IF EXISTS", if_exists) ++ [quote_qualified_name(function_name)]
     )
   end
 
@@ -865,18 +813,30 @@ defmodule SparkEx.Catalog do
   defp sql_string(value) do
     value
     |> to_string()
+    |> String.replace("\\", "\\\\")
     |> String.replace("'", "''")
     |> then(&("'" <> &1 <> "'"))
   end
 
+  defp quote_identifier(parts) when is_list(parts) do
+    parts
+    |> Enum.map(&quote_identifier_part/1)
+    |> Enum.join(".")
+  end
+
   defp quote_identifier(name) when is_binary(name) do
+    quote_identifier_part(name)
+  end
+
+  defp quote_identifier_part(name) when is_binary(name) do
+    escaped = String.replace(name, "`", "``")
+    "`#{escaped}`"
+  end
+
+  defp quote_qualified_name(name) when is_binary(name) do
     name
     |> String.split(".")
-    |> Enum.map(fn part ->
-      escaped = String.replace(part, "`", "``")
-      "`#{escaped}`"
-    end)
-    |> Enum.join(".")
+    |> quote_identifier()
   end
 
   defp maybe_add(list, _value, false), do: list
@@ -943,11 +903,5 @@ defmodule SparkEx.Catalog do
 
   defp parse_namespace(nil), do: nil
   defp parse_namespace(ns) when is_list(ns), do: ns
-
-  defp parse_namespace(ns) when is_binary(ns) do
-    case Jason.decode(ns) do
-      {:ok, list} when is_list(list) -> list
-      _ -> [ns]
-    end
-  end
+  defp parse_namespace(ns) when is_binary(ns), do: [ns]
 end

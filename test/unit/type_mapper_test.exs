@@ -169,7 +169,7 @@ defmodule SparkEx.Connect.TypeMapperTest do
       assert TypeMapper.to_spark_ddl_type({:list, :string}) == "ARRAY<STRING>"
 
       assert TypeMapper.to_spark_ddl_type({:struct, [{"age", {:s, 64}}, {"name", :string}]}) ==
-               "STRUCT<age: LONG, name: STRING>"
+               "STRUCT<age: BIGINT, name: STRING>"
 
       assert TypeMapper.to_spark_ddl_type({:map, :string, {:list, {:s, 32}}}) ==
                "MAP<STRING, ARRAY<INT>>"
@@ -183,7 +183,7 @@ defmodule SparkEx.Connect.TypeMapperTest do
       ]
 
       assert TypeMapper.explorer_schema_to_ddl(dtypes) ==
-               "id LONG, tags ARRAY<STRING>, info STRUCT<age: INT>"
+               "id BIGINT, tags ARRAY<STRING>, info STRUCT<age: INT>"
     end
   end
 

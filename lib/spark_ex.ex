@@ -228,7 +228,15 @@ defmodule SparkEx do
   end
 
   @doc """
-  Formats a SQL string with positional or named parameters.
+  Client-side SQL string formatter that splices positional or named parameters
+  directly into the SQL text.
+
+  Prefer `sql/3` with `args:` for normal use — that sends parameters to Spark
+  as `pos_arguments` / `named_arguments` and lets the server bind them safely.
+  This helper exists for cases that need a pre-rendered SQL string (logging,
+  test fixtures, queries executed outside Spark Connect).
+
+  See `SparkEx.SqlFormatter` for details.
   """
   @spec format_sql(String.t(), list() | map() | nil) :: String.t()
   def format_sql(sql, args \\ nil) when is_binary(sql) do
