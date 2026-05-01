@@ -1986,23 +1986,18 @@ defmodule SparkEx.DataFrame do
   def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
     case SparkEx.Session.execute_plan_stream(df.session, df.plan, merge_tags(df, opts)) do
       {:ok, stream} ->
-        {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream, fetch_session_state(df.session))}
+        # Pass the underlying %Session{} struct so streaming gRPC errors flow
+        # through Errors.from_grpc_error/2 the same way collected results do.
+        session_state = fetch_session_state(df.session)
+        {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state)}
 
       {:error, _} = error ->
         error
     end
   end
 
-  # Returns the underlying %Session{} struct when the GenServer responds with
-  # one; otherwise nil. The session is passed to ResultDecoder.rows_stream/2
-  # so streaming gRPC errors flow through Errors.from_grpc_error/2 the same
-  # way collected results do. Test doubles that don't expose a real session
-  # struct simply skip the enrichment.
   defp fetch_session_state(session) do
-    case SparkEx.Session.get_state(session) do
-      %SparkEx.Session{} = state -> state
-      _ -> nil
-    end
+    SparkEx.Session.get_state(session)
   catch
     :exit, _ -> nil
   end
