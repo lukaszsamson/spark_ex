@@ -3815,22 +3815,22 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp promote_literal_to_type(
-         %Expression.Literal{literal_type: {:integer, v}},
+         %Expression.Literal{literal_type: {:integer, v}} = lit,
          %DataType{kind: {:long, _}}
        ),
-       do: %Expression.Literal{literal_type: {:long, v}}
+       do: %Expression.Literal{lit | literal_type: {:long, v}}
 
   defp promote_literal_to_type(
-         %Expression.Literal{literal_type: {:integer, v}},
+         %Expression.Literal{literal_type: {:integer, v}} = lit,
          %DataType{kind: {:double, _}}
        ),
-       do: %Expression.Literal{literal_type: {:double, v * 1.0}}
+       do: %Expression.Literal{lit | literal_type: {:double, v * 1.0}}
 
   defp promote_literal_to_type(
-         %Expression.Literal{literal_type: {:long, v}},
+         %Expression.Literal{literal_type: {:long, v}} = lit,
          %DataType{kind: {:double, _}}
        ),
-       do: %Expression.Literal{literal_type: {:double, v * 1.0}}
+       do: %Expression.Literal{lit | literal_type: {:double, v * 1.0}}
 
   defp promote_literal_to_type(%Expression.Literal{} = lit, _), do: lit
 

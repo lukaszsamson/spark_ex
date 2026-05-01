@@ -183,6 +183,10 @@ defmodule SparkEx.BugsPlan2.StreamBTest do
       assert %Column{expr: {:star}} = Functions.col("*")
     end
 
+    test "\".*\" with empty target falls back to unqualified star" do
+      assert %Column{expr: {:star}} = Functions.col(".*")
+    end
+
     test "\"foo.*\" produces targeted star with target \"foo\"" do
       assert %Column{expr: {:star, "foo"}} = Functions.col("foo.*")
     end

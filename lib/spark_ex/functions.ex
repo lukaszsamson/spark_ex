@@ -36,6 +36,7 @@ defmodule SparkEx.Functions do
   """
   @spec col(String.t()) :: Column.t()
   def col("*"), do: %Column{expr: {:star}}
+  def col(".*"), do: %Column{expr: {:star}}
 
   def col(name) when is_binary(name) do
     if String.ends_with?(name, ".*") do
