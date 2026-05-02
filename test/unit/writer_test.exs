@@ -206,6 +206,16 @@ defmodule SparkEx.Unit.WriterTest do
       end
     end
 
+    test "csv raises when csv-specific kwargs collide with nested :options", %{df: df} do
+      assert_raise ArgumentError, ~r/multiple values for keyword argument/, fn ->
+        Writer.csv(df, "/tmp/out", sep: ";", options: %{"sep" => ","})
+      end
+
+      assert_raise ArgumentError, ~r/multiple values for keyword argument/, fn ->
+        Writer.csv(df, "/tmp/out", header: true, options: %{"header" => "false"})
+      end
+    end
+
     test "writer raises when an option is given both as top-level and inside :options", %{df: df} do
       assert_raise ArgumentError, ~r/multiple values for keyword argument/, fn ->
         Writer.parquet(df, "/tmp/out",

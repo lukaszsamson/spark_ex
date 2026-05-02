@@ -2529,6 +2529,11 @@ defmodule SparkEx.DataFrame do
     SparkEx.MergeIntoWriter.new(df, table_name) |> SparkEx.MergeIntoWriter.on(condition)
   end
 
+  def merge_into(%__MODULE__{}, table_name, condition) when is_binary(table_name) do
+    raise ArgumentError,
+          "merge_into/3 requires a SparkEx.Column merge condition, got: #{inspect(condition)}"
+  end
+
   @doc """
   Creates a DataFrame from a table-valued function (TVF) call.
 

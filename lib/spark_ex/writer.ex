@@ -279,6 +279,18 @@ defmodule SparkEx.Writer do
         {:sep, v}, acc -> Map.put(acc, "sep", v)
       end)
 
+    duplicates =
+      extra_options
+      |> Map.keys()
+      |> Enum.filter(&Map.has_key?(option_overrides, &1))
+
+    if duplicates != [] do
+      raise ArgumentError,
+            "got multiple values for keyword argument(s) " <>
+              Enum.map_join(duplicates, ", ", &inspect/1) <>
+              " — pass each option either as a top-level keyword OR inside :options, not both"
+    end
+
     writer =
       %__MODULE__{df: df, source: "csv"}
       |> maybe_set_mode(write_opts)

@@ -241,6 +241,18 @@ defmodule SparkEx.M13.MergeIntoTest do
                condition: {:fn, "==", [{:col, "source.id"}, {:col, "target.id"}], false}
              } = m
     end
+
+    test "raises ArgumentError when condition is nil" do
+      assert_raise ArgumentError, ~r/SparkEx.Column merge condition/, fn ->
+        DataFrame.merge_into(make_df(), "my_table", nil)
+      end
+    end
+
+    test "raises ArgumentError when condition is not a Column" do
+      assert_raise ArgumentError, ~r/SparkEx.Column merge condition/, fn ->
+        DataFrame.merge_into(make_df(), "my_table", "id = id")
+      end
+    end
   end
 
   describe "chained builder" do
