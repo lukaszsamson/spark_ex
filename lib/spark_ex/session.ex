@@ -1545,7 +1545,11 @@ defmodule SparkEx.Session do
     end
   end
 
-  def handle_call({:create_dataframe_chunked_cache, arrow_ipc, schema_ddl, chunk_size}, _from, state) do
+  def handle_call(
+        {:create_dataframe_chunked_cache, arrow_ipc, schema_ddl, chunk_size},
+        _from,
+        state
+      ) do
     data_chunks = split_arrow_ipc_for_cache(arrow_ipc, chunk_size)
 
     {data_hashes, data_artifacts} =
@@ -4170,8 +4174,11 @@ defmodule SparkEx.Session do
       [arrow_ipc]
     else
       case Explorer.DataFrame.load_ipc_stream(arrow_ipc) do
-        {:ok, df} -> chunk_explorer_dataframe(df, byte_size(arrow_ipc), chunk_size_bytes, arrow_ipc)
-        {:error, _} -> [arrow_ipc]
+        {:ok, df} ->
+          chunk_explorer_dataframe(df, byte_size(arrow_ipc), chunk_size_bytes, arrow_ipc)
+
+        {:error, _} ->
+          [arrow_ipc]
       end
     end
   end
@@ -4201,7 +4208,14 @@ defmodule SparkEx.Session do
 
     case Explorer.DataFrame.dump_ipc_stream(slice) do
       {:ok, bytes} ->
-        do_split_dataframe(df, total_rows, rows_per_chunk, offset + length, [bytes | acc], fallback)
+        do_split_dataframe(
+          df,
+          total_rows,
+          rows_per_chunk,
+          offset + length,
+          [bytes | acc],
+          fallback
+        )
 
       {:error, _} ->
         [fallback]

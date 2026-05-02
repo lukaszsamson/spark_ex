@@ -118,7 +118,10 @@ defmodule SparkEx.Unit.LocalRelationTest do
 
     test "splits a large payload into multiple Arrow IPC streams" do
       rows = Enum.to_list(1..2_000)
-      df = Explorer.DataFrame.new(%{"id" => rows, "label" => Enum.map(rows, &Integer.to_string/1)})
+
+      df =
+        Explorer.DataFrame.new(%{"id" => rows, "label" => Enum.map(rows, &Integer.to_string/1)})
+
       {:ok, ipc} = Explorer.DataFrame.dump_ipc_stream(df)
 
       chunk_size = max(1, div(byte_size(ipc), 4))
