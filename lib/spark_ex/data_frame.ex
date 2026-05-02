@@ -2505,18 +2505,22 @@ defmodule SparkEx.DataFrame do
   @doc """
   Creates a `SparkEx.MergeIntoWriter` for MERGE INTO operations.
 
+  The merge condition (ON clause) is required at construction time, mirroring
+  PySpark's `DataFrame.mergeInto`. Calling `merge_into/2` without a condition
+  raises `ArgumentError`.
+
   ## Examples
 
       df
-      |> DataFrame.merge_into("target_table")
-      |> MergeIntoWriter.on(col("source.id") |> Column.eq(col("target.id")))
+      |> DataFrame.merge_into("target_table", col("source.id") |> Column.eq(col("target.id")))
       |> MergeIntoWriter.when_matched_update_all()
       |> MergeIntoWriter.when_not_matched_insert_all()
       |> MergeIntoWriter.merge()
   """
-  @spec merge_into(t(), String.t()) :: SparkEx.MergeIntoWriter.t()
-  def merge_into(%__MODULE__{} = df, table_name) when is_binary(table_name) do
-    SparkEx.MergeIntoWriter.new(df, table_name)
+  @spec merge_into(t(), String.t()) :: no_return()
+  def merge_into(%__MODULE__{}, table_name) when is_binary(table_name) do
+    raise ArgumentError,
+          "merge_into/2 requires a merge condition; use merge_into/3 with the ON-clause Column"
   end
 
   @spec merge_into(t(), String.t(), Column.t()) :: SparkEx.MergeIntoWriter.t()

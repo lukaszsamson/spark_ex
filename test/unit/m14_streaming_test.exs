@@ -401,6 +401,28 @@ defmodule SparkEx.M14.StreamingTest do
       assert proto.foreach_batch == foreach_fn
       assert proto.foreach_writer == nil
     end
+
+    test "encodes empty format when none specified (server uses spark.sql.sources.default)" do
+      df_plan = {:sql, "SELECT 1", nil}
+
+      write_opts = [
+        format: nil,
+        output_mode: "append",
+        options: %{},
+        query_name: nil,
+        trigger: nil,
+        path: nil,
+        table_name: nil,
+        partition_by: [],
+        cluster_by: []
+      ]
+
+      {command, _counter} =
+        CommandEncoder.encode_command({:write_stream_operation_start, df_plan, write_opts}, 0)
+
+      assert {:write_stream_operation_start, proto} = command.command_type
+      assert proto.format == ""
+    end
   end
 
   # ── CommandEncoder: StreamingQueryCommand ──

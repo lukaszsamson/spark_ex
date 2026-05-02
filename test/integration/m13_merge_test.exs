@@ -51,8 +51,7 @@ defmodule SparkEx.Integration.M13.MergeTest do
 
       merge_writer =
         source_df
-        |> DataFrame.merge_into(target_table)
-        |> MergeIntoWriter.on(col("source.id") |> Column.eq(col("target.id")))
+        |> DataFrame.merge_into(target_table, col("source.id") |> Column.eq(col("target.id")))
         |> MergeIntoWriter.when_matched_update_all()
         |> MergeIntoWriter.when_not_matched_insert_all()
 
@@ -74,8 +73,7 @@ defmodule SparkEx.Integration.M13.MergeTest do
 
       merge_writer =
         source_df
-        |> DataFrame.merge_into("some_table")
-        |> MergeIntoWriter.on(col("source.id") |> Column.eq(col("target.id")))
+        |> DataFrame.merge_into("some_table", col("source.id") |> Column.eq(col("target.id")))
         |> MergeIntoWriter.when_matched_delete(
           col("target.name")
           |> Column.eq(col("source.name"))

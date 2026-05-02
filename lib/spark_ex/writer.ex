@@ -256,8 +256,12 @@ defmodule SparkEx.Writer do
 
   - `:mode` — save mode (default: `:error_if_exists`)
   - `:header` — whether to include a header row
-  - `:separator` — field separator
+  - `:sep` — field separator (mirrors PySpark's `sep`)
   - `:options` — map of CSV writer options
+
+  A `:separator` alias is still accepted for backwards compatibility, but if
+  both `:sep` and `:separator` are present and disagree an `ArgumentError`
+  is raised.
   """
   @spec csv(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def csv(df, path, opts \\ []) do
@@ -266,11 +270,12 @@ defmodule SparkEx.Writer do
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(rest, [:mode, :partition_by])
 
+    csv_opts = reconcile_csv_separator(csv_opts)
+
     extra_options =
       csv_opts
       |> Enum.reduce(%{}, fn
         {:header, v}, acc -> Map.put(acc, "header", to_string(v))
-        {:separator, v}, acc -> Map.put(acc, "sep", v)
         {:sep, v}, acc -> Map.put(acc, "sep", v)
       end)
 
@@ -481,7 +486,19 @@ defmodule SparkEx.Writer do
       |> Keyword.drop([:options | reserved_keys ++ @exec_opt_keys])
       |> stringify_options()
 
-    Map.merge(top_level_options, nested_options)
+    duplicates =
+      top_level_options
+      |> Map.keys()
+      |> Enum.filter(&Map.has_key?(nested_options, &1))
+
+    if duplicates != [] do
+      raise ArgumentError,
+            "got multiple values for keyword argument(s) " <>
+              Enum.map_join(duplicates, ", ", &inspect/1) <>
+              " — pass each option either as a top-level keyword OR inside :options, not both"
+    end
+
+    Map.merge(nested_options, top_level_options)
   end
 
   defp stringify_options(opts) when is_map(opts) do
@@ -496,6 +513,27 @@ defmodule SparkEx.Writer do
     SparkEx.Internal.OptionUtils.normalize_option_value(value)
   end
 
+  defp reconcile_csv_separator(csv_opts) do
+    sep = Keyword.get(csv_opts, :sep)
+    separator = Keyword.get(csv_opts, :separator)
+
+    cond do
+      Keyword.has_key?(csv_opts, :sep) and Keyword.has_key?(csv_opts, :separator) and
+          sep != separator ->
+        raise ArgumentError,
+              "csv writer received conflicting :sep and :separator options " <>
+                "(#{inspect(sep)} vs #{inspect(separator)}); pass only :sep"
+
+      Keyword.has_key?(csv_opts, :separator) ->
+        csv_opts
+        |> Keyword.delete(:separator)
+        |> Keyword.put_new(:sep, separator)
+
+      true ->
+        csv_opts
+    end
+  end
+
   defp resolve_insert_into_opts(writer, overwrite) when is_boolean(overwrite) do
     mode = if overwrite, do: :overwrite, else: :append
     {mode(writer, mode), []}
@@ -504,6 +542,20 @@ defmodule SparkEx.Writer do
   defp resolve_insert_into_opts(writer, opts) when is_list(opts) do
     overwrite = Keyword.get(opts, :overwrite)
     exec_opts = Keyword.delete(opts, :overwrite)
+
+    unknown =
+      exec_opts
+      |> Keyword.keys()
+      |> Enum.uniq()
+      |> Enum.reject(&(&1 in @exec_opt_keys))
+
+    if unknown != [] do
+      raise ArgumentError,
+            "insert_into received unknown option(s): " <>
+              Enum.map_join(unknown, ", ", &inspect/1) <>
+              ". Allowed options: :overwrite plus execution opts " <>
+              inspect(@exec_opt_keys)
+    end
 
     normalized_writer =
       case overwrite do
