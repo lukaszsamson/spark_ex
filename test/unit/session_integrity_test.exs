@@ -83,8 +83,7 @@ defmodule SparkEx.Connect.SessionIntegrityTest do
 
     test "unwraps {:error, _} replies" do
       assert SessionIntegrity.session_changed_error?(
-               {:error,
-                %SparkEx.Error.Remote{error_class: "INVALID_HANDLE.SESSION_CHANGED"}}
+               {:error, %SparkEx.Error.Remote{error_class: "INVALID_HANDLE.SESSION_CHANGED"}}
              )
 
       assert SessionIntegrity.session_changed_error?(
