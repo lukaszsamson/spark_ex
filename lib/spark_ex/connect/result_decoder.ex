@@ -1222,42 +1222,40 @@ defmodule SparkEx.Connect.ResultDecoder do
   # rewriting, or a 1-arity function applied to each value otherwise.
   #
   # - char(n): strip read-side space padding (matches CharVarcharCodegenUtils).
-  # - varchar(n): strip trailing spaces (Spark stores varchar as space-padded
-  #   when written through fixed-width sinks).
+  # - varchar(n): pass through unchanged. Unlike CHAR, VARCHAR preserves
+  #   trailing spaces; trimming would silently corrupt user data.
   # - udt: look up a deserializer in `SparkEx.Connect.UDTRegistry`. If a
   #   callback is registered for the UDT class, it is invoked per cell;
   #   otherwise the raw decoded value passes through unchanged.
   # - variant / geometry / geography / interval / unparsed: pass the raw
   #   decoded value through unchanged. Earlier code Jason-encoded list/map
   #   values, which lost native structure for callers who can handle it.
-  defp column_value_transform(%Spark.Connect.DataType{kind: {:char, _}}),
+  @doc false
+  def column_value_transform(%Spark.Connect.DataType{kind: {:char, _}}),
     do: &strip_trailing_spaces/1
 
-  defp column_value_transform(%Spark.Connect.DataType{kind: {:var_char, _}}),
-    do: &strip_trailing_spaces/1
-
-  defp column_value_transform(%Spark.Connect.DataType{
-         kind: {:udt, %Spark.Connect.DataType.UDT{} = udt}
-       }) do
+  def column_value_transform(%Spark.Connect.DataType{
+        kind: {:udt, %Spark.Connect.DataType.UDT{} = udt}
+      }) do
     case SparkEx.Connect.UDTRegistry.lookup_deserializer(udt) do
       nil -> &raw_passthrough/1
       fun when is_function(fun, 1) -> fun
     end
   end
 
-  defp column_value_transform(%Spark.Connect.DataType{kind: {tag, _}})
-       when tag in [
-              :calendar_interval,
-              :year_month_interval,
-              :day_time_interval,
-              :variant,
-              :geometry,
-              :geography,
-              :unparsed
-            ],
-       do: &raw_passthrough/1
+  def column_value_transform(%Spark.Connect.DataType{kind: {tag, _}})
+      when tag in [
+             :calendar_interval,
+             :year_month_interval,
+             :day_time_interval,
+             :variant,
+             :geometry,
+             :geography,
+             :unparsed
+           ],
+      do: &raw_passthrough/1
 
-  defp column_value_transform(_), do: nil
+  def column_value_transform(_), do: nil
 
   defp strip_trailing_spaces(nil), do: nil
   defp strip_trailing_spaces(value) when is_binary(value), do: String.trim_trailing(value, " ")
