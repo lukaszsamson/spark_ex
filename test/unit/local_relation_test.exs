@@ -107,4 +107,43 @@ defmodule SparkEx.Unit.LocalRelationTest do
       assert {:local_relation, %LocalRelation{}} = child.rel_type
     end
   end
+
+  describe "SparkEx.Session.split_arrow_ipc_for_cache/2" do
+    test "returns the original payload when below the chunk threshold" do
+      df = Explorer.DataFrame.new(%{"id" => Enum.to_list(1..16)})
+      {:ok, ipc} = Explorer.DataFrame.dump_ipc_stream(df)
+
+      assert SparkEx.Session.split_arrow_ipc_for_cache(ipc, byte_size(ipc) * 4) == [ipc]
+    end
+
+    test "splits a large payload into multiple Arrow IPC streams" do
+      rows = Enum.to_list(1..2_000)
+      df = Explorer.DataFrame.new(%{"id" => rows, "label" => Enum.map(rows, &Integer.to_string/1)})
+      {:ok, ipc} = Explorer.DataFrame.dump_ipc_stream(df)
+
+      chunk_size = max(1, div(byte_size(ipc), 4))
+
+      chunks = SparkEx.Session.split_arrow_ipc_for_cache(ipc, chunk_size)
+
+      assert length(chunks) > 1, "expected the helper to produce more than one chunk"
+
+      # Each chunk must be its own valid IPC stream.
+      decoded =
+        for chunk <- chunks do
+          {:ok, df} = Explorer.DataFrame.load_ipc_stream(chunk)
+          df
+        end
+
+      total_rows = Enum.sum(Enum.map(decoded, &Explorer.DataFrame.n_rows/1))
+      assert total_rows == length(rows)
+
+      # And concatenating them back must reproduce the original data ordering.
+      reconstructed = Explorer.DataFrame.concat_rows(decoded)
+      assert Explorer.DataFrame.to_columns(reconstructed) == Explorer.DataFrame.to_columns(df)
+    end
+
+    test "falls back to the single-chunk list when the input cannot be decoded" do
+      assert SparkEx.Session.split_arrow_ipc_for_cache(<<0, 0, 0, 0>>, 1) == [<<0, 0, 0, 0>>]
+    end
+  end
 end

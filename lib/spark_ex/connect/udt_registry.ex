@@ -19,6 +19,21 @@ defmodule SparkEx.Connect.UDTRegistry do
   The default behaviour is unchanged: when no callback is registered
   the raw value is returned as-is.
 
+  ## Multi-tenancy
+
+  The registry is process-global — there is a single ETS table shared by
+  every `SparkEx.Session` running in the same VM. Re-registering a class
+  name from one session changes the deserializer that every other session
+  observes. If you run multiple sessions against different Spark clusters
+  with conflicting UDT classes, register a different callback under each
+  cluster's logical `type` field rather than its `jvm_class`, or wrap your
+  registrations so different sessions cannot clobber each other.
+
+  Registering the same `(class_name, fun)` pair twice is a no-op. Replacing
+  an existing callback with a different function emits a warning at runtime
+  to surface the multi-tenant clobber risk; pass `replace?: true` to
+  `register/3` to opt out of the warning when the replacement is intentional.
+
   ## Examples
 
       SparkEx.Connect.UDTRegistry.register("org.example.PointUDT", fn raw ->
@@ -28,6 +43,8 @@ defmodule SparkEx.Connect.UDTRegistry do
         %MyApp.Point{x: x, y: y}
       end)
   """
+
+  require Logger
 
   @table :spark_ex_udt_deserializers
 
@@ -50,12 +67,38 @@ defmodule SparkEx.Connect.UDTRegistry do
   UDT proto: a JVM class name (e.g. `"org.apache.spark.ml.linalg.VectorUDT"`),
   a Python class name, or the logical `type` field. The same callback can
   be registered under multiple names by calling this function repeatedly.
+
+  ## Options
+
+  - `:replace?` — when `true`, suppress the warning emitted when an existing
+    registration for `class_name` is overwritten with a different function.
+    Defaults to `false` so accidental cross-session clobbers are visible.
   """
-  @spec register(String.t(), deserializer()) :: :ok
-  def register(class_name, fun) when is_binary(class_name) and is_function(fun, 1) do
+  @spec register(String.t(), deserializer(), keyword()) :: :ok
+  def register(class_name, fun, opts \\ [])
+      when is_binary(class_name) and is_function(fun, 1) and is_list(opts) do
     ensure_table()
-    :ets.insert(@table, {class_name, fun})
-    :ok
+    replace? = Keyword.get(opts, :replace?, false)
+
+    case :ets.lookup(@table, class_name) do
+      [{^class_name, ^fun}] ->
+        :ok
+
+      [{^class_name, existing}] when is_function(existing, 1) and not replace? ->
+        Logger.warning(fn ->
+          "SparkEx.Connect.UDTRegistry: replacing existing deserializer for #{inspect(class_name)} " <>
+            "with a different function. The registry is process-global and shared across all " <>
+            "SparkEx.Session instances; pass `replace?: true` to silence this warning if the " <>
+            "replacement is intentional."
+        end)
+
+        :ets.insert(@table, {class_name, fun})
+        :ok
+
+      _ ->
+        :ets.insert(@table, {class_name, fun})
+        :ok
+    end
   end
 
   @doc """
