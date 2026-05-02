@@ -1896,48 +1896,57 @@ defmodule SparkEx.Connect.Client do
           next_attempt
         )
 
-      # Recover from missing operation/session by re-issuing ExecutePlan,
-      # *regardless of how many items have arrived* — once the operation is
-      # gone, partial progress is worthless and the only path forward is a
-      # fresh execution. Surface RESPONSE_ALREADY_RECEIVED separately so the
-      # caller knows the previous response was already consumed by another
-      # client and reattach is unrecoverable.
+      # Surface RESPONSE_ALREADY_RECEIVED directly — the previous response
+      # was already consumed by another client and reattach is unrecoverable.
       {:error,
        %SparkEx.Error.Remote{error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED"} =
            remote} ->
         {:error, remote}
 
+      # Recover from missing operation/session by re-issuing ExecutePlan ONLY
+      # when nothing has been buffered yet (no items collected and no
+      # response_id seen). If partial responses already arrived, a fresh
+      # ExecutePlan would duplicate them and dropping the buffer would
+      # silently lose data — both unsafe — so we surface
+      # `SparkEx.Error.ResponseAlreadyReceived` to mirror PySpark's
+      # RESPONSE_ALREADY_RECEIVED contract.
       {:error, %SparkEx.Error.Remote{} = remote}
       when remote.error_class in [
              "INVALID_HANDLE.OPERATION_NOT_FOUND",
              "INVALID_HANDLE.SESSION_NOT_FOUND"
            ] ->
-        # The operation/session is gone server-side. Whatever responses we
-        # already collected are now orphaned: re-issuing ExecutePlan will
-        # regenerate all of them, so we must drop our buffer to avoid
-        # duplicates. Reset `all_items` to [] and `final_last_id` to nil.
-        case execute_stream_fun.(request, timeout) do
-          {:ok, fresh_stream} ->
-            collect_with_reattach(
-              fresh_stream,
-              session,
-              request,
-              execute_stream_fun,
-              reattach_stream_fun,
-              release_execute_fun,
-              operation_id,
-              timeout,
-              policy,
-              [],
-              nil,
-              attempt + 1
-            )
+        if all_items == [] and is_nil(final_last_id) do
+          case execute_stream_fun.(request, timeout) do
+            {:ok, fresh_stream} ->
+              collect_with_reattach(
+                fresh_stream,
+                session,
+                request,
+                execute_stream_fun,
+                reattach_stream_fun,
+                release_execute_fun,
+                operation_id,
+                timeout,
+                policy,
+                [],
+                nil,
+                attempt + 1
+              )
 
-          {:error, %GRPC.RPCError{} = grpc_error} ->
-            {:error, Errors.from_grpc_error(grpc_error, session)}
+            {:error, %GRPC.RPCError{} = grpc_error} ->
+              {:error, Errors.from_grpc_error(grpc_error, session)}
 
-          {:error, reason} ->
-            {:error, reason}
+            {:error, reason} ->
+              {:error, reason}
+          end
+        else
+          {:error,
+           %SparkEx.Error.ResponseAlreadyReceived{
+             operation_id: operation_id,
+             last_response_id: final_last_id,
+             buffered_count: length(all_items),
+             cause: remote
+           }}
         end
 
       {:error, _} = err ->

@@ -882,11 +882,11 @@ defmodule SparkEx.Session do
                 )
             end
 
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -914,7 +914,7 @@ defmodule SparkEx.Session do
           # Disconnect channel even on RPC error to prevent resource leak
           safe_disconnect(state.channel)
           state = %{state | released: true, channel: nil}
-          {:reply, error, state}
+          reply_error(error, state)
       end
     end
   end
@@ -950,7 +950,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, interrupted_ids}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -961,7 +961,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, version}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1037,7 +1037,7 @@ defmodule SparkEx.Session do
                       {:reply, {:ok, result.rows}, state}
 
                     {:error, state} ->
-                      {:reply, error, state}
+                      reply_error(error, state)
                   end
 
                 {:error, %SparkEx.Error.Remote{} = remote} = error ->
@@ -1054,16 +1054,16 @@ defmodule SparkEx.Session do
                       {:reply, {:ok, result.rows}, state}
 
                     :error ->
-                      {:reply, error, state}
+                      reply_error(error, state)
                   end
 
                 {:error, _} = error ->
-                  {:reply, error, state}
+                  reply_error(error, state)
               end
           end
 
         {nil, error} ->
-          {:reply, error, state}
+          reply_error(error, state)
       end
     end)
   end
@@ -1076,7 +1076,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, state, proto_plan, opts}, state}
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1112,11 +1112,11 @@ defmodule SparkEx.Session do
               {:reply, {:ok, result.dataframe}, state}
 
             {:error, _} = error ->
-              {:reply, error, state}
+              reply_error(error, state)
           end
 
         {nil, error} ->
-          {:reply, error, state}
+          reply_error(error, state)
       end
     end)
   end
@@ -1142,11 +1142,11 @@ defmodule SparkEx.Session do
               {:reply, {:ok, result.arrow}, state}
 
             {:error, _} = error ->
-              {:reply, error, state}
+              reply_error(error, state)
           end
 
         {nil, error} ->
-          {:reply, error, state}
+          reply_error(error, state)
       end
     end)
   end
@@ -1169,15 +1169,15 @@ defmodule SparkEx.Session do
 
               case extract_count(result.rows) do
                 {:ok, count} -> {:reply, {:ok, count}, state}
-                {:error, _} = error -> {:reply, error, state}
+                {:error, _} = error -> reply_error(error, state)
               end
 
             {:error, _} = error ->
-              {:reply, error, state}
+              reply_error(error, state)
           end
 
         {nil, error} ->
-          {:reply, error, state}
+          reply_error(error, state)
       end
     end)
   end
@@ -1193,11 +1193,11 @@ defmodule SparkEx.Session do
             {:reply, {:ok, schema}, state}
 
           {:error, _} = error ->
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1212,11 +1212,11 @@ defmodule SparkEx.Session do
             {:reply, {:ok, explain_str}, state}
 
           {:error, _} = error ->
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1227,7 +1227,7 @@ defmodule SparkEx.Session do
         {:reply, :ok, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1238,7 +1238,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, result}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1249,7 +1249,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, result}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1260,7 +1260,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, result}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1271,7 +1271,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, result}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1282,7 +1282,7 @@ defmodule SparkEx.Session do
         {:reply, :ok, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1293,7 +1293,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, result}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1308,11 +1308,11 @@ defmodule SparkEx.Session do
             {:reply, {:ok, str}, state}
 
           {:error, _} = error ->
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1327,11 +1327,11 @@ defmodule SparkEx.Session do
             {:reply, {:ok, is_local}, state}
 
           {:error, _} = error ->
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1346,11 +1346,11 @@ defmodule SparkEx.Session do
             {:reply, {:ok, is_streaming}, state}
 
           {:error, _} = error ->
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1365,11 +1365,11 @@ defmodule SparkEx.Session do
             {:reply, {:ok, files}, state}
 
           {:error, _} = error ->
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1380,7 +1380,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, parsed}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1391,7 +1391,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, ddl}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1408,15 +1408,15 @@ defmodule SparkEx.Session do
                 {:reply, {:ok, result}, state}
 
               {:error, _} = error ->
-                {:reply, error, state}
+                reply_error(error, state)
             end
 
           {nil, error} ->
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1431,11 +1431,11 @@ defmodule SparkEx.Session do
             {:reply, {:ok, hash}, state}
 
           {:error, _} = error ->
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1450,11 +1450,11 @@ defmodule SparkEx.Session do
             {:reply, :ok, state}
 
           {:error, _} = error ->
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1469,11 +1469,11 @@ defmodule SparkEx.Session do
             {:reply, :ok, state}
 
           {:error, _} = error ->
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1488,11 +1488,11 @@ defmodule SparkEx.Session do
             {:reply, {:ok, storage_level}, state}
 
           {:error, _} = error ->
-            {:reply, error, state}
+            reply_error(error, state)
         end
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1503,7 +1503,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, statuses}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1514,7 +1514,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, summaries}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1555,7 +1555,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, df}, state}
 
       {:error, _} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1598,7 +1598,7 @@ defmodule SparkEx.Session do
         end
 
       {:error, _reason} = error ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1617,11 +1617,11 @@ defmodule SparkEx.Session do
               {:reply, :ok, state}
 
             {:error, _} = error ->
-              {:reply, error, state}
+              reply_error(error, state)
           end
 
         {nil, error} ->
-          {:reply, error, state}
+          reply_error(error, state)
       end
     end)
   end
@@ -1641,11 +1641,11 @@ defmodule SparkEx.Session do
               {:reply, {:ok, result.command_result}, state}
 
             {:error, _} = error ->
-              {:reply, error, state}
+              reply_error(error, state)
           end
 
         {nil, error} ->
-          {:reply, error, state}
+          reply_error(error, state)
       end
     end)
   end
@@ -1658,7 +1658,7 @@ defmodule SparkEx.Session do
         {:reply, {:ok, state, proto_plan, opts}, state}
 
       {nil, error} ->
-        {:reply, error, state}
+        reply_error(error, state)
     end
   end
 
@@ -1675,15 +1675,15 @@ defmodule SparkEx.Session do
 
               case extract_show_string(result.rows) do
                 {:ok, str} -> {:reply, {:ok, str}, state}
-                {:error, _} = error -> {:reply, error, state}
+                {:error, _} = error -> reply_error(error, state)
               end
 
             {:error, _} = error ->
-              {:reply, error, state}
+              reply_error(error, state)
           end
 
         {nil, error} ->
-          {:reply, error, state}
+          reply_error(error, state)
       end
     end)
   end
@@ -3054,6 +3054,44 @@ defmodule SparkEx.Session do
 
         %{state | closed: true}
     end
+  end
+
+  # Mirror the close-state path used by maybe_update_server_session/2 on
+  # success: when an RPC reply (or streaming integrity violation) carries
+  # an INVALID_HANDLE.SESSION_CHANGED signal, the server has rotated the
+  # session and the client is no longer authorized to reuse it.
+  defp maybe_close_on_error(%{closed: true} = state, _error), do: state
+
+  defp maybe_close_on_error(state, error) do
+    if SparkEx.Connect.SessionIntegrity.session_changed_error?(error) do
+      Logger.warning(
+        "spark_ex session #{state.session_id} closed: server returned " <>
+          "INVALID_HANDLE.SESSION_CHANGED (#{summarize_session_changed(error)})"
+      )
+
+      %{state | closed: true}
+    else
+      state
+    end
+  end
+
+  # Keep the warning compact and avoid leaking user-supplied details
+  # (SQL fragments, stacktraces) that may be present on the error.
+  defp summarize_session_changed({:error, inner}), do: summarize_session_changed(inner)
+
+  defp summarize_session_changed({:server_session_changed, %{pinned: pinned, got: got}}),
+    do: "pinned=#{pinned}, got=#{got}"
+
+  defp summarize_session_changed(%SparkEx.Error.Remote{error_class: class})
+       when is_binary(class),
+       do: "error_class=#{class}"
+
+  defp summarize_session_changed(%SparkEx.Error.Remote{}), do: "error_class=unknown"
+
+  defp summarize_session_changed(_), do: "source=unknown"
+
+  defp reply_error(error, state) do
+    {:reply, error, maybe_close_on_error(state, error)}
   end
 
   @spark_ex_version Mix.Project.config()[:version]

@@ -74,6 +74,24 @@ defmodule SparkEx.Connect.SessionIntegrityTest do
 
       refute SessionIntegrity.session_changed_error?(:other)
     end
+
+    test "matches local server-side rotation tuples" do
+      assert SessionIntegrity.session_changed_error?(
+               {:server_session_changed, %{pinned: "a", got: "b"}}
+             )
+    end
+
+    test "unwraps {:error, _} replies" do
+      assert SessionIntegrity.session_changed_error?(
+               {:error, %SparkEx.Error.Remote{error_class: "INVALID_HANDLE.SESSION_CHANGED"}}
+             )
+
+      assert SessionIntegrity.session_changed_error?(
+               {:error, {:server_session_changed, %{pinned: "a", got: "b"}}}
+             )
+
+      refute SessionIntegrity.session_changed_error?({:error, :session_released})
+    end
   end
 
   describe "decode_stream integrity enforcement" do

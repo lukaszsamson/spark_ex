@@ -48,6 +48,32 @@ defmodule SparkEx.Error do
     defp format_bytes(bytes), do: "#{bytes} bytes"
   end
 
+  defmodule ResponseAlreadyReceived do
+    @moduledoc """
+    Raised when reattach discovers the operation/session is gone server-side
+    after the client has already buffered partial responses.
+
+    Mirrors PySpark's `RESPONSE_ALREADY_RECEIVED`: a fresh `ExecutePlan` would
+    duplicate already-consumed responses, and discarding the buffer would
+    silently drop user-visible data, so neither recovery path is safe.
+    """
+    defexception [:operation_id, :last_response_id, :buffered_count, :cause]
+
+    @type t :: %__MODULE__{
+            operation_id: String.t() | nil,
+            last_response_id: String.t() | nil,
+            buffered_count: non_neg_integer(),
+            cause: term()
+          }
+
+    @impl true
+    def message(%__MODULE__{} = e) do
+      "Reattach failed after #{e.buffered_count} response(s) were already buffered " <>
+        "(operation_id=#{inspect(e.operation_id)}, last_response_id=#{inspect(e.last_response_id)}). " <>
+        "Re-issuing ExecutePlan would duplicate consumed responses; the previous result is unrecoverable."
+    end
+  end
+
   defmodule Remote do
     @moduledoc """
     A structured error from the Spark Connect server.
