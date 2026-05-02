@@ -108,6 +108,47 @@ defmodule SparkEx.Unit.LocalRelationTest do
     end
   end
 
+  describe "SparkEx.Session.split_explorer_dataframe_for_cache/2" do
+    test "returns a single-chunk list for empty / single-row frames" do
+      empty = Explorer.DataFrame.new(%{"id" => []})
+      assert {:ok, [chunk]} = SparkEx.Session.split_explorer_dataframe_for_cache(empty, 1)
+      assert {:ok, decoded} = Explorer.DataFrame.load_ipc_stream(chunk)
+      assert Explorer.DataFrame.n_rows(decoded) == 0
+
+      single = Explorer.DataFrame.new(%{"id" => [42]})
+      assert {:ok, [chunk]} = SparkEx.Session.split_explorer_dataframe_for_cache(single, 1)
+      assert {:ok, decoded} = Explorer.DataFrame.load_ipc_stream(chunk)
+      assert Explorer.DataFrame.to_columns(decoded) == Explorer.DataFrame.to_columns(single)
+    end
+
+    test "splits a large frame into multiple Arrow IPC streams" do
+      rows = Enum.to_list(1..2_000)
+
+      df =
+        Explorer.DataFrame.new(%{"id" => rows, "label" => Enum.map(rows, &Integer.to_string/1)})
+
+      {:ok, ipc} = Explorer.DataFrame.dump_ipc_stream(df)
+      chunk_size = max(1, div(byte_size(ipc), 4))
+
+      assert {:ok, chunks} = SparkEx.Session.split_explorer_dataframe_for_cache(df, chunk_size)
+      assert length(chunks) > 1, "expected the helper to produce more than one chunk"
+
+      # Each chunk must be its own valid IPC stream.
+      decoded =
+        for chunk <- chunks do
+          {:ok, decoded_df} = Explorer.DataFrame.load_ipc_stream(chunk)
+          decoded_df
+        end
+
+      total_rows = Enum.sum(Enum.map(decoded, &Explorer.DataFrame.n_rows/1))
+      assert total_rows == length(rows)
+
+      # And concatenating them back must reproduce the original data ordering.
+      reconstructed = Explorer.DataFrame.concat_rows(decoded)
+      assert Explorer.DataFrame.to_columns(reconstructed) == Explorer.DataFrame.to_columns(df)
+    end
+  end
+
   describe "SparkEx.Session.split_arrow_ipc_for_cache/2" do
     test "returns the original payload when below the chunk threshold" do
       df = Explorer.DataFrame.new(%{"id" => Enum.to_list(1..16)})
@@ -130,17 +171,13 @@ defmodule SparkEx.Unit.LocalRelationTest do
 
       assert length(chunks) > 1, "expected the helper to produce more than one chunk"
 
-      # Each chunk must be its own valid IPC stream.
+      # Concatenating the per-chunk frames must reproduce the original payload.
       decoded =
         for chunk <- chunks do
-          {:ok, df} = Explorer.DataFrame.load_ipc_stream(chunk)
-          df
+          {:ok, decoded_df} = Explorer.DataFrame.load_ipc_stream(chunk)
+          decoded_df
         end
 
-      total_rows = Enum.sum(Enum.map(decoded, &Explorer.DataFrame.n_rows/1))
-      assert total_rows == length(rows)
-
-      # And concatenating them back must reproduce the original data ordering.
       reconstructed = Explorer.DataFrame.concat_rows(decoded)
       assert Explorer.DataFrame.to_columns(reconstructed) == Explorer.DataFrame.to_columns(df)
     end

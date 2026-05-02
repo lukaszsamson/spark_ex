@@ -24,15 +24,20 @@ defmodule SparkEx.Connect.UDTRegistry do
   The registry is process-global — there is a single ETS table shared by
   every `SparkEx.Session` running in the same VM. Re-registering a class
   name from one session changes the deserializer that every other session
-  observes. If you run multiple sessions against different Spark clusters
-  with conflicting UDT classes, register a different callback under each
-  cluster's logical `type` field rather than its `jvm_class`, or wrap your
-  registrations so different sessions cannot clobber each other.
+  observes. The lookup precedence above means simply registering under the
+  logical `type` instead of `jvm_class` is *not* a workaround: another
+  session that registers the same UDT's `jvm_class` or `python_class` will
+  still take precedence. If you need multi-tenant isolation across clusters
+  with conflicting UDT classes, gate registrations centrally so two sessions
+  cannot register different callbacks under the same name.
 
   Registering the same `(class_name, fun)` pair twice is a no-op. Replacing
-  an existing callback with a different function emits a warning at runtime
-  to surface the multi-tenant clobber risk; pass `replace?: true` to
-  `register/3` to opt out of the warning when the replacement is intentional.
+  an existing callback with a different function emits a best-effort warning
+  to surface the clobber risk: the first registration is atomic via
+  `:ets.insert_new/2`, but the warn-then-overwrite path on the slow side
+  still has a small race window where two concurrent racers can replace each
+  other without a warning. Pass `replace?: true` to `register/3` to opt out
+  of the warning when the replacement is intentional.
 
   ## Examples
 
@@ -80,6 +85,19 @@ defmodule SparkEx.Connect.UDTRegistry do
     ensure_table()
     replace? = Keyword.get(opts, :replace?, false)
 
+    # Atomic fast path: if no entry exists for `class_name`, `insert_new/2`
+    # claims it without races. Only on the slow path (entry already exists)
+    # do we look up to decide whether to warn — and that branch's
+    # warn-then-overwrite is best-effort under concurrent racers (documented
+    # in the moduledoc).
+    if :ets.insert_new(@table, {class_name, fun}) do
+      :ok
+    else
+      handle_existing_registration(class_name, fun, replace?)
+    end
+  end
+
+  defp handle_existing_registration(class_name, fun, replace?) do
     case :ets.lookup(@table, class_name) do
       [{^class_name, ^fun}] ->
         :ok
