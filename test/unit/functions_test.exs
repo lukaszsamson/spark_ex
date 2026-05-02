@@ -239,9 +239,7 @@ defmodule SparkEx.FunctionsTest do
 
     test "encodes Column start/length as expressions" do
       assert %Column{
-               expr:
-                 {:fn, "slice",
-                  [{:col, "xs"}, {:col, "s"}, {:col, "l"}], false}
+               expr: {:fn, "slice", [{:col, "xs"}, {:col, "s"}, {:col, "l"}], false}
              } =
                Functions.slice(
                  Functions.col("xs"),
@@ -252,8 +250,7 @@ defmodule SparkEx.FunctionsTest do
 
     test "encodes string start/length as column refs" do
       assert %Column{
-               expr:
-                 {:fn, "slice", [{:col, "xs"}, {:col, "s"}, {:col, "l"}], false}
+               expr: {:fn, "slice", [{:col, "xs"}, {:col, "s"}, {:col, "l"}], false}
              } = Functions.slice(Functions.col("xs"), "s", "l")
     end
   end
