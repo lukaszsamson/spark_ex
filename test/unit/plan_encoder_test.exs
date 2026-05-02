@@ -303,8 +303,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                  {:literal,
                   %Expression.Literal{
                     literal_type:
-                      {:time,
-                       %Expression.Literal.Time{nano: 43_200_100_000_000, precision: 1}}
+                      {:time, %Expression.Literal.Time{nano: 43_200_100_000_000, precision: 1}}
                   }}
              } = PlanEncoder.encode_expression({:lit, ~T[12:00:00.1]})
     end
@@ -318,8 +317,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                  {:literal,
                   %Expression.Literal{
                     literal_type:
-                      {:time,
-                       %Expression.Literal.Time{nano: ^expected_nanos, precision: 6}}
+                      {:time, %Expression.Literal.Time{nano: ^expected_nanos, precision: 6}}
                   }}
              } = PlanEncoder.encode_expression({:lit, ~T[12:30:45.123456]})
     end
