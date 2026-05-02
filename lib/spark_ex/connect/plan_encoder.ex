@@ -3586,17 +3586,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_null_ordering(:nulls_first, _direction), do: :SORT_NULLS_FIRST
   defp encode_null_ordering(:nulls_last, _direction), do: :SORT_NULLS_LAST
 
-  defp time_to_nanos(%Time{microsecond: {usec, precision}} = time) do
+  defp time_to_nanos(%Time{microsecond: {usec, _precision}} = time) do
     {seconds, _usecs} = Time.to_seconds_after_midnight(time)
-    normalized_usecs = normalize_microseconds(usec, precision)
-    seconds * 1_000_000_000 + normalized_usecs * 1000
+    seconds * 1_000_000_000 + usec * 1000
   end
-
-  defp normalize_microseconds(usec, precision) when precision < 6 do
-    usec * Integer.pow(10, 6 - precision)
-  end
-
-  defp normalize_microseconds(usec, _precision), do: usec
 
   defp encode_join_type(:inner), do: :JOIN_TYPE_INNER
   defp encode_join_type(:full), do: :JOIN_TYPE_FULL_OUTER

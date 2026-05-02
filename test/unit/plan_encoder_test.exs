@@ -295,6 +295,33 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                PlanEncoder.encode_expression({:lit, naive})
     end
 
+    test "encodes time literal with sub-second precision without double-scaling" do
+      # ~T[12:00:00.1] => 43_200 seconds, 100_000 microseconds, precision 1.
+      # Nanos must be raw microseconds * 1000, not scaled to precision 6.
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:time, %Expression.Literal.Time{nano: 43_200_100_000_000, precision: 1}}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, ~T[12:00:00.1]})
+    end
+
+    test "encodes time literal with full microsecond precision" do
+      # ~T[12:30:45.123456] => seconds 45_045, micros 123_456, precision 6.
+      expected_nanos = 45_045 * 1_000_000_000 + 123_456 * 1000
+
+      assert %Expression{
+               expr_type:
+                 {:literal,
+                  %Expression.Literal{
+                    literal_type:
+                      {:time, %Expression.Literal.Time{nano: ^expected_nanos, precision: 6}}
+                  }}
+             } = PlanEncoder.encode_expression({:lit, ~T[12:30:45.123456]})
+    end
+
     test "encodes decimal/binary/complex literals" do
       assert %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:decimal, _}}}} =
                PlanEncoder.encode_expression({:lit, {:decimal, "12.34", 4, 2}})

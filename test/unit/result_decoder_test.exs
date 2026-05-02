@@ -598,6 +598,31 @@ defmodule SparkEx.Connect.ResultDecoderTest do
     end
   end
 
+  describe "column_value_transform/1" do
+    test "char(n) strips trailing spaces" do
+      dt = %Spark.Connect.DataType{
+        kind: {:char, %Spark.Connect.DataType.Char{length: 3}}
+      }
+
+      fun = ResultDecoder.column_value_transform(dt)
+      assert is_function(fun, 1)
+      assert fun.("c  ") == "c"
+    end
+
+    test "varchar(n) preserves trailing spaces" do
+      dt = %Spark.Connect.DataType{
+        kind: {:var_char, %Spark.Connect.DataType.VarChar{length: 3}}
+      }
+
+      assert ResultDecoder.column_value_transform(dt) == nil
+    end
+
+    test "string returns nil (no transform)" do
+      dt = %Spark.Connect.DataType{kind: {:string, %Spark.Connect.DataType.String{}}}
+      assert ResultDecoder.column_value_transform(dt) == nil
+    end
+  end
+
   defp build_multi_row_ipc_data(n) do
     build_ipc_data(Enum.to_list(1..n))
   end
