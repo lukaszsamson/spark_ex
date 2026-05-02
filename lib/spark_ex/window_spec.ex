@@ -103,6 +103,18 @@ defmodule SparkEx.WindowSpec do
   @jvm_long_min -bsl(1, 63)
   @jvm_long_max bsl(1, 63) - 1
 
+  defp clamp_boundary(:unbounded_following, :lower) do
+    raise ArgumentError,
+          ":unbounded_following cannot be used as the lower frame bound; " <>
+            "use :unbounded_preceding, :current_row, or an integer offset"
+  end
+
+  defp clamp_boundary(:unbounded_preceding, :upper) do
+    raise ArgumentError,
+          ":unbounded_preceding cannot be used as the upper frame bound; " <>
+            "use :unbounded_following, :current_row, or an integer offset"
+  end
+
   defp clamp_boundary(value, _position)
        when value in [:unbounded_preceding, :unbounded_following],
        do: value

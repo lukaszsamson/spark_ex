@@ -142,4 +142,26 @@ defmodule SparkEx.M11.WindowTest do
       assert spec.partition_spec == [{:col, "dept"}]
     end
   end
+
+  describe "WindowSpec directional unbounded boundaries" do
+    test "rejects :unbounded_following as the lower bound" do
+      assert_raise ArgumentError, ~r/:unbounded_following cannot be used as the lower/, fn ->
+        Window.rows_between(:unbounded_following, :current_row)
+      end
+
+      assert_raise ArgumentError, ~r/:unbounded_following cannot be used as the lower/, fn ->
+        Window.range_between(:unbounded_following, 0)
+      end
+    end
+
+    test "rejects :unbounded_preceding as the upper bound" do
+      assert_raise ArgumentError, ~r/:unbounded_preceding cannot be used as the upper/, fn ->
+        Window.rows_between(:current_row, :unbounded_preceding)
+      end
+
+      assert_raise ArgumentError, ~r/:unbounded_preceding cannot be used as the upper/, fn ->
+        Window.range_between(0, :unbounded_preceding)
+      end
+    end
+  end
 end

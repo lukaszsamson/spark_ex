@@ -80,11 +80,12 @@ defmodule SparkEx.Integration.M13.UDFTVFTest do
       function_name = "test_udtf_#{System.unique_integer([:positive])}"
 
       # Register a UDTF with dummy Python command bytes
+      # (must start with the pickle protocol header for client-side validation)
       result =
         SparkEx.Session.register_udtf(
           session,
           function_name,
-          <<0, 0, 0>>,
+          <<0x80, 5, 0, 0, 0>>,
           eval_type: 0,
           python_ver: "3.11"
         )

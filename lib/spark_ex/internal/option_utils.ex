@@ -20,7 +20,8 @@ defmodule SparkEx.Internal.OptionUtils do
   @doc """
   Converts a map or keyword list to a string-keyed, string-valued map.
 
-  Nil values are kept. Use `stringify_options_reject_nil/1` to reject them.
+  Raises `ArgumentError` for nil values (via `normalize_option_value/1`).
+  Use `stringify_options_reject_nil/1` if you want nils filtered out.
   """
   @spec stringify_options(map() | keyword()) :: %{String.t() => String.t()}
   def stringify_options(opts) when is_map(opts) do
@@ -32,7 +33,8 @@ defmodule SparkEx.Internal.OptionUtils do
   end
 
   @doc """
-  Like `stringify_options/1` but rejects nil values.
+  Like `stringify_options/1` but silently drops entries whose value is `nil`.
+  Non-nil values are still validated by `normalize_option_value/1`.
   """
   @spec stringify_options_reject_nil(map() | keyword()) :: %{String.t() => String.t()}
   def stringify_options_reject_nil(opts) when is_map(opts) do

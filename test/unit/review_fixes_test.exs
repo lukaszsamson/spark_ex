@@ -418,6 +418,37 @@ defmodule SparkEx.ReviewFixesTest do
       # Cleanup
       SparkEx.ProgressHandlerRegistry.clear(session_id)
     end
+
+    test "two distinct function terms register as separate handlers" do
+      session_id = "test-dedup-#{System.unique_integer([:positive])}"
+      handler_a = fn _ -> :a end
+      handler_b = fn _ -> :b end
+
+      :ok = SparkEx.ProgressHandlerRegistry.register(session_id, handler_a)
+      :ok = SparkEx.ProgressHandlerRegistry.register(session_id, handler_b)
+
+      entries = :ets.lookup(:spark_ex_progress_handlers, session_id)
+      assert length(entries) == 2
+
+      SparkEx.ProgressHandlerRegistry.clear(session_id)
+    end
+
+    test ":id provides deterministic dedup across function terms" do
+      session_id = "test-dedup-#{System.unique_integer([:positive])}"
+      handler_a = fn _ -> :a end
+      handler_b = fn _ -> :b end
+
+      :ok = SparkEx.ProgressHandlerRegistry.register(session_id, handler_a, id: :tag)
+      :ok = SparkEx.ProgressHandlerRegistry.register(session_id, handler_b, id: :tag)
+
+      entries = :ets.lookup(:spark_ex_progress_handlers, session_id)
+      assert length(entries) == 1
+
+      :ok = SparkEx.ProgressHandlerRegistry.remove(session_id, handler_b, id: :tag)
+      assert :ets.lookup(:spark_ex_progress_handlers, session_id) == []
+
+      SparkEx.ProgressHandlerRegistry.clear(session_id)
+    end
   end
 
   # ── TypeMapper.data_type_to_ddl preserves decimal precision (REV_OPUS #29) ──
