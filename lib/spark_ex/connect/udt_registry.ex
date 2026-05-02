@@ -19,6 +19,26 @@ defmodule SparkEx.Connect.UDTRegistry do
   The default behaviour is unchanged: when no callback is registered
   the raw value is returned as-is.
 
+  ## Multi-tenancy
+
+  The registry is process-global — there is a single ETS table shared by
+  every `SparkEx.Session` running in the same VM. Re-registering a class
+  name from one session changes the deserializer that every other session
+  observes. The lookup precedence above means simply registering under the
+  logical `type` instead of `jvm_class` is *not* a workaround: another
+  session that registers the same UDT's `jvm_class` or `python_class` will
+  still take precedence. If you need multi-tenant isolation across clusters
+  with conflicting UDT classes, gate registrations centrally so two sessions
+  cannot register different callbacks under the same name.
+
+  Registering the same `(class_name, fun)` pair twice is a no-op. Replacing
+  an existing callback with a different function emits a best-effort warning
+  to surface the clobber risk: the first registration is atomic via
+  `:ets.insert_new/2`, but the warn-then-overwrite path on the slow side
+  still has a small race window where two concurrent racers can replace each
+  other without a warning. Pass `replace?: true` to `register/3` to opt out
+  of the warning when the replacement is intentional.
+
   ## Examples
 
       SparkEx.Connect.UDTRegistry.register("org.example.PointUDT", fn raw ->
@@ -28,6 +48,8 @@ defmodule SparkEx.Connect.UDTRegistry do
         %MyApp.Point{x: x, y: y}
       end)
   """
+
+  require Logger
 
   @table :spark_ex_udt_deserializers
 
@@ -50,12 +72,51 @@ defmodule SparkEx.Connect.UDTRegistry do
   UDT proto: a JVM class name (e.g. `"org.apache.spark.ml.linalg.VectorUDT"`),
   a Python class name, or the logical `type` field. The same callback can
   be registered under multiple names by calling this function repeatedly.
+
+  ## Options
+
+  - `:replace?` — when `true`, suppress the warning emitted when an existing
+    registration for `class_name` is overwritten with a different function.
+    Defaults to `false` so accidental cross-session clobbers are visible.
   """
-  @spec register(String.t(), deserializer()) :: :ok
-  def register(class_name, fun) when is_binary(class_name) and is_function(fun, 1) do
+  @spec register(String.t(), deserializer(), keyword()) :: :ok
+  def register(class_name, fun, opts \\ [])
+      when is_binary(class_name) and is_function(fun, 1) and is_list(opts) do
     ensure_table()
-    :ets.insert(@table, {class_name, fun})
-    :ok
+    replace? = Keyword.get(opts, :replace?, false)
+
+    # Atomic fast path: if no entry exists for `class_name`, `insert_new/2`
+    # claims it without races. Only on the slow path (entry already exists)
+    # do we look up to decide whether to warn — and that branch's
+    # warn-then-overwrite is best-effort under concurrent racers (documented
+    # in the moduledoc).
+    if :ets.insert_new(@table, {class_name, fun}) do
+      :ok
+    else
+      handle_existing_registration(class_name, fun, replace?)
+    end
+  end
+
+  defp handle_existing_registration(class_name, fun, replace?) do
+    case :ets.lookup(@table, class_name) do
+      [{^class_name, ^fun}] ->
+        :ok
+
+      [{^class_name, existing}] when is_function(existing, 1) and not replace? ->
+        Logger.warning(fn ->
+          "SparkEx.Connect.UDTRegistry: replacing existing deserializer for #{inspect(class_name)} " <>
+            "with a different function. The registry is process-global and shared across all " <>
+            "SparkEx.Session instances; pass `replace?: true` to silence this warning if the " <>
+            "replacement is intentional."
+        end)
+
+        :ets.insert(@table, {class_name, fun})
+        :ok
+
+      _ ->
+        :ets.insert(@table, {class_name, fun})
+        :ok
+    end
   end
 
   @doc """

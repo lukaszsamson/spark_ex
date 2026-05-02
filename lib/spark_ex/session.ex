@@ -614,8 +614,9 @@ defmodule SparkEx.Session do
 
   For small data (under the cache threshold), the data is embedded directly
   in the plan as a `LocalRelation`. For larger data, the Arrow IPC bytes
-  are uploaded to the server via `AddArtifacts` and referenced via
-  `CachedLocalRelation`.
+  are split into one or more chunks, each uploaded to the server via
+  `AddArtifacts` and referenced together via `ChunkedCachedLocalRelation`
+  (mirroring PySpark's `_chunk_local_relation`).
 
   ## Options
 
@@ -623,6 +624,11 @@ defmodule SparkEx.Session do
     inferred from the Explorer.DataFrame or from the data.
   - `:cache_threshold` — byte size threshold above which data is cached on the
     server instead of inlined (default: 4 MB)
+  - `:cache_chunk_size` — maximum byte size of each Arrow IPC chunk uploaded as
+    a separate cache artifact when the payload exceeds `:cache_threshold`
+    (default: same as `:cache_threshold`). Mirrors PySpark's
+    `_chunk_local_relation` behaviour, which splits a large Arrow stream into
+    multiple per-chunk cache entries instead of uploading a single blob.
   """
   @spec create_dataframe(GenServer.server(), term(), keyword()) ::
           {:ok, SparkEx.DataFrame.t()} | {:error, term()}
@@ -1514,15 +1520,34 @@ defmodule SparkEx.Session do
 
   def handle_call({:create_dataframe, data, opts}, from, state) do
     case prepare_local_data(data, opts) do
-      {:ok, {:local_relation, arrow_ipc, schema_ddl}} ->
+      {:ok, {:local_relation, arrow_ipc, schema_ddl, source_df}} ->
         cache_threshold = Keyword.get(opts, :cache_threshold, 4 * 1024 * 1024)
 
-        if byte_size(arrow_ipc) <= cache_threshold do
-          plan = {:local_relation, arrow_ipc, schema_ddl}
-          df = %SparkEx.DataFrame{session: self(), plan: plan}
-          {:reply, {:ok, df}, state}
-        else
-          handle_call({:create_dataframe_chunked_cache, arrow_ipc, schema_ddl}, from, state)
+        cond do
+          not (is_integer(cache_threshold) and cache_threshold >= 0) ->
+            {:reply, {:error, {:invalid_option, {:cache_threshold, cache_threshold}}}, state}
+
+          byte_size(arrow_ipc) <= cache_threshold ->
+            plan = {:local_relation, arrow_ipc, schema_ddl}
+            df = %SparkEx.DataFrame{session: self(), plan: plan}
+            {:reply, {:ok, df}, state}
+
+          true ->
+            chunk_size =
+              Keyword.get(opts, :cache_chunk_size, max(cache_threshold, 1))
+
+            if is_integer(chunk_size) and chunk_size > 0 do
+              # Drop arrow_ipc from this scope before re-encoding per chunk so
+              # peak memory stays close to the size of the source DataFrame
+              # rather than 2x that for very large payloads.
+              handle_call(
+                {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_size},
+                from,
+                state
+              )
+            else
+              {:reply, {:error, {:invalid_option, {:cache_chunk_size, chunk_size}}}, state}
+            end
         end
 
       {:ok, {:sql_relation, query, args}} ->
@@ -1534,24 +1559,43 @@ defmodule SparkEx.Session do
     end
   end
 
-  def handle_call({:create_dataframe_chunked_cache, arrow_ipc, schema_ddl}, _from, state) do
-    # Upload data as cache artifact
-    data_hash = :crypto.hash(:sha256, arrow_ipc) |> Base.encode16(case: :lower)
-    data_artifact = {"cache/#{data_hash}", arrow_ipc}
+  def handle_call(
+        {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_size},
+        _from,
+        state
+      ) do
+    case split_explorer_dataframe_for_cache(source_df, chunk_size) do
+      {:ok, data_chunks} ->
+        {data_hashes, data_artifacts} =
+          data_chunks
+          |> Enum.map(fn chunk ->
+            hash = :crypto.hash(:sha256, chunk) |> Base.encode16(case: :lower)
+            {hash, {"cache/#{hash}", chunk}}
+          end)
+          |> Enum.unzip()
 
-    # Upload schema DDL as separate cache artifact (no "schema_" prefix —
-    # the server looks up schemaHash directly in the cache key space)
-    schema_bytes = if schema_ddl, do: schema_ddl, else: ""
-    schema_hash = :crypto.hash(:sha256, schema_bytes) |> Base.encode16(case: :lower)
-    schema_artifact = {"cache/#{schema_hash}", schema_bytes}
+        # Upload schema DDL as separate cache artifact (no "schema_" prefix —
+        # the server looks up schemaHash directly in the cache key space)
+        schema_bytes = if schema_ddl, do: schema_ddl, else: ""
+        schema_hash = :crypto.hash(:sha256, schema_bytes) |> Base.encode16(case: :lower)
+        schema_artifact = {"cache/#{schema_hash}", schema_bytes}
 
-    artifacts = [data_artifact, schema_artifact]
+        # Dedupe by artifact name so identical chunks (or chunk == schema bytes
+        # by coincidence) only get uploaded once. The plan still references
+        # each hash in original order via `data_hashes`.
+        artifacts =
+          (data_artifacts ++ [schema_artifact])
+          |> Enum.uniq_by(fn {name, _data} -> name end)
 
-    case upload_missing_cache_artifacts(state, artifacts) do
-      {:ok, state} ->
-        plan = {:chunked_cached_local_relation, [data_hash], schema_hash}
-        df = %SparkEx.DataFrame{session: self(), plan: plan}
-        {:reply, {:ok, df}, state}
+        case upload_missing_cache_artifacts(state, artifacts) do
+          {:ok, state} ->
+            plan = {:chunked_cached_local_relation, data_hashes, schema_hash}
+            df = %SparkEx.DataFrame{session: self(), plan: plan}
+            {:reply, {:ok, df}, state}
+
+          {:error, _reason} = error ->
+            {:reply, error, state}
+        end
 
       {:error, _reason} = error ->
         {:reply, error, state}
@@ -3075,7 +3119,10 @@ defmodule SparkEx.Session do
         prepare_sql_json_relation(data, schema_ddl)
       else
         case Explorer.DataFrame.dump_ipc_stream(data) do
-          {:ok, ipc_bytes} -> {:ok, {:local_relation, ipc_bytes, schema_ddl}}
+          # Pass the source Explorer.DataFrame alongside the IPC bytes so the
+          # chunked-cache path can re-slice it natively without a full IPC
+          # decode round-trip on multi-hundred-MB payloads.
+          {:ok, ipc_bytes} -> {:ok, {:local_relation, ipc_bytes, schema_ddl, data}}
           {:error, reason} -> {:error, {:arrow_encode_error, reason}}
         end
       end
@@ -4129,6 +4176,109 @@ defmodule SparkEx.Session do
   end
 
   defp forward_to_fs_artifact_name(dest_path), do: "forward_to_fs" <> dest_path
+
+  # Splits an Explorer.DataFrame into a list of independently-decodable Arrow
+  # IPC streams whose serialized size is bounded (best-effort) by
+  # `chunk_size_bytes`. Each chunk carries its own schema header so the server
+  # can decode them independently and concatenate the resulting rows.
+  #
+  # Mirrors PySpark's `_chunk_local_relation` (session.py). Driving this from
+  # the source DataFrame avoids a full Arrow IPC decode + re-encode round-trip
+  # on the hot path for multi-hundred-MB / GB payloads — only the per-chunk
+  # encodes happen, plus one small head-sample to estimate bytes/row.
+  @doc false
+  @spec split_explorer_dataframe_for_cache(Explorer.DataFrame.t(), pos_integer()) ::
+          {:ok, [binary(), ...]} | {:error, term()}
+  def split_explorer_dataframe_for_cache(%Explorer.DataFrame{} = df, chunk_size_bytes)
+      when is_integer(chunk_size_bytes) and chunk_size_bytes > 0 do
+    total_rows = Explorer.DataFrame.n_rows(df)
+
+    cond do
+      total_rows <= 1 ->
+        case dump_ipc_stream_safe(df) do
+          {:ok, ipc} -> {:ok, [ipc]}
+          {:error, _} = error -> error
+        end
+
+      true ->
+        with {:ok, rows_per_chunk} <-
+               estimate_rows_per_chunk(df, total_rows, chunk_size_bytes) do
+          do_split_dataframe(df, total_rows, rows_per_chunk, 0, [])
+        end
+    end
+  end
+
+  # Public bytes-based variant for callers that only have the encoded IPC
+  # payload. Wraps `Explorer.DataFrame.load_ipc_stream/1` in try/rescue
+  # because that function can raise on malformed IPC; in that case (and on a
+  # documented `{:error, _}`) we fall back to returning the input unchanged
+  # so the caller still produces a valid (single-hash) plan.
+  @doc false
+  @spec split_arrow_ipc_for_cache(binary(), pos_integer()) :: [binary(), ...]
+  def split_arrow_ipc_for_cache(arrow_ipc, chunk_size_bytes)
+      when is_binary(arrow_ipc) and is_integer(chunk_size_bytes) and chunk_size_bytes > 0 do
+    if byte_size(arrow_ipc) <= chunk_size_bytes do
+      [arrow_ipc]
+    else
+      case load_ipc_stream_safe(arrow_ipc) do
+        {:ok, df} ->
+          case split_explorer_dataframe_for_cache(df, chunk_size_bytes) do
+            {:ok, chunks} -> chunks
+            {:error, _} -> [arrow_ipc]
+          end
+
+        {:error, _} ->
+          [arrow_ipc]
+      end
+    end
+  end
+
+  defp load_ipc_stream_safe(arrow_ipc) do
+    Explorer.DataFrame.load_ipc_stream(arrow_ipc)
+  rescue
+    error -> {:error, {:arrow_decode_error, error}}
+  end
+
+  defp dump_ipc_stream_safe(df) do
+    case Explorer.DataFrame.dump_ipc_stream(df) do
+      {:ok, _} = ok -> ok
+      {:error, reason} -> {:error, {:arrow_encode_error, reason}}
+    end
+  rescue
+    error -> {:error, {:arrow_encode_error, error}}
+  end
+
+  defp estimate_rows_per_chunk(df, total_rows, chunk_size_bytes) do
+    sample_rows = min(total_rows, 256)
+    sample_df = Explorer.DataFrame.head(df, sample_rows)
+
+    case dump_ipc_stream_safe(sample_df) do
+      {:ok, sample_ipc} ->
+        bytes_per_row = max(1, div(byte_size(sample_ipc), max(1, sample_rows)))
+        {:ok, max(1, div(chunk_size_bytes, bytes_per_row))}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp do_split_dataframe(_df, total_rows, _rows_per_chunk, offset, acc)
+       when offset >= total_rows do
+    {:ok, Enum.reverse(acc)}
+  end
+
+  defp do_split_dataframe(df, total_rows, rows_per_chunk, offset, acc) do
+    length = min(rows_per_chunk, total_rows - offset)
+    slice = Explorer.DataFrame.slice(df, offset, length)
+
+    case dump_ipc_stream_safe(slice) do
+      {:ok, bytes} ->
+        do_split_dataframe(df, total_rows, rows_per_chunk, offset + length, [bytes | acc])
+
+      {:error, _} = error ->
+        error
+    end
+  end
 
   defp upload_missing_cache_artifacts(state, artifacts) do
     names = Enum.map(artifacts, fn {name, _data} -> name end)
