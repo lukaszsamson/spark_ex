@@ -2600,9 +2600,6 @@ defmodule SparkEx.DataFrame do
 
   defp primitive_hint?(_), do: false
 
-  defp normalize_to_column(%Column{} = col), do: col
-  defp normalize_to_column(name) when is_binary(name), do: %Column{expr: {:col, name}}
-
   defp normalize_as_of_column(%Column{} = col, _df), do: col
 
   defp normalize_as_of_column(name, %__MODULE__{} = df) when is_binary(name) do
