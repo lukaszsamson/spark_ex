@@ -289,25 +289,45 @@ defmodule SparkEx.MissCodex2Test do
   # ── #15 as_of_join accepts string columns ──
 
   describe "#15 as_of_join string columns" do
-    test "accepts string left_as_of" do
-      result = DataFrame.as_of_join(make_df(), make_df(), "t1", Functions.col("t2"))
+    test "accepts string left_as_of (binds to left plan)" do
+      left = make_df()
+      right = make_df()
+      result = DataFrame.as_of_join(left, right, "t1", Functions.col("t2"))
 
-      assert %DataFrame{plan: {:as_of_join, _, _, {:col, "t1"}, {:col, "t2"}, _, _, _, _, _, _}} =
-               result
+      left_plan = left.plan
+
+      assert %DataFrame{
+               plan:
+                 {:as_of_join, _, _, {:col, "t1", ^left_plan}, {:col, "t2"}, _, _, _, _, _, _}
+             } = result
     end
 
-    test "accepts string right_as_of" do
-      result = DataFrame.as_of_join(make_df(), make_df(), Functions.col("t1"), "t2")
+    test "accepts string right_as_of (binds to right plan)" do
+      left = make_df()
+      right = make_df()
+      result = DataFrame.as_of_join(left, right, Functions.col("t1"), "t2")
 
-      assert %DataFrame{plan: {:as_of_join, _, _, {:col, "t1"}, {:col, "t2"}, _, _, _, _, _, _}} =
-               result
+      right_plan = right.plan
+
+      assert %DataFrame{
+               plan:
+                 {:as_of_join, _, _, {:col, "t1"}, {:col, "t2", ^right_plan}, _, _, _, _, _, _}
+             } = result
     end
 
-    test "accepts both strings" do
-      result = DataFrame.as_of_join(make_df(), make_df(), "t1", "t2")
+    test "accepts both strings (binds each to its own plan)" do
+      left = make_df()
+      right = make_df()
+      result = DataFrame.as_of_join(left, right, "t1", "t2")
 
-      assert %DataFrame{plan: {:as_of_join, _, _, {:col, "t1"}, {:col, "t2"}, _, _, _, _, _, _}} =
-               result
+      left_plan = left.plan
+      right_plan = right.plan
+
+      assert %DataFrame{
+               plan:
+                 {:as_of_join, _, _, {:col, "t1", ^left_plan}, {:col, "t2", ^right_plan}, _, _,
+                  _, _, _, _}
+             } = result
     end
   end
 
@@ -696,11 +716,16 @@ defmodule SparkEx.MissCodex2Test do
   # ── #40 sort_within_partitions ascending/ordinal support ──
 
   describe "#40 sort_within_partitions ascending keyword and ordinals" do
-    test "accepts integer ordinal columns" do
-      result = DataFrame.sort_within_partitions(make_df(), [0, 1])
-      assert %DataFrame{plan: {:sort, _, sort_exprs, false}} = result
-      assert length(sort_exprs) == 2
-      [{:sort_order, {:col, "_c0"}, _, _}, {:sort_order, {:col, "_c1"}, _, _}] = sort_exprs
+    test "rejects integer ordinal columns" do
+      assert_raise ArgumentError, ~r/integer sort keys are not supported/, fn ->
+        DataFrame.sort_within_partitions(make_df(), [0, 1])
+      end
+    end
+
+    test "rejects integer ordinal columns with explicit ascending flag" do
+      assert_raise ArgumentError, ~r/integer sort keys are not supported/, fn ->
+        DataFrame.sort_within_partitions(make_df(), [0], ascending: true)
+      end
     end
 
     test "ascending: false reverses all columns" do

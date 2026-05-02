@@ -914,20 +914,41 @@ defmodule SparkEx.Connect.PlanEncoder do
       right: right
     }
 
-    as_of_join =
-      if left_as_of == {:lit, nil},
-        do: as_of_join,
-        else: %{as_of_join | left_as_of: encode_expression(left_as_of)}
+    left_plan_id = left.common.plan_id
+    right_plan_id = right.common.plan_id
 
     as_of_join =
-      if right_as_of == {:lit, nil},
-        do: as_of_join,
-        else: %{as_of_join | right_as_of: encode_expression(right_as_of)}
+      if left_as_of == {:lit, nil} do
+        as_of_join
+      else
+        remapped =
+          left_as_of
+          |> remap_join_condition_plan_ids(left_plan_id, right_plan_id)
+
+        %{as_of_join | left_as_of: encode_expression(remapped)}
+      end
 
     as_of_join =
-      if join_expr == {:lit, nil},
-        do: as_of_join,
-        else: %{as_of_join | join_expr: encode_expression(join_expr)}
+      if right_as_of == {:lit, nil} do
+        as_of_join
+      else
+        remapped =
+          right_as_of
+          |> remap_join_condition_plan_ids(right_plan_id, left_plan_id)
+
+        %{as_of_join | right_as_of: encode_expression(remapped)}
+      end
+
+    as_of_join =
+      if join_expr == {:lit, nil} do
+        as_of_join
+      else
+        remapped =
+          join_expr
+          |> remap_join_condition_plan_ids(left_plan_id, right_plan_id)
+
+        %{as_of_join | join_expr: encode_expression(remapped)}
+      end
 
     as_of_join =
       if using_columns == [],

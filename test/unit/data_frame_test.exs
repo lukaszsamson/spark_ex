@@ -654,6 +654,30 @@ defmodule SparkEx.DataFrameTest do
                   [{:sort_order, {:col, "id"}, :asc, :nulls_first}], 10}
              } = result
     end
+
+    test "raises when num_partitions is zero" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert_raise ArgumentError, ~r/num_partitions must be a positive integer/, fn ->
+        DataFrame.repartition_by_range(df, 0, [Functions.col("id")])
+      end
+    end
+
+    test "raises when num_partitions is negative" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert_raise ArgumentError, ~r/num_partitions must be a positive integer/, fn ->
+        DataFrame.repartition_by_range(df, -1, [])
+      end
+    end
+
+    test "raises when cols is empty" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+
+      assert_raise ArgumentError, ~r/cols should not be empty/, fn ->
+        DataFrame.repartition_by_range(df, 4, [])
+      end
+    end
   end
 
   describe "join/4" do
@@ -830,6 +854,21 @@ defmodule SparkEx.DataFrameTest do
       assert_raise ArgumentError, ~r/invalid join type/, fn ->
         DataFrame.as_of_join(df1, df2, Functions.col("t1"), Functions.col("t2"), join_type: 123)
       end
+    end
+
+    test "string as-of column names bind to left/right plans" do
+      left_plan = {:sql, "SELECT * FROM t1", nil}
+      right_plan = {:sql, "SELECT * FROM t2", nil}
+      df1 = %DataFrame{session: self(), plan: left_plan}
+      df2 = %DataFrame{session: self(), plan: right_plan}
+
+      result = DataFrame.as_of_join(df1, df2, "ts", "ts")
+
+      assert %DataFrame{
+               plan:
+                 {:as_of_join, ^left_plan, ^right_plan, {:col, "ts", ^left_plan},
+                  {:col, "ts", ^right_plan}, _, _, _, _, _, _}
+             } = result
     end
   end
 

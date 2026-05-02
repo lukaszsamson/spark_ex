@@ -874,6 +874,40 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert %Plan{op_type: {:root, %Relation{rel_type: {:as_of_join, as_of}}}} = encoded
       assert %Spark.Connect.AsOfJoin{join_type: "inner", allow_exact_matches: false} = as_of
     end
+
+    test "DataFrame-bound as-of columns remap to left/right child plan_ids" do
+      left_plan = {:sql, "SELECT * FROM t1", nil}
+      right_plan = {:sql, "SELECT * FROM t2", nil}
+
+      plan =
+        {:as_of_join, left_plan, right_plan, {:col, "ts", left_plan},
+         {:col, "ts", right_plan}, {:lit, nil}, [], "inner", {:lit, nil}, true, "backward"}
+
+      {encoded, _} = PlanEncoder.encode(plan, 0)
+
+      assert %Relation{rel_type: {:as_of_join, as_of}} = root_relation(encoded)
+
+      left_id = as_of.left.common.plan_id
+      right_id = as_of.right.common.plan_id
+
+      assert %Expression{
+               expr_type:
+                 {:unresolved_attribute,
+                  %Expression.UnresolvedAttribute{
+                    unparsed_identifier: "ts",
+                    plan_id: ^left_id
+                  }}
+             } = as_of.left_as_of
+
+      assert %Expression{
+               expr_type:
+                 {:unresolved_attribute,
+                  %Expression.UnresolvedAttribute{
+                    unparsed_identifier: "ts",
+                    plan_id: ^right_id
+                  }}
+             } = as_of.right_as_of
+    end
   end
 
   describe "lateral_join encoding" do
