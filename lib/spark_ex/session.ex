@@ -3022,7 +3022,7 @@ defmodule SparkEx.Session do
     if SparkEx.Connect.SessionIntegrity.session_changed_error?(error) do
       Logger.warning(
         "spark_ex session #{state.session_id} closed: server returned " <>
-          "INVALID_HANDLE.SESSION_CHANGED (#{inspect(error)})"
+          "INVALID_HANDLE.SESSION_CHANGED (#{summarize_session_changed(error)})"
       )
 
       %{state | closed: true}
@@ -3030,6 +3030,21 @@ defmodule SparkEx.Session do
       state
     end
   end
+
+  # Keep the warning compact and avoid leaking user-supplied details
+  # (SQL fragments, stacktraces) that may be present on the error.
+  defp summarize_session_changed({:error, inner}), do: summarize_session_changed(inner)
+
+  defp summarize_session_changed({:server_session_changed, %{pinned: pinned, got: got}}),
+    do: "pinned=#{pinned}, got=#{got}"
+
+  defp summarize_session_changed(%SparkEx.Error.Remote{error_class: class})
+       when is_binary(class),
+       do: "error_class=#{class}"
+
+  defp summarize_session_changed(%SparkEx.Error.Remote{}), do: "error_class=unknown"
+
+  defp summarize_session_changed(_), do: "source=unknown"
 
   defp reply_error(error, state) do
     {:reply, error, maybe_close_on_error(state, error)}
