@@ -449,6 +449,28 @@ defmodule SparkEx.ReviewFixesTest do
 
       SparkEx.ProgressHandlerRegistry.clear(session_id)
     end
+
+    test ":id re-registration replaces the previously attached handler" do
+      session_id = "test-dedup-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      handler_v1 = fn _payload -> send(parent, {:invoked, :v1}) end
+      handler_v2 = fn _payload -> send(parent, {:invoked, :v2}) end
+
+      :ok = SparkEx.ProgressHandlerRegistry.register(session_id, handler_v1, id: :tag)
+      :ok = SparkEx.ProgressHandlerRegistry.register(session_id, handler_v2, id: :tag)
+
+      :telemetry.execute(
+        [:spark_ex, :result, :progress],
+        %{},
+        %{session_id: session_id}
+      )
+
+      assert_receive {:invoked, :v2}, 200
+      refute_receive {:invoked, :v1}, 50
+
+      SparkEx.ProgressHandlerRegistry.clear(session_id)
+    end
   end
 
   # ── TypeMapper.data_type_to_ddl preserves decimal precision (REV_OPUS #29) ──

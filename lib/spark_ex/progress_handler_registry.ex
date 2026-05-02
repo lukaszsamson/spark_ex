@@ -14,7 +14,21 @@ defmodule SparkEx.ProgressHandlerRegistry do
       SparkEx.ProgressHandlerRegistry.register(session_id, handler, id: :my_handler)
       SparkEx.ProgressHandlerRegistry.remove(session_id, handler, id: :my_handler)
 
+  When `register/3` is called with an `:id` that is already registered for the
+  session, the previously attached handler is detached and replaced with the
+  new one. This makes id-based registration safe to call after a code reload
+  without leaking the stale closure.
+
   Identifiers are scoped per session.
+
+  ## Concurrency
+
+  Registration is implemented as a `lookup` followed by `insert` on a `:bag`
+  ETS table; it is not atomic. Two processes that simultaneously call
+  `register/3` for the same session and the same `:id` may both miss the
+  lookup and attach duplicate telemetry handlers. Callers that need a
+  deterministic single-attach guarantee under concurrent startup or reload
+  should serialize the call themselves (e.g. through a session GenServer).
   """
 
   require Logger
@@ -34,19 +48,22 @@ defmodule SparkEx.ProgressHandlerRegistry do
     id = Keyword.get(opts, :id)
 
     case find_handler_entry(session_id, handler, id) do
+      {:ok, {^session_id, _handler_id, ^handler, ^id}} ->
+        # Same handler term + same id: nothing to do.
+        :ok
+
+      {:ok, existing} when not is_nil(id) ->
+        # Same id, different handler term — typically a code reload. Replace
+        # the previously attached callback so future events fire the new one.
+        detach_and_delete(existing)
+        attach_new(session_id, handler, id)
+
       {:ok, _} ->
+        # Same handler term, no id — already registered.
         :ok
 
       :error ->
-        handler_id = {__MODULE__, session_id, make_ref()}
-
-        :telemetry.attach(handler_id, @event, &__MODULE__.dispatch/4, %{
-          session_id: session_id,
-          handler: handler
-        })
-
-        :ets.insert(@table, {session_id, handler_id, handler, id})
-        :ok
+        attach_new(session_id, handler, id)
     end
   end
 
@@ -59,9 +76,8 @@ defmodule SparkEx.ProgressHandlerRegistry do
     id = Keyword.get(opts, :id)
 
     case find_handler_entry(session_id, handler, id) do
-      {:ok, {^session_id, handler_id, stored_handler, stored_id}} ->
-        :telemetry.detach(handler_id)
-        :ets.delete_object(@table, {session_id, handler_id, stored_handler, stored_id})
+      {:ok, entry} ->
+        detach_and_delete(entry)
         :ok
 
       :error ->
@@ -104,6 +120,23 @@ defmodule SparkEx.ProgressHandlerRegistry do
     kind, reason ->
       Logger.warning("Progress handler callback failed: #{inspect({kind, reason})}")
       :ok
+  end
+
+  defp attach_new(session_id, handler, id) do
+    handler_id = {__MODULE__, session_id, make_ref()}
+
+    :telemetry.attach(handler_id, @event, &__MODULE__.dispatch/4, %{
+      session_id: session_id,
+      handler: handler
+    })
+
+    :ets.insert(@table, {session_id, handler_id, handler, id})
+    :ok
+  end
+
+  defp detach_and_delete({session_id, handler_id, handler, id}) do
+    :telemetry.detach(handler_id)
+    :ets.delete_object(@table, {session_id, handler_id, handler, id})
   end
 
   defp find_handler_entry(session_id, handler, id) do

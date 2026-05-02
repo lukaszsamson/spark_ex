@@ -156,13 +156,7 @@ defmodule SparkEx.UDFRegistration do
           "#{fun}/4 requires non-empty python_command bytes; received an empty binary"
   end
 
-  defp validate_python_command!(<<0x80, _proto, _rest::binary>>, _fun), do: :ok
-
-  defp validate_python_command!(bytes, fun) when is_binary(bytes) do
-    raise ArgumentError,
-          "#{fun}/4 expects python_command to start with the pickle protocol header " <>
-            "(<<0x80, proto, ...>>); got #{inspect(binary_part(bytes, 0, min(byte_size(bytes), 8)))}"
-  end
+  defp validate_python_command!(bytes, _fun) when is_binary(bytes), do: :ok
 
   defp normalize_return_type(_session, nil), do: {:ok, nil}
 

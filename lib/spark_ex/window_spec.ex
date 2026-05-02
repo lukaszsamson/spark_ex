@@ -60,14 +60,23 @@ defmodule SparkEx.WindowSpec do
   @doc """
   Defines a row-based window frame between `start` and `end_` boundaries.
 
-  Boundary values:
-  - `:unbounded_preceding` — unbounded preceding
-  - `:unbounded_following` — unbounded following
-  - `:unbounded` — unbounded (legacy alias; resolves by position)
-  - `:current_row` — current row
-  - negative integer — N rows preceding
-  - positive integer — N rows following
-  - `0` — current row
+  Boundary values for `start` (lower bound):
+  - `:unbounded_preceding` — frame starts at the partition's first row
+  - `:unbounded` — legacy alias resolved to `:unbounded_preceding`
+  - `:current_row` (or `0`) — frame starts at the current row
+  - negative integer — N rows preceding the current row
+  - positive integer — N rows following the current row
+
+  Boundary values for `end_` (upper bound):
+  - `:unbounded_following` — frame ends at the partition's last row
+  - `:unbounded` — legacy alias resolved to `:unbounded_following`
+  - `:current_row` (or `0`) — frame ends at the current row
+  - negative integer — N rows preceding the current row
+  - positive integer — N rows following the current row
+
+  Passing `:unbounded_following` as `start` or `:unbounded_preceding` as `end_`
+  raises `ArgumentError`; the directional sentinels can only be used in their
+  matching position.
   """
   @spec rows_between(t(), boundary(), boundary()) :: t()
   def rows_between(%__MODULE__{} = spec, start, end_) do
@@ -80,14 +89,10 @@ defmodule SparkEx.WindowSpec do
   @doc """
   Defines a range-based window frame between `start` and `end_` boundaries.
 
-  Boundary values:
-  - `:unbounded_preceding` — unbounded preceding
-  - `:unbounded_following` — unbounded following
-  - `:unbounded` — unbounded (legacy alias; resolves by position)
-  - `:current_row` — current row
-  - negative integer — N preceding
-  - positive integer — N following
-  - `0` — current row
+  Same boundary rules as `rows_between/3`: `:unbounded_preceding` is only valid
+  as the lower bound, `:unbounded_following` is only valid as the upper bound,
+  `:unbounded` is a legacy alias resolved by position, and integer offsets are
+  measured in the order-by column's units.
   """
   @spec range_between(t(), boundary(), boundary()) :: t()
   def range_between(%__MODULE__{} = spec, start, end_) do
