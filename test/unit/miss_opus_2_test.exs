@@ -1598,15 +1598,28 @@ defmodule SparkEx.MissOpus2Test do
   # ── 13.2 Integer ordinal support ──
 
   describe "13.2 integer ordinal support" do
-    test "order_by accepts integer column indices" do
+    test "order_by rejects integer column indices" do
       df = make_df()
-      result = DataFrame.order_by(df, [0, 1])
-      assert %DataFrame{plan: {:sort, _, exprs}} = result
 
-      assert [
-               {:sort_order, {:col, "_c0"}, :asc, :nulls_first},
-               {:sort_order, {:col, "_c1"}, :asc, :nulls_first}
-             ] = exprs
+      assert_raise ArgumentError, ~r/integer sort keys are not supported/, fn ->
+        DataFrame.order_by(df, [0, 1])
+      end
+    end
+
+    test "order_by rejects integer column indices with ascending: true" do
+      df = make_df()
+
+      assert_raise ArgumentError, ~r/integer sort keys are not supported/, fn ->
+        DataFrame.order_by(df, [0], ascending: true)
+      end
+    end
+
+    test "order_by rejects integer column indices with ascending list" do
+      df = make_df()
+
+      assert_raise ArgumentError, ~r/integer sort keys are not supported/, fn ->
+        DataFrame.order_by(df, [0, 1], ascending: [true, false])
+      end
     end
 
     test "group_by accepts integer column indices" do

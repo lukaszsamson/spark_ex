@@ -229,10 +229,21 @@ defmodule SparkEx.DataFrame do
           Enum.map(columns, fn col ->
             expr =
               case col do
-                %Column{expr: {:sort_order, inner, _, _}} -> inner
-                %Column{expr: e} -> e
-                name when is_binary(name) -> {:col, name}
-                name when is_atom(name) -> {:col, Atom.to_string(name)}
+                %Column{expr: {:sort_order, inner, _, _}} ->
+                  inner
+
+                %Column{expr: e} ->
+                  e
+
+                name when is_binary(name) ->
+                  {:col, name}
+
+                name when is_atom(name) ->
+                  {:col, Atom.to_string(name)}
+
+                idx when is_integer(idx) ->
+                  raise ArgumentError,
+                        "integer sort keys are not supported; use a column name (string/atom) or Column expression, got: #{inspect(idx)}"
               end
 
             {:sort_order, expr, direction, null_order}
@@ -252,10 +263,21 @@ defmodule SparkEx.DataFrame do
 
             expr =
               case col do
-                %Column{expr: {:sort_order, inner, _, _}} -> inner
-                %Column{expr: e} -> e
-                name when is_binary(name) -> {:col, name}
-                name when is_atom(name) -> {:col, Atom.to_string(name)}
+                %Column{expr: {:sort_order, inner, _, _}} ->
+                  inner
+
+                %Column{expr: e} ->
+                  e
+
+                name when is_binary(name) ->
+                  {:col, name}
+
+                name when is_atom(name) ->
+                  {:col, Atom.to_string(name)}
+
+                idx when is_integer(idx) ->
+                  raise ArgumentError,
+                        "integer sort keys are not supported; use a column name (string/atom) or Column expression, got: #{inspect(idx)}"
               end
 
             {:sort_order, expr, direction, null_order}
@@ -463,8 +485,8 @@ defmodule SparkEx.DataFrame do
         right_as_of,
         opts \\ []
       ) do
-    left_as_of = normalize_to_column(left_as_of)
-    right_as_of = normalize_to_column(right_as_of)
+    left_as_of = normalize_as_of_column(left_as_of, left)
+    right_as_of = normalize_as_of_column(right_as_of, right)
     ensure_same_session!(left, right, :as_of_join)
 
     {join_expr, using_columns} = normalize_join_on(Keyword.get(opts, :on, []))
@@ -870,6 +892,15 @@ defmodule SparkEx.DataFrame do
   @spec repartition_by_range(t(), pos_integer(), [Column.t() | String.t() | atom()]) :: t()
   def repartition_by_range(%__MODULE__{} = df, num_partitions, cols)
       when is_integer(num_partitions) and is_list(cols) do
+    if num_partitions <= 0 do
+      raise ArgumentError,
+            "num_partitions must be a positive integer for repartition_by_range, got: #{inspect(num_partitions)}"
+    end
+
+    if cols == [] do
+      raise ArgumentError, "cols should not be empty for repartition_by_range"
+    end
+
     sort_exprs = Enum.map(cols, &normalize_sort_expr/1)
 
     %__MODULE__{
@@ -912,7 +943,7 @@ defmodule SparkEx.DataFrame do
 
       df |> DataFrame.sort_within_partitions(["key"])
   """
-  @spec sort_within_partitions(t(), [Column.t() | String.t() | atom() | integer()], keyword()) ::
+  @spec sort_within_partitions(t(), [Column.t() | String.t() | atom()], keyword()) ::
           t()
   def sort_within_partitions(%__MODULE__{} = df, columns, opts \\ []) when is_list(columns) do
     if columns == [] do
@@ -933,11 +964,21 @@ defmodule SparkEx.DataFrame do
           Enum.map(columns, fn col ->
             expr =
               case col do
-                %Column{expr: {:sort_order, inner, _, _}} -> inner
-                %Column{expr: e} -> e
-                name when is_binary(name) -> {:col, name}
-                name when is_atom(name) -> {:col, Atom.to_string(name)}
-                idx when is_integer(idx) -> {:col, "_c#{idx}"}
+                %Column{expr: {:sort_order, inner, _, _}} ->
+                  inner
+
+                %Column{expr: e} ->
+                  e
+
+                name when is_binary(name) ->
+                  {:col, name}
+
+                name when is_atom(name) ->
+                  {:col, Atom.to_string(name)}
+
+                idx when is_integer(idx) ->
+                  raise ArgumentError,
+                        "integer sort keys are not supported; use a column name (string/atom) or Column expression, got: #{inspect(idx)}"
               end
 
             {:sort_order, expr, direction, null_order}
@@ -957,11 +998,21 @@ defmodule SparkEx.DataFrame do
 
             expr =
               case col do
-                %Column{expr: {:sort_order, inner, _, _}} -> inner
-                %Column{expr: e} -> e
-                name when is_binary(name) -> {:col, name}
-                name when is_atom(name) -> {:col, Atom.to_string(name)}
-                idx when is_integer(idx) -> {:col, "_c#{idx}"}
+                %Column{expr: {:sort_order, inner, _, _}} ->
+                  inner
+
+                %Column{expr: e} ->
+                  e
+
+                name when is_binary(name) ->
+                  {:col, name}
+
+                name when is_atom(name) ->
+                  {:col, Atom.to_string(name)}
+
+                idx when is_integer(idx) ->
+                  raise ArgumentError,
+                        "integer sort keys are not supported; use a column name (string/atom) or Column expression, got: #{inspect(idx)}"
               end
 
             {:sort_order, expr, direction, null_order}
@@ -2596,8 +2647,11 @@ defmodule SparkEx.DataFrame do
 
   defp primitive_hint?(_), do: false
 
-  defp normalize_to_column(%Column{} = col), do: col
-  defp normalize_to_column(name) when is_binary(name), do: %Column{expr: {:col, name}}
+  defp normalize_as_of_column(%Column{} = col, _df), do: col
+
+  defp normalize_as_of_column(name, %__MODULE__{} = df) when is_binary(name) do
+    %Column{expr: {:col, name, df.plan}}
+  end
 
   defp normalize_column_expr(%Column{} = col), do: col.expr
   defp normalize_column_expr(name) when is_binary(name), do: {:col, name}
@@ -2636,7 +2690,8 @@ defmodule SparkEx.DataFrame do
   end
 
   defp normalize_sort_expr(idx) when is_integer(idx) do
-    {:sort_order, {:col, "_c#{idx}"}, :asc, :nulls_first}
+    raise ArgumentError,
+          "integer sort keys are not supported; use a column name (string/atom) or Column expression, got: #{inspect(idx)}"
   end
 
   defp normalize_transpose_index_columns(nil), do: []
