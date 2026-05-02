@@ -107,6 +107,8 @@ defmodule SparkEx.M13.UDFRegistrationTest do
   end
 
   describe "register_udtf/4 and register_data_source/4 validation" do
+    @python_command_bytes <<1, 2, 3>>
+
     test "register_udtf normalizes return_type DDL string" do
       {:ok, session} = FakeUDFSession.start_link(self())
 
@@ -114,7 +116,7 @@ defmodule SparkEx.M13.UDFRegistrationTest do
                SparkEx.UDFRegistration.register_udtf(
                  session,
                  "my_udtf",
-                 <<1, 2, 3>>,
+                 @python_command_bytes,
                  return_type: "id INT",
                  eval_type: 300,
                  python_ver: "3.11"
@@ -123,8 +125,8 @@ defmodule SparkEx.M13.UDFRegistrationTest do
       assert_receive {:analyze_ddl_parse_called, "id INT"}
 
       assert_receive {:execute_command_called,
-                      {:register_udtf, "my_udtf", <<1, 2, 3>>, %Spark.Connect.DataType{}, 300,
-                       "3.11", true}}
+                      {:register_udtf, "my_udtf", @python_command_bytes,
+                       %Spark.Connect.DataType{}, 300, "3.11", true}}
     end
 
     test "register_udtf returns error for invalid deterministic value" do
@@ -134,7 +136,7 @@ defmodule SparkEx.M13.UDFRegistrationTest do
                SparkEx.UDFRegistration.register_udtf(
                  session,
                  "my_udtf",
-                 <<1, 2, 3>>,
+                 @python_command_bytes,
                  eval_type: 300,
                  python_ver: "3.11",
                  deterministic: "yes"
@@ -148,7 +150,7 @@ defmodule SparkEx.M13.UDFRegistrationTest do
                SparkEx.UDFRegistration.register_udtf(
                  session,
                  "my_udtf",
-                 <<1, 2, 3>>,
+                 @python_command_bytes,
                  eval_type: "oops",
                  python_ver: "3.11"
                )
@@ -161,7 +163,7 @@ defmodule SparkEx.M13.UDFRegistrationTest do
         SparkEx.UDFRegistration.register_udtf(
           session,
           "my_udtf",
-          <<1, 2, 3>>,
+          @python_command_bytes,
           python_ver: "3.11"
         )
       end
@@ -174,8 +176,22 @@ defmodule SparkEx.M13.UDFRegistrationTest do
         SparkEx.UDFRegistration.register_udtf(
           session,
           "my_udtf",
-          <<1, 2, 3>>,
+          @python_command_bytes,
           eval_type: 300
+        )
+      end
+    end
+
+    test "register_udtf raises on empty python_command bytes" do
+      {:ok, session} = FakeUDFSession.start_link(self())
+
+      assert_raise ArgumentError, ~r/non-empty python_command/, fn ->
+        SparkEx.UDFRegistration.register_udtf(
+          session,
+          "my_udtf",
+          <<>>,
+          eval_type: 300,
+          python_ver: "3.11"
         )
       end
     end
@@ -187,9 +203,22 @@ defmodule SparkEx.M13.UDFRegistrationTest do
                SparkEx.UDFRegistration.register_data_source(
                  session,
                  "my_source",
-                 <<1, 2, 3>>,
+                 @python_command_bytes,
                  python_ver: 311
                )
+    end
+
+    test "register_data_source raises on empty python_command bytes" do
+      {:ok, session} = FakeUDFSession.start_link(self())
+
+      assert_raise ArgumentError, ~r/non-empty python_command/, fn ->
+        SparkEx.UDFRegistration.register_data_source(
+          session,
+          "my_source",
+          <<>>,
+          python_ver: "3.11"
+        )
+      end
     end
   end
 end

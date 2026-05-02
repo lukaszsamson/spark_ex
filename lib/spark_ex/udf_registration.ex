@@ -100,6 +100,8 @@ defmodule SparkEx.UDFRegistration do
           :ok | {:error, term()}
   def register_udtf(session, name, python_command, opts \\ [])
       when is_binary(name) and is_binary(python_command) do
+    validate_python_command!(python_command, :register_udtf)
+
     return_type = Keyword.get(opts, :return_type, nil)
     eval_type = require_opt!(opts, :eval_type, :register_udtf)
     python_ver = require_opt!(opts, :python_ver, :register_udtf)
@@ -140,6 +142,7 @@ defmodule SparkEx.UDFRegistration do
           :ok | {:error, term()}
   def register_data_source(session, name, python_command, opts \\ [])
       when is_binary(name) and is_binary(python_command) do
+    validate_python_command!(python_command, :register_data_source)
     python_ver = require_opt!(opts, :python_ver, :register_data_source)
 
     with {:ok, normalized_python_ver} <- normalize_python_ver(python_ver) do
@@ -147,6 +150,13 @@ defmodule SparkEx.UDFRegistration do
       SparkEx.Session.execute_command(session, command)
     end
   end
+
+  defp validate_python_command!(<<>>, fun) do
+    raise ArgumentError,
+          "#{fun}/4 requires non-empty python_command bytes; received an empty binary"
+  end
+
+  defp validate_python_command!(bytes, _fun) when is_binary(bytes), do: :ok
 
   defp normalize_return_type(_session, nil), do: {:ok, nil}
 

@@ -154,6 +154,12 @@ defmodule SparkEx.ManagedStream.Controller do
     end
   end
 
+  # If the release RPC does not finish within `timeout_ms`, the local task is
+  # `:brutal_kill`ed. The corresponding gRPC call may still be in flight — the
+  # server retains buffer state for the operation until its own GC reclaims it
+  # (typically after the operation's idle/retention timeout). Increase
+  # `release_timeout` if you need a stricter guarantee that the release was
+  # acknowledged before the controller exits.
   defp run_release_fun(release_fun, timeout_ms) do
     task =
       Task.Supervisor.async_nolink(SparkEx.TaskSupervisor, fn ->
