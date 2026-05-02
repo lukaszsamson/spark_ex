@@ -24,5 +24,12 @@ defmodule SparkEx.Integration.SessionIdMismatchTest do
              "SESSION_NOT_FOUND",
              "INTERNAL_ERROR"
            ]
+
+    if error.error_class == "INVALID_HANDLE.SESSION_CHANGED" do
+      # SESSION_CHANGED means the server rotated the session; the client
+      # must close locally so subsequent RPCs short-circuit with
+      # `:session_closed` instead of re-issuing doomed requests.
+      assert {:error, :session_closed} = SparkEx.spark_version(session)
+    end
   end
 end

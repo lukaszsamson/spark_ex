@@ -71,7 +71,11 @@ defmodule SparkEx.Connect.SessionIntegrity do
 
   @doc """
   Returns `true` if the given gRPC/Spark error indicates the server has
-  rotated the session (`INVALID_HANDLE.SESSION_CHANGED`).
+  rotated the session (`INVALID_HANDLE.SESSION_CHANGED`), or the local
+  integrity check observed a server-side session id rotation
+  (`{:server_session_changed, _}`).
+
+  Also unwraps `{:error, _}` tuples so callers can pass replies directly.
   """
   @spec session_changed_error?(term()) :: boolean()
   def session_changed_error?(%SparkEx.Error.Remote{
@@ -82,6 +86,9 @@ defmodule SparkEx.Connect.SessionIntegrity do
   def session_changed_error?(%SparkEx.Error.Remote{message: message}) when is_binary(message) do
     String.contains?(message, "INVALID_HANDLE.SESSION_CHANGED")
   end
+
+  def session_changed_error?({:server_session_changed, _ctx}), do: true
+  def session_changed_error?({:error, inner}), do: session_changed_error?(inner)
 
   def session_changed_error?(_), do: false
 end

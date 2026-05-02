@@ -262,14 +262,13 @@ defmodule SparkEx.Unit.ReattachTest do
                )
     end
 
-    test "operation-not-found during reattach re-executes from scratch and discards partial buffer",
+    test "operation-not-found during reattach raises ResponseAlreadyReceived when partial responses are buffered",
          %{session: session} do
-      # We recover from OPERATION/SESSION_NOT_FOUND even when items have
-      # arrived. Buffered responses are dropped — they would be regenerated
-      # by the fresh ExecutePlan, causing duplicates.
+      # Once any response has been buffered, reattach is unrecoverable: a
+      # fresh ExecutePlan would duplicate consumed responses, and dropping
+      # the buffer would silently lose data. Mirror PySpark's
+      # RESPONSE_ALREADY_RECEIVED contract instead.
       parent = self()
-      result_complete = {:result_complete, %ExecutePlanResponse.ResultComplete{}}
-
       counter = :counters.new(1, [])
 
       execute_stream_fun = fn _request, _timeout ->
@@ -277,15 +276,7 @@ defmodule SparkEx.Unit.ReattachTest do
         :counters.add(counter, 1, 1)
         send(parent, {:execute_attempt, attempt})
 
-        if attempt == 0 do
-          {:ok, [{:ok, %ExecutePlanResponse{response_id: "r1"}}]}
-        else
-          {:ok,
-           [
-             {:ok, %ExecutePlanResponse{response_id: "fresh-1"}},
-             {:ok, %ExecutePlanResponse{response_id: "fresh-2", response_type: result_complete}}
-           ]}
-        end
+        {:ok, [{:ok, %ExecutePlanResponse{response_id: "r1"}}]}
       end
 
       reattach_stream_fun = fn _last_response_id ->
@@ -298,7 +289,49 @@ defmodule SparkEx.Unit.ReattachTest do
 
       release_execute_fun = fn _opts -> {:ok, nil} end
 
-      assert {:ok, _} =
+      assert {:error,
+              %SparkEx.Error.ResponseAlreadyReceived{
+                last_response_id: "r1",
+                buffered_count: buffered,
+                cause: %SparkEx.Error.Remote{error_class: "INVALID_HANDLE.OPERATION_NOT_FOUND"}
+              }} =
+               Client.execute_plan(session, %Plan{},
+                 execute_stream_fun: execute_stream_fun,
+                 reattach_stream_fun: reattach_stream_fun,
+                 release_execute_fun: release_execute_fun
+               )
+
+      assert buffered >= 1
+
+      # Only the original ExecutePlan ran — no second attempt.
+      assert_received {:execute_attempt, 0}
+      refute_received {:execute_attempt, 1}
+    end
+
+    test "session-not-found during reattach raises ResponseAlreadyReceived when partial responses are buffered",
+         %{session: session} do
+      parent = self()
+      counter = :counters.new(1, [])
+
+      execute_stream_fun = fn _request, _timeout ->
+        attempt = :counters.get(counter, 1)
+        :counters.add(counter, 1, 1)
+        send(parent, {:execute_attempt, attempt})
+
+        {:ok, [{:ok, %ExecutePlanResponse{response_id: "r1"}}]}
+      end
+
+      reattach_stream_fun = fn _last_response_id ->
+        {:error,
+         %SparkEx.Error.Remote{
+           error_class: "INVALID_HANDLE.SESSION_NOT_FOUND",
+           message: "session gone"
+         }}
+      end
+
+      release_execute_fun = fn _opts -> {:ok, nil} end
+
+      assert {:error, %SparkEx.Error.ResponseAlreadyReceived{}} =
                Client.execute_plan(session, %Plan{},
                  execute_stream_fun: execute_stream_fun,
                  reattach_stream_fun: reattach_stream_fun,
@@ -306,7 +339,7 @@ defmodule SparkEx.Unit.ReattachTest do
                )
 
       assert_received {:execute_attempt, 0}
-      assert_received {:execute_attempt, 1}
+      refute_received {:execute_attempt, 1}
     end
 
     test "RESPONSE_ALREADY_RECEIVED during reattach surfaces a non-retryable error", %{
