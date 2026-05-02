@@ -1822,7 +1822,16 @@ defmodule SparkEx.Functions do
 
   defp to_expr_or_lit_int(%Column{expr: e}), do: e
   defp to_expr_or_lit_int(name) when is_binary(name), do: {:col, name}
+
+  defp to_expr_or_lit_int(name) when is_atom(name) and not is_nil(name) and not is_boolean(name),
+    do: {:col, Atom.to_string(name)}
+
   defp to_expr_or_lit_int(value) when is_integer(value), do: {:lit, value}
+
+  defp to_expr_or_lit_int(other) do
+    raise ArgumentError,
+          "expected a Column, string/atom column name, or integer literal, got: #{inspect(other)}"
+  end
 
   defp normalize_uniform_bound(%Column{expr: expr}), do: expr
   defp normalize_uniform_bound(name) when is_binary(name), do: {:col, name}

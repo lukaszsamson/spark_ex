@@ -494,7 +494,14 @@ defmodule SparkEx.Column do
   """
   @spec transform(t(), (t() -> t())) :: t()
   def transform(%__MODULE__{} = col, func) when is_function(func, 1) do
-    func.(col)
+    case func.(col) do
+      %__MODULE__{} = result ->
+        result
+
+      other ->
+        raise ArgumentError,
+              "Column.transform/2 callback must return a SparkEx.Column, got: #{inspect(other)}"
+    end
   end
 
   # ── Private helpers ──
