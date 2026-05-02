@@ -2,7 +2,7 @@ defmodule SparkEx.MergeIntoWriter do
   @moduledoc """
   Builder for MERGE INTO table commands.
 
-  Constructed via `SparkEx.DataFrame.merge_into/2`, configured with match
+  Constructed via `SparkEx.DataFrame.merge_into/3`, configured with match
   actions, and executed with `merge/1`.
 
   ## Examples
@@ -10,8 +10,7 @@ defmodule SparkEx.MergeIntoWriter do
       import SparkEx.Functions, only: [col: 1]
 
       df
-      |> DataFrame.merge_into("target_table")
-      |> MergeIntoWriter.on(col("source.id") |> Column.eq(col("target.id")))
+      |> DataFrame.merge_into("target_table", col("source.id") |> Column.eq(col("target.id")))
       |> MergeIntoWriter.when_matched_update_all()
       |> MergeIntoWriter.when_not_matched_insert_all()
       |> MergeIntoWriter.merge()
@@ -163,10 +162,27 @@ defmodule SparkEx.MergeIntoWriter do
   Executes the MERGE INTO command.
 
   Returns `:ok` or `{:error, reason}`.
+
+  Returns `{:error, :no_merge_action_specified}` if no `when_matched_*`,
+  `when_not_matched_*`, or `when_not_matched_by_source_*` action has been
+  configured (mirrors Spark's `NO_MERGE_ACTION_SPECIFIED`).
+
+  The merge condition is required at construction
+  (see `SparkEx.DataFrame.merge_into/3`). A nil condition here is treated
+  defensively as `{:error, :no_merge_condition_specified}` rather than
+  raising, so this function honours its `:ok | {:error, _}` contract.
   """
   @spec merge(t()) :: :ok | {:error, term()}
   def merge(%__MODULE__{condition: nil}) do
-    raise ArgumentError, "merge condition (ON clause) is required"
+    {:error, :no_merge_condition_specified}
+  end
+
+  def merge(%__MODULE__{
+        match_actions: [],
+        not_matched_actions: [],
+        not_matched_by_source_actions: []
+      }) do
+    {:error, :no_merge_action_specified}
   end
 
   def merge(%__MODULE__{} = m) do

@@ -310,7 +310,7 @@ defmodule SparkEx.Connect.CommandEncoder do
 
     write_proto = %WriteStreamOperationStart{
       input: relation,
-      format: format || "parquet",
+      format: format || "",
       options: options,
       output_mode: output_mode || "",
       query_name: query_name || "",

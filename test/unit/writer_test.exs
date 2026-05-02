@@ -179,5 +179,67 @@ defmodule SparkEx.Unit.WriterTest do
       assert Keyword.get(write_opts, :options)["quote_all"] == "true"
       assert Keyword.get(write_opts, :options)["escape"] == "\\"
     end
+
+    test "csv accepts :sep alone" do
+      {:ok, session} = FakeSession.start_link(parent: self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      assert :ok = Writer.csv(df, "/tmp/out", sep: ";")
+
+      assert_receive {:execute_command, {:write_operation, _, write_opts}, _exec_opts}
+      assert Keyword.get(write_opts, :options)["sep"] == ";"
+    end
+
+    test "csv treats matching :sep and :separator as equivalent" do
+      {:ok, session} = FakeSession.start_link(parent: self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      assert :ok = Writer.csv(df, "/tmp/out", sep: "|", separator: "|")
+
+      assert_receive {:execute_command, {:write_operation, _, write_opts}, _exec_opts}
+      assert Keyword.get(write_opts, :options)["sep"] == "|"
+    end
+
+    test "csv raises when :sep and :separator disagree", %{df: df} do
+      assert_raise ArgumentError, ~r/conflicting :sep and :separator/, fn ->
+        Writer.csv(df, "/tmp/out", sep: ",", separator: ";")
+      end
+    end
+
+    test "csv raises when csv-specific kwargs collide with nested :options", %{df: df} do
+      assert_raise ArgumentError, ~r/multiple values for keyword argument/, fn ->
+        Writer.csv(df, "/tmp/out", sep: ";", options: %{"sep" => ","})
+      end
+
+      assert_raise ArgumentError, ~r/multiple values for keyword argument/, fn ->
+        Writer.csv(df, "/tmp/out", header: true, options: %{"header" => "false"})
+      end
+    end
+
+    test "writer raises when an option is given both as top-level and inside :options", %{df: df} do
+      assert_raise ArgumentError, ~r/multiple values for keyword argument/, fn ->
+        Writer.parquet(df, "/tmp/out",
+          compression: "gzip",
+          options: %{"compression" => "snappy"}
+        )
+      end
+    end
+
+    test "insert_into raises on unknown options", %{df: df} do
+      assert_raise ArgumentError, ~r/unknown option/, fn ->
+        df |> DataFrame.write() |> Writer.insert_into("t", overwrite: true, bogus: 1)
+      end
+    end
+
+    test "insert_into accepts allowed exec opts" do
+      {:ok, session} = FakeSession.start_link(parent: self())
+      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+
+      assert :ok =
+               df |> DataFrame.write() |> Writer.insert_into("t", overwrite: true, timeout: 100)
+
+      assert_receive {:execute_command, {:write_operation, _, _}, exec_opts}
+      assert exec_opts == [timeout: 100]
+    end
   end
 end

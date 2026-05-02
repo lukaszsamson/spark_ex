@@ -1817,10 +1817,12 @@ defmodule SparkEx.MissOpus2Test do
       assert %SparkEx.MergeIntoWriter{condition: {:fn, "==", _, false}} = writer
     end
 
-    test "13.10 merge_into works without condition" do
+    test "13.10 merge_into/2 raises because condition is required" do
       df = make_df()
-      writer = DataFrame.merge_into(df, "target")
-      assert %SparkEx.MergeIntoWriter{condition: nil} = writer
+
+      assert_raise ArgumentError, ~r/merge condition/, fn ->
+        DataFrame.merge_into(df, "target")
+      end
     end
 
     test "15.19 WriterV2 overwrite with condition sets overwrite_condition" do

@@ -203,23 +203,55 @@ defmodule SparkEx.M13.MergeIntoTest do
   end
 
   describe "merge/1" do
-    test "raises without condition" do
-      m = MergeIntoWriter.new(make_df(), "t")
+    test "returns {:error, :no_merge_condition_specified} when condition is nil" do
+      m =
+        MergeIntoWriter.new(make_df(), "t")
+        |> MergeIntoWriter.when_matched_delete()
 
-      assert_raise ArgumentError, ~r/merge condition/, fn ->
-        MergeIntoWriter.merge(m)
-      end
+      assert MergeIntoWriter.merge(m) == {:error, :no_merge_condition_specified}
+    end
+
+    test "returns {:error, :no_merge_action_specified} when no actions configured" do
+      condition = Column.eq(Functions.col("s.id"), Functions.col("t.id"))
+
+      m =
+        MergeIntoWriter.new(make_df(), "t")
+        |> MergeIntoWriter.on(condition)
+
+      assert MergeIntoWriter.merge(m) == {:error, :no_merge_action_specified}
     end
   end
 
   describe "DataFrame.merge_into/2" do
-    test "creates a MergeIntoWriter from DataFrame" do
-      m = DataFrame.merge_into(make_df(), "my_table")
+    test "raises ArgumentError because merge condition is required" do
+      assert_raise ArgumentError, ~r/merge condition/, fn ->
+        DataFrame.merge_into(make_df(), "my_table")
+      end
+    end
+  end
+
+  describe "DataFrame.merge_into/3" do
+    test "creates a MergeIntoWriter from DataFrame with the supplied condition" do
+      condition = Column.eq(Functions.col("source.id"), Functions.col("target.id"))
+      m = DataFrame.merge_into(make_df(), "my_table", condition)
 
       assert %MergeIntoWriter{
                target_table: "my_table",
-               source_df: %DataFrame{plan: :source_plan}
+               source_df: %DataFrame{plan: :source_plan},
+               condition: {:fn, "==", [{:col, "source.id"}, {:col, "target.id"}], false}
              } = m
+    end
+
+    test "raises ArgumentError when condition is nil" do
+      assert_raise ArgumentError, ~r/SparkEx.Column merge condition/, fn ->
+        DataFrame.merge_into(make_df(), "my_table", nil)
+      end
+    end
+
+    test "raises ArgumentError when condition is not a Column" do
+      assert_raise ArgumentError, ~r/SparkEx.Column merge condition/, fn ->
+        DataFrame.merge_into(make_df(), "my_table", "id = id")
+      end
     end
   end
 
@@ -229,8 +261,7 @@ defmodule SparkEx.M13.MergeIntoTest do
 
       m =
         make_df()
-        |> DataFrame.merge_into("target")
-        |> MergeIntoWriter.on(condition)
+        |> DataFrame.merge_into("target", condition)
         |> MergeIntoWriter.when_matched_update_all()
         |> MergeIntoWriter.when_not_matched_insert_all()
         |> MergeIntoWriter.when_not_matched_by_source_delete()
