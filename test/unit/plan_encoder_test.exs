@@ -880,8 +880,8 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       right_plan = {:sql, "SELECT * FROM t2", nil}
 
       plan =
-        {:as_of_join, left_plan, right_plan, {:col, "ts", left_plan},
-         {:col, "ts", right_plan}, {:lit, nil}, [], "inner", {:lit, nil}, true, "backward"}
+        {:as_of_join, left_plan, right_plan, {:col, "ts", left_plan}, {:col, "ts", right_plan},
+         {:lit, nil}, [], "inner", {:lit, nil}, true, "backward"}
 
       {encoded, _} = PlanEncoder.encode(plan, 0)
 

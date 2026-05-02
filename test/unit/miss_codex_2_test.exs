@@ -297,8 +297,7 @@ defmodule SparkEx.MissCodex2Test do
       left_plan = left.plan
 
       assert %DataFrame{
-               plan:
-                 {:as_of_join, _, _, {:col, "t1", ^left_plan}, {:col, "t2"}, _, _, _, _, _, _}
+               plan: {:as_of_join, _, _, {:col, "t1", ^left_plan}, {:col, "t2"}, _, _, _, _, _, _}
              } = result
     end
 
@@ -325,8 +324,8 @@ defmodule SparkEx.MissCodex2Test do
 
       assert %DataFrame{
                plan:
-                 {:as_of_join, _, _, {:col, "t1", ^left_plan}, {:col, "t2", ^right_plan}, _, _,
-                  _, _, _, _}
+                 {:as_of_join, _, _, {:col, "t1", ^left_plan}, {:col, "t2", ^right_plan}, _, _, _,
+                  _, _, _}
              } = result
     end
   end
