@@ -254,7 +254,12 @@ defmodule SparkEx.Column do
 
   # ── String operations ──
 
-  @doc "Returns a substring starting at `pos` for `len` characters."
+  @doc """
+  Returns a substring starting at `pos` for `len` characters.
+
+  `pos` and `len` must be of the same kind: either both Columns or both
+  integers. Mixing the two raises `ArgumentError` (matching PySpark).
+  """
   @spec substr(t(), t() | integer(), t() | integer()) :: t()
   def substr(%__MODULE__{} = col, %__MODULE__{} = pos, %__MODULE__{} = len) do
     %__MODULE__{
@@ -268,20 +273,9 @@ defmodule SparkEx.Column do
     }
   end
 
-  def substr(%__MODULE__{} = col, %__MODULE__{} = pos, len) when is_integer(len) do
-    %__MODULE__{
-      expr: {:fn, "substr", [col.expr, pos.expr, {:lit, len}], false}
-    }
-  end
-
-  def substr(%__MODULE__{} = col, pos, %__MODULE__{} = len) when is_integer(pos) do
-    %__MODULE__{
-      expr: {:fn, "substr", [col.expr, {:lit, pos}, len.expr], false}
-    }
-  end
-
   def substr(%__MODULE__{} = _col, _pos, _len) do
-    raise ArgumentError, "startPos and length must be Column or integer"
+    raise ArgumentError,
+          "startPos and length must both be Columns or both be integers"
   end
 
   @doc """
@@ -422,9 +416,15 @@ defmodule SparkEx.Column do
   Assigns an alias (name) to this column expression.
 
   Optionally accepts a `metadata` keyword with a JSON-serializable map.
+
+  When given a list of names (e.g. for generator expressions like `explode`
+  on a map column producing `[k, v]`), emits a multi-name alias. Metadata
+  is not allowed in combination with a multi-name alias.
   """
-  @spec alias_(t(), String.t(), keyword()) :: t()
-  def alias_(%__MODULE__{} = col, name, opts \\ []) when is_binary(name) do
+  @spec alias_(t(), String.t() | [String.t()], keyword()) :: t()
+  def alias_(col, name_or_names, opts \\ [])
+
+  def alias_(%__MODULE__{} = col, name, opts) when is_binary(name) do
     case Keyword.get(opts, :metadata) do
       nil ->
         %__MODULE__{expr: {:alias, col.expr, name}}
@@ -432,6 +432,27 @@ defmodule SparkEx.Column do
       metadata when is_map(metadata) ->
         metadata_json = Jason.encode!(metadata)
         %__MODULE__{expr: {:alias, col.expr, name, metadata_json}}
+    end
+  end
+
+  def alias_(%__MODULE__{} = col, names, opts) when is_list(names) do
+    if names == [] do
+      raise ArgumentError, "alias names list must not be empty"
+    end
+
+    Enum.each(names, fn n ->
+      unless is_binary(n) do
+        raise ArgumentError, "alias names must be strings, got: #{inspect(n)}"
+      end
+    end)
+
+    case Keyword.get(opts, :metadata) do
+      nil ->
+        %__MODULE__{expr: {:alias, col.expr, names}}
+
+      _metadata ->
+        raise ArgumentError,
+              "cannot provide metadata for multi-name alias (got #{length(names)} names)"
     end
   end
 
@@ -461,18 +482,19 @@ defmodule SparkEx.Column do
   def outer(%__MODULE__{} = col), do: col
 
   @doc """
-  Applies a transformation function to this column.
+  Applies a local Elixir transformation to this column and returns the result.
 
-  Equivalent to PySpark's `Column.transform(f)` which delegates to
-  the `transform` SQL function.
+  This is a pipeline combinator: `func` receives this Column and returns
+  another Column. It is **not** the SQL `transform` higher-order function
+  (use `SparkEx.Functions.transform/2` for the SQL HOF over an array).
 
   ## Examples
 
-      col("arr") |> Column.transform(fn x -> Column.plus(x, lit(1)) end)
+      col("name") |> Column.transform(&SparkEx.Functions.upper/1)
   """
   @spec transform(t(), (t() -> t())) :: t()
   def transform(%__MODULE__{} = col, func) when is_function(func, 1) do
-    SparkEx.Functions.transform(col, func)
+    func.(col)
   end
 
   # ── Private helpers ──

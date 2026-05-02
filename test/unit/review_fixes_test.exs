@@ -167,22 +167,26 @@ defmodule SparkEx.ReviewFixesTest do
   end
 
   describe "Column.substr mixed types (REV_OPUS #33)" do
-    test "accepts Column pos with integer len" do
+    test "rejects Column pos with integer len" do
       c = SparkEx.Functions.col("s")
-      result = SparkEx.Column.substr(c, SparkEx.Functions.lit(1), 5)
-      assert %SparkEx.Column{expr: {:fn, "substr", [_, _, {:lit, 5}], false}} = result
+
+      assert_raise ArgumentError, ~r/both be Columns or both be integers/, fn ->
+        SparkEx.Column.substr(c, SparkEx.Functions.lit(1), 5)
+      end
     end
 
-    test "accepts integer pos with Column len" do
+    test "rejects integer pos with Column len" do
       c = SparkEx.Functions.col("s")
-      result = SparkEx.Column.substr(c, 1, SparkEx.Functions.lit(5))
-      assert %SparkEx.Column{expr: {:fn, "substr", [_, {:lit, 1}, _], false}} = result
+
+      assert_raise ArgumentError, ~r/both be Columns or both be integers/, fn ->
+        SparkEx.Column.substr(c, 1, SparkEx.Functions.lit(5))
+      end
     end
 
     test "rejects invalid types" do
       c = SparkEx.Functions.col("s")
 
-      assert_raise ArgumentError, ~r/Column or integer/, fn ->
+      assert_raise ArgumentError, ~r/both be Columns or both be integers/, fn ->
         SparkEx.Column.substr(c, "1", "5")
       end
     end

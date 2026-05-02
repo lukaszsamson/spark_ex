@@ -165,4 +165,96 @@ defmodule SparkEx.FunctionsTest do
              } = result
     end
   end
+
+  describe "R3-H4 array/map collection lit-wrapping (C1-1)" do
+    test "array_contains/2 wraps the second argument as a literal" do
+      assert %Column{
+               expr: {:fn, "array_contains", [{:col, "xs"}, {:lit, "x"}], false}
+             } = Functions.array_contains(Functions.col("xs"), "x")
+    end
+
+    test "array_position/2 wraps the second argument as a literal" do
+      assert %Column{
+               expr: {:fn, "array_position", [{:col, "xs"}, {:lit, "x"}], false}
+             } = Functions.array_position(Functions.col("xs"), "x")
+    end
+
+    test "array_remove/2 wraps the second argument as a literal" do
+      assert %Column{
+               expr: {:fn, "array_remove", [{:col, "xs"}, {:lit, 1}], false}
+             } = Functions.array_remove(Functions.col("xs"), 1)
+    end
+
+    test "array_append/2 wraps the second argument as a literal" do
+      assert %Column{
+               expr: {:fn, "array_append", [{:col, "xs"}, {:lit, "x"}], false}
+             } = Functions.array_append(Functions.col("xs"), "x")
+    end
+
+    test "array_prepend/2 wraps the second argument as a literal" do
+      assert %Column{
+               expr: {:fn, "array_prepend", [{:col, "xs"}, {:lit, "x"}], false}
+             } = Functions.array_prepend(Functions.col("xs"), "x")
+    end
+
+    test "element_at/2 wraps the second argument as a literal" do
+      assert %Column{
+               expr: {:fn, "element_at", [{:col, "xs"}, {:lit, 1}], false}
+             } = Functions.element_at(Functions.col("xs"), 1)
+    end
+
+    test "map_contains_key/2 wraps the second argument as a literal" do
+      assert %Column{
+               expr: {:fn, "map_contains_key", [{:col, "m"}, {:lit, "k"}], false}
+             } = Functions.map_contains_key(Functions.col("m"), "k")
+    end
+
+    test "try_element_at/2 still treats string arg as column (per GPT triage)" do
+      assert %Column{
+               expr: {:fn, "try_element_at", [{:col, "xs"}, {:col, "k"}], false}
+             } = Functions.try_element_at(Functions.col("xs"), "k")
+    end
+  end
+
+  describe "R3-H5 call_function/3 string args are column refs (C1-2)" do
+    test "binary positional args become column refs" do
+      assert %Column{
+               expr: {:call_function, "upper", [{:col, "name"}]}
+             } = Functions.call_function("upper", ["name"])
+    end
+
+    test "lit-wrapped strings stay as literals" do
+      assert %Column{
+               expr: {:call_function, "upper", [{:lit, "hello"}]}
+             } = Functions.call_function("upper", [Functions.lit("hello")])
+    end
+  end
+
+  describe "R3-L1 slice/3 (C1-3)" do
+    test "encodes integer start/length as literals" do
+      assert %Column{
+               expr: {:fn, "slice", [{:col, "xs"}, {:lit, 1}, {:lit, 2}], false}
+             } = Functions.slice(Functions.col("xs"), 1, 2)
+    end
+
+    test "encodes Column start/length as expressions" do
+      assert %Column{
+               expr:
+                 {:fn, "slice",
+                  [{:col, "xs"}, {:col, "s"}, {:col, "l"}], false}
+             } =
+               Functions.slice(
+                 Functions.col("xs"),
+                 Functions.col("s"),
+                 Functions.col("l")
+               )
+    end
+
+    test "encodes string start/length as column refs" do
+      assert %Column{
+               expr:
+                 {:fn, "slice", [{:col, "xs"}, {:col, "s"}, {:col, "l"}], false}
+             } = Functions.slice(Functions.col("xs"), "s", "l")
+    end
+  end
 end
