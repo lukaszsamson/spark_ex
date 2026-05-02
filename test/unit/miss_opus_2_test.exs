@@ -1606,6 +1606,22 @@ defmodule SparkEx.MissOpus2Test do
       end
     end
 
+    test "order_by rejects integer column indices with ascending: true" do
+      df = make_df()
+
+      assert_raise ArgumentError, ~r/integer sort keys are not supported/, fn ->
+        DataFrame.order_by(df, [0], ascending: true)
+      end
+    end
+
+    test "order_by rejects integer column indices with ascending list" do
+      df = make_df()
+
+      assert_raise ArgumentError, ~r/integer sort keys are not supported/, fn ->
+        DataFrame.order_by(df, [0, 1], ascending: [true, false])
+      end
+    end
+
     test "group_by accepts integer column indices" do
       df = make_df()
       result = DataFrame.group_by(df, [0])
