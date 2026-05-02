@@ -103,6 +103,10 @@ defmodule SparkEx.Functions do
 
   @doc """
   Calls a function with positional and named arguments.
+
+  Positional binary (string) arguments are treated as column references
+  (matching the rest of SparkEx's string-as-column convention); wrap with
+  `lit/1` for literal strings.
   """
   @spec call_function(String.t(), list(), list()) :: Column.t()
   def call_function(name, args \\ [], named_args \\ [])
@@ -157,7 +161,6 @@ defmodule SparkEx.Functions do
   def hours(col), do: %Column{expr: {:fn, "hours", [to_expr(col)], false}}
 
   defp normalize_expr_arg(%Column{expr: expr}), do: expr
-  defp normalize_expr_arg(value) when is_binary(value), do: {:lit, value}
   defp normalize_expr_arg(value), do: to_expr(value)
 
   # ── Sort helpers (hand-written delegates) ──
@@ -612,6 +615,28 @@ defmodule SparkEx.Functions do
       end
 
     %Column{expr: {:fn, "array_join", args, false}}
+  end
+
+  @doc """
+  Returns slice of array from `start` for `length` elements.
+
+  `start` and `length` may be Columns, string column names, or integer literals.
+  Integer values are wrapped as literals.
+
+  ## Examples
+
+      slice(col("xs"), 1, 2)
+      slice(col("xs"), col("s"), col("l"))
+      slice(col("xs"), "s", "l")
+  """
+  @spec slice(
+          Column.t() | String.t(),
+          Column.t() | String.t() | integer(),
+          Column.t() | String.t() | integer()
+        ) :: Column.t()
+  def slice(col, start, length) do
+    args = [to_expr(col), to_expr_or_lit_int(start), to_expr_or_lit_int(length)]
+    %Column{expr: {:fn, "slice", args, false}}
   end
 
   @doc """
@@ -1794,6 +1819,19 @@ defmodule SparkEx.Functions do
 
   defp to_expr_or_lit(%Column{expr: e}), do: e
   defp to_expr_or_lit(value), do: {:lit, value}
+
+  defp to_expr_or_lit_int(%Column{expr: e}), do: e
+  defp to_expr_or_lit_int(name) when is_binary(name), do: {:col, name}
+
+  defp to_expr_or_lit_int(name) when is_atom(name) and not is_nil(name) and not is_boolean(name),
+    do: {:col, Atom.to_string(name)}
+
+  defp to_expr_or_lit_int(value) when is_integer(value), do: {:lit, value}
+
+  defp to_expr_or_lit_int(other) do
+    raise ArgumentError,
+          "expected a Column, string/atom column name, or integer literal, got: #{inspect(other)}"
+  end
 
   defp normalize_uniform_bound(%Column{expr: expr}), do: expr
   defp normalize_uniform_bound(name) when is_binary(name), do: {:col, name}

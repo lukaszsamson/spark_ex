@@ -239,4 +239,36 @@ defmodule SparkEx.ColumnTest do
              } = result
     end
   end
+
+  describe "R3-L5 alias_/3 multi-name overload (C2-3)" do
+    test "accepts a list of names" do
+      assert %Column{expr: {:alias, {:col, "m"}, ["k", "v"]}} =
+               Column.alias_(Functions.col("m"), ["k", "v"])
+    end
+
+    test "rejects empty names list" do
+      assert_raise ArgumentError, ~r/must not be empty/, fn ->
+        Column.alias_(Functions.col("m"), [])
+      end
+    end
+
+    test "rejects non-string entries" do
+      assert_raise ArgumentError, ~r/must be strings/, fn ->
+        Column.alias_(Functions.col("m"), ["k", 123])
+      end
+    end
+
+    test "rejects metadata combined with multi-name alias" do
+      assert_raise ArgumentError, ~r/cannot provide metadata/, fn ->
+        Column.alias_(Functions.col("m"), ["k", "v"], metadata: %{"a" => 1})
+      end
+    end
+  end
+
+  describe "R3-H6 transform/2 local combinator (C2-1)" do
+    test "applies the function to the column and returns the result" do
+      assert %Column{expr: {:fn, "upper", [{:col, "name"}], false}} =
+               Column.transform(Functions.col("name"), &Functions.upper/1)
+    end
+  end
 end
