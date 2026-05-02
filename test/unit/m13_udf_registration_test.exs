@@ -125,8 +125,8 @@ defmodule SparkEx.M13.UDFRegistrationTest do
       assert_receive {:analyze_ddl_parse_called, "id INT"}
 
       assert_receive {:execute_command_called,
-                      {:register_udtf, "my_udtf", @python_command_bytes, %Spark.Connect.DataType{}, 300,
-                       "3.11", true}}
+                      {:register_udtf, "my_udtf", @python_command_bytes,
+                       %Spark.Connect.DataType{}, 300, "3.11", true}}
     end
 
     test "register_udtf returns error for invalid deterministic value" do
