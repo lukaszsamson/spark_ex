@@ -1231,6 +1231,8 @@ defmodule SparkEx.Connect.ResultDecoder do
   #   decoded value through unchanged. Earlier code Jason-encoded list/map
   #   values, which lost native structure for callers who can handle it.
   @doc false
+  @spec column_value_transform(Spark.Connect.DataType.t() | term()) ::
+          (term() -> term()) | nil
   def column_value_transform(%Spark.Connect.DataType{kind: {:char, _}}),
     do: &strip_trailing_spaces/1
 
