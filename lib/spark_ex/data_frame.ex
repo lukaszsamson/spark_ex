@@ -2543,7 +2543,7 @@ defmodule SparkEx.DataFrame do
     do: SparkEx.DataFrame.Stat.freq_items(df, cols, support)
 
   @doc "Computes approximate quantiles. Delegates to `SparkEx.DataFrame.Stat.approx_quantile/4`."
-  @spec approx_quantile(t(), String.t() | [String.t()], [float()], float()) ::
+  @spec approx_quantile(t(), String.t() | [String.t()] | tuple(), [float()], float()) ::
           {:ok, [float()] | [[float()]]} | {:error, term()}
   def approx_quantile(%__MODULE__{} = df, col, probabilities, relative_error),
     do: SparkEx.DataFrame.Stat.approx_quantile(df, col, probabilities, relative_error)

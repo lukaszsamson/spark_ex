@@ -185,7 +185,7 @@ defmodule SparkEx.DataFrame.Stat do
   """
   @spec approx_quantile(
           DataFrame.t(),
-          String.t() | [String.t()],
+          String.t() | [String.t()] | tuple(),
           [float()],
           float()
         ) :: {:ok, [float()] | [[float()]]} | {:error, term()}
@@ -193,9 +193,18 @@ defmodule SparkEx.DataFrame.Stat do
       when is_list(probabilities) do
     {cols, single?} =
       case col do
-        c when is_binary(c) -> {[c], true}
-        cs when is_list(cs) -> {cs, false}
-        cs when is_tuple(cs) -> {Tuple.to_list(cs), false}
+        c when is_binary(c) ->
+          {[c], true}
+
+        cs when is_list(cs) ->
+          {cs, false}
+
+        cs when is_tuple(cs) ->
+          {Tuple.to_list(cs), false}
+
+        _ ->
+          raise ArgumentError,
+                "col must be a string, list of strings, or tuple of strings, got: #{inspect(col)}"
       end
 
     unless Enum.all?(cols, &is_binary/1) do
