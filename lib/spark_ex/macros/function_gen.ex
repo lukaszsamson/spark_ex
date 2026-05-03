@@ -266,6 +266,44 @@ defmodule SparkEx.Macros.FunctionGen do
     end
   end
 
+  defp generate_function(name, spark_name, {:two_col_opt, defaults}, is_distinct, doc) do
+    escaped_defaults = Macro.escape(defaults)
+    {first_key, _default} = hd(defaults)
+
+    quote do
+      @doc unquote(doc)
+      @spec unquote(name)(Column.t() | String.t(), Column.t() | String.t(), keyword()) ::
+              Column.t()
+      def unquote(name)(col1, col2, opts \\ [])
+
+      def unquote(name)(col1, col2, opt_value) when not is_list(opt_value) do
+        unquote(name)(col1, col2, [{unquote(first_key), opt_value}])
+      end
+
+      def unquote(name)(col1, col2, opts) when is_list(opts) do
+        unless opts == [] or Keyword.keyword?(opts) do
+          raise ArgumentError,
+                "expected #{inspect(unquote(name))} options to be a keyword list, got: " <>
+                  inspect(opts)
+        end
+
+        opt_args =
+          unquote(escaped_defaults)
+          |> Enum.map(fn {key, default} -> Keyword.get(opts, key, default) end)
+          |> Enum.reverse()
+          |> Enum.drop_while(&is_nil/1)
+          |> Enum.reverse()
+          |> Enum.map(&lit_expr/1)
+
+        %Column{
+          expr:
+            {:fn, unquote(spark_name), [to_expr(col1), to_expr(col2) | opt_args],
+             unquote(is_distinct)}
+        }
+      end
+    end
+  end
+
   # --- Alias generation ---
 
   defp generate_alias(alias_name, primary_name, :zero) do
@@ -325,6 +363,16 @@ defmodule SparkEx.Macros.FunctionGen do
       @doc "Alias for `#{unquote(primary_name)}/2`."
       @spec unquote(alias_name)(Column.t() | String.t(), keyword()) :: Column.t()
       def unquote(alias_name)(col, opts \\ []), do: unquote(primary_name)(col, opts)
+    end
+  end
+
+  defp generate_alias(alias_name, primary_name, {:two_col_opt, _defaults}) do
+    quote do
+      @doc "Alias for `#{unquote(primary_name)}/3`."
+      @spec unquote(alias_name)(Column.t() | String.t(), Column.t() | String.t(), keyword()) ::
+              Column.t()
+      def unquote(alias_name)(col1, col2, opts \\ []),
+        do: unquote(primary_name)(col1, col2, opts)
     end
   end
 
