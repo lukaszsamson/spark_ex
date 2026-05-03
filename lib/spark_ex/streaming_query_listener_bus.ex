@@ -312,62 +312,18 @@ defmodule SparkEx.StreamingQueryListenerBus do
   def handle_info({:listener_stream_ended, reason}, state) do
     case reason do
       :normal ->
-        if state.listeners != [] and not state.closing_stream? and
-             state.reconnect_attempts < @max_reconnect_attempts do
-          attempts = state.reconnect_attempts + 1
-          delay = reconnect_delay_ms(attempts)
+        maybe_reconnect(state, "graceful EOF")
 
-          :telemetry.execute(
-            [:spark_ex, :streaming, :listener_bus, :reconnect],
-            %{attempt: attempts, delay_ms: delay},
-            %{session: state.session, max_attempts: @max_reconnect_attempts}
-          )
-
-          Logger.debug(
-            "StreamingQueryListenerBus reconnecting after graceful EOF (attempt #{attempts}/#{@max_reconnect_attempts}, delay #{delay}ms)"
-          )
-
-          Process.send_after(self(), :reconnect_listener_stream, delay)
-
-          {:noreply,
-           %{
-             state
-             | stream_task: nil,
-               registered?: false,
-               reconnect_attempts: attempts
-           }}
-        else
-          if state.listeners != [] and not state.closing_stream? do
-            :telemetry.execute(
-              [:spark_ex, :streaming, :listener_bus, :reconnect_exhausted],
-              %{attempts: state.reconnect_attempts},
-              %{session: state.session, max_attempts: @max_reconnect_attempts}
-            )
-
-            Logger.warning(
-              "StreamingQueryListenerBus reconnect attempts exhausted after #{state.reconnect_attempts} tries; stopping"
-            )
-          end
-
-          Enum.each(
-            state.pending_register_waiters,
-            &GenServer.reply(&1, {:error, :stream_closed})
-          )
-
-          {:noreply,
-           %{
-             state
-             | stream_task: nil,
-               registered?: false,
-               pending_register_waiters: [],
-               closing_stream?: false
-           }}
-        end
-
-      error ->
-        Enum.each(state.pending_register_waiters, &GenServer.reply(&1, {:error, error}))
-
+      {:error, _} = error ->
         Logger.warning("StreamingQueryListenerBus stream ended with error: #{inspect(error)}")
+        maybe_reconnect(state, "transport error")
+
+      other ->
+        Enum.each(state.pending_register_waiters, &GenServer.reply(&1, {:error, other}))
+
+        Logger.warning(
+          "StreamingQueryListenerBus stream ended with unexpected reason: #{inspect(other)}"
+        )
 
         {:noreply,
          %{
@@ -426,6 +382,60 @@ defmodule SparkEx.StreamingQueryListenerBus do
   end
 
   # --- Private ---
+
+  defp maybe_reconnect(state, context) do
+    if state.listeners != [] and not state.closing_stream? and
+         state.reconnect_attempts < @max_reconnect_attempts do
+      attempts = state.reconnect_attempts + 1
+      delay = reconnect_delay_ms(attempts)
+
+      :telemetry.execute(
+        [:spark_ex, :streaming, :listener_bus, :reconnect],
+        %{attempt: attempts, delay_ms: delay},
+        %{session: state.session, max_attempts: @max_reconnect_attempts}
+      )
+
+      Logger.debug(
+        "StreamingQueryListenerBus reconnecting after #{context} (attempt #{attempts}/#{@max_reconnect_attempts}, delay #{delay}ms)"
+      )
+
+      Process.send_after(self(), :reconnect_listener_stream, delay)
+
+      {:noreply,
+       %{
+         state
+         | stream_task: nil,
+           registered?: false,
+           reconnect_attempts: attempts
+       }}
+    else
+      if state.listeners != [] and not state.closing_stream? do
+        :telemetry.execute(
+          [:spark_ex, :streaming, :listener_bus, :reconnect_exhausted],
+          %{attempts: state.reconnect_attempts},
+          %{session: state.session, max_attempts: @max_reconnect_attempts}
+        )
+
+        Logger.warning(
+          "StreamingQueryListenerBus reconnect attempts exhausted after #{state.reconnect_attempts} tries; bus is now inert (still alive, listeners retained)"
+        )
+      end
+
+      Enum.each(
+        state.pending_register_waiters,
+        &GenServer.reply(&1, {:error, :stream_closed})
+      )
+
+      {:noreply,
+       %{
+         state
+         | stream_task: nil,
+           registered?: false,
+           pending_register_waiters: [],
+           closing_stream?: false
+       }}
+    end
+  end
 
   @doc false
   # Exponential backoff: base * 2^(attempt-1), capped at the configured ceiling.

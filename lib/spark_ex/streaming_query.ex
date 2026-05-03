@@ -290,7 +290,8 @@ defmodule SparkEx.StreamingQuery do
     end
   end
 
-  defp parse_progress_ok(other), do: {:error, {:invalid_progress_payload, other}}
+  defp parse_progress_ok(other),
+    do: {:error, {:invalid_progress_json, :non_binary_payload, other}}
 
   defp parse_progress_list(entries) do
     Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, acc} ->
