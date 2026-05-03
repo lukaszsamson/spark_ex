@@ -146,9 +146,49 @@ defmodule SparkEx.Unit.FunctionGenTest do
   # ── {:col_lit, 1} arity ──
 
   describe "{:col_lit, 1} functions" do
-    test "repeat/2 - column + literal" do
+    test "repeat/2 - column + integer literal" do
       assert %Column{expr: {:fn, "repeat", [{:col, "s"}, {:lit, 3}], false}} =
                Functions.repeat("s", 3)
+    end
+
+    test "repeat/2 - resolves bare-string second arg as column ref" do
+      assert %Column{expr: {:fn, "repeat", [{:col, "s"}, {:col, "n"}], false}} =
+               Functions.repeat("s", "n")
+    end
+
+    test "repeat/2 - Column second arg passes through" do
+      assert %Column{expr: {:fn, "repeat", [{:col, "s"}, {:col, "n"}], false}} =
+               Functions.repeat("s", Functions.col("n"))
+    end
+
+    test "bit_get/2 - column + integer literal" do
+      assert %Column{expr: {:fn, "bit_get", [{:col, "e"}, {:lit, 1}], false}} =
+               Functions.bit_get("e", 1)
+    end
+
+    test "bit_get/2 - resolves bare-string position as column ref" do
+      assert %Column{expr: {:fn, "bit_get", [{:col, "e"}, {:col, "pos"}], false}} =
+               Functions.bit_get("e", "pos")
+    end
+
+    test "getbit/2 alias mirrors bit_get/2" do
+      assert %Column{expr: {:fn, "bit_get", [{:col, "e"}, {:col, "pos"}], false}} =
+               Functions.getbit("e", "pos")
+    end
+
+    test "regexp_instr/2 wraps regexp as literal" do
+      assert %Column{
+               expr: {:fn, "regexp_instr", [{:col, "s"}, {:lit, "\\d+"}], false}
+             } = Functions.regexp_instr("s", "\\d+")
+    end
+
+    test "regexp_instr/3 wraps idx as literal" do
+      assert %Column{
+               expr:
+                 {:fn, "regexp_instr",
+                  [{:col, "s"}, {:col, "p"}, {:lit, 1}], false}
+             } =
+               Functions.regexp_instr(Functions.col("s"), Functions.col("p"), 1)
     end
 
     test "date_add/2" do
@@ -191,11 +231,27 @@ defmodule SparkEx.Unit.FunctionGenTest do
   # ── {:col_lit, 3} arity ──
 
   describe "{:col_lit, 3} functions" do
-    test "width_bucket/4" do
+    test "width_bucket/4 - column + numeric literals" do
       assert %Column{
                expr:
                  {:fn, "width_bucket", [{:col, "v"}, {:lit, 0}, {:lit, 100}, {:lit, 10}], false}
              } = Functions.width_bucket("v", 0, 100, 10)
+    end
+
+    test "width_bucket/4 - bare-string min/max resolve as column refs" do
+      assert %Column{
+               expr:
+                 {:fn, "width_bucket",
+                  [{:col, "v"}, {:col, "min"}, {:col, "max"}, {:lit, 10}], false}
+             } = Functions.width_bucket("v", "min", "max", 10)
+    end
+
+    test "width_bucket/4 - column num_bucket passes through" do
+      assert %Column{
+               expr:
+                 {:fn, "width_bucket",
+                  [{:col, "v"}, {:col, "min"}, {:col, "max"}, {:col, "n"}], false}
+             } = Functions.width_bucket("v", "min", "max", Functions.col("n"))
     end
   end
 

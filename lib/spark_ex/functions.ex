@@ -1779,6 +1779,67 @@ defmodule SparkEx.Functions do
     %Column{expr: {:fn, "randstr", [to_col_or_lit(length), {:lit, seed}], false}}
   end
 
+  @doc """
+  Returns the bucket number into which the value `v` would be assigned in an
+  equi-width histogram with `num_bucket` buckets in the range `[min, max]`.
+
+  `v`, `min`, and `max` accept Column or string column names (bare strings
+  resolve to column references). `num_bucket` accepts a Column, string column
+  name, or integer literal.
+  """
+  @spec width_bucket(
+          Column.t() | String.t(),
+          Column.t() | String.t(),
+          Column.t() | String.t(),
+          Column.t() | String.t() | integer()
+        ) :: Column.t()
+  def width_bucket(v, min, max, num_bucket) do
+    args = [to_expr(v), to_expr(min), to_expr(max), to_expr_or_lit_int(num_bucket)]
+    %Column{expr: {:fn, "width_bucket", args, false}}
+  end
+
+  @doc """
+  Returns the value of the bit at the given position.
+
+  `col` accepts a Column or string column name. `pos` accepts a Column,
+  string column name, or integer literal (bare strings resolve to column
+  references).
+  """
+  @spec bit_get(Column.t() | String.t(), Column.t() | String.t() | integer()) :: Column.t()
+  def bit_get(col, pos) do
+    args = [to_expr(col), to_expr_or_lit_int(pos)]
+    %Column{expr: {:fn, "bit_get", args, false}}
+  end
+
+  @doc "Alias for `bit_get/2`."
+  @spec getbit(Column.t() | String.t(), Column.t() | String.t() | integer()) :: Column.t()
+  def getbit(col, pos), do: bit_get(col, pos)
+
+  @doc """
+  Repeats string `s` `n` times.
+
+  `s` accepts a Column or string column name. `n` accepts a Column, string
+  column name, or integer literal (bare strings resolve to column references).
+  """
+  @spec repeat(Column.t() | String.t(), Column.t() | String.t() | integer()) :: Column.t()
+  def repeat(s, n) do
+    args = [to_expr(s), to_expr_or_lit_int(n)]
+    %Column{expr: {:fn, "repeat", args, false}}
+  end
+
+  @doc """
+  Returns the position of the n-th occurrence (capture group `idx`) of the
+  regex `regexp` in `str`.
+
+  `str` and `regexp` accept Columns or string column names. `idx` is wrapped
+  as a literal.
+  """
+  @spec regexp_instr(Column.t() | String.t(), Column.t() | String.t(), term()) :: Column.t()
+  def regexp_instr(str, regexp, idx) do
+    args = [to_expr(str), to_expr(regexp), lit_expr(idx)]
+    %Column{expr: {:fn, "regexp_instr", args, false}}
+  end
+
   # ── Internal helpers (used by generated functions) ──
 
   @doc """

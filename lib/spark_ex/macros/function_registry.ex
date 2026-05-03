@@ -15,6 +15,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
   #   {:col_lit, n}  — first arg is Column, rest are literal-coerced
   #   {:lit_then_cols, n} — first n args are literal-coerced, rest is a Column list
   #   {:col_opt, defaults} — Column + optional keyword args with defaults
+  #   {:two_col_opt, defaults} — two Columns + optional keyword args with defaults
   #   {:lit_opt, defaults} — optional keyword args only, no column arg
   #
   # opts (keyword):
@@ -93,8 +94,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:tan, "tan", :one_col, group: :math, doc: "Computes tangent."},
       {:tanh, "tanh", :one_col, group: :math, doc: "Computes hyperbolic tangent."},
       {:unhex, "unhex", :one_col, group: :math, doc: "Decodes hex string to binary."},
-      {:width_bucket, "width_bucket", {:col_lit, 3},
-       group: :math, doc: "Returns bucket number for value in equi-width histogram."},
+      # width_bucket hand-written in functions.ex to accept column-name strings on v/min/max
+      # {:width_bucket, ...} — see Functions.width_bucket/4
       {:try_add, "try_add", :two_col,
        group: :math, doc: "Try addition, returns null on overflow."},
       {:try_divide, "try_divide", :two_col,
@@ -117,10 +118,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
   defp bitwise_functions do
     [
       {:bit_count, "bit_count", :one_col, group: :bitwise, doc: "Counts number of set bits."},
-      {:bit_get, "bit_get", {:col_lit, 1},
-       group: :bitwise,
-       doc: "Returns the value of the bit at the given position.",
-       aliases: [:getbit]},
+      # bit_get hand-written in functions.ex to accept column-name strings on the position arg
+      # {:bit_get, ...} — see Functions.bit_get/2 and getbit/2
       {:bit_length, "bit_length", :one_col,
        group: :bitwise, doc: "Returns bit length of string."},
       {:shiftleft, "shiftleft", {:col_lit, 1}, group: :bitwise, doc: "Bitwise left shift."},
@@ -152,7 +151,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :string, doc: "Left-pads string to length with pad string."},
       {:rpad, "rpad", {:col_lit, 2},
        group: :string, doc: "Right-pads string to length with pad string."},
-      {:repeat, "repeat", {:col_lit, 1}, group: :string, doc: "Repeats string n times."},
+      # repeat hand-written in functions.ex to accept column-name strings on the count arg
+      # {:repeat, ...} — see Functions.repeat/2
       {:reverse, "reverse", :one_col, group: :string, doc: "Reverses string or array."},
       {:soundex, "soundex", :one_col, group: :string, doc: "Soundex code."},
       {:substring, "substring", {:col_lit, 2},
@@ -696,7 +696,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :sketch, doc: "Aggregates values into an HLL sketch."},
       {:hll_sketch_estimate, "hll_sketch_estimate", :one_col,
        group: :sketch, doc: "Estimates distinct count from an HLL sketch."},
-      {:hll_union, "hll_union", {:col_opt, [allow_different_lg_config_k: nil]},
+      {:hll_union, "hll_union", {:two_col_opt, [allow_different_lg_config_k: nil]},
        group: :sketch, doc: "Unions two HLL sketches."},
       {:hll_union_agg, "hll_union_agg", {:col_opt, [allow_different_lg_config_k: nil]},
        group: :sketch, doc: "Aggregate union of HLL sketches."}
@@ -705,19 +705,19 @@ defmodule SparkEx.Macros.FunctionRegistry do
 
   defp theta_sketch_functions do
     [
-      {:theta_sketch_agg, "theta_sketch_agg", {:col_opt, [lg_k: nil, seed: nil]},
+      {:theta_sketch_agg, "theta_sketch_agg", {:col_opt, [lg_nom_entries: nil]},
        group: :sketch, doc: "Aggregates values into a theta sketch."},
       {:theta_sketch_estimate, "theta_sketch_estimate", :one_col,
        group: :sketch, doc: "Estimates distinct count from a theta sketch."},
-      {:theta_union, "theta_union", {:col_opt, [lg_k: nil, seed: nil]},
+      {:theta_union, "theta_union", {:two_col_opt, [lg_nom_entries: nil]},
        group: :sketch, doc: "Unions two theta sketches."},
-      {:theta_union_agg, "theta_union_agg", {:col_opt, [lg_k: nil, seed: nil]},
+      {:theta_union_agg, "theta_union_agg", {:col_opt, [lg_nom_entries: nil]},
        group: :sketch, doc: "Aggregate union of theta sketches."},
-      {:theta_intersection_agg, "theta_intersection_agg", {:col_opt, [seed: nil]},
+      {:theta_intersection_agg, "theta_intersection_agg", :one_col,
        group: :sketch, doc: "Aggregate intersection of theta sketches."},
-      {:theta_intersection, "theta_intersection", {:col_opt, [seed: nil]},
+      {:theta_intersection, "theta_intersection", :two_col,
        group: :sketch, doc: "Intersects two theta sketches."},
-      {:theta_difference, "theta_difference", {:col_opt, [seed: nil]},
+      {:theta_difference, "theta_difference", :two_col,
        group: :sketch, doc: "Computes difference of two theta sketches."}
     ]
   end

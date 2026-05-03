@@ -440,9 +440,41 @@ defmodule SparkEx.MissingFeaturesTest do
       assert %Column{expr: {:fn, "hll_sketch_estimate", [{:col, "sketch"}], false}} = result
     end
 
-    test "hll_union/1" do
-      result = Functions.hll_union(Functions.col("sketch"))
-      assert %Column{expr: {:fn, "hll_union", [{:col, "sketch"}], false}} = result
+    test "hll_union/2" do
+      result = Functions.hll_union(Functions.col("sketch1"), Functions.col("sketch2"))
+
+      assert %Column{
+               expr: {:fn, "hll_union", [{:col, "sketch1"}, {:col, "sketch2"}], false}
+             } = result
+    end
+
+    test "hll_union/2 resolves bare-string column refs" do
+      result = Functions.hll_union("sketch1", "sketch2")
+
+      assert %Column{
+               expr: {:fn, "hll_union", [{:col, "sketch1"}, {:col, "sketch2"}], false}
+             } = result
+    end
+
+    test "hll_union/3 with allow_different_lg_config_k option" do
+      result =
+        Functions.hll_union("sketch1", "sketch2", allow_different_lg_config_k: true)
+
+      assert %Column{
+               expr:
+                 {:fn, "hll_union",
+                  [{:col, "sketch1"}, {:col, "sketch2"}, {:lit, true}], false}
+             } = result
+    end
+
+    test "hll_union/3 with positional bool option" do
+      result = Functions.hll_union("sketch1", "sketch2", true)
+
+      assert %Column{
+               expr:
+                 {:fn, "hll_union",
+                  [{:col, "sketch1"}, {:col, "sketch2"}, {:lit, true}], false}
+             } = result
     end
 
     test "hll_union_agg/1" do
@@ -573,9 +605,40 @@ defmodule SparkEx.MissingFeaturesTest do
       assert %Column{expr: {:fn, "theta_sketch_estimate", [{:col, "sketch"}], false}} = result
     end
 
-    test "theta_union/1" do
-      result = Functions.theta_union(Functions.col("sketch"))
-      assert %Column{expr: {:fn, "theta_union", [{:col, "sketch"}], false}} = result
+    test "theta_union/2" do
+      result = Functions.theta_union(Functions.col("s1"), Functions.col("s2"))
+
+      assert %Column{
+               expr: {:fn, "theta_union", [{:col, "s1"}, {:col, "s2"}], false}
+             } = result
+    end
+
+    test "theta_union/2 resolves bare-string column refs" do
+      result = Functions.theta_union("s1", "s2")
+
+      assert %Column{
+               expr: {:fn, "theta_union", [{:col, "s1"}, {:col, "s2"}], false}
+             } = result
+    end
+
+    test "theta_union/3 with lg_nom_entries option" do
+      result = Functions.theta_union("s1", "s2", lg_nom_entries: 15)
+
+      assert %Column{
+               expr:
+                 {:fn, "theta_union",
+                  [{:col, "s1"}, {:col, "s2"}, {:lit, 15}], false}
+             } = result
+    end
+
+    test "theta_union/3 with positional integer option" do
+      result = Functions.theta_union("s1", "s2", 12)
+
+      assert %Column{
+               expr:
+                 {:fn, "theta_union",
+                  [{:col, "s1"}, {:col, "s2"}, {:lit, 12}], false}
+             } = result
     end
 
     test "theta_union_agg/1" do
@@ -583,19 +646,49 @@ defmodule SparkEx.MissingFeaturesTest do
       assert %Column{expr: {:fn, "theta_union_agg", [{:col, "sketch"}], false}} = result
     end
 
+    test "theta_union_agg/2 with lg_nom_entries option" do
+      result = Functions.theta_union_agg("sketch", lg_nom_entries: 15)
+
+      assert %Column{
+               expr: {:fn, "theta_union_agg", [{:col, "sketch"}, {:lit, 15}], false}
+             } = result
+    end
+
     test "theta_intersection_agg/1" do
       result = Functions.theta_intersection_agg(Functions.col("sketch"))
       assert %Column{expr: {:fn, "theta_intersection_agg", [{:col, "sketch"}], false}} = result
     end
 
-    test "theta_intersection/1" do
-      result = Functions.theta_intersection(Functions.col("sketch"))
-      assert %Column{expr: {:fn, "theta_intersection", [{:col, "sketch"}], false}} = result
+    test "theta_intersection/2" do
+      result = Functions.theta_intersection(Functions.col("s1"), Functions.col("s2"))
+
+      assert %Column{
+               expr: {:fn, "theta_intersection", [{:col, "s1"}, {:col, "s2"}], false}
+             } = result
     end
 
-    test "theta_difference/1" do
-      result = Functions.theta_difference(Functions.col("sketch"))
-      assert %Column{expr: {:fn, "theta_difference", [{:col, "sketch"}], false}} = result
+    test "theta_intersection/2 resolves bare-string column refs" do
+      result = Functions.theta_intersection("s1", "s2")
+
+      assert %Column{
+               expr: {:fn, "theta_intersection", [{:col, "s1"}, {:col, "s2"}], false}
+             } = result
+    end
+
+    test "theta_difference/2" do
+      result = Functions.theta_difference(Functions.col("s1"), Functions.col("s2"))
+
+      assert %Column{
+               expr: {:fn, "theta_difference", [{:col, "s1"}, {:col, "s2"}], false}
+             } = result
+    end
+
+    test "theta_difference/2 resolves bare-string column refs" do
+      result = Functions.theta_difference("s1", "s2")
+
+      assert %Column{
+               expr: {:fn, "theta_difference", [{:col, "s1"}, {:col, "s2"}], false}
+             } = result
     end
   end
 
