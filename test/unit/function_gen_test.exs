@@ -182,11 +182,16 @@ defmodule SparkEx.Unit.FunctionGenTest do
              } = Functions.regexp_instr("s", "\\d+")
     end
 
-    test "regexp_instr/3 wraps idx as literal" do
+    test "regexp_instr/3 treats bare-string regexp as literal pattern, not column ref" do
+      assert %Column{
+               expr: {:fn, "regexp_instr", [{:col, "s"}, {:lit, "\\d+"}, {:lit, 1}], false}
+             } = Functions.regexp_instr("s", "\\d+", 1)
+    end
+
+    test "regexp_instr/3 Column regexp passes through" do
       assert %Column{
                expr: {:fn, "regexp_instr", [{:col, "s"}, {:col, "p"}, {:lit, 1}], false}
-             } =
-               Functions.regexp_instr(Functions.col("s"), Functions.col("p"), 1)
+             } = Functions.regexp_instr(Functions.col("s"), Functions.col("p"), 1)
     end
 
     test "date_add/2" do

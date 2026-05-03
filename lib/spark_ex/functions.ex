@@ -1831,12 +1831,15 @@ defmodule SparkEx.Functions do
   Returns the position of the n-th occurrence (capture group `idx`) of the
   regex `regexp` in `str`.
 
-  `str` and `regexp` accept Columns or string column names. `idx` is wrapped
-  as a literal.
+  `str` accepts a Column or string column name. `regexp` follows the same
+  coercion as the 2-arity form: `%Column{}` is passed through, bare strings
+  are treated as literal patterns (not column refs). `idx` is wrapped as a
+  literal.
   """
-  @spec regexp_instr(Column.t() | String.t(), Column.t() | String.t(), term()) :: Column.t()
+  @spec regexp_instr(Column.t() | String.t(), Column.t() | String.t() | term(), term()) ::
+          Column.t()
   def regexp_instr(str, regexp, idx) do
-    args = [to_expr(str), to_expr(regexp), lit_expr(idx)]
+    args = [to_expr(str), lit_expr(regexp), lit_expr(idx)]
     %Column{expr: {:fn, "regexp_instr", args, false}}
   end
 
