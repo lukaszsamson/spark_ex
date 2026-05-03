@@ -602,9 +602,11 @@ defmodule SparkEx.Session do
           :ok | {:error, term()}
   def copy_from_local_to_fs(session, local_path, dest_path) do
     with :ok <- validate_forward_dest_path(dest_path),
-         {:ok, data} <- read_local_file(local_path),
+         {:ok, size} <- stat_local_file(local_path),
          {:ok, _summaries} <-
-           add_artifacts(session, [{forward_to_fs_artifact_name(dest_path), data}]) do
+           add_artifacts(session, [
+             {forward_to_fs_artifact_name(dest_path), {:file, local_path, size}}
+           ]) do
       :ok
     end
   end
@@ -4188,9 +4190,10 @@ defmodule SparkEx.Session do
 
   defp dtype_requires_json_relation?(_other), do: false
 
-  defp read_local_file(local_path) do
-    case File.read(local_path) do
-      {:ok, data} -> {:ok, data}
+  defp stat_local_file(local_path) do
+    case File.stat(local_path) do
+      {:ok, %File.Stat{size: size, type: :regular}} -> {:ok, size}
+      {:ok, %File.Stat{type: type}} -> {:error, {:invalid_local_file, local_path, type}}
       {:error, reason} -> {:error, {:file_read_error, local_path, reason}}
     end
   end
