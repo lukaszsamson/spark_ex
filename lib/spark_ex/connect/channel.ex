@@ -123,7 +123,17 @@ defmodule SparkEx.Connect.Channel do
       |> Enum.reduce(%{}, fn {k, v}, acc ->
         case normalize_metadata_key(k) do
           {:ok, normalized} ->
-            Map.put(acc, normalized, v)
+            if Map.has_key?(acc, normalized) do
+              require Logger
+
+              Logger.warning(
+                "dropping extra_param #{inspect(k)}: normalises to duplicate key #{inspect(normalized)}"
+              )
+
+              acc
+            else
+              Map.put(acc, normalized, v)
+            end
 
           {:error, reason} ->
             require Logger
@@ -362,6 +372,9 @@ defmodule SparkEx.Connect.Channel do
         {:error, "key must contain only [a-z0-9-] after normalization"}
     end
   end
+
+  defp normalize_metadata_key(key),
+    do: {:error, "key must be a binary string, got: #{inspect(key)}"}
 
   defp auth_metadata_fallback(opts, token) when is_binary(token) do
     case Map.get(opts, :auth_transport, :auto) do
