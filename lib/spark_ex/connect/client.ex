@@ -1306,32 +1306,20 @@ defmodule SparkEx.Connect.Client do
 
     case execute_stream_fun.(request, timeout) do
       {:ok, initial_stream} ->
-        case collect_with_reattach(
-               initial_stream,
-               session,
-               request,
-               execute_stream_fun,
-               reattach_stream_fun,
-               release_execute_fun,
-               operation_id,
-               timeout,
-               policy,
-               [],
-               nil,
-               0
-             ) do
-          {:ok, responses, _last_response_id} ->
-            wrapped = Enum.map(responses, &{:ok, &1})
-            result = decode_fn.(wrapped)
+        ctx = %{
+          session: session,
+          request: request,
+          execute_stream_fun: execute_stream_fun,
+          reattach_stream_fun: reattach_stream_fun,
+          release_execute_fun: release_execute_fun,
+          operation_id: operation_id,
+          timeout: timeout,
+          policy: policy,
+          release_execute_timeout: release_execute_timeout
+        }
 
-            release_execute_best_effort(release_execute_fun, [], release_execute_timeout)
-
-            result
-
-          {:error, _} = error ->
-            release_execute_best_effort(release_execute_fun, [], release_execute_timeout)
-            error
-        end
+        response_stream = build_reattachable_response_stream(ctx, initial_stream)
+        decode_fn.(response_stream)
 
       {:error, %GRPC.RPCError{} = error} ->
         {:error, Errors.from_grpc_error(error, session)}
@@ -1341,120 +1329,234 @@ defmodule SparkEx.Connect.Client do
     end
   end
 
-  defp collect_with_reattach(
-         stream,
-         session,
-         request,
-         execute_stream_fun,
-         reattach_stream_fun,
-         release_execute_fun,
-         operation_id,
-         timeout,
-         policy,
-         acc,
-         last_response_id,
-         attempt
-       ) do
-    case consume_until_error(stream) do
-      {:ok, new_items, last_id, result_complete?} ->
-        all_items = prepend_items(acc, new_items)
-        final_last_id = last_id || last_response_id
+  # Builds a lazy stream of `{:ok, ExecutePlanResponse.t()} | {:error, term()}`
+  # that transparently handles reattach/retry semantics. Responses are yielded
+  # one at a time so decoders can short-circuit (e.g. on max_bytes) without
+  # buffering the entire upstream into memory first.
+  defp build_reattachable_response_stream(ctx, initial_stream) do
+    Stream.resource(
+      fn ->
+        %{
+          ctx: ctx,
+          iter: start_iter(initial_stream),
+          attempt: 0,
+          last_response_id: nil,
+          result_complete?: false,
+          emitted_count: 0
+        }
+      end,
+      &reattach_stream_step/1,
+      &reattach_stream_finalize/1
+    )
+  end
 
-        release_checkpoints_best_effort(release_execute_fun, new_items)
+  defp reattach_stream_step(%{result_complete?: true, iter: iter} = state) do
+    case pull_iter(iter) do
+      {:value, {:ok, %ExecutePlanResponse{} = resp}, new_iter} ->
+        new_id = response_id_or_nil(resp.response_id) || state.last_response_id
 
-        if result_complete? do
-          {:ok, Enum.reverse(all_items), final_last_id}
-        else
-          retry_reattach(
-            session,
-            request,
-            execute_stream_fun,
-            reattach_stream_fun,
-            release_execute_fun,
-            operation_id,
-            timeout,
-            policy,
-            all_items,
-            final_last_id,
-            attempt,
-            {:graceful_eof, nil}
-          )
-        end
+        {[{:ok, resp}],
+         %{
+           state
+           | iter: new_iter,
+             last_response_id: new_id,
+             emitted_count: state.emitted_count + 1
+         }}
 
-      {:error, error, new_items, last_id} ->
-        all_items = prepend_items(acc, new_items)
-        final_last_id = last_id || last_response_id
+      {:value, {:error, _error}, _new_iter} ->
+        {:halt, state}
 
-        release_checkpoints_best_effort(release_execute_fun, new_items)
-
-        case error do
-          %GRPC.RPCError{status: status}
-          when status in [@status_unavailable, @status_deadline_exceeded] ->
-            retry_reattach(
-              session,
-              request,
-              execute_stream_fun,
-              reattach_stream_fun,
-              release_execute_fun,
-              operation_id,
-              timeout,
-              policy,
-              all_items,
-              final_last_id,
-              attempt,
-              {:transient_error, error}
-            )
-
-          %GRPC.RPCError{status: @status_internal, message: message}
-          when is_binary(message) ->
-            if String.contains?(message, "INVALID_CURSOR.DISCONNECTED") do
-              retry_reattach(
-                session,
-                request,
-                execute_stream_fun,
-                reattach_stream_fun,
-                release_execute_fun,
-                operation_id,
-                timeout,
-                policy,
-                all_items,
-                final_last_id,
-                attempt,
-                {:transient_error, error}
-              )
-            else
-              {:error, Errors.from_grpc_error(error, session)}
-            end
-
-          %GRPC.RPCError{} = grpc_error ->
-            {:error, Errors.from_grpc_error(grpc_error, session)}
-
-          other ->
-            {:error, other}
-        end
+      :done ->
+        {:halt, state}
     end
   end
 
-  defp consume_until_error(stream) do
-    result =
-      Enum.reduce_while(stream, {[], nil, false}, fn
-        {:ok, %ExecutePlanResponse{} = resp}, {items, _last_id, result_complete?} ->
-          complete? =
-            result_complete? or match?({:result_complete, _}, resp.response_type)
+  defp reattach_stream_step(state) do
+    case pull_iter(state.iter) do
+      {:value, {:ok, %ExecutePlanResponse{} = resp}, new_iter} ->
+        new_id = response_id_or_nil(resp.response_id) || state.last_response_id
+        complete? = match?({:result_complete, _}, resp.response_type)
 
-          {:cont, {[resp | items], response_id_or_nil(resp.response_id), complete?}}
+        new_state = %{
+          state
+          | iter: new_iter,
+            last_response_id: new_id,
+            result_complete?: complete?,
+            emitted_count: state.emitted_count + 1
+        }
 
-        {:error, error}, {items, last_id, _result_complete?} ->
-          {:halt, {:error, error, Enum.reverse(items), last_id}}
-      end)
+        {[{:ok, resp}], new_state}
 
-    case result do
-      {items, last_id, result_complete?} ->
-        {:ok, Enum.reverse(items), last_id, result_complete?}
+      {:value, {:error, error}, _new_iter} ->
+        handle_inner_error(state, error)
 
-      {:error, _, _, _} = error ->
-        error
+      :done ->
+        handle_graceful_eof(state)
     end
+  end
+
+  defp reattach_stream_finalize(state) do
+    %{ctx: ctx} = state
+    release_execute_best_effort(ctx.release_execute_fun, [], ctx.release_execute_timeout)
+  end
+
+  defp handle_graceful_eof(state) do
+    fire_release_checkpoint(state.ctx.release_execute_fun, state.last_response_id)
+    perform_reattach(state, {:graceful_eof, nil})
+  end
+
+  defp handle_inner_error(state, %GRPC.RPCError{status: status} = error)
+       when status in [@status_unavailable, @status_deadline_exceeded] do
+    fire_release_checkpoint(state.ctx.release_execute_fun, state.last_response_id)
+    perform_reattach(state, {:transient_error, error})
+  end
+
+  defp handle_inner_error(
+         state,
+         %GRPC.RPCError{status: @status_internal, message: message} = error
+       )
+       when is_binary(message) do
+    if String.contains?(message, "INVALID_CURSOR.DISCONNECTED") do
+      fire_release_checkpoint(state.ctx.release_execute_fun, state.last_response_id)
+      perform_reattach(state, {:transient_error, error})
+    else
+      {[{:error, Errors.from_grpc_error(error, state.ctx.session)}],
+       %{state | result_complete?: true}}
+    end
+  end
+
+  defp handle_inner_error(state, %GRPC.RPCError{} = error) do
+    {[{:error, Errors.from_grpc_error(error, state.ctx.session)}],
+     %{state | result_complete?: true}}
+  end
+
+  defp handle_inner_error(state, other) do
+    {[{:error, other}], %{state | result_complete?: true}}
+  end
+
+  defp perform_reattach(state, reason) do
+    %{ctx: ctx, attempt: attempt} = state
+    %{policy: policy, operation_id: operation_id, session: session} = ctx
+
+    if attempt >= policy.max_retries do
+      error =
+        {:reattach_incomplete_result,
+         %{
+           retries_attempted: attempt,
+           last_response_id: state.last_response_id,
+           responses_received: state.emitted_count
+         }}
+
+      {[{:error, error}], %{state | result_complete?: true}}
+    else
+      {telemetry_metadata, server_retry_delay_ms} =
+        case reason do
+          {:transient_error, %GRPC.RPCError{status: status} = error} ->
+            delay = extract_server_retry_delay(error)
+
+            {%{
+               operation_id: operation_id,
+               last_response_id: state.last_response_id,
+               grpc_status: status,
+               error: error,
+               reason: :transient_error
+             }, delay}
+
+          {:graceful_eof, _} ->
+            {%{
+               operation_id: operation_id,
+               last_response_id: state.last_response_id,
+               reason: :graceful_eof
+             }, nil}
+        end
+
+      :telemetry.execute(
+        [:spark_ex, :reattach, :attempt],
+        %{attempt: attempt + 1},
+        telemetry_metadata
+      )
+
+      sleep_ms = backoff_with_retry_info(attempt, policy, server_retry_delay_ms)
+      policy.sleep_fun.(sleep_ms)
+
+      next_attempt =
+        case reason do
+          {:graceful_eof, _} -> attempt
+          _ -> attempt + 1
+        end
+
+      case ctx.reattach_stream_fun.(state.last_response_id) do
+        {:ok, new_stream} ->
+          new_state = %{state | iter: start_iter(new_stream), attempt: next_attempt}
+          reattach_stream_step(new_state)
+
+        {:error,
+         %SparkEx.Error.Remote{error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED"} =
+             remote} ->
+          {[{:error, remote}], %{state | result_complete?: true}}
+
+        {:error, %SparkEx.Error.Remote{} = remote}
+        when remote.error_class in [
+               "INVALID_HANDLE.OPERATION_NOT_FOUND",
+               "INVALID_HANDLE.SESSION_NOT_FOUND"
+             ] ->
+          if is_nil(state.last_response_id) do
+            case ctx.execute_stream_fun.(ctx.request, ctx.timeout) do
+              {:ok, fresh_stream} ->
+                new_state = %{state | iter: start_iter(fresh_stream), attempt: next_attempt + 1}
+                reattach_stream_step(new_state)
+
+              {:error, %GRPC.RPCError{} = grpc_error} ->
+                {[{:error, Errors.from_grpc_error(grpc_error, session)}],
+                 %{state | result_complete?: true}}
+
+              {:error, err} ->
+                {[{:error, err}], %{state | result_complete?: true}}
+            end
+          else
+            error = %SparkEx.Error.ResponseAlreadyReceived{
+              operation_id: operation_id,
+              last_response_id: state.last_response_id,
+              buffered_count: state.emitted_count,
+              cause: remote
+            }
+
+            {[{:error, error}], %{state | result_complete?: true}}
+          end
+
+        {:error, _} = err ->
+          {[err], %{state | result_complete?: true}}
+      end
+    end
+  end
+
+  # Suspends an enumerable so elements can be pulled one at a time via pull_iter/1.
+  defp start_iter(enum) do
+    Enumerable.reduce(enum, {:suspend, nil}, fn elem, _acc -> {:suspend, elem} end)
+  end
+
+  defp pull_iter({:suspended, _prev, cont}) do
+    case cont.({:cont, nil}) do
+      {:suspended, elem, next_cont} -> {:value, elem, {:suspended, elem, next_cont}}
+      {:done, _} -> :done
+      {:halted, _} -> :done
+    end
+  end
+
+  defp pull_iter(_), do: :done
+
+  defp fire_release_checkpoint(_release_execute_fun, nil), do: :ok
+
+  defp fire_release_checkpoint(release_execute_fun, response_id) do
+    Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
+      try do
+        release_execute_fun.(until_response_id: response_id)
+      catch
+        _, _ -> :ok
+      end
+    end)
+
+    :ok
   end
 
   @doc false
@@ -1787,194 +1889,6 @@ defmodule SparkEx.Connect.Client do
   # consumed (non-result_complete) response_id needs to be released —
   # fanning out one ReleaseExecute per response is redundant work that the
   # server interprets identically to a single call against the highest id.
-  defp release_checkpoints_best_effort(release_execute_fun, responses) do
-    last_response_id =
-      responses
-      |> Enum.reject(fn resp -> match?({:result_complete, _}, resp.response_type) end)
-      |> Enum.map(&response_id_or_nil(&1.response_id))
-      |> Enum.reject(&is_nil/1)
-      |> List.last()
-
-    case last_response_id do
-      nil ->
-        :ok
-
-      response_id ->
-        Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
-          try do
-            release_execute_fun.(until_response_id: response_id)
-          catch
-            _, _ -> :ok
-          end
-        end)
-
-        :ok
-    end
-  end
-
-  defp retry_reattach(
-         _session,
-         _request,
-         _execute_stream_fun,
-         _reattach_stream_fun,
-         _release_execute_fun,
-         _operation_id,
-         _timeout,
-         %{max_retries: max_retries},
-         all_items,
-         final_last_id,
-         attempt,
-         _reason
-       )
-       when attempt >= max_retries do
-    {:error,
-     {:reattach_incomplete_result,
-      %{
-        retries_attempted: attempt,
-        last_response_id: final_last_id,
-        responses_received: length(all_items)
-      }}}
-  end
-
-  defp retry_reattach(
-         session,
-         request,
-         execute_stream_fun,
-         reattach_stream_fun,
-         release_execute_fun,
-         operation_id,
-         timeout,
-         policy,
-         all_items,
-         final_last_id,
-         attempt,
-         reason
-       ) do
-    {telemetry_metadata, server_retry_delay_ms} =
-      case reason do
-        {:transient_error, %GRPC.RPCError{status: status} = error} ->
-          delay = extract_server_retry_delay(error)
-
-          {%{
-             operation_id: operation_id,
-             last_response_id: final_last_id,
-             grpc_status: status,
-             error: error,
-             reason: :transient_error
-           }, delay}
-
-        {:graceful_eof, _} ->
-          {%{
-             operation_id: operation_id,
-             last_response_id: final_last_id,
-             reason: :graceful_eof
-           }, nil}
-      end
-
-    :telemetry.execute(
-      [:spark_ex, :reattach, :attempt],
-      %{attempt: attempt + 1},
-      telemetry_metadata
-    )
-
-    computed_backoff = backoff_ms(attempt, policy)
-
-    sleep_ms =
-      case server_retry_delay_ms do
-        delay when is_integer(delay) and delay > 0 ->
-          capped = min(delay, policy.max_server_retry_delay)
-          max(computed_backoff, capped)
-
-        _ ->
-          computed_backoff
-      end
-
-    policy.sleep_fun.(sleep_ms)
-
-    # Graceful EOF is the server saying "no more data on this stream right
-    # now." It's not a transient failure, so it shouldn't consume the retry
-    # budget the same way — only count attempts caused by errors.
-    next_attempt =
-      case reason do
-        {:graceful_eof, _} -> attempt
-        _ -> attempt + 1
-      end
-
-    case reattach_stream_fun.(final_last_id) do
-      {:ok, new_stream} ->
-        collect_with_reattach(
-          new_stream,
-          session,
-          request,
-          execute_stream_fun,
-          reattach_stream_fun,
-          release_execute_fun,
-          operation_id,
-          timeout,
-          policy,
-          all_items,
-          final_last_id,
-          next_attempt
-        )
-
-      # Surface RESPONSE_ALREADY_RECEIVED directly — the previous response
-      # was already consumed by another client and reattach is unrecoverable.
-      {:error,
-       %SparkEx.Error.Remote{error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED"} =
-           remote} ->
-        {:error, remote}
-
-      # Recover from missing operation/session by re-issuing ExecutePlan ONLY
-      # when nothing has been buffered yet (no items collected and no
-      # response_id seen). If partial responses already arrived, a fresh
-      # ExecutePlan would duplicate them and dropping the buffer would
-      # silently lose data — both unsafe — so we surface
-      # `SparkEx.Error.ResponseAlreadyReceived` to mirror PySpark's
-      # RESPONSE_ALREADY_RECEIVED contract.
-      {:error, %SparkEx.Error.Remote{} = remote}
-      when remote.error_class in [
-             "INVALID_HANDLE.OPERATION_NOT_FOUND",
-             "INVALID_HANDLE.SESSION_NOT_FOUND"
-           ] ->
-        if all_items == [] and is_nil(final_last_id) do
-          case execute_stream_fun.(request, timeout) do
-            {:ok, fresh_stream} ->
-              collect_with_reattach(
-                fresh_stream,
-                session,
-                request,
-                execute_stream_fun,
-                reattach_stream_fun,
-                release_execute_fun,
-                operation_id,
-                timeout,
-                policy,
-                [],
-                nil,
-                attempt + 1
-              )
-
-            {:error, %GRPC.RPCError{} = grpc_error} ->
-              {:error, Errors.from_grpc_error(grpc_error, session)}
-
-            {:error, reason} ->
-              {:error, reason}
-          end
-        else
-          {:error,
-           %SparkEx.Error.ResponseAlreadyReceived{
-             operation_id: operation_id,
-             last_response_id: final_last_id,
-             buffered_count: length(all_items),
-             cause: remote
-           }}
-        end
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
   defp execute_plan_stream(session, request, timeout) do
     Stub.execute_plan(session.channel, request, timeout: timeout)
   end
@@ -2250,12 +2164,6 @@ defmodule SparkEx.Connect.Client do
     {:ok, Protobuf.decode(value, Google.Rpc.RetryInfo)}
   rescue
     _ -> :error
-  end
-
-  defp prepend_items(acc, items) do
-    Enum.reduce(items, acc, fn item, rev_acc ->
-      [item | rev_acc]
-    end)
   end
 
   defp backoff_with_retry_info(_attempt, policy, retry_delay_ms)
