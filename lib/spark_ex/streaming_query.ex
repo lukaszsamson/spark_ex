@@ -142,16 +142,17 @@ defmodule SparkEx.StreamingQuery do
   Returns a list of recent progress reports as parsed maps.
 
   Each entry is the JSON-decoded `StreamingQueryProgress` reported by
-  the server. Entries that fail to parse are returned as
-  `{:error, reason}` so callers can drop or surface them as needed.
+  the server. If any entry fails to parse, the whole call returns
+  `{:error, {:invalid_progress_json, reason, raw_payload}}` — matching
+  the contract of `last_progress/1`.
   """
-  @spec recent_progress(t()) :: {:ok, [map() | {:error, term()}]} | {:error, term()}
+  @spec recent_progress(t()) :: {:ok, [map()]} | {:error, term()}
   def recent_progress(%__MODULE__{} = query) do
     case execute_command(query, {:recent_progress}) do
       {:ok, {:streaming_query, result}} ->
         case result.result_type do
           {:recent_progress, rp} ->
-            {:ok, Enum.map(rp.recent_progress_json, &parse_progress_entry/1)}
+            parse_progress_list(rp.recent_progress_json)
 
           other ->
             {:error, {:unexpected_result, other}}
@@ -163,12 +164,14 @@ defmodule SparkEx.StreamingQuery do
   end
 
   @doc """
-  Returns the most recent progress report as a parsed map, or `nil`.
+  Returns the most recent progress report as a parsed map, or `nil` if
+  the server has not produced any progress yet.
 
-  If the server payload fails to parse as JSON it is returned as a raw
-  string instead.
+  Returns `{:error, {:invalid_progress_json, reason, raw_payload}}` when
+  the server-supplied JSON cannot be decoded — matching the contract of
+  `recent_progress/1`.
   """
-  @spec last_progress(t()) :: {:ok, map() | String.t() | nil} | {:error, term()}
+  @spec last_progress(t()) :: {:ok, map() | nil} | {:error, term()}
   def last_progress(%__MODULE__{} = query) do
     case execute_command(query, {:last_progress}) do
       {:ok, {:streaming_query, result}} ->
@@ -176,7 +179,7 @@ defmodule SparkEx.StreamingQuery do
           {:recent_progress, rp} ->
             case List.last(rp.recent_progress_json) do
               nil -> {:ok, nil}
-              json -> {:ok, parse_progress(json)}
+              json -> parse_progress_ok(json)
             end
 
           other ->
@@ -280,21 +283,25 @@ defmodule SparkEx.StreamingQuery do
     end
   end
 
-  defp parse_progress(json) when is_binary(json) do
+  defp parse_progress_ok(json) when is_binary(json) do
     case Jason.decode(json) do
-      {:ok, parsed} -> parsed
-      {:error, _} -> json
-    end
-  end
-
-  defp parse_progress(other), do: other
-
-  defp parse_progress_entry(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, parsed} -> parsed
+      {:ok, parsed} -> {:ok, parsed}
       {:error, reason} -> {:error, {:invalid_progress_json, reason, json}}
     end
   end
 
-  defp parse_progress_entry(other), do: {:error, {:invalid_progress_payload, other}}
+  defp parse_progress_ok(other), do: {:error, {:invalid_progress_payload, other}}
+
+  defp parse_progress_list(entries) do
+    Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, acc} ->
+      case parse_progress_ok(entry) do
+        {:ok, parsed} -> {:cont, {:ok, [parsed | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, parsed} -> {:ok, Enum.reverse(parsed)}
+      {:error, _} = error -> error
+    end
+  end
 end
