@@ -1770,7 +1770,8 @@ defmodule SparkEx.Session do
         stacktrace = __STACKTRACE__
 
         Logger.warning(
-          "spark_ex session channel disconnect raised #{inspect(exception.__struct__)}: #{Exception.message(exception)}"
+          "spark_ex session channel disconnect raised #{inspect(exception.__struct__)}: #{Exception.message(exception)}\n" <>
+            Exception.format_stacktrace(stacktrace)
         )
 
         :telemetry.execute(

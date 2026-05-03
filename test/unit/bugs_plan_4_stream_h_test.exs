@@ -1,5 +1,5 @@
 defmodule SparkEx.BugsPlan4.StreamHTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias SparkEx.Internal.Random
 
