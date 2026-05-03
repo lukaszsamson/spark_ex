@@ -45,7 +45,7 @@ defmodule SparkEx.StreamingQueryListenerBus do
     def ensure_started do
       case Process.whereis(__MODULE__) do
         nil ->
-          case GenServer.start_link(__MODULE__, :ok, name: __MODULE__) do
+          case GenServer.start(__MODULE__, :ok, name: __MODULE__) do
             {:ok, _pid} -> :ok
             {:error, {:already_started, _pid}} -> :ok
           end
