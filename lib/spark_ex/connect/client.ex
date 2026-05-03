@@ -1336,7 +1336,8 @@ defmodule SparkEx.Connect.Client do
           iter: start_iter(initial_stream),
           attempt: 0,
           last_response_id: nil,
-          result_complete?: false
+          result_complete?: false,
+          emitted_count: 0
         }
       end,
       &reattach_stream_step/1,
@@ -1348,7 +1349,14 @@ defmodule SparkEx.Connect.Client do
     case pull_iter(iter) do
       {:value, {:ok, %ExecutePlanResponse{} = resp}, new_iter} ->
         new_id = response_id_or_nil(resp.response_id) || state.last_response_id
-        {[{:ok, resp}], %{state | iter: new_iter, last_response_id: new_id}}
+
+        {[{:ok, resp}],
+         %{
+           state
+           | iter: new_iter,
+             last_response_id: new_id,
+             emitted_count: state.emitted_count + 1
+         }}
 
       {:value, {:error, _error}, _new_iter} ->
         {:halt, state}
@@ -1363,7 +1371,15 @@ defmodule SparkEx.Connect.Client do
       {:value, {:ok, %ExecutePlanResponse{} = resp}, new_iter} ->
         new_id = response_id_or_nil(resp.response_id) || state.last_response_id
         complete? = match?({:result_complete, _}, resp.response_type)
-        new_state = %{state | iter: new_iter, last_response_id: new_id, result_complete?: complete?}
+
+        new_state = %{
+          state
+          | iter: new_iter,
+            last_response_id: new_id,
+            result_complete?: complete?,
+            emitted_count: state.emitted_count + 1
+        }
+
         {[{:ok, resp}], new_state}
 
       {:value, {:error, error}, _new_iter} ->
@@ -1390,18 +1406,23 @@ defmodule SparkEx.Connect.Client do
     perform_reattach(state, {:transient_error, error})
   end
 
-  defp handle_inner_error(state, %GRPC.RPCError{status: @status_internal, message: message} = error)
+  defp handle_inner_error(
+         state,
+         %GRPC.RPCError{status: @status_internal, message: message} = error
+       )
        when is_binary(message) do
     if String.contains?(message, "INVALID_CURSOR.DISCONNECTED") do
       fire_release_checkpoint(state.ctx.release_execute_fun, state.last_response_id)
       perform_reattach(state, {:transient_error, error})
     else
-      {[{:error, Errors.from_grpc_error(error, state.ctx.session)}], %{state | result_complete?: true}}
+      {[{:error, Errors.from_grpc_error(error, state.ctx.session)}],
+       %{state | result_complete?: true}}
     end
   end
 
   defp handle_inner_error(state, %GRPC.RPCError{} = error) do
-    {[{:error, Errors.from_grpc_error(error, state.ctx.session)}], %{state | result_complete?: true}}
+    {[{:error, Errors.from_grpc_error(error, state.ctx.session)}],
+     %{state | result_complete?: true}}
   end
 
   defp handle_inner_error(state, other) do
@@ -1418,7 +1439,7 @@ defmodule SparkEx.Connect.Client do
          %{
            retries_attempted: attempt,
            last_response_id: state.last_response_id,
-           responses_received: 0
+           responses_received: state.emitted_count
          }}
 
       {[{:error, error}], %{state | result_complete?: true}}
@@ -1464,7 +1485,9 @@ defmodule SparkEx.Connect.Client do
           new_state = %{state | iter: start_iter(new_stream), attempt: next_attempt}
           reattach_stream_step(new_state)
 
-        {:error, %SparkEx.Error.Remote{error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED"} = remote} ->
+        {:error,
+         %SparkEx.Error.Remote{error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED"} =
+             remote} ->
           {[{:error, remote}], %{state | result_complete?: true}}
 
         {:error, %SparkEx.Error.Remote{} = remote}
@@ -1489,7 +1512,7 @@ defmodule SparkEx.Connect.Client do
             error = %SparkEx.Error.ResponseAlreadyReceived{
               operation_id: operation_id,
               last_response_id: state.last_response_id,
-              buffered_count: 0,
+              buffered_count: state.emitted_count,
               cause: remote
             }
 
