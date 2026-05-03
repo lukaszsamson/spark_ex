@@ -560,7 +560,8 @@ defmodule SparkEx.Connect.Client do
           {:ok, Enumerable.t()} | {:error, term()}
   def execute_plan_raw_stream(session, plan, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, :infinity)
-    request = build_execute_request(session, plan, [], nil, false, opts)
+    tags = Keyword.get(opts, :tags, [])
+    request = build_execute_request(session, plan, tags, nil, false, opts)
 
     case Stub.execute_plan(session.channel, request, timeout: timeout) do
       {:ok, stream} -> {:ok, stream}
@@ -585,7 +586,8 @@ defmodule SparkEx.Connect.Client do
     idle_timeout = Keyword.get(opts, :idle_timeout, nil)
     release_timeout = Keyword.get(opts, :release_execute_timeout, @release_execute_timeout)
     operation_id = generate_operation_id()
-    request = build_execute_request(session, plan, [], operation_id, true, opts)
+    tags = Keyword.get(opts, :tags, [])
+    request = build_execute_request(session, plan, tags, operation_id, true, opts)
 
     case Stub.execute_plan(session.channel, request, timeout: timeout) do
       {:ok, stream} ->

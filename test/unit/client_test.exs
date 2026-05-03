@@ -106,6 +106,26 @@ defmodule SparkEx.Connect.ClientTest do
     assert [^extension] = request.user_context.extensions
   end
 
+  test "build_execute_request/6 carries tags into the request" do
+    session = %SparkEx.Session{
+      channel: nil,
+      session_id: "test-session",
+      user_id: "test",
+      client_type: "test"
+    }
+
+    request =
+      Client.build_execute_request(
+        session,
+        %Spark.Connect.Plan{},
+        ["alpha", "beta"],
+        nil,
+        false
+      )
+
+    assert request.tags == ["alpha", "beta"]
+  end
+
   test "build_execute_request/6 validates preferred chunk size" do
     session = %SparkEx.Session{
       channel: nil,
