@@ -1756,18 +1756,44 @@ defmodule SparkEx.Session do
 
         {:error, reason} ->
           Logger.warning("spark_ex session channel disconnect failed: #{inspect(reason)}")
+
+          :telemetry.execute(
+            [:spark_ex, :session, :disconnect, :error],
+            %{system_time: System.system_time()},
+            %{reason: reason}
+          )
+
           :ok
       end
     rescue
       exception ->
+        stacktrace = __STACKTRACE__
+
         Logger.warning(
           "spark_ex session channel disconnect raised #{inspect(exception.__struct__)}: #{Exception.message(exception)}"
+        )
+
+        :telemetry.execute(
+          [:spark_ex, :session, :disconnect, :exception],
+          %{system_time: System.system_time()},
+          %{kind: :error, reason: exception, stacktrace: stacktrace}
         )
 
         :ok
     catch
       kind, reason ->
-        Logger.warning("spark_ex session channel disconnect #{kind}: #{inspect(reason)}")
+        stacktrace = __STACKTRACE__
+
+        Logger.warning(
+          "spark_ex session channel disconnect #{kind}: #{inspect(reason)}\n" <>
+            Exception.format_stacktrace(stacktrace)
+        )
+
+        :telemetry.execute(
+          [:spark_ex, :session, :disconnect, :exception],
+          %{system_time: System.system_time()},
+          %{kind: kind, reason: reason, stacktrace: stacktrace}
+        )
 
         :ok
     end

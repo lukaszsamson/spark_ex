@@ -30,6 +30,7 @@ defmodule SparkEx.DataFrame do
   """
 
   alias SparkEx.Column
+  alias SparkEx.Internal.Random
   alias SparkEx.Internal.Tag
 
   defstruct [:session, :plan, tags: [], _schema: nil]
@@ -1110,7 +1111,7 @@ defmodule SparkEx.DataFrame do
 
     resolved_seed =
       case seed_or_opts do
-        nil -> :rand.uniform(0x7FFFFFFFFFFFFFFF)
+        nil -> Random.long_seed()
         s when is_integer(s) -> s
         other -> raise ArgumentError, "expected seed to be integer or nil, got: #{inspect(other)}"
       end
@@ -2722,7 +2723,7 @@ defmodule SparkEx.DataFrame do
     raise ArgumentError, "ascending list values must be booleans, got: #{inspect(value)}"
   end
 
-  defp normalize_sample_seed!(nil), do: :rand.uniform(9_223_372_036_854_775_807)
+  defp normalize_sample_seed!(nil), do: Random.long_seed()
   defp normalize_sample_seed!(seed) when is_integer(seed), do: seed
 
   defp normalize_sample_seed!(seed) do

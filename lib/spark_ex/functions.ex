@@ -22,6 +22,7 @@ defmodule SparkEx.Functions do
   import Kernel, except: [abs: 1, ceil: 1, floor: 1, round: 1, length: 1, struct: 1, struct: 2]
 
   alias SparkEx.Column
+  alias SparkEx.Internal.Random
   require SparkEx.Macros.FunctionGen
 
   # ── Core constructors (hand-written) ──
@@ -330,7 +331,7 @@ defmodule SparkEx.Functions do
   end
 
   def rand(seed) when is_integer(seed) or is_nil(seed) do
-    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
+    seed = seed || Random.long_seed()
     %Column{expr: {:fn, "rand", [{:lit, seed}], false}}
   end
 
@@ -346,7 +347,7 @@ defmodule SparkEx.Functions do
   end
 
   def randn(seed) when is_integer(seed) or is_nil(seed) do
-    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
+    seed = seed || Random.long_seed()
     %Column{expr: {:fn, "randn", [{:lit, seed}], false}}
   end
 
@@ -392,7 +393,7 @@ defmodule SparkEx.Functions do
   """
   @spec shuffle(Column.t() | String.t()) :: Column.t()
   def shuffle(col) do
-    shuffle(col, :rand.uniform(0x7FFFFFFFFFFFFFFF))
+    shuffle(col, Random.long_seed())
   end
 
   @spec shuffle(Column.t() | String.t(), integer()) :: Column.t()
@@ -1756,7 +1757,7 @@ defmodule SparkEx.Functions do
   """
   @spec uniform(Column.t() | String.t() | number(), term(), integer() | nil) :: Column.t()
   def uniform(min, max, seed \\ nil) do
-    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
+    seed = seed || Random.long_seed()
 
     args = [
       normalize_uniform_bound(min),
@@ -1775,7 +1776,7 @@ defmodule SparkEx.Functions do
   """
   @spec randstr(Column.t() | String.t() | integer(), integer() | nil) :: Column.t()
   def randstr(length, seed \\ nil) do
-    seed = seed || :rand.uniform(9_223_372_036_854_775_807)
+    seed = seed || Random.long_seed()
     %Column{expr: {:fn, "randstr", [to_col_or_lit(length), {:lit, seed}], false}}
   end
 
