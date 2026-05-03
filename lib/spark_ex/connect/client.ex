@@ -560,8 +560,7 @@ defmodule SparkEx.Connect.Client do
           {:ok, Enumerable.t()} | {:error, term()}
   def execute_plan_raw_stream(session, plan, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, :infinity)
-    tags = Keyword.get(opts, :tags, [])
-    request = build_execute_request(session, plan, tags, nil, false, opts)
+    request = build_raw_stream_request(session, plan, opts)
 
     case Stub.execute_plan(session.channel, request, timeout: timeout) do
       {:ok, stream} -> {:ok, stream}
@@ -586,8 +585,7 @@ defmodule SparkEx.Connect.Client do
     idle_timeout = Keyword.get(opts, :idle_timeout, nil)
     release_timeout = Keyword.get(opts, :release_execute_timeout, @release_execute_timeout)
     operation_id = generate_operation_id()
-    tags = Keyword.get(opts, :tags, [])
-    request = build_execute_request(session, plan, tags, operation_id, true, opts)
+    request = build_managed_stream_request(session, plan, operation_id, opts)
 
     case Stub.execute_plan(session.channel, request, timeout: timeout) do
       {:ok, stream} ->
@@ -1503,6 +1501,22 @@ defmodule SparkEx.Connect.Client do
       operation_id: operation_id,
       request_options: request_options
     }
+  end
+
+  @doc false
+  @spec build_raw_stream_request(SparkEx.Session.t(), Plan.t(), keyword()) ::
+          ExecutePlanRequest.t()
+  def build_raw_stream_request(session, plan, opts \\ []) do
+    tags = Keyword.get(opts, :tags, [])
+    build_execute_request(session, plan, tags, nil, false, opts)
+  end
+
+  @doc false
+  @spec build_managed_stream_request(SparkEx.Session.t(), Plan.t(), String.t(), keyword()) ::
+          ExecutePlanRequest.t()
+  def build_managed_stream_request(session, plan, operation_id, opts \\ []) do
+    tags = Keyword.get(opts, :tags, [])
+    build_execute_request(session, plan, tags, operation_id, true, opts)
   end
 
   defp normalize_preferred_arrow_chunk_size(nil), do: nil
