@@ -1071,6 +1071,211 @@ defmodule SparkEx.M14.StreamingTest do
     end
   end
 
+  defmodule ProgressFakeSession do
+    use GenServer
+
+    def start_link(payloads) do
+      GenServer.start_link(__MODULE__, payloads)
+    end
+
+    @impl true
+    def init(payloads), do: {:ok, payloads}
+
+    @impl true
+    def handle_call({:execute_command_with_result, command, _opts}, _from, payloads) do
+      {:streaming_query_command, _qid, _rid, cmd} = command
+
+      key =
+        case cmd do
+          {:recent_progress} -> :recent_progress
+          {:last_progress} -> :last_progress
+        end
+
+      case Map.fetch!(payloads, key) do
+        {:ok, json_list} ->
+          result = %Spark.Connect.StreamingQueryCommandResult{
+            result_type:
+              {:recent_progress,
+               %Spark.Connect.StreamingQueryCommandResult.RecentProgressResult{
+                 recent_progress_json: json_list
+               }}
+          }
+
+          {:reply, {:ok, {:streaming_query, result}}, payloads}
+
+        {:error, _} = err ->
+          {:reply, err, payloads}
+      end
+    end
+  end
+
+  describe "StreamingQuery progress parsing" do
+    setup do
+      {:ok, session} =
+        ProgressFakeSession.start_link(%{
+          recent_progress: {:ok, [~s({"a":1}), ~s({"b":2})]},
+          last_progress: {:ok, [~s({"a":1}), ~s({"b":2})]}
+        })
+
+      query = %SparkEx.StreamingQuery{session: session, query_id: "q", run_id: "r"}
+      %{query: query}
+    end
+
+    test "recent_progress decodes every entry", %{query: query} do
+      assert {:ok, [%{"a" => 1}, %{"b" => 2}]} = SparkEx.StreamingQuery.recent_progress(query)
+    end
+
+    test "last_progress returns the trailing entry", %{query: query} do
+      assert {:ok, %{"b" => 2}} = SparkEx.StreamingQuery.last_progress(query)
+    end
+
+    test "recent_progress returns empty list when the server has no progress entries" do
+      {:ok, session} =
+        ProgressFakeSession.start_link(%{
+          recent_progress: {:ok, []},
+          last_progress: {:ok, []}
+        })
+
+      query = %SparkEx.StreamingQuery{session: session, query_id: "q", run_id: "r"}
+      assert {:ok, []} = SparkEx.StreamingQuery.recent_progress(query)
+    end
+
+    test "last_progress returns nil when the server reports no progress" do
+      {:ok, session} =
+        ProgressFakeSession.start_link(%{
+          recent_progress: {:ok, []},
+          last_progress: {:ok, []}
+        })
+
+      query = %SparkEx.StreamingQuery{session: session, query_id: "q", run_id: "r"}
+      assert {:ok, nil} = SparkEx.StreamingQuery.last_progress(query)
+    end
+
+    test "recent_progress bubbles up an outer error on malformed JSON" do
+      {:ok, session} =
+        ProgressFakeSession.start_link(%{
+          recent_progress: {:ok, [~s({"a":1}), "not-json"]},
+          last_progress: {:ok, []}
+        })
+
+      query = %SparkEx.StreamingQuery{session: session, query_id: "q", run_id: "r"}
+
+      assert {:error, {:invalid_progress_json, _, "not-json"}} =
+               SparkEx.StreamingQuery.recent_progress(query)
+    end
+
+    test "last_progress bubbles up an outer error on malformed JSON" do
+      {:ok, session} =
+        ProgressFakeSession.start_link(%{
+          recent_progress: {:ok, []},
+          last_progress: {:ok, ["not-json"]}
+        })
+
+      query = %SparkEx.StreamingQuery{session: session, query_id: "q", run_id: "r"}
+
+      assert {:error, {:invalid_progress_json, _, "not-json"}} =
+               SparkEx.StreamingQuery.last_progress(query)
+    end
+  end
+
+  describe "StreamingQueryListenerBus.reconnect_delay_ms/1" do
+    test "exponential schedule capped at 30 seconds" do
+      assert SparkEx.StreamingQueryListenerBus.reconnect_delay_ms(1) == 200
+      assert SparkEx.StreamingQueryListenerBus.reconnect_delay_ms(2) == 400
+      assert SparkEx.StreamingQueryListenerBus.reconnect_delay_ms(3) == 800
+      assert SparkEx.StreamingQueryListenerBus.reconnect_delay_ms(4) == 1600
+      assert SparkEx.StreamingQueryListenerBus.reconnect_delay_ms(5) == 3200
+      assert SparkEx.StreamingQueryListenerBus.reconnect_delay_ms(6) == 6400
+      assert SparkEx.StreamingQueryListenerBus.reconnect_delay_ms(7) == 12_800
+      assert SparkEx.StreamingQueryListenerBus.reconnect_delay_ms(8) == 25_600
+      assert SparkEx.StreamingQueryListenerBus.reconnect_delay_ms(9) == 30_000
+      assert SparkEx.StreamingQueryListenerBus.reconnect_delay_ms(50) == 30_000
+      assert SparkEx.StreamingQueryListenerBus.reconnect_delay_ms(100) == 30_000
+    end
+  end
+
+  describe "StreamingQueryListenerBus reconnect telemetry" do
+    test ":reconnect event includes delay_ms when stream ends normally" do
+      test_pid = self()
+      handler_id = {__MODULE__, :reconnect_telemetry, make_ref()}
+
+      :telemetry.attach(
+        handler_id,
+        [:spark_ex, :streaming, :listener_bus, :reconnect],
+        fn _event, measurements, _meta, _ ->
+          send(test_pid, {:telemetry_reconnect, measurements})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, session} = FakeSession.start_link(parent: self())
+      {:ok, bus} = SparkEx.StreamingQueryListenerBus.start_link(session)
+      on_exit(fn -> if Process.alive?(bus), do: SparkEx.StreamingQueryListenerBus.stop(bus) end)
+
+      :ok = SparkEx.StreamingQueryListenerBus.add_listener(bus, StartedListener)
+
+      send(bus, {:listener_stream_ended, :normal})
+
+      assert_receive {:telemetry_reconnect, %{attempt: 1, delay_ms: delay}}, 500
+      assert is_integer(delay) and delay > 0
+    end
+
+    test ":reconnect event fires on transport errors too" do
+      test_pid = self()
+      handler_id = {__MODULE__, :reconnect_error_telemetry, make_ref()}
+
+      :telemetry.attach(
+        handler_id,
+        [:spark_ex, :streaming, :listener_bus, :reconnect],
+        fn _event, measurements, _meta, _ ->
+          send(test_pid, {:telemetry_reconnect, measurements})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, session} = FakeSession.start_link(parent: self())
+      {:ok, bus} = SparkEx.StreamingQueryListenerBus.start_link(session)
+      on_exit(fn -> if Process.alive?(bus), do: SparkEx.StreamingQueryListenerBus.stop(bus) end)
+
+      :ok = SparkEx.StreamingQueryListenerBus.add_listener(bus, StartedListener)
+
+      send(bus, {:listener_stream_ended, {:error, :econnreset}})
+
+      assert_receive {:telemetry_reconnect, %{attempt: 1, delay_ms: _}}, 500
+    end
+
+    test ":reconnect_exhausted telemetry fires when attempt ceiling is hit" do
+      test_pid = self()
+      handler_id = {__MODULE__, :exhausted_telemetry, make_ref()}
+
+      :telemetry.attach(
+        handler_id,
+        [:spark_ex, :streaming, :listener_bus, :reconnect_exhausted],
+        fn _event, measurements, _meta, _ ->
+          send(test_pid, {:telemetry_exhausted, measurements})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, session} = FakeSession.start_link(parent: self())
+      {:ok, bus} = SparkEx.StreamingQueryListenerBus.start_link(session)
+      on_exit(fn -> if Process.alive?(bus), do: SparkEx.StreamingQueryListenerBus.stop(bus) end)
+
+      :ok = SparkEx.StreamingQueryListenerBus.add_listener(bus, StartedListener)
+
+      :sys.replace_state(bus, fn state -> %{state | reconnect_attempts: 100} end)
+      send(bus, {:listener_stream_ended, :normal})
+
+      assert_receive {:telemetry_exhausted, %{attempts: 100}}, 500
+    end
+  end
+
   # ── SparkEx.Types ──
 
   describe "SparkEx.Types" do

@@ -33,6 +33,7 @@ defmodule SparkEx.StreamingQueryListenerBus do
   use GenServer
 
   alias Spark.Connect.{ExecutePlanResponse, StreamingQueryListenerEvent}
+  import Bitwise, only: [bsl: 2]
   require Logger
 
   defmodule Registry do
@@ -141,8 +142,14 @@ defmodule SparkEx.StreamingQueryListenerBus do
     end
   end
 
-  @max_reconnect_attempts 5
-  @reconnect_backoff_ms 200
+  # Reconnect strategy: exponential backoff with a hard cap on the delay,
+  # and a generous attempt ceiling so that long-lived buses survive transient
+  # server-side disconnects without silently giving up. Persistent failures
+  # are reported via `[:spark_ex, :streaming, :listener_bus, :reconnect]`
+  # telemetry so operators can observe sustained reconnect storms.
+  @max_reconnect_attempts 100
+  @reconnect_backoff_base_ms 200
+  @reconnect_backoff_cap_ms 30_000
 
   defstruct [
     :session,
@@ -305,49 +312,18 @@ defmodule SparkEx.StreamingQueryListenerBus do
   def handle_info({:listener_stream_ended, reason}, state) do
     case reason do
       :normal ->
-        if state.listeners != [] and not state.closing_stream? and
-             state.reconnect_attempts < @max_reconnect_attempts do
-          attempts = state.reconnect_attempts + 1
+        maybe_reconnect(state, "graceful EOF")
 
-          :telemetry.execute(
-            [:spark_ex, :streaming, :listener_bus, :reconnect],
-            %{attempt: attempts},
-            %{session: state.session, max_attempts: @max_reconnect_attempts}
-          )
-
-          Logger.debug(
-            "StreamingQueryListenerBus reconnecting after graceful EOF (attempt #{attempts}/#{@max_reconnect_attempts})"
-          )
-
-          Process.send_after(self(), :reconnect_listener_stream, @reconnect_backoff_ms * attempts)
-
-          {:noreply,
-           %{
-             state
-             | stream_task: nil,
-               registered?: false,
-               reconnect_attempts: attempts
-           }}
-        else
-          Enum.each(
-            state.pending_register_waiters,
-            &GenServer.reply(&1, {:error, :stream_closed})
-          )
-
-          {:noreply,
-           %{
-             state
-             | stream_task: nil,
-               registered?: false,
-               pending_register_waiters: [],
-               closing_stream?: false
-           }}
-        end
-
-      error ->
-        Enum.each(state.pending_register_waiters, &GenServer.reply(&1, {:error, error}))
-
+      {:error, _} = error ->
         Logger.warning("StreamingQueryListenerBus stream ended with error: #{inspect(error)}")
+        maybe_reconnect(state, "transport error")
+
+      other ->
+        Enum.each(state.pending_register_waiters, &GenServer.reply(&1, {:error, other}))
+
+        Logger.warning(
+          "StreamingQueryListenerBus stream ended with unexpected reason: #{inspect(other)}"
+        )
 
         {:noreply,
          %{
@@ -406,6 +382,70 @@ defmodule SparkEx.StreamingQueryListenerBus do
   end
 
   # --- Private ---
+
+  defp maybe_reconnect(state, context) do
+    if state.listeners != [] and not state.closing_stream? and
+         state.reconnect_attempts < @max_reconnect_attempts do
+      attempts = state.reconnect_attempts + 1
+      delay = reconnect_delay_ms(attempts)
+
+      :telemetry.execute(
+        [:spark_ex, :streaming, :listener_bus, :reconnect],
+        %{attempt: attempts, delay_ms: delay},
+        %{session: state.session, max_attempts: @max_reconnect_attempts}
+      )
+
+      Logger.debug(
+        "StreamingQueryListenerBus reconnecting after #{context} (attempt #{attempts}/#{@max_reconnect_attempts}, delay #{delay}ms)"
+      )
+
+      Process.send_after(self(), :reconnect_listener_stream, delay)
+
+      {:noreply,
+       %{
+         state
+         | stream_task: nil,
+           registered?: false,
+           reconnect_attempts: attempts
+       }}
+    else
+      if state.listeners != [] and not state.closing_stream? do
+        :telemetry.execute(
+          [:spark_ex, :streaming, :listener_bus, :reconnect_exhausted],
+          %{attempts: state.reconnect_attempts},
+          %{session: state.session, max_attempts: @max_reconnect_attempts}
+        )
+
+        Logger.warning(
+          "StreamingQueryListenerBus reconnect attempts exhausted after #{state.reconnect_attempts} tries; bus is now inert (still alive, listeners retained)"
+        )
+      end
+
+      Enum.each(
+        state.pending_register_waiters,
+        &GenServer.reply(&1, {:error, :stream_closed})
+      )
+
+      {:noreply,
+       %{
+         state
+         | stream_task: nil,
+           registered?: false,
+           pending_register_waiters: [],
+           closing_stream?: false
+       }}
+    end
+  end
+
+  @doc false
+  # Exponential backoff: base * 2^(attempt-1), capped at the configured ceiling.
+  # Exposed (module-private) for the reconnect path; pure function for tests.
+  @spec reconnect_delay_ms(pos_integer()) :: pos_integer()
+  def reconnect_delay_ms(attempt) when is_integer(attempt) and attempt >= 1 do
+    shift = min(attempt - 1, 30)
+    raw = @reconnect_backoff_base_ms * bsl(1, shift)
+    min(raw, @reconnect_backoff_cap_ms)
+  end
 
   defp start_reader_task(session) do
     parent = self()
