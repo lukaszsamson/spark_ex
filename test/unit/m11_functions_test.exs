@@ -83,10 +83,12 @@ defmodule SparkEx.M11.FunctionsTest do
                  {:fn, "transform",
                   [
                     {:col, "arr"},
-                    {:lambda, {:fn, "+", [{:lambda_var, "x"}, {:lit, 1}], false},
-                     [{:lambda_var, "x"}]}
+                    {:lambda, {:fn, "+", [{:lambda_var, x_name}, {:lit, 1}], false},
+                     [{:lambda_var, x_name}]}
                   ], false}
              } = result
+
+      assert String.starts_with?(x_name, "x_")
     end
 
     test "accepts string column name" do
@@ -104,10 +106,12 @@ defmodule SparkEx.M11.FunctionsTest do
                  {:fn, "filter",
                   [
                     {:col, "arr"},
-                    {:lambda, {:fn, ">", [{:lambda_var, "x"}, {:lit, 0}], false},
-                     [{:lambda_var, "x"}]}
+                    {:lambda, {:fn, ">", [{:lambda_var, x_name}, {:lit, 0}], false},
+                     [{:lambda_var, x_name}]}
                   ], false}
              } = result
+
+      assert String.starts_with?(x_name, "x_")
     end
   end
 
@@ -120,10 +124,12 @@ defmodule SparkEx.M11.FunctionsTest do
                  {:fn, "exists",
                   [
                     {:col, "arr"},
-                    {:lambda, {:fn, ">", [{:lambda_var, "x"}, {:lit, 0}], false},
-                     [{:lambda_var, "x"}]}
+                    {:lambda, {:fn, ">", [{:lambda_var, x_name}, {:lit, 0}], false},
+                     [{:lambda_var, x_name}]}
                   ], false}
              } = result
+
+      assert String.starts_with?(x_name, "x_")
     end
   end
 
@@ -136,9 +142,11 @@ defmodule SparkEx.M11.FunctionsTest do
                  {:fn, "forall",
                   [
                     {:col, "arr"},
-                    {:lambda, {:fn, ">", _, false}, [{:lambda_var, "x"}]}
+                    {:lambda, {:fn, ">", _, false}, [{:lambda_var, x_name}]}
                   ], false}
              } = result
+
+      assert String.starts_with?(x_name, "x_")
     end
   end
 
@@ -155,10 +163,13 @@ defmodule SparkEx.M11.FunctionsTest do
                   [
                     {:col, "arr"},
                     {:lit, 0},
-                    {:lambda, {:fn, "+", [{:lambda_var, "acc"}, {:lambda_var, "x"}], false},
-                     [{:lambda_var, "acc"}, {:lambda_var, "x"}]}
+                    {:lambda, {:fn, "+", [{:lambda_var, acc_name}, {:lambda_var, x_name}], false},
+                     [{:lambda_var, acc_name}, {:lambda_var, x_name}]}
                   ], false}
              } = result
+
+      assert String.starts_with?(acc_name, "acc_")
+      assert String.starts_with?(x_name, "x_")
     end
 
     test "auto-coerces zero value to literal" do
@@ -196,10 +207,13 @@ defmodule SparkEx.M11.FunctionsTest do
                  {:fn, "map_filter",
                   [
                     {:col, "m"},
-                    {:lambda, {:fn, ">", [{:lambda_var, "v"}, {:lit, 0}], false},
-                     [{:lambda_var, "k"}, {:lambda_var, "v"}]}
+                    {:lambda, {:fn, ">", [{:lambda_var, v_name}, {:lit, 0}], false},
+                     [{:lambda_var, k_name}, {:lambda_var, v_name}]}
                   ], false}
              } = result
+
+      assert String.starts_with?(k_name, "k_")
+      assert String.starts_with?(v_name, "v_")
     end
   end
 
@@ -216,10 +230,14 @@ defmodule SparkEx.M11.FunctionsTest do
                   [
                     {:col, "m1"},
                     {:col, "m2"},
-                    {:lambda, {:fn, "+", [{:lambda_var, "v1"}, {:lambda_var, "v2"}], false},
-                     [{:lambda_var, "k"}, {:lambda_var, "v1"}, {:lambda_var, "v2"}]}
+                    {:lambda, {:fn, "+", [{:lambda_var, v1_name}, {:lambda_var, v2_name}], false},
+                     [{:lambda_var, k_name}, {:lambda_var, v1_name}, {:lambda_var, v2_name}]}
                   ], false}
              } = result
+
+      assert String.starts_with?(k_name, "k_")
+      assert String.starts_with?(v1_name, "v1_")
+      assert String.starts_with?(v2_name, "v2_")
     end
   end
 
@@ -235,10 +253,13 @@ defmodule SparkEx.M11.FunctionsTest do
                  {:fn, "transform_keys",
                   [
                     {:col, "m"},
-                    {:lambda, {:fn, "+", [{:lambda_var, "k"}, {:lit, 1}], false},
-                     [{:lambda_var, "k"}, {:lambda_var, "v"}]}
+                    {:lambda, {:fn, "+", [{:lambda_var, k_name}, {:lit, 1}], false},
+                     [{:lambda_var, k_name}, {:lambda_var, v_name}]}
                   ], false}
              } = result
+
+      assert String.starts_with?(k_name, "k_")
+      assert String.starts_with?(v_name, "v_")
     end
   end
 
@@ -254,10 +275,13 @@ defmodule SparkEx.M11.FunctionsTest do
                  {:fn, "transform_values",
                   [
                     {:col, "m"},
-                    {:lambda, {:fn, "+", [{:lambda_var, "v"}, {:lit, 1}], false},
-                     [{:lambda_var, "k"}, {:lambda_var, "v"}]}
+                    {:lambda, {:fn, "+", [{:lambda_var, v_name}, {:lit, 1}], false},
+                     [{:lambda_var, k_name}, {:lambda_var, v_name}]}
                   ], false}
              } = result
+
+      assert String.starts_with?(k_name, "k_")
+      assert String.starts_with?(v_name, "v_")
     end
   end
 
@@ -274,10 +298,13 @@ defmodule SparkEx.M11.FunctionsTest do
                   [
                     {:col, "a1"},
                     {:col, "a2"},
-                    {:lambda, {:fn, "+", [{:lambda_var, "x"}, {:lambda_var, "y"}], false},
-                     [{:lambda_var, "x"}, {:lambda_var, "y"}]}
+                    {:lambda, {:fn, "+", [{:lambda_var, x_name}, {:lambda_var, y_name}], false},
+                     [{:lambda_var, x_name}, {:lambda_var, y_name}]}
                   ], false}
              } = result
+
+      assert String.starts_with?(x_name, "x_")
+      assert String.starts_with?(y_name, "y_")
     end
   end
 

@@ -350,25 +350,31 @@ defmodule SparkEx.MissOpus2Test do
     test "transform/2 with 1-arg function" do
       result = Functions.transform("arr", fn x -> Column.plus(x, Functions.lit(1)) end)
       assert %Column{expr: {:fn, "transform", [_, {:lambda, _, vars}], false}} = result
-      assert [{:lambda_var, "x"}] = vars
+      assert [{:lambda_var, x_name}] = vars
+      assert String.starts_with?(x_name, "x_")
     end
 
     test "transform/2 with 2-arg function (element + index)" do
       result = Functions.transform("arr", fn x, i -> Column.plus(x, i) end)
       assert %Column{expr: {:fn, "transform", [_, {:lambda, _, vars}], false}} = result
-      assert [{:lambda_var, "x"}, {:lambda_var, "i"}] = vars
+      assert [{:lambda_var, x_name}, {:lambda_var, i_name}] = vars
+      assert String.starts_with?(x_name, "x_")
+      assert String.starts_with?(i_name, "i_")
     end
 
     test "filter/2 with 1-arg function" do
       result = Functions.filter("arr", fn x -> Column.gt(x, Functions.lit(0)) end)
       assert %Column{expr: {:fn, "filter", [_, {:lambda, _, vars}], false}} = result
-      assert [{:lambda_var, "x"}] = vars
+      assert [{:lambda_var, x_name}] = vars
+      assert String.starts_with?(x_name, "x_")
     end
 
     test "filter/2 with 2-arg function (element + index)" do
       result = Functions.filter("arr", fn _x, i -> Column.gt(i, Functions.lit(0)) end)
       assert %Column{expr: {:fn, "filter", [_, {:lambda, _, vars}], false}} = result
-      assert [{:lambda_var, "x"}, {:lambda_var, "i"}] = vars
+      assert [{:lambda_var, x_name}, {:lambda_var, i_name}] = vars
+      assert String.starts_with?(x_name, "x_")
+      assert String.starts_with?(i_name, "i_")
     end
   end
 
