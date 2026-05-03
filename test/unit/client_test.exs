@@ -137,6 +137,22 @@ defmodule SparkEx.Connect.ClientTest do
     assert {:error, {:invalid_new_session_id, 123}} = Client.clone_session(session, 123)
   end
 
+  test "clone_session/2 rejects malformed binary new_session_id" do
+    session = %SparkEx.Session{
+      channel: nil,
+      session_id: "test-session",
+      user_id: "test",
+      client_type: "test"
+    }
+
+    assert {:error, {:invalid_new_session_id, "not-a-uuid"}} =
+             Client.clone_session(session, "not-a-uuid")
+
+    # Non-v4 (e.g. v1) uuid is also rejected.
+    assert {:error, {:invalid_new_session_id, "550e8400-e29b-11d4-a716-446655440000"}} =
+             Client.clone_session(session, "550e8400-e29b-11d4-a716-446655440000")
+  end
+
   test "SqlFormatter formats positional args" do
     sql = "SELECT * FROM t WHERE id = ? AND name = ?"
 

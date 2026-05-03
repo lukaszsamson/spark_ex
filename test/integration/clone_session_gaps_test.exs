@@ -50,6 +50,10 @@ defmodule SparkEx.Integration.CloneSessionGapsTest do
       result = SparkEx.clone_session(session, "not-a-uuid")
 
       case result do
+        {:error, {:invalid_new_session_id, _}} ->
+          # Client-side validation rejected the malformed UUID — expected outcome.
+          :ok
+
         {:error, %SparkEx.Error.Remote{} = err} ->
           # Server rejected invalid UUID — verify it's a meaningful error
           assert err.message != nil

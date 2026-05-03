@@ -890,8 +890,13 @@ defmodule SparkEx.Connect.Client do
   def clone_session(session, new_session_id \\ nil)
   def clone_session(session, nil), do: do_clone_session(session, nil)
 
-  def clone_session(session, new_session_id) when is_binary(new_session_id),
-    do: do_clone_session(session, new_session_id)
+  def clone_session(session, new_session_id) when is_binary(new_session_id) do
+    if SparkEx.Internal.UUID.valid_v4?(new_session_id) do
+      do_clone_session(session, new_session_id)
+    else
+      {:error, {:invalid_new_session_id, new_session_id}}
+    end
+  end
 
   def clone_session(_session, new_session_id),
     do: {:error, {:invalid_new_session_id, new_session_id}}

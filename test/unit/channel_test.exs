@@ -79,6 +79,34 @@ defmodule SparkEx.Connect.ChannelTest do
       assert opts.use_ssl == false
     end
 
+    test "use_ssl parsing is case-insensitive" do
+      assert {:ok, opts} = Channel.parse_uri("sc://localhost:15002/;use_ssl=TRUE")
+      assert opts.use_ssl == true
+
+      assert {:ok, opts} = Channel.parse_uri("sc://localhost:15002/;use_ssl=True")
+      assert opts.use_ssl == true
+
+      assert {:ok, opts} = Channel.parse_uri("sc://localhost:15002/;use_ssl=FALSE")
+      assert opts.use_ssl == false
+    end
+
+    test "grpc_keepalive_permit_without_calls accepts mixed case booleans" do
+      assert {:ok, opts} =
+               Channel.parse_uri("sc://localhost:15002/;grpc_keepalive_permit_without_calls=TRUE")
+
+      assert opts.keepalive == %{permit_without_calls: true}
+
+      assert {:ok, opts} =
+               Channel.parse_uri(
+                 "sc://localhost:15002/;grpc_keepalive_permit_without_calls=False"
+               )
+
+      assert opts.keepalive == %{permit_without_calls: false}
+
+      assert {:error, {:invalid_param, "grpc_keepalive_permit_without_calls=yes"}} =
+               Channel.parse_uri("sc://localhost:15002/;grpc_keepalive_permit_without_calls=yes")
+    end
+
     test "decodes percent-encoded params" do
       session_id = "550e8400-e29b-41d4-a716-446655440000"
 
@@ -278,6 +306,45 @@ defmodule SparkEx.Connect.ChannelTest do
       # shouldn't stall on the default 64 KiB window.
       assert http2_opts.initial_stream_window_size == 256 * 1024 * 1024
       assert http2_opts.initial_connection_window_size == 256 * 1024 * 1024
+    end
+
+    test "normalises metadata keys: lowercases and collapses underscores" do
+      opts = %{
+        host: "host",
+        port: 15002,
+        use_ssl: false,
+        token: nil,
+        auth_transport: :auto,
+        extra_params: %{"X-My-Header" => "v1", "trace_id" => "t1"}
+      }
+
+      grpc_opts = Channel.build_grpc_opts(opts)
+      assert %{metadata: md} = Enum.into(grpc_opts, %{})
+      assert md["x-my-header"] == "v1"
+      assert md["trace-id"] == "t1"
+      refute Map.has_key?(md, "X-My-Header")
+      refute Map.has_key?(md, "trace_id")
+    end
+
+    test "drops metadata keys that contain illegal characters after normalisation" do
+      opts = %{
+        host: "host",
+        port: 15002,
+        use_ssl: false,
+        token: nil,
+        auth_transport: :auto,
+        extra_params: %{"bad key!" => "v1", "x-good" => "v2"}
+      }
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          grpc_opts = Channel.build_grpc_opts(opts)
+          assert %{metadata: md} = Enum.into(grpc_opts, %{})
+          assert md["x-good"] == "v2"
+          refute Map.has_key?(md, "bad key!")
+        end)
+
+      assert log =~ "bad key!"
     end
 
     test "token authorization overrides custom authorization header" do
