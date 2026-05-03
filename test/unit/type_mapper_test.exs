@@ -278,10 +278,19 @@ defmodule SparkEx.Connect.TypeMapperTest do
     test "falls back to STRING for CHAR/VARCHAR with non-positive length" do
       # proto3 int32 defaults to 0 when omitted; 0 and negative lengths are invalid in Spark SQL.
       assert TypeMapper.data_type_to_ddl(%DataType{kind: {:char, %DataType.Char{}}}) == "STRING"
-      assert TypeMapper.data_type_to_ddl(%DataType{kind: {:char, %DataType.Char{length: 0}}}) == "STRING"
-      assert TypeMapper.data_type_to_ddl(%DataType{kind: {:char, %DataType.Char{length: -1}}}) == "STRING"
-      assert TypeMapper.data_type_to_ddl(%DataType{kind: {:var_char, %DataType.VarChar{}}}) == "STRING"
-      assert TypeMapper.data_type_to_ddl(%DataType{kind: {:var_char, %DataType.VarChar{length: 0}}}) == "STRING"
+
+      assert TypeMapper.data_type_to_ddl(%DataType{kind: {:char, %DataType.Char{length: 0}}}) ==
+               "STRING"
+
+      assert TypeMapper.data_type_to_ddl(%DataType{kind: {:char, %DataType.Char{length: -1}}}) ==
+               "STRING"
+
+      assert TypeMapper.data_type_to_ddl(%DataType{kind: {:var_char, %DataType.VarChar{}}}) ==
+               "STRING"
+
+      assert TypeMapper.data_type_to_ddl(%DataType{
+               kind: {:var_char, %DataType.VarChar{length: 0}}
+             }) == "STRING"
     end
 
     test "preserves CHAR/VARCHAR length inside nested types" do
