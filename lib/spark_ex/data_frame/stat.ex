@@ -110,16 +110,21 @@ defmodule SparkEx.DataFrame.Stat do
 
   ## Parameters
 
-  - `col` — column name (string) or `Column` used for stratification.
+  - `col` — column name (string or atom) or `Column` used for stratification.
   - `fractions` — map of `%{stratum_value => sampling_fraction}`.
   - `seed` — optional random seed. Auto-generated if not provided; pass an explicit seed for reproducibility.
 
   ## Examples
 
       DataFrame.Stat.sample_by(df, "label", %{0 => 0.1, 1 => 0.5})
-      DataFrame.Stat.sample_by(df, "label", %{0 => 0.1, 1 => 0.5}, 42)
+      DataFrame.Stat.sample_by(df, :label, %{0 => 0.1, 1 => 0.5}, 42)
   """
-  @spec sample_by(DataFrame.t(), Column.t() | String.t(), map(), integer() | keyword() | nil) ::
+  @spec sample_by(
+          DataFrame.t(),
+          Column.t() | String.t() | atom(),
+          map(),
+          integer() | keyword() | nil
+        ) ::
           DataFrame.t()
   def sample_by(%DataFrame{} = df, col, fractions, seed \\ nil) when is_map(fractions) do
     validate_fractions!(fractions)
@@ -175,22 +180,31 @@ defmodule SparkEx.DataFrame.Stat do
 
   ## Examples
 
-      {:ok, quantiles} = DataFrame.Stat.approx_quantile(df, "age", [0.25, 0.5, 0.75])
+      {:ok, quantiles} = DataFrame.Stat.approx_quantile(df, "age", [0.25, 0.5, 0.75], 0.0)
       {:ok, quantiles} = DataFrame.Stat.approx_quantile(df, ["age", "salary"], [0.5], 0.01)
   """
   @spec approx_quantile(
           DataFrame.t(),
-          String.t() | [String.t()],
+          String.t() | [String.t()] | tuple(),
           [float()],
           float()
         ) :: {:ok, [float()] | [[float()]]} | {:error, term()}
-  def approx_quantile(%DataFrame{} = df, col, probabilities, relative_error \\ 0.0)
+  def approx_quantile(%DataFrame{} = df, col, probabilities, relative_error)
       when is_list(probabilities) do
     {cols, single?} =
       case col do
-        c when is_binary(c) -> {[c], true}
-        cs when is_list(cs) -> {cs, false}
-        cs when is_tuple(cs) -> {Tuple.to_list(cs), false}
+        c when is_binary(c) ->
+          {[c], true}
+
+        cs when is_list(cs) ->
+          {cs, false}
+
+        cs when is_tuple(cs) ->
+          {Tuple.to_list(cs), false}
+
+        _ ->
+          raise ArgumentError,
+                "col must be a string, list of strings, or tuple of strings, got: #{inspect(col)}"
       end
 
     unless Enum.all?(cols, &is_binary/1) do
@@ -209,10 +223,10 @@ defmodule SparkEx.DataFrame.Stat do
       {:ok, [row]} ->
         # Result is a single row with one column containing a nested array:
         # single col: [[q1, q2, ...]], multi col: [[q1_a, q2_a], [q1_b, q2_b]]
-        raw = first_column_value(row)
-        parsed = parse_nested_quantile(raw)
-
-        {:ok, if(single?, do: hd(parsed), else: parsed)}
+        with {:ok, raw} <- first_column_value(row),
+             {:ok, parsed} <- parse_nested_quantile(raw) do
+          {:ok, if(single?, do: hd(parsed), else: parsed)}
+        end
 
       {:error, _} = err ->
         err
@@ -221,64 +235,49 @@ defmodule SparkEx.DataFrame.Stat do
 
   # ── Private helpers ──
 
-  # Extracts the value of the first column from a row map.
+  # Extracts the value of the first column from a single-column row map.
   # Equivalent to PySpark's `table[0][0].as_py()` positional access.
-  # Validates that the row contains exactly one column to prevent
-  # non-deterministic extraction from multi-column results.
-  defp first_column_value(row) when map_size(row) == 1 do
+  # Returns `{:error, {:unexpected_columns, _}}` for multi-column rows so
+  # the caller can surface the divergence rather than silently picking
+  # whichever key Erlang's map iterator yields first.
+  defp first_column_value(row) when is_map(row) and map_size(row) == 1 do
     [{_key, value}] = Map.to_list(row)
-    value
+    {:ok, value}
   end
 
   defp first_column_value(row) when is_map(row) do
-    # Fallback: if Spark returns extra columns, take the first by key order.
-    # This matches Map.values/1 |> hd/0 but is explicit about the choice.
-    {_key, value, _iterator} = :maps.next(:maps.iterator(row))
-    value
+    {:error, {:unexpected_columns, Map.keys(row)}}
   end
 
   defp normalize_col_expr(%Column{expr: e}), do: e
   defp normalize_col_expr(name) when is_binary(name), do: {:col, name}
 
-  # Spark returns approx_quantile as a nested array (array of arrays).
-  # The result decoder may return this as a native list or as a string
-  # representation like "[[1.0, 5.0, 10.0]]" or "[[3.0], [30.0]]".
+  defp normalize_col_expr(name) when is_atom(name) and not is_boolean(name) and not is_nil(name),
+    do: {:col, Atom.to_string(name)}
+
+  defp normalize_col_expr(other) do
+    raise ArgumentError,
+          "expected column name (string or atom) or %SparkEx.Column{}, got: #{inspect(other)}"
+  end
+
+  # Spark returns approx_quantile as a nested array (array of arrays). The
+  # Arrow result decoder yields native lists, so the only shape we accept is
+  # a list of lists; anything else is reported as an error tuple instead of
+  # being coerced through ad-hoc string parsing.
   defp parse_nested_quantile(v) when is_list(v) do
-    Enum.map(v, fn
-      inner when is_list(inner) -> inner
-      inner when is_binary(inner) -> parse_float_list(inner)
-      inner -> [inner]
-    end)
+    if Enum.all?(v, &is_list/1) do
+      {:ok, v}
+    else
+      {:error, {:invalid_quantile_payload, v}}
+    end
   end
 
-  defp parse_nested_quantile(v) when is_binary(v) do
-    # String like "[[1.0, 5.0, 10.0], [10.0, 50.0, 100.0]]"
-    # Strip outer brackets, then split into inner arrays
-    inner = v |> String.trim_leading("[") |> String.trim_trailing("]")
-
-    # Split on "], [" to get individual array strings
-    inner
-    |> String.split(~r/\]\s*,\s*\[/)
-    |> Enum.map(&parse_float_list/1)
-  end
-
-  defp parse_float_list(s) do
-    s
-    |> String.replace(~r/[\[\]]/, "")
-    |> String.split(",")
-    |> Enum.map(fn part ->
-      case part |> String.trim() |> Float.parse() do
-        {value, _rest} -> value
-        :error -> raise ArgumentError, "could not parse float from: #{inspect(String.trim(part))}"
-      end
-    end)
-  end
+  defp parse_nested_quantile(v), do: {:error, {:invalid_quantile_payload, v}}
 
   defp collect_scalar(session, plan) do
     case DataFrame.collect(%DataFrame{session: session, plan: plan}) do
       {:ok, [row]} when is_map(row) ->
-        value = first_column_value(row)
-        {:ok, value}
+        first_column_value(row)
 
       {:ok, []} ->
         {:ok, nil}

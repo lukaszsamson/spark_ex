@@ -2543,13 +2543,14 @@ defmodule SparkEx.DataFrame do
     do: SparkEx.DataFrame.Stat.freq_items(df, cols, support)
 
   @doc "Computes approximate quantiles. Delegates to `SparkEx.DataFrame.Stat.approx_quantile/4`."
-  @spec approx_quantile(t(), String.t() | [String.t()], [float()], float()) ::
+  @spec approx_quantile(t(), String.t() | [String.t()] | tuple(), [float()], float()) ::
           {:ok, [float()] | [[float()]]} | {:error, term()}
-  def approx_quantile(%__MODULE__{} = df, col, probabilities, relative_error \\ 0.0),
+  def approx_quantile(%__MODULE__{} = df, col, probabilities, relative_error),
     do: SparkEx.DataFrame.Stat.approx_quantile(df, col, probabilities, relative_error)
 
   @doc "Returns stratified sample. Delegates to `SparkEx.DataFrame.Stat.sample_by/4`."
-  @spec sample_by(t(), Column.t() | String.t(), map(), integer() | keyword() | nil) :: t()
+  @spec sample_by(t(), Column.t() | String.t() | atom(), map(), integer() | keyword() | nil) ::
+          t()
   def sample_by(%__MODULE__{} = df, col, fractions, seed \\ nil),
     do: SparkEx.DataFrame.Stat.sample_by(df, col, fractions, seed)
 

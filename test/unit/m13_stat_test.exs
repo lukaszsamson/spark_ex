@@ -159,19 +159,25 @@ defmodule SparkEx.M13.StatTest do
   describe "approx_quantile validation" do
     test "raises on invalid probability" do
       assert_raise ArgumentError, ~r/between 0 and 1/, fn ->
-        Stat.approx_quantile(make_df(), "age", [1.5])
+        Stat.approx_quantile(make_df(), "age", [1.5], 0.0)
       end
     end
 
     test "raises on negative probability" do
       assert_raise ArgumentError, ~r/between 0 and 1/, fn ->
-        Stat.approx_quantile(make_df(), "age", [-0.1])
+        Stat.approx_quantile(make_df(), "age", [-0.1], 0.0)
       end
     end
 
     test "raises on negative relative_error" do
       assert_raise ArgumentError, ~r/non-negative/, fn ->
         Stat.approx_quantile(make_df(), "age", [0.5], -0.01)
+      end
+    end
+
+    test "requires relative_error argument" do
+      assert_raise UndefinedFunctionError, fn ->
+        apply(Stat, :approx_quantile, [make_df(), "age", [0.5]])
       end
     end
   end
@@ -186,6 +192,32 @@ defmodule SparkEx.M13.StatTest do
     test "raises on fraction greater than one" do
       assert_raise ArgumentError, ~r/\[0\.0, 1\.0\]/, fn ->
         Stat.sample_by(make_df(), "label", %{0 => 1.5})
+      end
+    end
+
+    test "accepts atom column name" do
+      df = Stat.sample_by(make_df(), :label, %{0 => 0.1}, 42)
+
+      assert %DataFrame{
+               plan: {:stat_sample_by, :test_plan, {:col, "label"}, [{0, 0.1}], 42}
+             } = df
+    end
+
+    test "raises ArgumentError for non-string non-atom column" do
+      assert_raise ArgumentError, ~r/expected column name/, fn ->
+        Stat.sample_by(make_df(), 42, %{0 => 0.1}, 0)
+      end
+    end
+
+    test "raises ArgumentError for boolean column" do
+      assert_raise ArgumentError, ~r/expected column name/, fn ->
+        Stat.sample_by(make_df(), true, %{0 => 0.1}, 0)
+      end
+    end
+
+    test "raises ArgumentError for nil column" do
+      assert_raise ArgumentError, ~r/expected column name/, fn ->
+        Stat.sample_by(make_df(), nil, %{0 => 0.1}, 0)
       end
     end
   end

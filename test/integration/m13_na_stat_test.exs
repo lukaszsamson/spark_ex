@@ -354,7 +354,7 @@ defmodule SparkEx.Integration.M13.NAStatTest do
         SELECT CAST(id AS DOUBLE) AS value FROM VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10) AS t(id)
         """)
 
-      assert {:ok, quantiles} = Stat.approx_quantile(df, "value", [0.0, 0.5, 1.0])
+      assert {:ok, quantiles} = Stat.approx_quantile(df, "value", [0.0, 0.5, 1.0], 0.0)
       assert is_list(quantiles)
       assert length(quantiles) == 3
       # Min should be ~1.0, median ~5.5, max ~10.0
@@ -371,7 +371,7 @@ defmodule SparkEx.Integration.M13.NAStatTest do
         FROM VALUES (1),(2),(3),(4),(5) AS t(id)
         """)
 
-      assert {:ok, result} = Stat.approx_quantile(df, ["a", "b"], [0.5])
+      assert {:ok, result} = Stat.approx_quantile(df, ["a", "b"], [0.5], 0.0)
       assert is_list(result)
       assert length(result) == 2
 
