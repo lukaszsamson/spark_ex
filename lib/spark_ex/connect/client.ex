@@ -1358,8 +1358,12 @@ defmodule SparkEx.Connect.Client do
              emitted_count: state.emitted_count + 1
          }}
 
-      {:value, {:error, _error}, _new_iter} ->
-        {:halt, state}
+      {:value, {:error, %GRPC.RPCError{} = error}, _new_iter} ->
+        {[{:error, Errors.from_grpc_error(error, state.ctx.session)}],
+         %{state | result_complete?: true}}
+
+      {:value, {:error, error}, _new_iter} ->
+        {[{:error, error}], %{state | result_complete?: true}}
 
       :done ->
         {:halt, state}

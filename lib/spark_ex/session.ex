@@ -595,8 +595,9 @@ defmodule SparkEx.Session do
   @doc """
   Copies a local file to the Spark driver filesystem.
 
-  Reads the file at `local_path` and uploads it as a Spark Connect
-  forward-to-filesystem artifact.
+  Uploads the file at `local_path` as a Spark Connect forward-to-filesystem
+  artifact. The file is streamed to the server in chunks rather than read
+  into memory all at once.
   """
   @spec copy_from_local_to_fs(GenServer.server(), String.t(), String.t()) ::
           :ok | {:error, term()}
