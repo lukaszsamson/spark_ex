@@ -639,7 +639,7 @@ defmodule SparkEx.MissCodex2Test do
   describe "#49 approx_quantile tuple support" do
     test "rejects non-string column names in tuple" do
       assert_raise ArgumentError, ~r/column names must all be strings/, fn ->
-        SparkEx.DataFrame.Stat.approx_quantile(make_df(), {1, 2}, [0.5])
+        SparkEx.DataFrame.Stat.approx_quantile(make_df(), {1, 2}, [0.5], 0.0)
       end
     end
   end
