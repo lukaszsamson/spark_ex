@@ -209,7 +209,6 @@ defmodule SparkEx.Macros.FunctionRegistry do
       # position/2 and position/3 are hand-written in functions.ex so that all
       # column arguments accept bare-string column names and `start` accepts
       # either an integer literal or a column.
-      # replace hand-written in functions.ex to support optional replace parameter
       {:url_encode, "url_encode", :one_col, group: :string, doc: "URL-encodes string."},
       {:url_decode, "url_decode", :one_col, group: :string, doc: "URL-decodes string."},
       {:try_url_decode, "try_url_decode", :one_col,
