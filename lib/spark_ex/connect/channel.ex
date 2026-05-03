@@ -72,7 +72,7 @@ defmodule SparkEx.Connect.Channel do
        %{
          host: host,
          port: port,
-         use_ssl: use_ssl_str == "true",
+         use_ssl: String.downcase(use_ssl_str) == "true",
          token: token,
          user_id: user_id,
          user_agent: user_agent,
@@ -120,7 +120,17 @@ defmodule SparkEx.Connect.Channel do
     extra_metadata =
       opts.extra_params
       |> Enum.reject(fn {k, _v} -> k in @reserved_metadata_keys end)
-      |> Enum.into(%{})
+      |> Enum.reduce(%{}, fn {k, v}, acc ->
+        case normalize_metadata_key(k) do
+          {:ok, normalized} ->
+            Map.put(acc, normalized, v)
+
+          {:error, reason} ->
+            require Logger
+            Logger.warning("dropping extra_param #{inspect(k)}: #{reason}")
+            acc
+        end
+      end)
 
     grpc_opts =
       case {token, map_size(extra_metadata)} do
@@ -316,15 +326,42 @@ defmodule SparkEx.Connect.Channel do
 
   defp pop_bool(params, key) do
     case Map.pop(params, key) do
-      {nil, rest} -> {{:ok, nil}, rest}
-      {"true", rest} -> {{:ok, true}, rest}
-      {"false", rest} -> {{:ok, false}, rest}
-      {value, rest} -> {{:error, {:invalid_param, "#{key}=#{value}"}}, rest}
+      {nil, rest} ->
+        {{:ok, nil}, rest}
+
+      {value, rest} ->
+        case String.downcase(value) do
+          "true" -> {{:ok, true}, rest}
+          "false" -> {{:ok, false}, rest}
+          _ -> {{:error, {:invalid_param, "#{key}=#{value}"}}, rest}
+        end
     end
   end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # gRPC metadata keys are HTTP/2 header names: lower-case ASCII
+  # alphanumerics and `-`. Underscores are accepted by some proxies but
+  # rejected by others, so collapse `_` to `-` to match the headers
+  # users typically copy from Spark/PySpark docs.
+  defp normalize_metadata_key(key) when is_binary(key) do
+    normalized =
+      key
+      |> String.downcase()
+      |> String.replace("_", "-")
+
+    cond do
+      normalized == "" ->
+        {:error, "empty key"}
+
+      String.match?(normalized, ~r/^[a-z0-9\-]+$/) ->
+        {:ok, normalized}
+
+      true ->
+        {:error, "key must contain only [a-z0-9-] after normalization"}
+    end
+  end
 
   defp auth_metadata_fallback(opts, token) when is_binary(token) do
     case Map.get(opts, :auth_transport, :auto) do
