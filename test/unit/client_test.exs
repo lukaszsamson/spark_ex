@@ -106,6 +106,84 @@ defmodule SparkEx.Connect.ClientTest do
     assert [^extension] = request.user_context.extensions
   end
 
+  test "build_execute_request/6 carries tags into the request" do
+    session = %SparkEx.Session{
+      channel: nil,
+      session_id: "test-session",
+      user_id: "test",
+      client_type: "test"
+    }
+
+    request =
+      Client.build_execute_request(
+        session,
+        %Spark.Connect.Plan{},
+        ["alpha", "beta"],
+        nil,
+        false
+      )
+
+    assert request.tags == ["alpha", "beta"]
+  end
+
+  test "build_raw_stream_request/3 reads tags from opts" do
+    session = %SparkEx.Session{
+      channel: nil,
+      session_id: "test-session",
+      user_id: "test",
+      client_type: "test"
+    }
+
+    request = Client.build_raw_stream_request(session, %Spark.Connect.Plan{}, tags: ["x", "y"])
+
+    assert request.tags == ["x", "y"]
+    assert is_nil(request.operation_id)
+  end
+
+  test "build_raw_stream_request/3 uses empty tags by default" do
+    session = %SparkEx.Session{
+      channel: nil,
+      session_id: "test-session",
+      user_id: "test",
+      client_type: "test"
+    }
+
+    request = Client.build_raw_stream_request(session, %Spark.Connect.Plan{})
+
+    assert request.tags == []
+  end
+
+  test "build_managed_stream_request/4 reads tags from opts" do
+    session = %SparkEx.Session{
+      channel: nil,
+      session_id: "test-session",
+      user_id: "test",
+      client_type: "test"
+    }
+
+    request =
+      Client.build_managed_stream_request(session, %Spark.Connect.Plan{}, "op-123",
+        tags: ["stream-tag"]
+      )
+
+    assert request.tags == ["stream-tag"]
+    assert request.operation_id == "op-123"
+  end
+
+  test "build_managed_stream_request/4 uses empty tags by default" do
+    session = %SparkEx.Session{
+      channel: nil,
+      session_id: "test-session",
+      user_id: "test",
+      client_type: "test"
+    }
+
+    request = Client.build_managed_stream_request(session, %Spark.Connect.Plan{}, "op-456")
+
+    assert request.tags == []
+    assert request.operation_id == "op-456"
+  end
+
   test "build_execute_request/6 validates preferred chunk size" do
     session = %SparkEx.Session{
       channel: nil,

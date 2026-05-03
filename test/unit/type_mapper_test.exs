@@ -264,6 +264,68 @@ defmodule SparkEx.Connect.TypeMapperTest do
       assert TypeMapper.data_type_to_ddl(struct_dt) ==
                "STRUCT<tags: ARRAY<INT>, meta: MAP<STRING, DOUBLE>>"
     end
+
+    test "preserves CHAR length in DDL" do
+      dt = %DataType{kind: {:char, %DataType.Char{length: 10}}}
+      assert TypeMapper.data_type_to_ddl(dt) == "CHAR(10)"
+    end
+
+    test "preserves VARCHAR length in DDL" do
+      dt = %DataType{kind: {:var_char, %DataType.VarChar{length: 255}}}
+      assert TypeMapper.data_type_to_ddl(dt) == "VARCHAR(255)"
+    end
+
+    test "falls back to STRING for CHAR/VARCHAR with non-positive length" do
+      # proto3 int32 defaults to 0 when omitted; 0 and negative lengths are invalid in Spark SQL.
+      assert TypeMapper.data_type_to_ddl(%DataType{kind: {:char, %DataType.Char{}}}) == "STRING"
+
+      assert TypeMapper.data_type_to_ddl(%DataType{kind: {:char, %DataType.Char{length: 0}}}) ==
+               "STRING"
+
+      assert TypeMapper.data_type_to_ddl(%DataType{kind: {:char, %DataType.Char{length: -1}}}) ==
+               "STRING"
+
+      assert TypeMapper.data_type_to_ddl(%DataType{kind: {:var_char, %DataType.VarChar{}}}) ==
+               "STRING"
+
+      assert TypeMapper.data_type_to_ddl(%DataType{
+               kind: {:var_char, %DataType.VarChar{length: 0}}
+             }) == "STRING"
+    end
+
+    test "preserves CHAR/VARCHAR length inside nested types" do
+      char_dt = %DataType{kind: {:char, %DataType.Char{length: 5}}}
+      var_char_dt = %DataType{kind: {:var_char, %DataType.VarChar{length: 32}}}
+
+      array_dt = %DataType{
+        kind: {:array, %DataType.Array{element_type: char_dt, contains_null: true}}
+      }
+
+      struct_dt = %DataType{
+        kind:
+          {:struct,
+           %DataType.Struct{
+             fields: [
+               %DataType.StructField{name: "code", data_type: char_dt, nullable: true},
+               %DataType.StructField{name: "label", data_type: var_char_dt, nullable: true}
+             ]
+           }}
+      }
+
+      map_dt = %DataType{
+        kind:
+          {:map,
+           %DataType.Map{
+             key_type: char_dt,
+             value_type: var_char_dt,
+             value_contains_null: true
+           }}
+      }
+
+      assert TypeMapper.data_type_to_ddl(array_dt) == "ARRAY<CHAR(5)>"
+      assert TypeMapper.data_type_to_ddl(struct_dt) == "STRUCT<code: CHAR(5), label: VARCHAR(32)>"
+      assert TypeMapper.data_type_to_ddl(map_dt) == "MAP<CHAR(5), VARCHAR(32)>"
+    end
   end
 
   defp interval_module(:calendar_interval), do: DataType.CalendarInterval

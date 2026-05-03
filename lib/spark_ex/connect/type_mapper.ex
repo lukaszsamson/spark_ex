@@ -150,7 +150,18 @@ defmodule SparkEx.Connect.TypeMapper do
   defp direct_ddl(:float, _), do: "FLOAT"
   defp direct_ddl(:double, _), do: "DOUBLE"
   defp direct_ddl(:string, _), do: "STRING"
+
+  defp direct_ddl(:char, %DataType.Char{length: length}) when is_integer(length) and length > 0 do
+    "CHAR(#{length})"
+  end
+
   defp direct_ddl(:char, _), do: "STRING"
+
+  defp direct_ddl(:var_char, %DataType.VarChar{length: length})
+       when is_integer(length) and length > 0 do
+    "VARCHAR(#{length})"
+  end
+
   defp direct_ddl(:var_char, _), do: "STRING"
   defp direct_ddl(:binary, _), do: "BINARY"
   defp direct_ddl(:date, _), do: "DATE"
