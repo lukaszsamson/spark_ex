@@ -371,6 +371,34 @@ defmodule SparkEx.Functions do
   end
 
   @doc """
+  Returns the position of the first occurrence of `substr` within `str`.
+
+  Both arguments are resolved as columns (string names become column refs).
+  """
+  @spec position(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
+  def position(substr, str) do
+    %Column{expr: {:fn, "position", [to_expr(substr), to_expr(str)], false}}
+  end
+
+  @doc """
+  Returns the position of the first occurrence of `substr` within `str`,
+  searching from `start`.
+
+  `substr` and `str` resolve as columns; `start` may be an integer literal
+  or a column / column-name string.
+  """
+  @spec position(
+          Column.t() | String.t(),
+          Column.t() | String.t(),
+          Column.t() | String.t() | integer()
+        ) :: Column.t()
+  def position(substr, str, start) do
+    %Column{
+      expr: {:fn, "position", [to_expr(substr), to_expr(str), to_expr_or_lit_int(start)], false}
+    }
+  end
+
+  @doc """
   Most frequent value in group.
   """
   @spec mode(Column.t() | String.t()) :: Column.t()
@@ -1800,18 +1828,26 @@ defmodule SparkEx.Functions do
 
   @doc false
   def to_expr(%Column{expr: e}), do: e
+  def to_expr(nil), do: {:lit, nil}
+  def to_expr(value) when is_boolean(value), do: {:lit, value}
+  def to_expr(value) when is_number(value), do: {:lit, value}
   def to_expr(name) when is_binary(name), do: {:col, name}
   def to_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
-  def to_expr(value) when is_number(value) or is_boolean(value), do: {:lit, value}
 
   @doc false
   def lit_expr(%Column{expr: e}), do: e
   def lit_expr(value), do: {:lit, value}
 
+  @doc false
+  @spec fresh_lambda_name(String.t()) :: String.t()
+  def fresh_lambda_name(base) when is_binary(base) do
+    base <> "_" <> Integer.to_string(:erlang.unique_integer([:positive, :monotonic]))
+  end
+
   # ── Private helpers for HOF lambda construction ──
 
   defp build_lambda(func, var_names) do
-    vars = Enum.map(var_names, fn name -> {:lambda_var, name} end)
+    vars = Enum.map(var_names, fn name -> {:lambda_var, fresh_lambda_name(name)} end)
     col_args = Enum.map(vars, fn var -> %Column{expr: var} end)
     %Column{expr: body} = apply(func, col_args)
     {body, vars}
