@@ -977,7 +977,7 @@ defmodule SparkEx.MissOpus2Test do
       df = make_df()
       result = DataFrame.Stat.sample_by(df, "label", %{0 => 0.1})
       assert %DataFrame{plan: {:stat_sample_by, _, _, _, seed}} = result
-      assert is_integer(seed) and seed > 0
+      assert is_integer(seed) and seed >= -0x8000000000000000 and seed <= 0x7FFFFFFFFFFFFFFF
     end
 
     test "sample_by uses provided seed" do

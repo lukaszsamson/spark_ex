@@ -10,6 +10,7 @@ defmodule SparkEx.DataFrame.Stat do
   """
 
   alias SparkEx.{Column, DataFrame}
+  alias SparkEx.Internal.Random
 
   # ── Lazy methods (return DataFrame) ──
 
@@ -325,7 +326,7 @@ defmodule SparkEx.DataFrame.Stat do
     end
   end
 
-  defp normalize_seed(nil), do: :rand.uniform(9_223_372_036_854_775_807)
+  defp normalize_seed(nil), do: Random.long_seed()
 
   defp normalize_seed(seed) when is_integer(seed), do: seed
 
