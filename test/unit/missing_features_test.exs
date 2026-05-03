@@ -462,8 +462,7 @@ defmodule SparkEx.MissingFeaturesTest do
 
       assert %Column{
                expr:
-                 {:fn, "hll_union",
-                  [{:col, "sketch1"}, {:col, "sketch2"}, {:lit, true}], false}
+                 {:fn, "hll_union", [{:col, "sketch1"}, {:col, "sketch2"}, {:lit, true}], false}
              } = result
     end
 
@@ -472,8 +471,7 @@ defmodule SparkEx.MissingFeaturesTest do
 
       assert %Column{
                expr:
-                 {:fn, "hll_union",
-                  [{:col, "sketch1"}, {:col, "sketch2"}, {:lit, true}], false}
+                 {:fn, "hll_union", [{:col, "sketch1"}, {:col, "sketch2"}, {:lit, true}], false}
              } = result
     end
 
@@ -625,9 +623,7 @@ defmodule SparkEx.MissingFeaturesTest do
       result = Functions.theta_union("s1", "s2", lg_nom_entries: 15)
 
       assert %Column{
-               expr:
-                 {:fn, "theta_union",
-                  [{:col, "s1"}, {:col, "s2"}, {:lit, 15}], false}
+               expr: {:fn, "theta_union", [{:col, "s1"}, {:col, "s2"}, {:lit, 15}], false}
              } = result
     end
 
@@ -635,9 +631,7 @@ defmodule SparkEx.MissingFeaturesTest do
       result = Functions.theta_union("s1", "s2", 12)
 
       assert %Column{
-               expr:
-                 {:fn, "theta_union",
-                  [{:col, "s1"}, {:col, "s2"}, {:lit, 12}], false}
+               expr: {:fn, "theta_union", [{:col, "s1"}, {:col, "s2"}, {:lit, 12}], false}
              } = result
     end
 

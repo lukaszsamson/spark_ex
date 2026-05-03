@@ -184,9 +184,7 @@ defmodule SparkEx.Unit.FunctionGenTest do
 
     test "regexp_instr/3 wraps idx as literal" do
       assert %Column{
-               expr:
-                 {:fn, "regexp_instr",
-                  [{:col, "s"}, {:col, "p"}, {:lit, 1}], false}
+               expr: {:fn, "regexp_instr", [{:col, "s"}, {:col, "p"}, {:lit, 1}], false}
              } =
                Functions.regexp_instr(Functions.col("s"), Functions.col("p"), 1)
     end
@@ -241,16 +239,16 @@ defmodule SparkEx.Unit.FunctionGenTest do
     test "width_bucket/4 - bare-string min/max resolve as column refs" do
       assert %Column{
                expr:
-                 {:fn, "width_bucket",
-                  [{:col, "v"}, {:col, "min"}, {:col, "max"}, {:lit, 10}], false}
+                 {:fn, "width_bucket", [{:col, "v"}, {:col, "min"}, {:col, "max"}, {:lit, 10}],
+                  false}
              } = Functions.width_bucket("v", "min", "max", 10)
     end
 
     test "width_bucket/4 - column num_bucket passes through" do
       assert %Column{
                expr:
-                 {:fn, "width_bucket",
-                  [{:col, "v"}, {:col, "min"}, {:col, "max"}, {:col, "n"}], false}
+                 {:fn, "width_bucket", [{:col, "v"}, {:col, "min"}, {:col, "max"}, {:col, "n"}],
+                  false}
              } = Functions.width_bucket("v", "min", "max", Functions.col("n"))
     end
   end
