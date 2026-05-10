@@ -3040,10 +3040,14 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp register_inline_plan_id(plan, plan_ids, refs, counter) do
     case extract_explicit_referenced_plan_id(plan) do
       # Plan already carries a stable plan_id (e.g. from DataFrame.new) — reuse
-      # it instead of allocating a synthetic counter id. This keeps the
-      # carrier flowing through join children so column references bind
-      # correctly without needing a side-aware remap.
-      {:ok, _existing_id, _inner} ->
+      # it instead of allocating a synthetic counter id. Record the
+      # `{:inline, normalized_plan} -> existing_id` binding so the subsequent
+      # `rewrite_expr/4` pass treats column references against this child as
+      # already-resolved (matching the synthetic-id branch below) and does
+      # not add the join child to `with_relations.references` as a free ref.
+      {:ok, existing_id, _inner} ->
+        normalized = normalize_referenced_plan(plan)
+        plan_ids = Map.put_new(plan_ids, {:inline, normalized}, existing_id)
         {plan, plan_ids, refs, counter}
 
       :error ->

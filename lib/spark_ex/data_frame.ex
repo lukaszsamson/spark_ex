@@ -109,6 +109,10 @@ defmodule SparkEx.DataFrame do
     col(df, Atom.to_string(name))
   end
 
+  def col(%__MODULE__{plan: plan}, _name) do
+    raise_unstamped_plan!(:col, plan)
+  end
+
   @doc """
   Selects columns by regex.
 
@@ -121,6 +125,10 @@ defmodule SparkEx.DataFrame do
     %Column{expr: {:col_regex, pattern, plan}}
   end
 
+  def col_regex(%__MODULE__{plan: plan}, _pattern) do
+    raise_unstamped_plan!(:col_regex, plan)
+  end
+
   @doc """
   Returns a metadata column expression by name.
 
@@ -131,6 +139,18 @@ defmodule SparkEx.DataFrame do
   @spec metadata_column(t(), String.t()) :: Column.t()
   def metadata_column(%__MODULE__{plan: {:plan_id, _, _} = plan}, name) when is_binary(name) do
     %Column{expr: {:metadata_col, name, plan}}
+  end
+
+  def metadata_column(%__MODULE__{plan: plan}, _name) do
+    raise_unstamped_plan!(:metadata_column, plan)
+  end
+
+  defp raise_unstamped_plan!(fun, plan) do
+    raise ArgumentError,
+          "DataFrame.#{fun}/2 requires a DataFrame whose plan is stamped with a stable " <>
+            "plan_id. Construct DataFrames via SparkEx.DataFrame.new/2 (or the public " <>
+            "session APIs that wrap it) instead of building %DataFrame{} struct " <>
+            "literals directly. Got plan: #{inspect(plan)}"
   end
 
   @doc """
