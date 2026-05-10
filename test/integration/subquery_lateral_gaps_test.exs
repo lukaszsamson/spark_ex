@@ -23,7 +23,6 @@ defmodule SparkEx.Integration.SubqueryLateralGapsTest do
   # ── Scalar subquery variants ──
 
   describe "scalar subquery" do
-    @tag min_spark: "4.0"
     test "uncorrelated scalar subquery with temp view", %{session: session} do
       SparkEx.sql(
         session,
@@ -42,7 +41,6 @@ defmodule SparkEx.Integration.SubqueryLateralGapsTest do
       assert {:ok, [%{"max_v" => 30}]} = DataFrame.collect(df)
     end
 
-    @tag min_spark: "4.0"
     test "scalar subquery against local relation", %{session: session} do
       {:ok, local_df} =
         SparkEx.create_dataframe(session, [%{"x" => 5}, %{"x" => 15}], schema: "x INT")
@@ -79,7 +77,6 @@ defmodule SparkEx.Integration.SubqueryLateralGapsTest do
   # ── Exists subquery variants ──
 
   describe "exists subquery" do
-    @tag min_spark: "4.0"
     test "exists with temp view", %{session: session} do
       SparkEx.sql(
         session,
