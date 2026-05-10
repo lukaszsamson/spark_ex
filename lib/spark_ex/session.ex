@@ -3183,7 +3183,6 @@ defmodule SparkEx.Session do
     case :os.type() do
       {:unix, name} -> Atom.to_string(name)
       {:win32, _} -> "windows"
-      {family, _} -> Atom.to_string(family)
     end
   end
 

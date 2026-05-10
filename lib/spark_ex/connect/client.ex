@@ -1506,7 +1506,7 @@ defmodule SparkEx.Connect.Client do
   defp handle_inner_error(state, %GRPC.RPCError{} = grpc_error) do
     remote = Errors.from_grpc_error(grpc_error, state.ctx.session)
 
-    if match?(%SparkEx.Error.Remote{}, remote) and retryable_error?(remote) do
+    if retryable_error?(remote) do
       # No pre-reattach release: reattach replays from last_response_id;
       # releasing first would tell the server to drop the very buffer the
       # reattach is about to read. PySpark only releases on consumed
@@ -2339,8 +2339,6 @@ defmodule SparkEx.Connect.Client do
         nil
     end)
   end
-
-  defp extract_server_retry_delay(_), do: nil
 
   defp safe_decode_retry_info(value) do
     {:ok, Protobuf.decode(value, Google.Rpc.RetryInfo)}
