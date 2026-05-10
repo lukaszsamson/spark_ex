@@ -925,6 +925,28 @@ defmodule SparkEx.Connect.PlanEncoderTest do
              } = col_expr
     end
 
+    test "scalar subquery over a project body encodes without re-entrance crash" do
+      # Regression: when the subquery body is itself a project plan (i.e., not
+      # a leaf), encode_relation({:plan_id, _, _}) recursively calls
+      # attach_with_relations on the body. The second pass walks the
+      # already-rewritten outer subquery expression whose third element is
+      # now an integer plan_id; the rewrite must be idempotent.
+      subquery =
+        SparkEx.DataFrame.new(self(), {:range, 0, 1, 1, nil})
+        |> SparkEx.DataFrame.select([SparkEx.Functions.lit(1)])
+
+      df =
+        SparkEx.DataFrame.new(self(), {:range, 0, 1, 1, nil})
+        |> SparkEx.DataFrame.select([
+          SparkEx.Column.alias_(SparkEx.DataFrame.scalar(subquery), "b")
+        ])
+
+      {encoded, _} = PlanEncoder.encode(df.plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
+      assert length(wr.references) == 1
+    end
+
     test ":sql leaf args carrying DataFrame-bound Columns resolve via stable id" do
       # NOTE: PySpark wraps every sql arg through F.lit/1, so cross-DataFrame
       # column refs in :sql args is a SparkEx-only shape. With stable plan_ids

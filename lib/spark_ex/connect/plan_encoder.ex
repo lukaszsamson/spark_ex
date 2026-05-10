@@ -2874,10 +2874,25 @@ defmodule SparkEx.Connect.PlanEncoder do
     rewrite_expr(child, plan_ids, refs, counter)
   end
 
+  # Idempotency clause: when a subquery has already been rewritten (its third
+  # element is an integer plan_id), leave it alone. Re-entrance happens via
+  # `attach_with_relations/2` inside `encode_relation({:plan_id, _, _})`.
+  defp rewrite_expr({:subquery, _type, plan_id, opts} = expr, plan_ids, refs, counter)
+       when is_integer(plan_id) and is_list(opts) do
+    {opts, plan_ids, refs, counter} = rewrite_subquery_opts(opts, plan_ids, refs, counter)
+    {put_elem(expr, 3, opts), plan_ids, refs, counter}
+  end
+
   defp rewrite_expr({:subquery, subquery_type, referenced_plan, opts}, plan_ids, refs, counter)
        when is_list(opts) do
     {plan_ids, refs, plan_id, counter} = ensure_plan_id(referenced_plan, plan_ids, refs, counter)
+    {opts, plan_ids, refs, counter} = rewrite_subquery_opts(opts, plan_ids, refs, counter)
+    {{:subquery, subquery_type, plan_id, opts}, plan_ids, refs, counter}
+  end
 
+  defp rewrite_expr(value, plan_ids, refs, counter), do: {value, plan_ids, refs, counter}
+
+  defp rewrite_subquery_opts(opts, plan_ids, refs, counter) do
     {opts, plan_ids, refs, counter} =
       case Keyword.get(opts, :table_arg_options) do
         nil ->
@@ -2890,20 +2905,15 @@ defmodule SparkEx.Connect.PlanEncoder do
           {Keyword.put(opts, :table_arg_options, table_opts), plan_ids, refs, counter}
       end
 
-    {opts, plan_ids, refs, counter} =
-      case Keyword.get(opts, :in_values) do
-        nil ->
-          {opts, plan_ids, refs, counter}
+    case Keyword.get(opts, :in_values) do
+      nil ->
+        {opts, plan_ids, refs, counter}
 
-        values ->
-          {values, plan_ids, refs, counter} = rewrite_expr_list(values, plan_ids, refs, counter)
-          {Keyword.put(opts, :in_values, values), plan_ids, refs, counter}
-      end
-
-    {{:subquery, subquery_type, plan_id, opts}, plan_ids, refs, counter}
+      values ->
+        {values, plan_ids, refs, counter} = rewrite_expr_list(values, plan_ids, refs, counter)
+        {Keyword.put(opts, :in_values, values), plan_ids, refs, counter}
+    end
   end
-
-  defp rewrite_expr(value, plan_ids, refs, counter), do: {value, plan_ids, refs, counter}
 
   defp maybe_register_join_child_plan_ids(
          {:join, left_plan, right_plan, condition, type, using},
