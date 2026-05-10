@@ -956,8 +956,12 @@ defmodule SparkEx.DataFrame do
 
   @doc """
   Randomly splits the DataFrame into multiple DataFrames using normalized weights.
+
+  Returns the list of DataFrames directly (matching PySpark
+  `randomSplit`). The operation is purely client-side plan construction
+  — no server round-trip — so an `{:ok, _}` wrapper is unnecessary.
   """
-  @spec random_split(t(), [number()], integer() | nil | keyword()) :: {:ok, [t()]}
+  @spec random_split(t(), [number()], integer() | nil | keyword()) :: [t()]
   def random_split(df, weights, seed_or_opts \\ nil)
 
   def random_split(%__MODULE__{} = df, weights, opts)
@@ -1003,7 +1007,7 @@ defmodule SparkEx.DataFrame do
         {split, upper}
       end)
 
-    {:ok, splits}
+    splits
   end
 
   # ── M10: Row Operations ──

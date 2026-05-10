@@ -71,24 +71,39 @@ defmodule SparkEx.Reader do
   end
 
   @doc """
-  Sets a single option on a reader builder.
+  Sets a single option on a reader builder. A `nil` value removes the
+  key (mirroring PySpark's `option(k, None)` behaviour).
   """
   @spec option(t(), String.t(), term()) :: t()
+  def option(%__MODULE__{} = reader, key, nil) when is_binary(key) do
+    %{reader | options: Map.delete(reader.options, key)}
+  end
+
   def option(%__MODULE__{} = reader, key, value) when is_binary(key) do
     %{reader | options: Map.put(reader.options, key, normalize_option_value(value))}
   end
 
   @doc """
-  Merges options into a reader builder.
+  Merges options into a reader builder. Entries whose value is `nil`
+  remove the key.
   """
   @spec options(t(), map() | keyword()) :: t()
   def options(%__MODULE__{} = reader, opts) when is_map(opts) or is_list(opts) do
-    merged =
-      opts
-      |> normalize_options()
-      |> then(&Map.merge(reader.options, &1))
+    # Collapse to a map first so duplicate keys resolve via last-wins semantics.
+    pairs = if is_map(opts), do: opts, else: Enum.into(opts, %{})
 
-    %{reader | options: merged}
+    {drops, sets} =
+      Enum.reduce(pairs, {[], []}, fn {k, v}, {drops, sets} ->
+        key = to_string(k)
+        if is_nil(v), do: {[key | drops], sets}, else: {drops, [{key, v} | sets]}
+      end)
+
+    new_options =
+      reader.options
+      |> Map.drop(drops)
+      |> Map.merge(normalize_options(Map.new(sets)))
+
+    %{reader | options: new_options}
   end
 
   @doc """
@@ -410,8 +425,8 @@ defmodule SparkEx.Reader do
     format = Keyword.get(opts, :format, reader.format)
     schema = opts |> Keyword.get(:schema, reader.schema) |> normalize_schema()
 
-    opts_options = Keyword.get(opts, :options, %{})
-    merged_options = Map.merge(reader.options, normalize_options(opts_options))
+    call_time_options = merge_source_options(opts, [:format, :schema, :predicates])
+    merged_options = Map.merge(reader.options, call_time_options)
 
     %DataFrame{
       session: reader.session,
@@ -435,12 +450,12 @@ defmodule SparkEx.Reader do
   end
 
   defp merge_source_options(opts, reserved_keys) do
-    nested_options = opts |> Keyword.get(:options, %{}) |> normalize_options()
+    nested_options = opts |> Keyword.get(:options, %{}) |> normalize_options_reject_nil()
 
     top_level_options =
       opts
       |> Keyword.drop([:options | reserved_keys])
-      |> normalize_options()
+      |> normalize_options_reject_nil()
 
     Map.merge(top_level_options, nested_options)
   end
@@ -463,6 +478,14 @@ defmodule SparkEx.Reader do
 
   defp normalize_options(opts) when is_map(opts) do
     SparkEx.Internal.OptionUtils.stringify_options(opts)
+  end
+
+  defp normalize_options_reject_nil(opts) when is_list(opts) do
+    SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
+  end
+
+  defp normalize_options_reject_nil(opts) when is_map(opts) do
+    SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
   end
 
   defp normalize_option_value(value) do

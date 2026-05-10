@@ -539,7 +539,7 @@ defmodule SparkEx.Catalog do
 
   defp normalize_table_options(options) when is_list(options) or is_map(options) do
     try do
-      {:ok, OptionUtils.stringify_options(options)}
+      {:ok, OptionUtils.stringify_options_reject_nil(options)}
     rescue
       e in ArgumentError ->
         {:error, {:invalid_options, Exception.message(e)}}

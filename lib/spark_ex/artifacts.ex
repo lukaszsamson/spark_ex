@@ -41,10 +41,11 @@ defmodule SparkEx.Artifacts do
   def prepare(paths, prefix, opts) when is_binary(prefix) and is_list(opts) do
     normalized_prefix = normalize_prefix(prefix)
     allowed_extensions = Keyword.get(opts, :extensions, nil)
+    archive? = Keyword.get(opts, :archive, false)
     paths = normalize_paths(paths)
 
     with :ok <- validate_extensions(paths, allowed_extensions),
-         {:ok, entries} <- stat_paths(paths) do
+         {:ok, entries} <- stat_paths(paths, archive?) do
       artifacts =
         Enum.map(entries, fn {real_path, alias_name, size} ->
           {normalized_prefix <> alias_name, {:file, real_path, size}}
@@ -92,7 +93,10 @@ defmodule SparkEx.Artifacts do
   @spec add_archives(GenServer.server(), String.t() | [String.t()]) ::
           {:ok, [{String.t(), boolean()}]} | {:error, term()}
   def add_archives(session, paths) do
-    add_with_prefix(session, paths, "archives/", extensions: @archive_extensions)
+    add_with_prefix(session, paths, "archives/",
+      extensions: @archive_extensions,
+      archive: true
+    )
   end
 
   @doc """
@@ -137,9 +141,10 @@ defmodule SparkEx.Artifacts do
   defp validate_extensions(paths, allowed) when is_list(allowed) do
     bad =
       Enum.reject(paths, fn raw ->
-        {real, alias_name} = split_fragment(raw)
-        path_for_check = if alias_name == nil, do: real, else: alias_name
-        ext_match?(path_for_check, allowed)
+        {real, _alias_name} = split_fragment(raw)
+        # Mirror PySpark: archive/jar/pyfile extension is checked against
+        # the *real* file's basename, not the alias fragment.
+        ext_match?(real, allowed)
       end)
 
     case bad do
@@ -171,16 +176,23 @@ defmodule SparkEx.Artifacts do
     end
   end
 
-  defp stat_paths(paths) do
+  defp stat_paths(paths, archive?) do
     Enum.reduce_while(paths, {:ok, []}, fn raw, {:ok, acc} ->
       {real_path, fragment} = split_fragment(raw)
 
       case File.stat(real_path) do
         {:ok, %File.Stat{type: :regular, size: size}} ->
+          basename = Path.basename(real_path)
+
           alias_name =
-            case fragment do
-              nil -> Path.basename(real_path)
-              other -> other
+            cond do
+              fragment == nil -> basename
+              # PySpark archives keep the basename as part of the alias so
+              # the server can pick the right unpacker by file extension:
+              # `name = f"{basename}#{fragment}"`. See pyspark
+              # connect/client/artifact.py:_parse_artifacts.
+              archive? -> basename <> "#" <> fragment
+              true -> fragment
             end
 
           {:cont, {:ok, [{real_path, alias_name, size} | acc]}}

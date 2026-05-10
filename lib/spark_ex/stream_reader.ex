@@ -60,50 +60,87 @@ defmodule SparkEx.StreamReader do
   end
 
   @spec option(t(), String.t(), term()) :: t()
+  def option(%__MODULE__{} = reader, key, nil) when is_binary(key) do
+    %{reader | options: Map.delete(reader.options, key)}
+  end
+
   def option(%__MODULE__{} = reader, key, value) when is_binary(key) do
-    if is_nil(value) do
-      reader
-    else
-      %{reader | options: Map.put(reader.options, key, normalize_option_value(value))}
-    end
+    %{reader | options: Map.put(reader.options, key, normalize_option_value(value))}
   end
 
   @spec options(t(), map() | keyword()) :: t()
   def options(%__MODULE__{} = reader, opts) when is_map(opts) or is_list(opts) do
-    merged =
-      opts
-      |> normalize_options()
-      |> then(&Map.merge(reader.options, &1))
+    # Collapse to a map first so duplicate keys resolve via last-wins semantics.
+    pairs = if is_map(opts), do: opts, else: Enum.into(opts, %{})
 
-    %{reader | options: merged}
+    {drops, sets} =
+      Enum.reduce(pairs, {[], []}, fn {k, v}, {drops, sets} ->
+        key = to_string(k)
+        if is_nil(v), do: {[key | drops], sets}, else: {drops, [{key, v} | sets]}
+      end)
+
+    new_options =
+      reader.options
+      |> Map.drop(drops)
+      |> Map.merge(normalize_options(Map.new(sets)))
+
+    %{reader | options: new_options}
   end
 
   @spec load(t()) :: DataFrame.t()
-  def load(%__MODULE__{} = reader) do
-    %DataFrame{
-      session: reader.session,
-      plan: {:read_data_source_streaming, reader.format, [], reader.schema, reader.options}
-    }
+  def load(%__MODULE__{} = reader), do: load(reader, nil, [])
+
+  @doc """
+  Loads a streaming DataFrame using the configured builder. Mirrors
+  PySpark's `DataStreamReader.load(path=None, format=None, schema=None,
+  **options)` — call-time `:format`, `:schema`, and a top-level option
+  map (or `:options` keyword) override the builder state.
+  """
+  @spec load(t(), String.t() | nil | keyword()) :: DataFrame.t()
+  def load(%__MODULE__{} = reader, path_or_opts) when is_binary(path_or_opts) do
+    load(reader, path_or_opts, [])
   end
 
-  @spec load(t(), String.t()) :: DataFrame.t()
-  def load(%__MODULE__{} = reader, path) when is_binary(path) do
-    validate_path!(path)
+  def load(%__MODULE__{} = reader, nil), do: load(reader, nil, [])
 
-    %DataFrame{
-      session: reader.session,
-      plan: {:read_data_source_streaming, reader.format, [path], reader.schema, reader.options}
-    }
-  end
-
-  def load(%__MODULE__{}, paths) when is_list(paths) do
-    raise ArgumentError,
-          "stream load only accepts a single path; got a list: #{inspect(paths)}. " <>
-            "Streaming sources read from one location at a time — call load/2 once per path."
+  def load(%__MODULE__{} = reader, opts) when is_list(opts) do
+    if Keyword.keyword?(opts) and opts != [] do
+      load(reader, nil, opts)
+    else
+      raise ArgumentError,
+            "stream load only accepts a single path; got a list: #{inspect(opts)}. " <>
+              "Streaming sources read from one location at a time — call load/2 once per path."
+    end
   end
 
   def load(%__MODULE__{}, other) do
     raise ArgumentError, "stream load path must be a string, got: #{inspect(other)}"
+  end
+
+  @spec load(t(), String.t() | nil, keyword()) :: DataFrame.t()
+  def load(%__MODULE__{} = reader, path, opts) when is_list(opts) do
+    paths =
+      case path do
+        nil ->
+          []
+
+        p when is_binary(p) ->
+          validate_path!(p)
+          [p]
+
+        other ->
+          raise ArgumentError, "stream load path must be a string, got: #{inspect(other)}"
+      end
+
+    format = Keyword.get(opts, :format, reader.format)
+    schema = opts |> Keyword.get(:schema, reader.schema) |> normalize_schema()
+    call_time_options = merge_source_options(opts, [:format, :schema])
+    merged_options = Map.merge(reader.options, call_time_options)
+
+    %DataFrame{
+      session: reader.session,
+      plan: {:read_data_source_streaming, format, paths, schema, merged_options}
+    }
   end
 
   @spec table(t(), String.t()) :: DataFrame.t()

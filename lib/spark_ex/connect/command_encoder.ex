@@ -68,7 +68,7 @@ defmodule SparkEx.Connect.CommandEncoder do
     {relation, counter} = PlanEncoder.encode_relation(df_plan, counter)
 
     save_type = encode_save_type(write_opts)
-    mode = encode_save_mode(Keyword.get(write_opts, :mode, :error_if_exists))
+    mode = encode_save_mode(Keyword.get(write_opts, :mode, nil))
     source = Keyword.get(write_opts, :format, nil)
     options = write_opts |> Keyword.get(:options, %{}) |> stringify_options()
     sort_column_names = Keyword.get(write_opts, :sort_by, [])
@@ -503,6 +503,7 @@ defmodule SparkEx.Connect.CommandEncoder do
     end
   end
 
+  defp encode_save_mode(nil), do: :SAVE_MODE_UNSPECIFIED
   defp encode_save_mode(:append), do: :SAVE_MODE_APPEND
   defp encode_save_mode(:overwrite), do: :SAVE_MODE_OVERWRITE
   defp encode_save_mode(:error_if_exists), do: :SAVE_MODE_ERROR_IF_EXISTS

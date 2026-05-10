@@ -1417,7 +1417,9 @@ defmodule SparkEx.MissOpus2Test do
       assert writer.mode == :overwrite
 
       writer2 = df |> DataFrame.write() |> SparkEx.Writer.format("delta")
-      assert writer2.mode == :error_if_exists
+      # Default mode is now nil so insert_into / save without explicit
+      # mode emits SAVE_MODE_UNSPECIFIED, mirroring PySpark.
+      assert writer2.mode == nil
     end
   end
 
