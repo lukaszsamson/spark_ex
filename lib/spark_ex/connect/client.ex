@@ -87,6 +87,9 @@ defmodule SparkEx.Connect.Client do
       {:ok, %AnalyzePlanResponse{result: {:schema, %{schema: schema}}} = resp} ->
         {:ok, schema, resp.server_side_session_id}
 
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
+
       {:error, _} = error ->
         error
     end
@@ -109,6 +112,9 @@ defmodule SparkEx.Connect.Client do
            ) do
         {:ok, %AnalyzePlanResponse{result: {:explain, %{explain_string: str}}} = resp} ->
           {:ok, str, resp.server_side_session_id}
+
+        {:ok, %AnalyzePlanResponse{result: other}} ->
+          {:error, {:unexpected_response, other}}
 
         {:error, _} = error ->
           error
@@ -146,6 +152,9 @@ defmodule SparkEx.Connect.Client do
       {:ok, %AnalyzePlanResponse{result: {:tree_string, %{tree_string: str}}} = resp} ->
         {:ok, str, resp.server_side_session_id}
 
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
+
       {:error, _} = error ->
         error
     end
@@ -167,6 +176,9 @@ defmodule SparkEx.Connect.Client do
          ) do
       {:ok, %AnalyzePlanResponse{result: {:is_local, %{is_local: is_local}}} = resp} ->
         {:ok, is_local, resp.server_side_session_id}
+
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
 
       {:error, _} = error ->
         error
@@ -190,6 +202,9 @@ defmodule SparkEx.Connect.Client do
       {:ok, %AnalyzePlanResponse{result: {:is_streaming, %{is_streaming: is_streaming}}} = resp} ->
         {:ok, is_streaming, resp.server_side_session_id}
 
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
+
       {:error, _} = error ->
         error
     end
@@ -211,6 +226,9 @@ defmodule SparkEx.Connect.Client do
          ) do
       {:ok, %AnalyzePlanResponse{result: {:input_files, %{files: files}}} = resp} ->
         {:ok, files, resp.server_side_session_id}
+
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
 
       {:error, _} = error ->
         error
@@ -234,6 +252,9 @@ defmodule SparkEx.Connect.Client do
       {:ok, %AnalyzePlanResponse{result: {:ddl_parse, %{parsed: parsed}}} = resp} ->
         {:ok, parsed, resp.server_side_session_id}
 
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
+
       {:error, _} = error ->
         error
     end
@@ -255,6 +276,9 @@ defmodule SparkEx.Connect.Client do
          ) do
       {:ok, %AnalyzePlanResponse{result: {:json_to_ddl, %{ddl_string: ddl}}} = resp} ->
         {:ok, ddl, resp.server_side_session_id}
+
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
 
       {:error, _} = error ->
         error
@@ -283,6 +307,9 @@ defmodule SparkEx.Connect.Client do
       {:ok, %AnalyzePlanResponse{result: {:same_semantics, %{result: result}}} = resp} ->
         {:ok, result, resp.server_side_session_id}
 
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
+
       {:error, _} = error ->
         error
     end
@@ -304,6 +331,9 @@ defmodule SparkEx.Connect.Client do
          ) do
       {:ok, %AnalyzePlanResponse{result: {:semantic_hash, %{result: hash}}} = resp} ->
         {:ok, hash, resp.server_side_session_id}
+
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
 
       {:error, _} = error ->
         error
@@ -345,6 +375,9 @@ defmodule SparkEx.Connect.Client do
       {:ok, %AnalyzePlanResponse{result: {:persist, _}} = resp} ->
         {:ok, resp.server_side_session_id}
 
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
+
       {:error, _} = error ->
         error
     end
@@ -378,6 +411,9 @@ defmodule SparkEx.Connect.Client do
       {:ok, %AnalyzePlanResponse{result: {:unpersist, _}} = resp} ->
         {:ok, resp.server_side_session_id}
 
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
+
       {:error, _} = error ->
         error
     end
@@ -402,6 +438,9 @@ defmodule SparkEx.Connect.Client do
            resp} ->
         {:ok, storage_level, resp.server_side_session_id}
 
+      {:ok, %AnalyzePlanResponse{result: other}} ->
+        {:error, {:unexpected_response, other}}
+
       {:error, _} = error ->
         error
     end
@@ -421,29 +460,22 @@ defmodule SparkEx.Connect.Client do
   @spec execute_plan(SparkEx.Session.t(), Plan.t(), keyword()) ::
           {:ok, ResultDecoder.decode_result()} | {:error, term()}
   def execute_plan(session, plan, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, 60_000)
     tags = Keyword.get(opts, :tags, [])
     reattachable = Keyword.get(opts, :reattachable, true)
     operation_id = if reattachable, do: generate_operation_id(), else: nil
 
-    request = build_execute_request(session, plan, tags, operation_id, reattachable, opts)
-    metadata = %{rpc: :execute_plan, session_id: session.session_id, operation_id: operation_id}
-
-    rpc_telemetry_span(metadata, fn ->
-      if reattachable do
-        execute_reattachable(session, request, operation_id, timeout, opts, fn responses ->
-          ResultDecoder.decode_stream(responses, session)
-        end)
-      else
-        execute_plan_non_reattachable(
-          session,
-          request,
-          timeout,
-          opts,
-          &ResultDecoder.decode_stream(&1, session)
-        )
-      end
-    end)
+    with :ok <- validate_tags(tags) do
+      run_execute_plan(
+        :execute_plan,
+        session,
+        plan,
+        tags,
+        operation_id,
+        reattachable,
+        opts,
+        &ResultDecoder.decode_stream(&1, session)
+      )
+    end
   end
 
   @doc """
@@ -457,34 +489,22 @@ defmodule SparkEx.Connect.Client do
   @spec execute_plan_explorer(SparkEx.Session.t(), Plan.t(), keyword()) ::
           {:ok, ResultDecoder.explorer_result()} | {:error, term()}
   def execute_plan_explorer(session, plan, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, 60_000)
     tags = Keyword.get(opts, :tags, [])
     reattachable = Keyword.get(opts, :reattachable, true)
     operation_id = if reattachable, do: generate_operation_id(), else: nil
 
-    request = build_execute_request(session, plan, tags, operation_id, reattachable, opts)
-
-    metadata = %{
-      rpc: :execute_plan_explorer,
-      session_id: session.session_id,
-      operation_id: operation_id
-    }
-
-    rpc_telemetry_span(metadata, fn ->
-      if reattachable do
-        execute_reattachable(session, request, operation_id, timeout, opts, fn responses ->
-          ResultDecoder.decode_stream_explorer(responses, session, opts)
-        end)
-      else
-        execute_plan_non_reattachable(
-          session,
-          request,
-          timeout,
-          opts,
-          &ResultDecoder.decode_stream_explorer(&1, session, opts)
-        )
-      end
-    end)
+    with :ok <- validate_tags(tags) do
+      run_execute_plan(
+        :execute_plan_explorer,
+        session,
+        plan,
+        tags,
+        operation_id,
+        reattachable,
+        opts,
+        &ResultDecoder.decode_stream_explorer(&1, session, opts)
+      )
+    end
   end
 
   @doc """
@@ -493,32 +513,48 @@ defmodule SparkEx.Connect.Client do
   @spec execute_plan_arrow(SparkEx.Session.t(), Plan.t(), keyword()) ::
           {:ok, ResultDecoder.arrow_result()} | {:error, term()}
   def execute_plan_arrow(session, plan, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, 60_000)
     tags = Keyword.get(opts, :tags, [])
     reattachable = Keyword.get(opts, :reattachable, true)
     operation_id = if reattachable, do: generate_operation_id(), else: nil
 
+    with :ok <- validate_tags(tags) do
+      run_execute_plan(
+        :execute_plan_arrow,
+        session,
+        plan,
+        tags,
+        operation_id,
+        reattachable,
+        opts,
+        &ResultDecoder.decode_stream_arrow(&1, session)
+      )
+    end
+  end
+
+  defp run_execute_plan(
+         rpc_name,
+         session,
+         plan,
+         tags,
+         operation_id,
+         reattachable,
+         opts,
+         decode_fn
+       ) do
+    timeout = Keyword.get(opts, :timeout, 60_000)
     request = build_execute_request(session, plan, tags, operation_id, reattachable, opts)
 
     metadata = %{
-      rpc: :execute_plan_arrow,
+      rpc: rpc_name,
       session_id: session.session_id,
       operation_id: operation_id
     }
 
     rpc_telemetry_span(metadata, fn ->
       if reattachable do
-        execute_reattachable(session, request, operation_id, timeout, opts, fn responses ->
-          ResultDecoder.decode_stream_arrow(responses, session)
-        end)
+        execute_reattachable(session, request, operation_id, timeout, opts, decode_fn)
       else
-        execute_plan_non_reattachable(
-          session,
-          request,
-          timeout,
-          opts,
-          &ResultDecoder.decode_stream_arrow(&1, session)
-        )
+        execute_plan_non_reattachable(session, request, timeout, opts, decode_fn)
       end
     end)
   end
@@ -796,11 +832,8 @@ defmodule SparkEx.Connect.Client do
          ) do
       {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
         log_config_warnings(resp)
-
-        case parse_is_modifiable_pairs(resp_pairs) do
-          {:ok, result} -> {:ok, result, resp.server_side_session_id}
-          {:error, _} = err -> err
-        end
+        result = parse_is_modifiable_pairs(resp_pairs)
+        {:ok, result, resp.server_side_session_id}
 
       {:error, _} = error ->
         error
@@ -808,26 +841,30 @@ defmodule SparkEx.Connect.Client do
   end
 
   defp parse_is_modifiable_pairs(pairs) do
-    Enum.reduce_while(pairs, {:ok, []}, fn %KeyValue{key: k, value: v}, {:ok, acc} ->
-      case parse_is_modifiable_value(v) do
-        {:ok, parsed} -> {:cont, {:ok, [{k, parsed} | acc]}}
-        {:error, reason} -> {:halt, {:error, {:value_not_allowed, k, reason}}}
-      end
+    Enum.map(pairs, fn %KeyValue{key: k, value: v} ->
+      {k, parse_is_modifiable_value(k, v)}
     end)
-    |> case do
-      {:ok, rev} -> {:ok, Enum.reverse(rev)}
-      {:error, _} = err -> err
-    end
   end
 
-  defp parse_is_modifiable_value(nil), do: {:ok, nil}
+  defp parse_is_modifiable_value(_key, nil), do: nil
 
-  defp parse_is_modifiable_value(value) when is_binary(value) do
+  defp parse_is_modifiable_value(key, value) when is_binary(value) do
     case value |> String.trim() |> String.downcase() do
-      "" -> {:ok, nil}
-      "true" -> {:ok, true}
-      "false" -> {:ok, false}
-      _ -> {:error, value}
+      "" ->
+        nil
+
+      "true" ->
+        true
+
+      "false" ->
+        false
+
+      _ ->
+        Logger.warning(
+          "Spark Connect config is_modifiable returned unexpected value for #{inspect(key)}: #{inspect(value)}"
+        )
+
+        nil
     end
   end
 
@@ -867,7 +904,7 @@ defmodule SparkEx.Connect.Client do
   def clone_session(session, nil), do: do_clone_session(session, nil)
 
   def clone_session(session, new_session_id) when is_binary(new_session_id) do
-    if SparkEx.Internal.UUID.valid_v4?(new_session_id) do
+    if SparkEx.Internal.UUID.valid_uuid?(new_session_id) do
       do_clone_session(session, new_session_id)
     else
       {:error, {:invalid_new_session_id, new_session_id}}
@@ -935,16 +972,60 @@ defmodule SparkEx.Connect.Client do
   @spec interrupt(SparkEx.Session.t(), :all | {:tag, String.t()} | {:operation_id, String.t()}) ::
           {:ok, [String.t()], String.t() | nil} | {:error, term()}
   def interrupt(session, type) do
-    request = build_interrupt_request(session, type)
+    with {:ok, _} <- validate_interrupt_type(type) do
+      request = build_interrupt_request(session, type)
 
-    case dispatch_unary_rpc(:interrupt, session, request, extra_metadata: %{interrupt_type: type}) do
-      {:ok, %InterruptResponse{} = resp} ->
-        {:ok, resp.interrupted_ids, resp.server_side_session_id}
+      case dispatch_unary_rpc(:interrupt, session, request,
+             extra_metadata: %{interrupt_type: type}
+           ) do
+        {:ok, %InterruptResponse{} = resp} ->
+          {:ok, resp.interrupted_ids, resp.server_side_session_id}
 
-      {:error, _} = error ->
-        error
+        {:error, _} = error ->
+          error
+      end
     end
   end
+
+  defp validate_interrupt_type(:all), do: {:ok, :all}
+
+  defp validate_interrupt_type({:tag, tag}) when is_binary(tag) do
+    case validate_tag(tag) do
+      :ok -> {:ok, {:tag, tag}}
+      {:error, reason} -> {:error, {:invalid_tag, reason, tag}}
+    end
+  end
+
+  defp validate_interrupt_type({:operation_id, id}) when is_binary(id) and id != "" do
+    {:ok, {:operation_id, id}}
+  end
+
+  defp validate_interrupt_type(other), do: {:error, {:invalid_interrupt_type, other}}
+
+  @doc false
+  @spec validate_tag(term()) :: :ok | {:error, atom()}
+  def validate_tag(tag) when is_binary(tag) do
+    cond do
+      tag == "" -> {:error, :empty}
+      String.contains?(tag, ",") -> {:error, :contains_comma}
+      true -> :ok
+    end
+  end
+
+  def validate_tag(_), do: {:error, :not_a_string}
+
+  @doc false
+  @spec validate_tags(term()) :: :ok | {:error, term()}
+  def validate_tags(tags) when is_list(tags) do
+    Enum.reduce_while(tags, :ok, fn tag, :ok ->
+      case validate_tag(tag) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:invalid_tag, reason, tag}}}
+      end
+    end)
+  end
+
+  def validate_tags(other), do: {:error, {:invalid_tags, other}}
 
   defp build_interrupt_request(session, :all) do
     %InterruptRequest{

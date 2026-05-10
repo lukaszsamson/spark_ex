@@ -2,6 +2,7 @@ defmodule SparkEx.Internal.UUID do
   @moduledoc false
 
   @uuid_v4_regex ~r/\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\z/
+  @uuid_any_regex ~r/\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z/
 
   @spec generate_v4() :: String.t()
   def generate_v4 do
@@ -31,4 +32,14 @@ defmodule SparkEx.Internal.UUID do
   @spec valid_v4?(term()) :: boolean()
   def valid_v4?(value) when is_binary(value), do: String.match?(value, @uuid_v4_regex)
   def valid_v4?(_value), do: false
+
+  @doc """
+  Validates that the value is a syntactically valid UUID string (8-4-4-4-12 hex).
+
+  Accepts any RFC4122 form: any version, any variant. Use this for cross-vendor
+  IDs (e.g. session ids assigned by remote services that may not be v4).
+  """
+  @spec valid_uuid?(term()) :: boolean()
+  def valid_uuid?(value) when is_binary(value), do: String.match?(value, @uuid_any_regex)
+  def valid_uuid?(_value), do: false
 end

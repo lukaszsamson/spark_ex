@@ -15,7 +15,7 @@ defmodule SparkEx.Connect.TypeMapper do
       iex> TypeMapper.to_explorer_dtype(%DataType{kind: {:array, %DataType.Array{element_type: element}}})
       {:ok, {:list, {:s, 32}}}
   """
-  @spec to_explorer_dtype(DataType.t()) :: {:ok, atom() | {atom(), term()}}
+  @spec to_explorer_dtype(DataType.t() | nil) :: {:ok, atom() | {atom(), term()}}
   def to_explorer_dtype(%DataType{kind: {tag, _value}} = dt) do
     {:ok, map_kind(tag, dt)}
   end
@@ -24,18 +24,24 @@ defmodule SparkEx.Connect.TypeMapper do
     {:ok, :null}
   end
 
+  # A nested DataType slot can be unset on the wire; treat it as VOID/null.
+  def to_explorer_dtype(nil), do: {:ok, :null}
+
   @doc """
   Converts a Spark Connect `DataType` directly to a Spark DDL type string.
 
   Uses direct mapping to preserve precision information (e.g., DECIMAL scale/precision)
   that would be lost in an Explorer dtype round-trip.
   """
-  @spec data_type_to_ddl(DataType.t()) :: String.t()
+  @spec data_type_to_ddl(DataType.t() | nil) :: String.t()
   def data_type_to_ddl(%DataType{kind: {tag, value}}) do
     direct_ddl(tag, value)
   end
 
   def data_type_to_ddl(%DataType{kind: nil}), do: "VOID"
+
+  # Nested DataType fields can arrive as nil for forward-compat / partial responses.
+  def data_type_to_ddl(nil), do: "VOID"
 
   @doc """
   Converts a Spark Connect schema (`DataType.Struct`) to Explorer dtypes map.
@@ -326,9 +332,13 @@ defmodule SparkEx.Connect.TypeMapper do
   end
 
   def explorer_schema_to_ddl(dtypes) when is_list(dtypes) do
-    dtypes
-    |> Enum.map_join(", ", fn {name, dtype} ->
-      "#{SparkEx.Types.quote_identifier(name)} #{to_spark_ddl_type(dtype)}"
+    Enum.map_join(dtypes, ", ", fn
+      {name, dtype} when is_binary(name) ->
+        "#{SparkEx.Types.quote_identifier(name)} #{to_spark_ddl_type(dtype)}"
+
+      other ->
+        raise ArgumentError,
+              "explorer_schema_to_ddl expected a list of {name, dtype} tuples with binary names, got element: #{inspect(other)}"
     end)
   end
 end

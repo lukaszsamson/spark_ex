@@ -4398,7 +4398,7 @@ defmodule SparkEx.Session do
     session_id =
       Keyword.get(opts, :session_id) || Map.get(connect_opts, :session_id) || UUID.generate_v4()
 
-    if UUID.valid_v4?(session_id) do
+    if UUID.valid_uuid?(session_id) do
       {:ok, %{user_id: user_id, client_type: client_type, session_id: session_id}}
     else
       {:error, {:invalid_session_id, session_id}}

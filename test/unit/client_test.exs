@@ -226,9 +226,9 @@ defmodule SparkEx.Connect.ClientTest do
     assert {:error, {:invalid_new_session_id, "not-a-uuid"}} =
              Client.clone_session(session, "not-a-uuid")
 
-    # Non-v4 (e.g. v1) uuid is also rejected.
-    assert {:error, {:invalid_new_session_id, "550e8400-e29b-11d4-a716-446655440000"}} =
-             Client.clone_session(session, "550e8400-e29b-11d4-a716-446655440000")
+    # Wrong length is rejected.
+    assert {:error, {:invalid_new_session_id, "550e8400"}} =
+             Client.clone_session(session, "550e8400")
   end
 
   test "SqlFormatter formats positional args" do

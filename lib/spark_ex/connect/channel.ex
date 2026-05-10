@@ -391,7 +391,7 @@ defmodule SparkEx.Connect.Channel do
   defp validate_token(_params), do: :ok
 
   defp validate_session_id(%{"session_id" => session_id}) do
-    if SparkEx.Internal.UUID.valid_v4?(session_id) do
+    if SparkEx.Internal.UUID.valid_uuid?(session_id) do
       :ok
     else
       {:error, {:invalid_param, "session_id=#{session_id}"}}
