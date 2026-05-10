@@ -322,7 +322,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       assert {:ok, plan} = StreamingQuery.explain(query)
       assert is_binary(plan)
-      assert String.plan() != []
+      assert plan != ""
 
       :ok = StreamingQuery.stop(query)
     end

@@ -231,7 +231,7 @@ defmodule SparkEx.Integration.DataFrameTest do
       for mode <- [:simple, :extended, :codegen, :cost, :formatted] do
         assert {:ok, explain_str} = DataFrame.explain(df, mode)
         assert is_binary(explain_str)
-        assert String.explain_str() != []
+        assert explain_str != ""
       end
     end
   end
