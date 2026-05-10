@@ -97,6 +97,7 @@ defmodule SparkEx.Integration.DataFrameM10Test do
     assert {:ok, 20} = DataFrame.count(df)
   end
 
+  @tag min_spark: "4.0"
   test "unpivot and transpose execute", %{session: session} do
     unpivot_df =
       SparkEx.sql(session, "SELECT * FROM VALUES (1, 10, 20) AS t(id, c1, c2)")
