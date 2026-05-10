@@ -34,10 +34,12 @@ defmodule SparkEx.Internal.UUID do
   def valid_v4?(_value), do: false
 
   @doc """
-  Validates that the value is a syntactically valid UUID string (8-4-4-4-12 hex).
+  Returns `true` when the value is a syntactically well-formed UUID string
+  (8-4-4-4-12 hexadecimal groups separated by hyphens).
 
-  Accepts any RFC4122 form: any version, any variant. Use this for cross-vendor
-  IDs (e.g. session ids assigned by remote services that may not be v4).
+  This is a *format-only* check — it does not validate RFC4122 version or
+  variant bits. Use it for session IDs that may be assigned by remote services
+  using any UUID version (v1, v4, v7, etc.).
   """
   @spec valid_uuid?(term()) :: boolean()
   def valid_uuid?(value) when is_binary(value), do: String.match?(value, @uuid_any_regex)

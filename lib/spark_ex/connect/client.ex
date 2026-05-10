@@ -813,7 +813,8 @@ defmodule SparkEx.Connect.Client do
   @doc """
   Checks whether the given configuration keys are modifiable at runtime.
 
-  Returns a list of `{key, value}` pairs where value is `"true"` or `"false"`.
+  Returns a list of `{key, boolean_or_nil}` pairs: `true` if modifiable, `false` if not,
+  `nil` if the server returned an empty or unrecognised value for that key.
   """
   @spec config_is_modifiable(SparkEx.Session.t(), [config_value()]) ::
           {:ok, [{String.t(), boolean() | nil}], String.t() | nil} | {:error, term()}
@@ -972,7 +973,7 @@ defmodule SparkEx.Connect.Client do
   @spec interrupt(SparkEx.Session.t(), :all | {:tag, String.t()} | {:operation_id, String.t()}) ::
           {:ok, [String.t()], String.t() | nil} | {:error, term()}
   def interrupt(session, type) do
-    with {:ok, _} <- validate_interrupt_type(type) do
+    with {:ok, type} <- validate_interrupt_type(type) do
       request = build_interrupt_request(session, type)
 
       case dispatch_unary_rpc(:interrupt, session, request,
