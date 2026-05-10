@@ -2973,7 +2973,11 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp ensure_plan_id(referenced_plan, plan_ids, refs, counter) do
     case extract_explicit_referenced_plan_id(referenced_plan) do
       {:ok, plan_id, explicit_plan} ->
-        ensure_referenced_plan_id(plan_id, explicit_plan, plan_ids, refs, counter)
+        # Wrap the referenced plan so when encode_relation re-encodes it as a
+        # with_relations.references entry it preserves the stable plan_id
+        # rather than allocating a fresh counter id.
+        wrapped = {:plan_id, plan_id, explicit_plan}
+        ensure_referenced_plan_id(plan_id, wrapped, plan_ids, refs, counter)
 
       :error ->
         normalized_plan = normalize_referenced_plan(referenced_plan)
@@ -3019,16 +3023,26 @@ defmodule SparkEx.Connect.PlanEncoder do
   # cache and collapses both sides to the same synth (matches PySpark's
   # per-DataFrame-instance plan_id).
   defp register_inline_plan_id(plan, plan_ids, refs, counter) do
-    normalized = normalize_referenced_plan(plan)
-
-    case Map.fetch(plan_ids, {:inline, normalized}) do
-      {:ok, existing_id} ->
-        {wrap_inline_plan_id(plan, existing_id), plan_ids, refs, counter}
+    case extract_explicit_referenced_plan_id(plan) do
+      # Plan already carries a stable plan_id (e.g. from DataFrame.new) — reuse
+      # it instead of allocating a synthetic counter id. This keeps the
+      # carrier flowing through join children so column references bind
+      # correctly without needing a side-aware remap.
+      {:ok, _existing_id, _inner} ->
+        {plan, plan_ids, refs, counter}
 
       :error ->
-        {synth_id, counter} = next_id(counter)
-        plan_ids = Map.put(plan_ids, {:inline, normalized}, synth_id)
-        {wrap_inline_plan_id(plan, synth_id), plan_ids, refs, counter}
+        normalized = normalize_referenced_plan(plan)
+
+        case Map.fetch(plan_ids, {:inline, normalized}) do
+          {:ok, existing_id} ->
+            {wrap_inline_plan_id(plan, existing_id), plan_ids, refs, counter}
+
+          :error ->
+            {synth_id, counter} = next_id(counter)
+            plan_ids = Map.put(plan_ids, {:inline, normalized}, synth_id)
+            {wrap_inline_plan_id(plan, synth_id), plan_ids, refs, counter}
+        end
     end
   end
 

@@ -877,6 +877,85 @@ defmodule SparkEx.Connect.PlanEncoderTest do
         PlanEncoder.encode_expression({:subquery, :in, 1, []})
       end
     end
+
+    test "same DataFrame as join child AND subquery reference resolves with one stable id" do
+      # Regression test for the BUGS_PLAN_5 Stream A "known limitation": when
+      # the same DataFrame appears both as a join child and as a true subquery
+      # reference elsewhere in the plan, the heuristic inline marker used to
+      # suppress the with_relations entry. With stable plan_ids assigned at
+      # DataFrame construction, the carrier id flows to both binding sites,
+      # so the column resolves against the join child AND the subquery
+      # references the same plan via with_relations.
+      shared = SparkEx.DataFrame.new(self(), {:sql, "SELECT id, val FROM t", nil})
+      other = SparkEx.DataFrame.new(self(), {:sql, "SELECT id FROM other", nil})
+
+      shared_id = SparkEx.Internal.PlanIds.id_of(shared.plan)
+
+      # The shared DF appears as a join child …
+      join_plan = {:join, shared.plan, other.plan, nil, :inner, []}
+
+      # … and the same shared.plan is used as a scalar subquery body elsewhere.
+      project_plan =
+        {:project, join_plan,
+         [
+           {:subquery, :scalar, shared.plan, []},
+           {:col, "id", shared.plan}
+         ]}
+
+      {encoded, _} = PlanEncoder.encode(project_plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
+
+      # The subquery references the shared DF — its plan_id matches the
+      # shared DF's stable id (no synthetic remap, no duplicate references).
+      assert [%Relation{common: %{plan_id: ref_id}}] = wr.references
+      assert ref_id == shared_id
+
+      # The join's left child also encodes with the same stable id.
+      assert %Relation{rel_type: {:project, project}} = wr.root
+      assert %Relation{rel_type: {:join, join}} = project.input
+      assert join.left.common.plan_id == shared_id
+
+      # Column reference inside the project resolves to the same id.
+      [_subq_expr, col_expr] = project.expressions
+
+      assert %Expression{
+               expr_type:
+                 {:unresolved_attribute, %Expression.UnresolvedAttribute{plan_id: ^shared_id}}
+             } = col_expr
+    end
+
+    test ":sql leaf args carrying DataFrame-bound Columns resolve via stable id" do
+      # NOTE: PySpark wraps every sql arg through F.lit/1, so cross-DataFrame
+      # column refs in :sql args is a SparkEx-only shape. With stable plan_ids
+      # the column carries its source's id directly — no register-by-traversal-
+      # order is needed, and the encoder emits a with_relations reference for
+      # the source DataFrame.
+      source = SparkEx.DataFrame.new(self(), {:sql, "SELECT a FROM src", nil})
+      source_id = SparkEx.Internal.PlanIds.id_of(source.plan)
+
+      arg_col = SparkEx.DataFrame.col(source, "a")
+      sql_plan = {:sql, "SELECT ? AS x", [arg_col]}
+
+      {encoded, _} = PlanEncoder.encode(sql_plan, 0)
+
+      # Encoder wraps the plan in with_relations because the leaf :sql args
+      # reference a free plan_id (source's stable id, not bound to :sql itself).
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
+
+      assert Enum.any?(wr.references, fn %Relation{common: %{plan_id: id}} ->
+               id == source_id
+             end),
+             "expected source DataFrame to appear in with_relations.references"
+
+      assert %Relation{rel_type: {:sql, sql_rel}} = wr.root
+      [pos_arg] = sql_rel.pos_arguments
+
+      assert %Expression{
+               expr_type:
+                 {:unresolved_attribute, %Expression.UnresolvedAttribute{plan_id: ^source_id}}
+             } = pos_arg
+    end
   end
 
   describe "collect_metrics encoding" do
