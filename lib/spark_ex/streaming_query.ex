@@ -225,39 +225,7 @@ defmodule SparkEx.StreamingQuery do
   def exception(%__MODULE__{} = query) do
     case execute_command(query, {:exception}) do
       {:ok, {:streaming_query, result}} ->
-        case result.result_type do
-          {:exception, ex} ->
-            # `exception_message`, `error_class`, and `stack_trace` are
-            # `proto3_optional` fields. Use HasField semantics (nil ==
-            # unset) so that an explicitly empty exception message is not
-            # treated as "no exception".
-            if is_binary(ex.exception_message) do
-              message = strip_exception_type_prefix(ex.exception_message)
-
-              message =
-                if is_binary(ex.stack_trace) do
-                  message <> "\n\n" <> "JVM stacktrace:\n" <> ex.stack_trace
-                else
-                  message
-                end
-
-              {:ok,
-               %{
-                 message: message,
-                 error_class: ex.error_class,
-                 stack_trace: ex.stack_trace
-               }}
-            else
-              {:ok, nil}
-            end
-
-          # No exception set in response means no exception occurred
-          nil ->
-            {:ok, nil}
-
-          other ->
-            {:error, {:unexpected_result, other}}
-        end
+        decode_exception_result(result.result_type)
 
       {:error, _} = error ->
         error
@@ -265,6 +233,31 @@ defmodule SparkEx.StreamingQuery do
   end
 
   # --- Private ---
+
+  # `exception_message`, `error_class`, and `stack_trace` are
+  # `proto3_optional` fields. Use HasField semantics (nil ==
+  # unset) so that an explicitly empty exception message is not
+  # treated as "no exception".
+  defp decode_exception_result({:exception, ex}) do
+    if is_binary(ex.exception_message) do
+      message = strip_exception_type_prefix(ex.exception_message)
+
+      message =
+        if is_binary(ex.stack_trace) do
+          message <> "\n\n" <> "JVM stacktrace:\n" <> ex.stack_trace
+        else
+          message
+        end
+
+      {:ok, %{message: message, error_class: ex.error_class, stack_trace: ex.stack_trace}}
+    else
+      {:ok, nil}
+    end
+  end
+
+  # No exception set in response means no exception occurred
+  defp decode_exception_result(nil), do: {:ok, nil}
+  defp decode_exception_result(other), do: {:error, {:unexpected_result, other}}
 
   defp execute_command(query, cmd_type, opts \\ []) do
     SparkEx.Session.execute_command_with_result(

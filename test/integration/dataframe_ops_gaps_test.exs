@@ -103,7 +103,7 @@ defmodule SparkEx.Integration.DataFrameOpsGapsTest do
       assert {:ok, sample2} = df |> DataFrame.sample(0.3, seed: 42) |> DataFrame.collect()
 
       assert sample1 == sample2
-      assert length(sample1) > 0
+      assert sample1 != []
       assert length(sample1) < 100
     end
   end

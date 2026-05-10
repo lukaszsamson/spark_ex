@@ -7,22 +7,22 @@ defmodule SparkEx.Connect.ChannelTest do
     test "parses basic URI with host and port" do
       assert {:ok, opts} = Channel.parse_uri("sc://localhost:15002")
       assert opts.host == "localhost"
-      assert opts.port == 15002
+      assert opts.port == 15_002
       assert opts.use_ssl == false
       assert opts.token == nil
       assert opts.extra_params == %{}
     end
 
-    test "uses default port 15002 when not specified" do
+    test "uses default port 15_002 when not specified" do
       assert {:ok, opts} = Channel.parse_uri("sc://spark-host")
       assert opts.host == "spark-host"
-      assert opts.port == 15002
+      assert opts.port == 15_002
     end
 
     test "parses URI with trailing slash" do
       assert {:ok, opts} = Channel.parse_uri("sc://localhost:15002/")
       assert opts.host == "localhost"
-      assert opts.port == 15002
+      assert opts.port == 15_002
     end
 
     test "parses use_ssl parameter" do
@@ -51,7 +51,7 @@ defmodule SparkEx.Connect.ChannelTest do
       uri = "sc://spark-host:15002/;use_ssl=true;token=abc123;custom_key=custom_value"
       assert {:ok, opts} = Channel.parse_uri(uri)
       assert opts.host == "spark-host"
-      assert opts.port == 15002
+      assert opts.port == 15_002
       assert opts.use_ssl == true
       assert opts.token == "abc123"
       assert opts.auth_transport == :auto
@@ -157,13 +157,13 @@ defmodule SparkEx.Connect.ChannelTest do
     test "parses IPv6 URI with port" do
       assert {:ok, opts} = Channel.parse_uri("sc://[::1]:15002")
       assert opts.host == "::1"
-      assert opts.port == 15002
+      assert opts.port == 15_002
     end
 
     test "parses IPv6 URI without port uses default" do
       assert {:ok, opts} = Channel.parse_uri("sc://[::1]")
       assert opts.host == "::1"
-      assert opts.port == 15002
+      assert opts.port == 15_002
     end
   end
 
@@ -171,7 +171,7 @@ defmodule SparkEx.Connect.ChannelTest do
     test "includes custom metadata headers and authorization" do
       opts = %{
         host: "host",
-        port: 15002,
+        port: 15_002,
         use_ssl: false,
         token: "abc",
         auth_transport: :auto,
@@ -188,7 +188,7 @@ defmodule SparkEx.Connect.ChannelTest do
     test "filters reserved metadata keys" do
       opts = %{
         host: "host",
-        port: 15002,
+        port: 15_002,
         use_ssl: false,
         token: "abc",
         auth_transport: :auto,
@@ -215,7 +215,7 @@ defmodule SparkEx.Connect.ChannelTest do
     test "remote token implies secure credentials even when use_ssl is false" do
       opts = %{
         host: "host",
-        port: 15002,
+        port: 15_002,
         use_ssl: false,
         token: "abc",
         auth_transport: :auto,
@@ -229,7 +229,7 @@ defmodule SparkEx.Connect.ChannelTest do
     test "localhost token does not force tls when use_ssl is false" do
       opts = %{
         host: "localhost",
-        port: 15002,
+        port: 15_002,
         use_ssl: false,
         token: "abc",
         auth_transport: :auto,
@@ -255,7 +255,7 @@ defmodule SparkEx.Connect.ChannelTest do
 
       remote_opts = %{
         host: "remote-host",
-        port: 15002,
+        port: 15_002,
         use_ssl: false,
         token: nil,
         auth_transport: :auto,
@@ -282,7 +282,7 @@ defmodule SparkEx.Connect.ChannelTest do
       # invalid SETTINGS value that breaks gun negotiation.
       tiny_opts = %{
         host: "host",
-        port: 15002,
+        port: 15_002,
         use_ssl: false,
         token: nil,
         auth_transport: :auto,
@@ -311,7 +311,7 @@ defmodule SparkEx.Connect.ChannelTest do
     test "normalises metadata keys: lowercases and collapses underscores" do
       opts = %{
         host: "host",
-        port: 15002,
+        port: 15_002,
         use_ssl: false,
         token: nil,
         auth_transport: :auto,
@@ -329,7 +329,7 @@ defmodule SparkEx.Connect.ChannelTest do
     test "drops metadata keys that contain illegal characters after normalisation" do
       opts = %{
         host: "host",
-        port: 15002,
+        port: 15_002,
         use_ssl: false,
         token: nil,
         auth_transport: :auto,
@@ -350,7 +350,7 @@ defmodule SparkEx.Connect.ChannelTest do
     test "token authorization overrides custom authorization header" do
       opts = %{
         host: "host",
-        port: 15002,
+        port: 15_002,
         use_ssl: true,
         token: "abc",
         auth_transport: :metadata,

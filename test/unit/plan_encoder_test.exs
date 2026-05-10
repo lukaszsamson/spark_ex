@@ -853,7 +853,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       {encoded, _} = PlanEncoder.encode(plan, 0)
 
       assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
-      assert length(wr.references) >= 1
+      assert wr.references != []
     end
 
     test "encode_expression rejects subquery plans without pre-wired plan_id" do

@@ -242,18 +242,25 @@ defmodule SparkEx.Observation do
   def decode_literal(%Expression.Literal{
         literal_type: {:specialized_array, %Expression.Literal.SpecializedArray{value_type: vt}}
       }) do
-    case vt do
-      {:bools, %Spark.Connect.Bools{values: values}} -> values || []
-      {:ints, %Spark.Connect.Ints{values: values}} -> values || []
-      {:longs, %Spark.Connect.Longs{values: values}} -> values || []
-      {:floats, %Spark.Connect.Floats{values: values}} -> values || []
-      {:doubles, %Spark.Connect.Doubles{values: values}} -> values || []
-      {:strings, %Spark.Connect.Strings{values: values}} -> values || []
-      _ -> []
-    end
+    decode_specialized_array(vt)
   end
 
   def decode_literal(other), do: other
+
+  defp decode_specialized_array({:bools, %Spark.Connect.Bools{values: values}}), do: values || []
+  defp decode_specialized_array({:ints, %Spark.Connect.Ints{values: values}}), do: values || []
+  defp decode_specialized_array({:longs, %Spark.Connect.Longs{values: values}}), do: values || []
+
+  defp decode_specialized_array({:floats, %Spark.Connect.Floats{values: values}}),
+    do: values || []
+
+  defp decode_specialized_array({:doubles, %Spark.Connect.Doubles{values: values}}),
+    do: values || []
+
+  defp decode_specialized_array({:strings, %Spark.Connect.Strings{values: values}}),
+    do: values || []
+
+  defp decode_specialized_array(_), do: []
 
   defp struct_field_names(%DataType{kind: {:struct, %DataType.Struct{fields: fields}}})
        when is_list(fields) do

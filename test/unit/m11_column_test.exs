@@ -98,22 +98,22 @@ defmodule SparkEx.M11.ColumnTest do
     test "appends additional when branch to existing chain" do
       base =
         Functions.when_(
-          Column.gt(Functions.col("salary"), Functions.lit(65000)),
+          Column.gt(Functions.col("salary"), Functions.lit(65_000)),
           Functions.lit("senior")
         )
 
       result =
         base
-        |> Column.when_(Column.gt(Functions.col("salary"), Functions.lit(55000)), "mid")
+        |> Column.when_(Column.gt(Functions.col("salary"), Functions.lit(55_000)), "mid")
         |> Column.otherwise("junior")
 
       assert %Column{
                expr:
                  {:fn, "when",
                   [
-                    {:fn, ">", [{:col, "salary"}, {:lit, 65000}], false},
+                    {:fn, ">", [{:col, "salary"}, {:lit, 65_000}], false},
                     {:lit, "senior"},
-                    {:fn, ">", [{:col, "salary"}, {:lit, 55000}], false},
+                    {:fn, ">", [{:col, "salary"}, {:lit, 55_000}], false},
                     {:lit, "mid"},
                     {:lit, "junior"}
                   ], false}

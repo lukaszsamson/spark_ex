@@ -183,16 +183,14 @@ defmodule SparkEx.DataFrame.NA do
     cols = normalize_subset(Keyword.get(effective_opts, :subset, nil))
 
     values =
-      cond do
-        is_list(value) ->
-          if length(to_replace) != length(value) do
-            raise ArgumentError, "to_replace and value lists must have the same length"
-          end
+      if is_list(value) do
+        if length(to_replace) != length(value) do
+          raise ArgumentError, "to_replace and value lists must have the same length"
+        end
 
-          value
-
-        true ->
-          List.duplicate(value, length(to_replace))
+        value
+      else
+        List.duplicate(value, length(to_replace))
       end
 
     replacements = Enum.zip(to_replace, values)
@@ -238,13 +236,11 @@ defmodule SparkEx.DataFrame.NA do
       |> Enum.flat_map(fn {old, new} -> [old, new] end)
       |> Enum.reject(&is_nil/1)
 
-    cond do
-      non_nil_values != [] and Enum.all?(non_nil_values, &is_number/1) and
-          Enum.any?(non_nil_values, &is_float/1) ->
-        Enum.map(replacements, fn {old, new} -> {to_float(old), to_float(new)} end)
-
-      true ->
-        replacements
+    if non_nil_values != [] and Enum.all?(non_nil_values, &is_number/1) and
+         Enum.any?(non_nil_values, &is_float/1) do
+      Enum.map(replacements, fn {old, new} -> {to_float(old), to_float(new)} end)
+    else
+      replacements
     end
   end
 

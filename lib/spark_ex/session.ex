@@ -985,84 +985,14 @@ defmodule SparkEx.Session do
       case safe_encode(plan, state.plan_id_counter) do
         {{proto_plan, counter}, nil} ->
           state = %{state | plan_id_counter: counter}
-
           opts = merge_session_tags(opts, state.tags)
 
           case maybe_execute_collect_with_json_projection(state, plan, proto_plan, opts) do
             {:ok, result, state} ->
-              state = %{state | last_execution_metrics: result.execution_metrics}
-
-              SparkEx.Observation.store_observed_metrics(
-                result.observed_metrics,
-                state.session_id
-              )
-
-              {:reply, {:ok, result.rows}, state}
+              reply_collect_result(result, state)
 
             {:no_fallback, state} ->
-              case Client.execute_plan(state, proto_plan, opts) do
-                {:ok, result} ->
-                  state = maybe_update_server_session(state, result.server_side_session_id)
-
-                  {:ok, result, state} =
-                    maybe_retry_collect_with_json_projection(
-                      state,
-                      plan,
-                      proto_plan,
-                      opts,
-                      result
-                    )
-
-                  state = %{state | last_execution_metrics: result.execution_metrics}
-
-                  SparkEx.Observation.store_observed_metrics(
-                    result.observed_metrics,
-                    state.session_id
-                  )
-
-                  {:reply, {:ok, result.rows}, state}
-
-                {:error, {:arrow_decode_failed, _reason}} = error ->
-                  case retry_collect_with_unique_columns(state, plan, proto_plan, opts) do
-                    {:ok, result, state} ->
-                      state = maybe_update_server_session(state, result.server_side_session_id)
-
-                      {result, state} =
-                        maybe_decode_retry_result_rows(state, plan, proto_plan, result)
-
-                      state = %{state | last_execution_metrics: result.execution_metrics}
-
-                      SparkEx.Observation.store_observed_metrics(
-                        result.observed_metrics,
-                        state.session_id
-                      )
-
-                      {:reply, {:ok, result.rows}, state}
-
-                    {:error, state} ->
-                      reply_error(error, state)
-                  end
-
-                {:error, %SparkEx.Error.Remote{} = remote} = error ->
-                  case retry_collect_with_legacy_fallbacks(state, plan, opts, remote) do
-                    {:ok, result, state} ->
-                      state = maybe_update_server_session(state, result.server_side_session_id)
-                      state = %{state | last_execution_metrics: result.execution_metrics}
-
-                      SparkEx.Observation.store_observed_metrics(
-                        result.observed_metrics,
-                        state.session_id
-                      )
-
-                      {:reply, {:ok, result.rows}, state}
-
-                    :error ->
-                      reply_error(error, state)
-                  end
-
-                {:error, _} = error ->
-                  reply_error(error, state)
-              end
+              execute_collect_no_fallback(state, plan, proto_plan, opts)
           end
 
         {nil, error} ->
@@ -1162,18 +1092,7 @@ defmodule SparkEx.Session do
 
           case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
             {:ok, result} ->
-              state = maybe_update_server_session(state, result.server_side_session_id)
-              state = %{state | last_execution_metrics: result.execution_metrics}
-
-              SparkEx.Observation.store_observed_metrics(
-                result.observed_metrics,
-                state.session_id
-              )
-
-              case extract_count(result.rows) do
-                {:ok, count} -> {:reply, {:ok, count}, state}
-                {:error, _} = error -> reply_error(error, state)
-              end
+              reply_execute_count_result(result, state)
 
             {:error, _} = error ->
               reply_error(error, state)
@@ -1673,13 +1592,7 @@ defmodule SparkEx.Session do
 
           case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
             {:ok, result} ->
-              state = maybe_update_server_session(state, result.server_side_session_id)
-              state = %{state | last_execution_metrics: result.execution_metrics}
-
-              case extract_show_string(result.rows) do
-                {:ok, str} -> {:reply, {:ok, str}, state}
-                {:error, _} = error -> reply_error(error, state)
-              end
+              reply_execute_show_result(result, state)
 
             {:error, _} = error ->
               reply_error(error, state)
@@ -1689,6 +1602,77 @@ defmodule SparkEx.Session do
           reply_error(error, state)
       end
     end)
+  end
+
+  defp reply_execute_show_result(result, state) do
+    state = maybe_update_server_session(state, result.server_side_session_id)
+    state = %{state | last_execution_metrics: result.execution_metrics}
+
+    case extract_show_string(result.rows) do
+      {:ok, str} -> {:reply, {:ok, str}, state}
+      {:error, _} = error -> reply_error(error, state)
+    end
+  end
+
+  defp execute_collect_no_fallback(state, plan, proto_plan, opts) do
+    case Client.execute_plan(state, proto_plan, opts) do
+      {:ok, result} ->
+        state = maybe_update_server_session(state, result.server_side_session_id)
+
+        {:ok, result, state} =
+          maybe_retry_collect_with_json_projection(state, plan, proto_plan, opts, result)
+
+        reply_collect_result(result, state)
+
+      {:error, {:arrow_decode_failed, _reason}} = error ->
+        execute_collect_retry_unique_columns(state, plan, proto_plan, opts, error)
+
+      {:error, %SparkEx.Error.Remote{} = remote} = error ->
+        execute_collect_retry_legacy(state, plan, opts, remote, error)
+
+      {:error, _} = error ->
+        reply_error(error, state)
+    end
+  end
+
+  defp execute_collect_retry_unique_columns(state, plan, proto_plan, opts, error) do
+    case retry_collect_with_unique_columns(state, plan, proto_plan, opts) do
+      {:ok, result, state} ->
+        state = maybe_update_server_session(state, result.server_side_session_id)
+        {result, state} = maybe_decode_retry_result_rows(state, plan, proto_plan, result)
+        reply_collect_result(result, state)
+
+      {:error, state} ->
+        reply_error(error, state)
+    end
+  end
+
+  defp execute_collect_retry_legacy(state, plan, opts, remote, error) do
+    case retry_collect_with_legacy_fallbacks(state, plan, opts, remote) do
+      {:ok, result, state} ->
+        state = maybe_update_server_session(state, result.server_side_session_id)
+        reply_collect_result(result, state)
+
+      :error ->
+        reply_error(error, state)
+    end
+  end
+
+  defp reply_collect_result(result, state) do
+    state = %{state | last_execution_metrics: result.execution_metrics}
+    SparkEx.Observation.store_observed_metrics(result.observed_metrics, state.session_id)
+    {:reply, {:ok, result.rows}, state}
+  end
+
+  defp reply_execute_count_result(result, state) do
+    state = maybe_update_server_session(state, result.server_side_session_id)
+    state = %{state | last_execution_metrics: result.execution_metrics}
+    SparkEx.Observation.store_observed_metrics(result.observed_metrics, state.session_id)
+
+    case extract_count(result.rows) do
+      {:ok, count} -> {:reply, {:ok, count}, state}
+      {:error, _} = error -> reply_error(error, state)
+    end
   end
 
   @impl true
@@ -1856,16 +1840,7 @@ defmodule SparkEx.Session do
 
           case unique_schema_column_names(schema) do
             unique_names when is_list(unique_names) ->
-              :telemetry.execute(
-                [:spark_ex, :session, :collect_retry],
-                %{attempt: 1},
-                %{session_id: state.session_id, strategy: :unique_columns_pre}
-              )
-
-              case execute_retry_plan(state, {:to_df, plan, unique_names}, opts) do
-                {:ok, result, state} -> {:ok, result, state}
-                {:error, state} -> {:no_fallback, state}
-              end
+              execute_collect_with_unique_columns_pre(state, plan, unique_names, opts)
 
             _ ->
               maybe_execute_collect_with_json_projection_schema_retry(state, plan, schema, opts)
@@ -1876,6 +1851,19 @@ defmodule SparkEx.Session do
       end
     else
       {:no_fallback, state}
+    end
+  end
+
+  defp execute_collect_with_unique_columns_pre(state, plan, unique_names, opts) do
+    :telemetry.execute(
+      [:spark_ex, :session, :collect_retry],
+      %{attempt: 1},
+      %{session_id: state.session_id, strategy: :unique_columns_pre}
+    )
+
+    case execute_retry_plan(state, {:to_df, plan, unique_names}, opts) do
+      {:ok, result, state} -> {:ok, result, state}
+      {:error, state} -> {:no_fallback, state}
     end
   end
 
@@ -1962,23 +1950,24 @@ defmodule SparkEx.Session do
       %{session_id: state.session_id, strategy: :unique_columns}
     )
 
-    with {:ok, schema, server_side_session_id} <- Client.analyze_schema(state, proto_plan) do
-      state = maybe_update_server_session(state, server_side_session_id)
+    case Client.analyze_schema(state, proto_plan) do
+      {:ok, schema, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
 
-      case unique_schema_column_names(schema) do
-        unique_names when is_list(unique_names) ->
-          case execute_retry_plan(state, {:to_df, plan, unique_names}, opts) do
-            {:ok, result, state} ->
-              {:ok, result, state}
+        case unique_schema_column_names(schema) do
+          unique_names when is_list(unique_names) ->
+            case execute_retry_plan(state, {:to_df, plan, unique_names}, opts) do
+              {:ok, result, state} ->
+                {:ok, result, state}
 
-            {:error, state} ->
-              retry_collect_with_json_projection(state, plan, schema, opts)
-          end
+              {:error, state} ->
+                retry_collect_with_json_projection(state, plan, schema, opts)
+            end
 
-        _ ->
-          retry_collect_with_json_projection(state, plan, schema, opts)
-      end
-    else
+          _ ->
+            retry_collect_with_json_projection(state, plan, schema, opts)
+        end
+
       _ ->
         {:error, state}
     end
@@ -2047,20 +2036,21 @@ defmodule SparkEx.Session do
   end
 
   defp execute_retry_plan(state, retry_plan, opts) do
-    with {{retry_proto_plan, counter}, nil} <- safe_encode(retry_plan, state.plan_id_counter) do
-      state = %{state | plan_id_counter: counter}
+    case safe_encode(retry_plan, state.plan_id_counter) do
+      {{retry_proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
 
-      case Client.execute_plan(state, retry_proto_plan, opts) do
-        {:ok, result} ->
-          {:ok, result, state}
+        case Client.execute_plan(state, retry_proto_plan, opts) do
+          {:ok, result} ->
+            {:ok, result, state}
 
-        {:error, {:arrow_decode_failed, _reason}} ->
-          retry_collect_with_unique_columns(state, retry_plan, retry_proto_plan, opts)
+          {:error, {:arrow_decode_failed, _reason}} ->
+            retry_collect_with_unique_columns(state, retry_plan, retry_proto_plan, opts)
 
-        {:error, _} ->
-          {:error, state}
-      end
-    else
+          {:error, _} ->
+            {:error, state}
+        end
+
       _ ->
         {:error, state}
     end
@@ -2266,25 +2256,14 @@ defmodule SparkEx.Session do
          {:ok, set_specs} <- extract_grouping_set_specs(grouping_sets) do
       set_plans =
         Enum.map(set_specs, fn {set_exprs, set_names} ->
-          grouped_plan = {:aggregate, child_plan, :groupby, set_exprs, agg_exprs}
-          set_name_set = MapSet.new(set_names)
-
-          grouping_projections =
-            Enum.map(grouping_names, fn grouping_name ->
-              expr =
-                if MapSet.member?(set_name_set, grouping_name),
-                  do: {:col, grouping_name},
-                  else: {:lit, nil}
-
-              {:alias, expr, grouping_name}
-            end)
-
-          agg_projections =
-            Enum.map(agg_aliases, fn alias_name ->
-              {:alias, {:col, alias_name}, alias_name}
-            end)
-
-          {:project, grouped_plan, grouping_projections ++ agg_projections}
+          build_grouping_set_plan(
+            child_plan,
+            set_exprs,
+            set_names,
+            grouping_names,
+            agg_exprs,
+            agg_aliases
+          )
         end)
 
       case set_plans do
@@ -2303,6 +2282,35 @@ defmodule SparkEx.Session do
   end
 
   defp rewrite_grouping_sets_collect_plan(_plan), do: :error
+
+  defp build_grouping_set_plan(
+         child_plan,
+         set_exprs,
+         set_names,
+         grouping_names,
+         agg_exprs,
+         agg_aliases
+       ) do
+    grouped_plan = {:aggregate, child_plan, :groupby, set_exprs, agg_exprs}
+    set_name_set = MapSet.new(set_names)
+
+    grouping_projections =
+      Enum.map(grouping_names, fn grouping_name ->
+        expr =
+          if MapSet.member?(set_name_set, grouping_name),
+            do: {:col, grouping_name},
+            else: {:lit, nil}
+
+        {:alias, expr, grouping_name}
+      end)
+
+    agg_projections =
+      Enum.map(agg_aliases, fn alias_name ->
+        {:alias, {:col, alias_name}, alias_name}
+      end)
+
+    {:project, grouped_plan, grouping_projections ++ agg_projections}
+  end
 
   defp rewrite_subquery_collect_plan(plan) do
     {rewritten, changed?} = rewrite_subquery_plan(plan)
@@ -2493,36 +2501,38 @@ defmodule SparkEx.Session do
       referenced_plan = normalize_subquery_reference_plan(referenced_plan)
 
       with {:ok, subquery_sql} <- subquery_plan_to_sql(referenced_plan) do
-        case subquery_type do
-          :scalar ->
-            {:ok, {:expr, "(#{subquery_sql})"}}
-
-          :exists ->
-            {:ok, {:expr, "EXISTS (#{subquery_sql})"}}
-
-          :in ->
-            case Keyword.get(opts, :in_values, []) do
-              [] ->
-                :error
-
-              in_values ->
-                with {:ok, in_values_sql} <- expr_list_to_sql(in_values) do
-                  left_expr_sql =
-                    case in_values_sql do
-                      [single] -> single
-                      many -> "(" <> Enum.join(many, ", ") <> ")"
-                    end
-
-                  {:ok, {:expr, "#{left_expr_sql} IN (#{subquery_sql})"}}
-                end
-            end
-
-          _ ->
-            :error
-        end
+        build_subquery_sql_expression(subquery_type, subquery_sql, opts)
       end
     end
   end
+
+  defp build_subquery_sql_expression(:scalar, subquery_sql, _opts) do
+    {:ok, {:expr, "(#{subquery_sql})"}}
+  end
+
+  defp build_subquery_sql_expression(:exists, subquery_sql, _opts) do
+    {:ok, {:expr, "EXISTS (#{subquery_sql})"}}
+  end
+
+  defp build_subquery_sql_expression(:in, subquery_sql, opts) do
+    case Keyword.get(opts, :in_values, []) do
+      [] ->
+        :error
+
+      in_values ->
+        with {:ok, in_values_sql} <- expr_list_to_sql(in_values) do
+          left_expr_sql =
+            case in_values_sql do
+              [single] -> single
+              many -> "(" <> Enum.join(many, ", ") <> ")"
+            end
+
+          {:ok, {:expr, "#{left_expr_sql} IN (#{subquery_sql})"}}
+        end
+    end
+  end
+
+  defp build_subquery_sql_expression(_subquery_type, _subquery_sql, _opts), do: :error
 
   defp explicit_subquery_reference_plan?(%{plan_id: plan_id, plan: _plan})
        when is_integer(plan_id),
@@ -2647,27 +2657,29 @@ defmodule SparkEx.Session do
 
   defp expr_to_sql({:fn, name, args, is_distinct}) when is_binary(name) and is_list(args) do
     with {:ok, arg_sql} <- expr_list_to_sql(args) do
-      case {name, arg_sql} do
-        {"==", [left, right]} -> {:ok, "(#{left} = #{right})"}
-        {"!=", [left, right]} -> {:ok, "(#{left} <> #{right})"}
-        {"<>", [left, right]} -> {:ok, "(#{left} <> #{right})"}
-        {">", [left, right]} -> {:ok, "(#{left} > #{right})"}
-        {"<", [left, right]} -> {:ok, "(#{left} < #{right})"}
-        {">=", [left, right]} -> {:ok, "(#{left} >= #{right})"}
-        {"<=", [left, right]} -> {:ok, "(#{left} <= #{right})"}
-        {"and", [left, right]} -> {:ok, "(#{left} AND #{right})"}
-        {"or", [left, right]} -> {:ok, "(#{left} OR #{right})"}
-        {"not", [arg]} -> {:ok, "(NOT #{arg})"}
-        {"+", [left, right]} -> {:ok, "(#{left} + #{right})"}
-        {"-", [left, right]} -> {:ok, "(#{left} - #{right})"}
-        {"*", [left, right]} -> {:ok, "(#{left} * #{right})"}
-        {"/", [left, right]} -> {:ok, "(#{left} / #{right})"}
-        _ -> {:ok, sql_function_call(name, arg_sql, is_distinct)}
-      end
+      fn_to_sql(name, arg_sql, is_distinct)
     end
   end
 
   defp expr_to_sql(_expr), do: :error
+
+  defp fn_to_sql("==", [left, right], _), do: {:ok, "(#{left} = #{right})"}
+  defp fn_to_sql("!=", [left, right], _), do: {:ok, "(#{left} <> #{right})"}
+  defp fn_to_sql("<>", [left, right], _), do: {:ok, "(#{left} <> #{right})"}
+  defp fn_to_sql(">", [left, right], _), do: {:ok, "(#{left} > #{right})"}
+  defp fn_to_sql("<", [left, right], _), do: {:ok, "(#{left} < #{right})"}
+  defp fn_to_sql(">=", [left, right], _), do: {:ok, "(#{left} >= #{right})"}
+  defp fn_to_sql("<=", [left, right], _), do: {:ok, "(#{left} <= #{right})"}
+  defp fn_to_sql("and", [left, right], _), do: {:ok, "(#{left} AND #{right})"}
+  defp fn_to_sql("or", [left, right], _), do: {:ok, "(#{left} OR #{right})"}
+  defp fn_to_sql("not", [arg], _), do: {:ok, "(NOT #{arg})"}
+  defp fn_to_sql("+", [left, right], _), do: {:ok, "(#{left} + #{right})"}
+  defp fn_to_sql("-", [left, right], _), do: {:ok, "(#{left} - #{right})"}
+  defp fn_to_sql("*", [left, right], _), do: {:ok, "(#{left} * #{right})"}
+  defp fn_to_sql("/", [left, right], _), do: {:ok, "(#{left} / #{right})"}
+
+  defp fn_to_sql(name, arg_sql, is_distinct),
+    do: {:ok, sql_function_call(name, arg_sql, is_distinct)}
 
   defp sql_function_call(name, args_sql, is_distinct) do
     args_sql =
@@ -2707,11 +2719,10 @@ defmodule SparkEx.Session do
   defp quote_sql_identifier(name) when is_binary(name) do
     name
     |> String.split(".")
-    |> Enum.map(fn part ->
+    |> Enum.map_join(".", fn part ->
       escaped = String.replace(part, "`", "``")
       "`#{escaped}`"
     end)
-    |> Enum.join(".")
   end
 
   defp extract_grouping_set_specs(grouping_sets) when is_list(grouping_sets) do
@@ -3348,15 +3359,13 @@ defmodule SparkEx.Session do
   defp tuple_to_named_map(tuple, names) when is_tuple(tuple) and is_list(names) do
     values = Tuple.to_list(tuple)
 
-    cond do
-      length(values) == length(names) ->
-        names
-        |> Enum.zip(values)
-        |> Map.new()
-
-      true ->
-        raise ArgumentError,
-              "tuple arity #{length(values)} does not match #{length(names)} column names"
+    if length(values) == length(names) do
+      names
+      |> Enum.zip(values)
+      |> Map.new()
+    else
+      raise ArgumentError,
+            "tuple arity #{length(values)} does not match #{length(names)} column names"
     end
   end
 
@@ -3460,21 +3469,25 @@ defmodule SparkEx.Session do
           prepare_local_data(explorer_df, opts)
 
         {:error, reason} ->
-          if normalize_local_relation_arrow?(opts) do
-            with {:ok, normalized_rows} <- normalize_rows_for_schema(data),
-                 {:ok, inferred_schema_ddl} <- infer_schema_ddl_from_rows(normalized_rows),
-                 {:ok, validated_schema} <-
-                   validate_schema_ddl_for_sql_relation(inferred_schema_ddl),
-                 {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
-              query = json_rows_to_sql_query(row_json, validated_schema)
-              {:ok, {:sql_relation, query, nil}}
-            else
-              {:error, _} = error -> error
-            end
-          else
-            {:error, {:data_conversion_error, reason}}
-          end
+          prepare_list_data_inferred_fallback(data, reason, opts)
       end
+    end
+  end
+
+  defp prepare_list_data_inferred_fallback(data, reason, opts) do
+    if normalize_local_relation_arrow?(opts) do
+      with {:ok, normalized_rows} <- normalize_rows_for_schema(data),
+           {:ok, inferred_schema_ddl} <- infer_schema_ddl_from_rows(normalized_rows),
+           {:ok, validated_schema} <-
+             validate_schema_ddl_for_sql_relation(inferred_schema_ddl),
+           {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
+        query = json_rows_to_sql_query(row_json, validated_schema)
+        {:ok, {:sql_relation, query, nil}}
+      else
+        {:error, _} = error -> error
+      end
+    else
+      {:error, {:data_conversion_error, reason}}
     end
   end
 
@@ -3557,15 +3570,12 @@ defmodule SparkEx.Session do
             key_string = to_string(key)
 
             value =
-              if Map.has_key?(non_string_map_fields_map, key_string) do
-                normalize_non_string_map_value(value)
-              else
-                if Map.has_key?(binary_fields_map, key_string) do
-                  normalize_binary_field_value(value)
-                else
-                  normalize_json_value(value)
-                end
-              end
+              normalize_row_field_value(
+                value,
+                key_string,
+                non_string_map_fields_map,
+                binary_fields_map
+              )
 
             {key_string, value}
           end)
@@ -3582,6 +3592,14 @@ defmodule SparkEx.Session do
     |> case do
       {:ok, rows_rev} -> {:ok, Enum.reverse(rows_rev)}
       {:error, _} = error -> error
+    end
+  end
+
+  defp normalize_row_field_value(value, key_string, non_string_map_fields_map, binary_fields_map) do
+    cond do
+      Map.has_key?(non_string_map_fields_map, key_string) -> normalize_non_string_map_value(value)
+      Map.has_key?(binary_fields_map, key_string) -> normalize_binary_field_value(value)
+      true -> normalize_json_value(value)
     end
   end
 
@@ -3653,29 +3671,24 @@ defmodule SparkEx.Session do
     |> split_top_level_schema_fields()
     |> Enum.flat_map(fn field ->
       case parse_schema_field(field) do
-        {name, type} ->
-          case parse_map_type(type) do
-            {:ok, key_type, value_type} ->
-              if String.upcase(String.trim(key_type)) == "STRING" do
-                []
-              else
-                [
-                  %{
-                    name: name,
-                    key_type: String.trim(key_type),
-                    value_type: String.trim(value_type)
-                  }
-                ]
-              end
-
-            :error ->
-              []
-          end
-
-        :error ->
-          []
+        {name, type} -> non_string_map_field_entry(name, type)
+        :error -> []
       end
     end)
+  end
+
+  defp non_string_map_field_entry(name, type) do
+    case parse_map_type(type) do
+      {:ok, key_type, value_type} ->
+        if String.upcase(String.trim(key_type)) == "STRING" do
+          []
+        else
+          [%{name: name, key_type: String.trim(key_type), value_type: String.trim(value_type)}]
+        end
+
+      :error ->
+        []
+    end
   end
 
   defp helper_schema_for_non_string_map_fields(schema_ddl, non_string_map_fields) do
@@ -3686,7 +3699,7 @@ defmodule SparkEx.Session do
 
     schema_ddl
     |> split_top_level_schema_fields()
-    |> Enum.map(fn field ->
+    |> Enum.map_join(", ", fn field ->
       case parse_schema_field(field) do
         {name, _type} ->
           replacement = Map.get(replacements, name)
@@ -3696,7 +3709,6 @@ defmodule SparkEx.Session do
           field
       end
     end)
-    |> Enum.join(", ")
   end
 
   defp projected_select_list_for_non_string_map_fields(schema_ddl, non_string_map_fields) do
@@ -3857,9 +3869,7 @@ defmodule SparkEx.Session do
       end)
 
     {:ok,
-     fields
-     |> Enum.map(fn {name, type} -> "#{name} #{type_to_inferred_ddl(type)}" end)
-     |> Enum.join(", ")}
+     Enum.map_join(fields, ", ", fn {name, type} -> "#{name} #{type_to_inferred_ddl(type)}" end)}
   end
 
   defp collect_ordered_keys(rows) do
@@ -4008,9 +4018,7 @@ defmodule SparkEx.Session do
 
   defp type_to_inferred_ddl({:struct, fields}) do
     inner =
-      fields
-      |> Enum.map(fn {name, type} -> "#{name}: #{type_to_inferred_ddl(type)}" end)
-      |> Enum.join(", ")
+      Enum.map_join(fields, ", ", fn {name, type} -> "#{name}: #{type_to_inferred_ddl(type)}" end)
 
     "STRUCT<#{inner}>"
   end
@@ -4186,9 +4194,7 @@ defmodule SparkEx.Session do
   end
 
   defp json_rows_to_values_clause(json_rows) do
-    json_rows
-    |> Enum.map(fn json -> "('" <> sql_escape_string(json) <> "')" end)
-    |> Enum.join(", ")
+    Enum.map_join(json_rows, ", ", fn json -> "('" <> sql_escape_string(json) <> "')" end)
   end
 
   defp sql_escape_string(value) when is_binary(value) do
@@ -4262,18 +4268,16 @@ defmodule SparkEx.Session do
       when is_integer(chunk_size_bytes) and chunk_size_bytes > 0 do
     total_rows = Explorer.DataFrame.n_rows(df)
 
-    cond do
-      total_rows <= 1 ->
-        case dump_ipc_stream_safe(df) do
-          {:ok, ipc} -> {:ok, [ipc]}
-          {:error, _} = error -> error
-        end
-
-      true ->
-        with {:ok, rows_per_chunk} <-
-               estimate_rows_per_chunk(df, total_rows, chunk_size_bytes) do
-          do_split_dataframe(df, total_rows, rows_per_chunk, 0, [])
-        end
+    if total_rows <= 1 do
+      case dump_ipc_stream_safe(df) do
+        {:ok, ipc} -> {:ok, [ipc]}
+        {:error, _} = error -> error
+      end
+    else
+      with {:ok, rows_per_chunk} <-
+             estimate_rows_per_chunk(df, total_rows, chunk_size_bytes) do
+        do_split_dataframe(df, total_rows, rows_per_chunk, 0, [])
+      end
     end
   end
 

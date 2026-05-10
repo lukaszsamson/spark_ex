@@ -435,20 +435,12 @@ defmodule SparkEx.Connect.Client do
           ResultDecoder.decode_stream(responses, session)
         end)
       else
-        retry_with_backoff(
-          fn ->
-            case Stub.execute_plan(session.channel, request, timeout: timeout) do
-              {:ok, stream} ->
-                ResultDecoder.decode_stream(stream, session)
-
-              {:error, %GRPC.RPCError{} = error} ->
-                {:error, Errors.from_grpc_error(error, session)}
-
-              {:error, reason} ->
-                {:error, reason}
-            end
-          end,
-          opts
+        execute_plan_non_reattachable(
+          session,
+          request,
+          timeout,
+          opts,
+          &ResultDecoder.decode_stream(&1, session)
         )
       end
     end)
@@ -484,20 +476,12 @@ defmodule SparkEx.Connect.Client do
           ResultDecoder.decode_stream_explorer(responses, session, opts)
         end)
       else
-        retry_with_backoff(
-          fn ->
-            case Stub.execute_plan(session.channel, request, timeout: timeout) do
-              {:ok, stream} ->
-                ResultDecoder.decode_stream_explorer(stream, session, opts)
-
-              {:error, %GRPC.RPCError{} = error} ->
-                {:error, Errors.from_grpc_error(error, session)}
-
-              {:error, reason} ->
-                {:error, reason}
-            end
-          end,
-          opts
+        execute_plan_non_reattachable(
+          session,
+          request,
+          timeout,
+          opts,
+          &ResultDecoder.decode_stream_explorer(&1, session, opts)
         )
       end
     end)
@@ -528,20 +512,12 @@ defmodule SparkEx.Connect.Client do
           ResultDecoder.decode_stream_arrow(responses, session)
         end)
       else
-        retry_with_backoff(
-          fn ->
-            case Stub.execute_plan(session.channel, request, timeout: timeout) do
-              {:ok, stream} ->
-                ResultDecoder.decode_stream_arrow(stream, session)
-
-              {:error, %GRPC.RPCError{} = error} ->
-                {:error, Errors.from_grpc_error(error, session)}
-
-              {:error, reason} ->
-                {:error, reason}
-            end
-          end,
-          opts
+        execute_plan_non_reattachable(
+          session,
+          request,
+          timeout,
+          opts,
+          &ResultDecoder.decode_stream_arrow(&1, session)
         )
       end
     end)
@@ -1077,27 +1053,7 @@ defmodule SparkEx.Connect.Client do
                   stream_artifact_requests(session, artifacts, @artifact_chunk_size)
                 )
 
-              case GRPC.Stub.recv(stream) do
-                {:ok, %AddArtifactsResponse{} = resp} ->
-                  case SessionIntegrity.validate_response(resp, session) do
-                    {:ok, _} ->
-                      summaries =
-                        Enum.map(resp.artifacts, fn summary ->
-                          {summary.name, summary.is_crc_successful}
-                        end)
-
-                      {:ok, summaries, resp.server_side_session_id}
-
-                    {:error, _} = error ->
-                      error
-                  end
-
-                {:error, %GRPC.RPCError{} = error} ->
-                  {:error, Errors.from_grpc_error(error, session)}
-
-                {:error, reason} ->
-                  {:error, reason}
-              end
+              handle_add_artifacts_response(GRPC.Stub.recv(stream), session)
             end,
             session: session
           )
@@ -1436,98 +1392,119 @@ defmodule SparkEx.Connect.Client do
 
   defp perform_reattach(state, reason) do
     %{ctx: ctx, attempt: attempt} = state
-    %{policy: policy, operation_id: operation_id, session: session} = ctx
+    %{policy: policy} = ctx
 
     if attempt >= policy.max_retries do
-      error =
-        {:reattach_incomplete_result,
-         %{
-           retries_attempted: attempt,
-           last_response_id: state.last_response_id,
-           responses_received: state.emitted_count
-         }}
-
-      {[{:error, error}], %{state | result_complete?: true}}
+      reattach_max_retries_error(state)
     else
-      {telemetry_metadata, server_retry_delay_ms} =
-        case reason do
-          {:transient_error, %GRPC.RPCError{status: status} = error} ->
-            delay = extract_server_retry_delay(error)
-
-            {%{
-               operation_id: operation_id,
-               last_response_id: state.last_response_id,
-               grpc_status: status,
-               error: error,
-               reason: :transient_error
-             }, delay}
-
-          {:graceful_eof, _} ->
-            {%{
-               operation_id: operation_id,
-               last_response_id: state.last_response_id,
-               reason: :graceful_eof
-             }, nil}
-        end
-
-      :telemetry.execute(
-        [:spark_ex, :reattach, :attempt],
-        %{attempt: attempt + 1},
-        telemetry_metadata
-      )
-
-      sleep_ms = backoff_with_retry_info(attempt, policy, server_retry_delay_ms)
-      policy.sleep_fun.(sleep_ms)
-
-      next_attempt =
-        case reason do
-          {:graceful_eof, _} -> attempt
-          _ -> attempt + 1
-        end
-
-      case ctx.reattach_stream_fun.(state.last_response_id) do
-        {:ok, new_stream} ->
-          new_state = %{state | iter: start_iter(new_stream), attempt: next_attempt}
-          reattach_stream_step(new_state)
-
-        {:error,
-         %SparkEx.Error.Remote{error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED"} =
-             remote} ->
-          {[{:error, remote}], %{state | result_complete?: true}}
-
-        {:error, %SparkEx.Error.Remote{} = remote}
-        when remote.error_class in [
-               "INVALID_HANDLE.OPERATION_NOT_FOUND",
-               "INVALID_HANDLE.SESSION_NOT_FOUND"
-             ] ->
-          if is_nil(state.last_response_id) do
-            case ctx.execute_stream_fun.(ctx.request, ctx.timeout) do
-              {:ok, fresh_stream} ->
-                new_state = %{state | iter: start_iter(fresh_stream), attempt: next_attempt + 1}
-                reattach_stream_step(new_state)
-
-              {:error, %GRPC.RPCError{} = grpc_error} ->
-                {[{:error, Errors.from_grpc_error(grpc_error, session)}],
-                 %{state | result_complete?: true}}
-
-              {:error, err} ->
-                {[{:error, err}], %{state | result_complete?: true}}
-            end
-          else
-            error = %SparkEx.Error.ResponseAlreadyReceived{
-              operation_id: operation_id,
-              last_response_id: state.last_response_id,
-              buffered_count: state.emitted_count,
-              cause: remote
-            }
-
-            {[{:error, error}], %{state | result_complete?: true}}
-          end
-
-        {:error, _} = err ->
-          {[err], %{state | result_complete?: true}}
-      end
+      do_perform_reattach(state, reason)
     end
+  end
+
+  defp reattach_max_retries_error(state) do
+    error =
+      {:reattach_incomplete_result,
+       %{
+         retries_attempted: state.attempt,
+         last_response_id: state.last_response_id,
+         responses_received: state.emitted_count
+       }}
+
+    {[{:error, error}], %{state | result_complete?: true}}
+  end
+
+  defp do_perform_reattach(state, reason) do
+    %{ctx: ctx, attempt: attempt} = state
+    %{policy: policy, operation_id: operation_id, session: session} = ctx
+
+    {telemetry_metadata, server_retry_delay_ms} =
+      reattach_telemetry_info(reason, operation_id, state)
+
+    :telemetry.execute(
+      [:spark_ex, :reattach, :attempt],
+      %{attempt: attempt + 1},
+      telemetry_metadata
+    )
+
+    sleep_ms = backoff_with_retry_info(attempt, policy, server_retry_delay_ms)
+    policy.sleep_fun.(sleep_ms)
+
+    next_attempt = if match?({:graceful_eof, _}, reason), do: attempt, else: attempt + 1
+
+    case ctx.reattach_stream_fun.(state.last_response_id) do
+      {:ok, new_stream} ->
+        new_state = %{state | iter: start_iter(new_stream), attempt: next_attempt}
+        reattach_stream_step(new_state)
+
+      {:error,
+       %SparkEx.Error.Remote{error_class: "INVALID_CURSOR.RESPONSE_ALREADY_RECEIVED"} = remote} ->
+        {[{:error, remote}], %{state | result_complete?: true}}
+
+      {:error, %SparkEx.Error.Remote{} = remote}
+      when remote.error_class in [
+             "INVALID_HANDLE.OPERATION_NOT_FOUND",
+             "INVALID_HANDLE.SESSION_NOT_FOUND"
+           ] ->
+        handle_invalid_handle(state, remote, session, operation_id, next_attempt, ctx)
+
+      {:error, _} = err ->
+        {[err], %{state | result_complete?: true}}
+    end
+  end
+
+  defp reattach_telemetry_info(
+         {:transient_error, %GRPC.RPCError{status: status} = error},
+         operation_id,
+         state
+       ) do
+    delay = extract_server_retry_delay(error)
+
+    metadata = %{
+      operation_id: operation_id,
+      last_response_id: state.last_response_id,
+      grpc_status: status,
+      error: error,
+      reason: :transient_error
+    }
+
+    {metadata, delay}
+  end
+
+  defp reattach_telemetry_info({:graceful_eof, _}, operation_id, state) do
+    metadata = %{
+      operation_id: operation_id,
+      last_response_id: state.last_response_id,
+      reason: :graceful_eof
+    }
+
+    {metadata, nil}
+  end
+
+  defp handle_invalid_handle(state, _remote, session, _operation_id, next_attempt, ctx)
+       when is_nil(state.last_response_id) do
+    case ctx.execute_stream_fun.(ctx.request, ctx.timeout) do
+      {:ok, fresh_stream} ->
+        new_state = %{state | iter: start_iter(fresh_stream), attempt: next_attempt + 1}
+        reattach_stream_step(new_state)
+
+      {:error, %GRPC.RPCError{} = grpc_error} ->
+        {[{:error, Errors.from_grpc_error(grpc_error, session)}],
+         %{state | result_complete?: true}}
+
+      {:error, err} ->
+        {[{:error, err}], %{state | result_complete?: true}}
+    end
+  end
+
+  defp handle_invalid_handle(state, remote, _session, operation_id, _next_attempt, _ctx) do
+    error = %SparkEx.Error.ResponseAlreadyReceived{
+      operation_id: operation_id,
+      last_response_id: state.last_response_id,
+      buffered_count: state.emitted_count,
+      cause: remote
+    }
+
+    {[{:error, error}], %{state | result_complete?: true}}
   end
 
   # Suspends an enumerable so elements can be pulled one at a time via pull_iter/1.
@@ -1978,27 +1955,25 @@ defmodule SparkEx.Connect.Client do
     # server treats a missing handle as success).
     rpc_telemetry_span(metadata, fn ->
       retry_with_backoff(
-        fn ->
-          case do_unary_stub_call(rpc, session.channel, request, grpc_opts) do
-            {:ok, response} ->
-              case SessionIntegrity.validate_response(response, session) do
-                {:ok, _server_session_id} ->
-                  {:ok, response}
-
-                {:error, _reason} = error ->
-                  error
-              end
-
-            {:error, %GRPC.RPCError{} = error} ->
-              {:error, Errors.from_grpc_error(error, session)}
-
-            {:error, reason} ->
-              {:error, reason}
-          end
-        end,
+        fn -> do_unary_rpc_call(rpc, session, request, grpc_opts) end,
         session: session
       )
     end)
+  end
+
+  defp do_unary_rpc_call(rpc, session, request, grpc_opts) do
+    case do_unary_stub_call(rpc, session.channel, request, grpc_opts) do
+      {:ok, response} ->
+        with {:ok, _} <- SessionIntegrity.validate_response(response, session) do
+          {:ok, response}
+        end
+
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, Errors.from_grpc_error(error, session)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp do_unary_stub_call(:analyze_plan, channel, request, opts),
@@ -2021,6 +1996,41 @@ defmodule SparkEx.Connect.Client do
 
   defp do_unary_stub_call(:release_execute, channel, request, opts),
     do: Stub.release_execute(channel, request, opts)
+
+  defp handle_add_artifacts_response({:ok, %AddArtifactsResponse{} = resp}, session) do
+    case SessionIntegrity.validate_response(resp, session) do
+      {:ok, _} ->
+        summaries = Enum.map(resp.artifacts, fn s -> {s.name, s.is_crc_successful} end)
+        {:ok, summaries, resp.server_side_session_id}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp handle_add_artifacts_response({:error, %GRPC.RPCError{} = error}, session),
+    do: {:error, Errors.from_grpc_error(error, session)}
+
+  defp handle_add_artifacts_response({:error, reason}, _session), do: {:error, reason}
+
+  defp stub_execute_plan(session, request, timeout) do
+    case Stub.execute_plan(session.channel, request, timeout: timeout) do
+      {:ok, stream} -> {:ok, stream}
+      {:error, %GRPC.RPCError{} = error} -> {:error, Errors.from_grpc_error(error, session)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp execute_plan_non_reattachable(session, request, timeout, opts, decode_fn) do
+    retry_with_backoff(
+      fn ->
+        with {:ok, stream} <- stub_execute_plan(session, request, timeout) do
+          decode_fn.(stream)
+        end
+      end,
+      opts
+    )
+  end
 
   defp explain_mode_to_proto(:simple), do: {:ok, :EXPLAIN_MODE_SIMPLE}
   defp explain_mode_to_proto(:extended), do: {:ok, :EXPLAIN_MODE_EXTENDED}

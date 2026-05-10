@@ -53,13 +53,11 @@ if Code.ensure_loaded?(Kino.Render) do
     end
 
     defp format_schema(%Spark.Connect.DataType{kind: {:struct, struct}}) do
-      struct.fields
-      |> Enum.map(fn field ->
+      Enum.map_join(struct.fields, "\n", fn field ->
         nullable = if field.nullable, do: " (nullable)", else: ""
         type_str = format_data_type(field.data_type)
         "#{field.name}: #{type_str}#{nullable}"
       end)
-      |> Enum.join("\n")
     end
 
     defp format_schema(other), do: inspect(other, pretty: true)

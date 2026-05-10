@@ -77,19 +77,7 @@ defmodule SparkEx.Connect.ResultDecoder do
         {:ok, %ExecutePlanResponse{} = resp}, {:ok, state} ->
           case check_response_integrity(resp, session, state) do
             {:ok, state} ->
-              state = if resp.schema, do: %{state | schema: resp.schema}, else: state
-
-              observed_metrics =
-                merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
-
-              execution_metrics =
-                merge_execution_metrics(state.execution_metrics, resp.metrics)
-
-              state = %{
-                state
-                | observed_metrics: observed_metrics,
-                  execution_metrics: execution_metrics
-              }
+              state = update_state_with_resp(state, resp)
 
               case dispatch_response_type(resp.response_type, state, session) do
                 {:cont, state} -> {:cont, {:ok, state}}
@@ -101,13 +89,7 @@ defmodule SparkEx.Connect.ResultDecoder do
           end
 
         {:error, %GRPC.RPCError{} = error}, {:ok, _state} ->
-          err =
-            if session do
-              Errors.from_grpc_error(error, session)
-            else
-              error
-            end
-
+          err = if session, do: Errors.from_grpc_error(error, session), else: error
           {:halt, {:error, err}}
 
         {:error, reason}, {:ok, _state} ->
@@ -281,89 +263,63 @@ defmodule SparkEx.Connect.ResultDecoder do
         {:ok, %ExecutePlanResponse{} = resp}, {:ok, state} ->
           case check_response_integrity(resp, session, state) do
             {:ok, state} ->
-              state = if resp.schema, do: %{state | schema: resp.schema}, else: state
-
-              observed_metrics =
-                merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
-
-              execution_metrics =
-                merge_execution_metrics(state.execution_metrics, resp.metrics)
-
-              state = %{
-                state
-                | observed_metrics: observed_metrics,
-                  execution_metrics: execution_metrics
-              }
-
-              case resp.response_type do
-                {:arrow_batch, batch} ->
-                  case handle_arrow_batch_explorer(state, batch) do
-                    {:ok, state} -> {:cont, {:ok, state}}
-                    {:error, _} = error -> {:halt, error}
-                  end
-
-                {:execution_progress, progress} ->
-                  :telemetry.execute(
-                    [:spark_ex, :result, :progress],
-                    %{num_inflight_tasks: progress.num_inflight_tasks || 0},
-                    %{
-                      session_id: session && session.session_id,
-                      stages:
-                        Enum.map(progress.stages || [], fn stage ->
-                          %{
-                            stage_id: stage.stage_id,
-                            num_tasks: stage.num_tasks,
-                            num_completed_tasks: stage.num_completed_tasks,
-                            input_bytes_read: stage.input_bytes_read,
-                            done: stage.done
-                          }
-                        end)
-                    }
-                  )
-
-                  {:cont, {:ok, state}}
-
-                _ ->
-                  {:cont, {:ok, state}}
-              end
+              state = update_state_with_resp(state, resp)
+              dispatch_explorer_response(resp.response_type, state, session)
 
             {:error, _} = error ->
               {:halt, error}
           end
 
         {:error, %GRPC.RPCError{} = error}, {:ok, _state} ->
-          err =
-            if session do
-              Errors.from_grpc_error(error, session)
-            else
-              error
-            end
-
+          err = if session, do: Errors.from_grpc_error(error, session), else: error
           {:halt, {:error, err}}
 
         {:error, reason}, {:ok, _state} ->
           {:halt, {:error, reason}}
       end)
 
-    case result do
-      {:ok, state} ->
-        case state.current_chunked_batch do
-          nil ->
-            finalize_explorer_result(state)
+    finalize_explorer_stream_result(result)
+  end
 
-          current ->
-            {:error,
-             {:incomplete_arrow_batch,
-              %{
-                expected_chunks: current.expected_chunks,
-                received_chunks: length(current.parts)
-              }}}
-        end
+  defp update_state_with_resp(state, resp) do
+    state = if resp.schema, do: %{state | schema: resp.schema}, else: state
 
-      {:error, _} = error ->
-        error
+    observed_metrics = merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
+    execution_metrics = merge_execution_metrics(state.execution_metrics, resp.metrics)
+
+    %{state | observed_metrics: observed_metrics, execution_metrics: execution_metrics}
+  end
+
+  defp dispatch_explorer_response({:arrow_batch, batch}, state, _session) do
+    case handle_arrow_batch_explorer(state, batch) do
+      {:ok, state} -> {:cont, {:ok, state}}
+      {:error, _} = error -> {:halt, error}
     end
   end
+
+  defp dispatch_explorer_response({:execution_progress, progress}, state, session) do
+    emit_progress_telemetry(progress, session)
+    {:cont, {:ok, state}}
+  end
+
+  defp dispatch_explorer_response(_other, state, _session), do: {:cont, {:ok, state}}
+
+  defp finalize_explorer_stream_result({:ok, state}) do
+    case state.current_chunked_batch do
+      nil ->
+        finalize_explorer_result(state)
+
+      current ->
+        {:error,
+         {:incomplete_arrow_batch,
+          %{
+            expected_chunks: current.expected_chunks,
+            received_chunks: length(current.parts)
+          }}}
+    end
+  end
+
+  defp finalize_explorer_stream_result({:error, _} = error), do: error
 
   @doc """
   Decodes an ExecutePlan response stream into an Arrow IPC payload.
@@ -404,44 +360,8 @@ defmodule SparkEx.Connect.ResultDecoder do
         {:ok, %ExecutePlanResponse{} = resp}, {:ok, state} ->
           case check_response_integrity(resp, session, state) do
             {:ok, state} ->
-              state = maybe_set_schema(state, resp.schema)
-
-              observed_metrics =
-                merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
-
-              execution_metrics =
-                merge_execution_metrics(state.execution_metrics, resp.metrics)
-
-              state = %{
-                state
-                | observed_metrics: observed_metrics,
-                  execution_metrics: execution_metrics
-              }
-
-              case resp.response_type do
-                {:arrow_batch, %ExecutePlanResponse.ArrowBatch{} = batch} ->
-                  case handle_arrow_batch_arrow(state, batch) do
-                    {:ok, state} -> {:cont, {:ok, state}}
-                    {:error, _} = error -> {:halt, error}
-                  end
-
-                {:result_complete, _} ->
-                  case state.current_chunked_batch do
-                    nil ->
-                      arrow_state =
-                        state
-                        |> Map.put_new(:arrow_parts, [])
-                        |> Map.put(:current_chunked_batch, nil)
-
-                      {:halt, finalize_arrow_result(arrow_state)}
-
-                    current ->
-                      {:halt, {:error, incomplete_arrow_batch_error(current)}}
-                  end
-
-                _ ->
-                  {:cont, {:ok, state}}
-              end
+              state = update_state_with_resp(state, resp)
+              dispatch_arrow_response(resp.response_type, state, session)
 
             {:error, _} = error ->
               {:halt, error}
@@ -455,28 +375,44 @@ defmodule SparkEx.Connect.ResultDecoder do
           {:halt, {:error, reason}}
       end)
 
-    case result do
-      {:ok, %{arrow: _} = arrow_result} ->
-        {:ok, arrow_result}
+    finalize_arrow_stream_result(result)
+  end
 
-      {:ok, state} ->
-        finalize_state =
-          state
-          |> Map.put_new(:current_chunked_batch, nil)
-          |> Map.put_new(:arrow_parts, [])
-
-        case finalize_state.current_chunked_batch do
-          nil ->
-            finalize_arrow_result(finalize_state)
-
-          current ->
-            {:error, incomplete_arrow_batch_error(current)}
-        end
-
-      {:error, _} = error ->
-        error
+  defp dispatch_arrow_response(
+         {:arrow_batch, %ExecutePlanResponse.ArrowBatch{} = batch},
+         state,
+         _session
+       ) do
+    case handle_arrow_batch_arrow(state, batch) do
+      {:ok, state} -> {:cont, {:ok, state}}
+      {:error, _} = error -> {:halt, error}
     end
   end
+
+  defp dispatch_arrow_response({:result_complete, _}, state, _session) do
+    case state.current_chunked_batch do
+      nil -> {:halt, finalize_arrow_result(state)}
+      current -> {:halt, {:error, incomplete_arrow_batch_error(current)}}
+    end
+  end
+
+  defp dispatch_arrow_response(_other, state, _session), do: {:cont, {:ok, state}}
+
+  defp finalize_arrow_stream_result({:ok, %{arrow: _} = arrow_result}), do: {:ok, arrow_result}
+
+  defp finalize_arrow_stream_result({:ok, state}) do
+    finalize_state =
+      state
+      |> Map.put_new(:current_chunked_batch, nil)
+      |> Map.put_new(:arrow_parts, [])
+
+    case finalize_state.current_chunked_batch do
+      nil -> finalize_arrow_result(finalize_state)
+      current -> {:error, incomplete_arrow_batch_error(current)}
+    end
+  end
+
+  defp finalize_arrow_stream_result({:error, _} = error), do: error
 
   # --- Response-type dispatch (rows mode) ---
   #
@@ -738,36 +674,21 @@ defmodule SparkEx.Connect.ResultDecoder do
     batch_bytes = byte_size(data)
     new_total_bytes = state.total_bytes + batch_bytes
 
-    if exceeds_limit?(new_total_bytes, state.max_bytes) do
-      {:error,
-       %SparkEx.Error.LimitExceeded{
-         limit_type: :bytes,
-         limit_value: state.max_bytes,
-         actual_value: new_total_bytes,
-         remediation:
-           "Use DataFrame.limit/2 to reduce result size, or pass max_bytes: <value> to increase the limit"
-       }}
-    else
-      new_num_records = state.num_records + row_count
+    cond do
+      exceeds_limit?(new_total_bytes, state.max_bytes) ->
+        bytes_limit_error(state.max_bytes, new_total_bytes)
 
-      if exceeds_limit?(new_num_records, state.max_rows) do
-        {:error,
-         %SparkEx.Error.LimitExceeded{
-           limit_type: :rows,
-           limit_value: state.max_rows,
-           actual_value: new_num_records,
-           remediation:
-             "Use DataFrame.limit/2 to reduce result size, or pass max_rows: <value> to increase the limit"
-         }}
-      else
+      exceeds_limit?(state.num_records + row_count, state.max_rows) ->
+        rows_limit_error(state.max_rows, state.num_records + row_count)
+
+      true ->
         {:ok,
          %{
            state
            | arrow_parts: [data | state.arrow_parts],
-             num_records: new_num_records,
+             num_records: state.num_records + row_count,
              total_bytes: new_total_bytes
          }}
-      end
     end
   end
 
@@ -843,12 +764,6 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp nonempty_id(nil), do: nil
   defp nonempty_id(""), do: nil
   defp nonempty_id(id) when is_binary(id), do: id
-
-  defp maybe_set_schema(state, nil), do: state
-
-  defp maybe_set_schema(state, schema) do
-    %{state | schema: schema}
-  end
 
   defp validate_batch_start_offset(_state, %ExecutePlanResponse.ArrowBatch{start_offset: nil}),
     do: :ok
@@ -1022,51 +937,62 @@ defmodule SparkEx.Connect.ResultDecoder do
     new_total_bytes = state.total_bytes + batch_bytes
 
     if exceeds_limit?(new_total_bytes, state.max_bytes) do
-      {:error,
-       %SparkEx.Error.LimitExceeded{
-         limit_type: :bytes,
-         limit_value: state.max_bytes,
-         actual_value: new_total_bytes,
-         remediation:
-           "Use DataFrame.limit/2 to reduce result size, or pass max_bytes: <value> to increase the limit"
-       }}
+      bytes_limit_error(state.max_bytes, new_total_bytes)
     else
       with {:ok, df} <- decode_single_batch_explorer(ipc_data) do
-        num_rows = Explorer.DataFrame.n_rows(df)
-
-        if num_rows != expected_row_count do
-          {:error,
-           {:invalid_arrow_batch_row_count, %{expected: expected_row_count, got: num_rows}}}
-        else
-          new_num_records = state.num_records + num_rows
-
-          if exceeds_limit?(new_num_records, state.max_rows) do
-            {:error,
-             %SparkEx.Error.LimitExceeded{
-               limit_type: :rows,
-               limit_value: state.max_rows,
-               actual_value: new_num_records,
-               remediation:
-                 "Use DataFrame.limit/2 to reduce result size, or pass max_rows: <value> to increase the limit"
-             }}
-          else
-            :telemetry.execute(
-              [:spark_ex, :result, :batch],
-              %{row_count: num_rows, bytes: batch_bytes},
-              %{batch_index: state.num_records, mode: :explorer}
-            )
-
-            {:ok,
-             %{
-               state
-               | dataframes: [df | state.dataframes],
-                 num_records: new_num_records,
-                 total_bytes: new_total_bytes
-             }}
-          end
-        end
+        append_explorer_df(state, df, batch_bytes, new_total_bytes, expected_row_count)
       end
     end
+  end
+
+  defp append_explorer_df(state, df, batch_bytes, new_total_bytes, expected_row_count) do
+    num_rows = Explorer.DataFrame.n_rows(df)
+
+    if num_rows != expected_row_count do
+      {:error, {:invalid_arrow_batch_row_count, %{expected: expected_row_count, got: num_rows}}}
+    else
+      new_num_records = state.num_records + num_rows
+
+      if exceeds_limit?(new_num_records, state.max_rows) do
+        rows_limit_error(state.max_rows, new_num_records)
+      else
+        :telemetry.execute(
+          [:spark_ex, :result, :batch],
+          %{row_count: num_rows, bytes: batch_bytes},
+          %{batch_index: state.num_records, mode: :explorer}
+        )
+
+        {:ok,
+         %{
+           state
+           | dataframes: [df | state.dataframes],
+             num_records: new_num_records,
+             total_bytes: new_total_bytes
+         }}
+      end
+    end
+  end
+
+  defp bytes_limit_error(limit_value, actual_value) do
+    {:error,
+     %SparkEx.Error.LimitExceeded{
+       limit_type: :bytes,
+       limit_value: limit_value,
+       actual_value: actual_value,
+       remediation:
+         "Use DataFrame.limit/2 to reduce result size, or pass max_bytes: <value> to increase the limit"
+     }}
+  end
+
+  defp rows_limit_error(limit_value, actual_value) do
+    {:error,
+     %SparkEx.Error.LimitExceeded{
+       limit_type: :rows,
+       limit_value: limit_value,
+       actual_value: actual_value,
+       remediation:
+         "Use DataFrame.limit/2 to reduce result size, or pass max_rows: <value> to increase the limit"
+     }}
   end
 
   defp decode_single_batch_explorer(ipc_data) do

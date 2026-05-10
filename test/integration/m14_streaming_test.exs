@@ -227,7 +227,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       assert {:ok, queries} = StreamingQueryManager.active(session)
       assert is_list(queries)
-      assert length(queries) >= 1
+      assert queries != []
 
       query_ids = Enum.map(queries, & &1.query_id)
       assert query.query_id in query_ids
@@ -276,7 +276,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
                await_condition(
                  fn -> StreamingQuery.recent_progress(query) end,
                  fn
-                   {:ok, values} -> length(values) > 0
+                   {:ok, values} -> values != []
                    _ -> false
                  end,
                  5000
@@ -322,7 +322,7 @@ defmodule SparkEx.Integration.M14.StreamingTest do
 
       assert {:ok, plan} = StreamingQuery.explain(query)
       assert is_binary(plan)
-      assert String.length(plan) > 0
+      assert plan != ""
 
       :ok = StreamingQuery.stop(query)
     end
@@ -356,13 +356,13 @@ defmodule SparkEx.Integration.M14.StreamingTest do
                    DataFrame.collect(result_df)
                  end,
                  fn
-                   {:ok, values} -> length(values) > 0
+                   {:ok, values} -> values != []
                    _ -> false
                  end,
                  10_000
                )
 
-      assert length(rows) > 0
+      assert rows != []
 
       :ok = StreamingQuery.stop(query)
     end

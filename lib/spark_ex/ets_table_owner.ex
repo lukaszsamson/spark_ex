@@ -30,8 +30,12 @@ defmodule SparkEx.EtsTableOwner do
             # Verify it now exists; if not, re-raise.
             case :ets.whereis(table) do
               :undefined ->
-                raise ArgumentError,
-                      "failed to create ETS table #{inspect(table)} and it does not exist"
+                reraise ArgumentError,
+                        [
+                          message:
+                            "failed to create ETS table #{inspect(table)} and it does not exist"
+                        ],
+                        __STACKTRACE__
 
               _tid ->
                 :ok

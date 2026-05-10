@@ -254,7 +254,7 @@ defmodule SparkEx.Integration.M13.NAStatTest do
       df = SparkEx.range(session, 10)
       desc = DataFrame.describe(df)
       {:ok, rows} = DataFrame.collect(desc)
-      assert length(rows) > 0
+      assert rows != []
     end
   end
 
@@ -322,7 +322,7 @@ defmodule SparkEx.Integration.M13.NAStatTest do
 
       ct = Stat.crosstab(df, "dept", "gender")
       {:ok, rows} = DataFrame.collect(ct)
-      assert length(rows) > 0
+      assert rows != []
       # The crosstab produces a row per dept with columns for each gender value
     end
   end
@@ -341,7 +341,7 @@ defmodule SparkEx.Integration.M13.NAStatTest do
 
       fi = Stat.freq_items(df, ["item"], 0.3)
       {:ok, rows} = DataFrame.collect(fi)
-      assert length(rows) > 0
+      assert rows != []
     end
   end
 
