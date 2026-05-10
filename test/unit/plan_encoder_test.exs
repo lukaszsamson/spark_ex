@@ -1123,6 +1123,96 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert {:unresolved_attribute, sum_attr} = sum_arg.expr_type
       assert sum_attr.plan_id == left_plan_id
     end
+
+    test "with_columns over join preserves side assignment when alias references right first" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+
+      aliases = [
+        {:alias, {:fn, "+", [{:col, "x", right}, {:col, "y", left}], false}, "c"}
+      ]
+
+      {plan, _} = PlanEncoder.encode({:with_columns, join, aliases}, 0)
+
+      assert %Relation{rel_type: {:with_columns, wc}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = wc.input
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      [alias_proto] = wc.aliases
+      assert {:unresolved_function, plus} = alias_proto.expr.expr_type
+      [right_arg, left_arg] = plus.arguments
+      assert {:unresolved_attribute, right_attr} = right_arg.expr_type
+      assert {:unresolved_attribute, left_attr} = left_arg.expr_type
+      assert right_attr.plan_id == right_plan_id
+      assert left_attr.plan_id == left_plan_id
+    end
+
+    test "filter over join preserves side assignment when condition references right first" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+      condition = {:fn, "==", [{:col, "x", right}, {:col, "y", left}], false}
+
+      {plan, _} = PlanEncoder.encode({:filter, join, condition}, 0)
+
+      assert %Relation{rel_type: {:filter, filter}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = filter.input
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, eq}} = filter.condition
+      [right_arg, left_arg] = eq.arguments
+      assert {:unresolved_attribute, right_attr} = right_arg.expr_type
+      assert {:unresolved_attribute, left_attr} = left_arg.expr_type
+      assert right_attr.plan_id == right_plan_id
+      assert left_attr.plan_id == left_plan_id
+    end
+
+    test "sort over join preserves side assignment when sort references right first" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+
+      sort_orders = [
+        {:sort_order, {:col, "x", right}, :asc, :nulls_first},
+        {:sort_order, {:col, "y", left}, :asc, :nulls_first}
+      ]
+
+      {plan, _} = PlanEncoder.encode({:sort, join, sort_orders}, 0)
+
+      assert %Relation{rel_type: {:sort, sort}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = sort.input
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      [right_so, left_so] = sort.order
+      assert {:unresolved_attribute, right_attr} = right_so.child.expr_type
+      assert {:unresolved_attribute, left_attr} = left_so.child.expr_type
+      assert right_attr.plan_id == right_plan_id
+      assert left_attr.plan_id == left_plan_id
+    end
+
+    test "drop over join preserves side assignment when col_exprs reference right first" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+      col_exprs = [{:col, "x", right}, {:col, "y", left}]
+
+      {plan, _} = PlanEncoder.encode({:drop, join, [], col_exprs}, 0)
+
+      assert %Relation{rel_type: {:drop, drop}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = drop.input
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      [right_expr, left_expr] = drop.columns
+      assert {:unresolved_attribute, right_attr} = right_expr.expr_type
+      assert {:unresolved_attribute, left_attr} = left_expr.expr_type
+      assert right_attr.plan_id == right_plan_id
+      assert left_attr.plan_id == left_plan_id
+    end
   end
 
   describe "Stream A — relation expression plan_id remap to encoded child input" do
