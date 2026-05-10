@@ -1292,6 +1292,21 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       [c_arg, _] = gt.arguments
       assert {:unresolved_attribute, c_attr} = c_arg.expr_type
       assert c_attr.plan_id == c_plan_id
+
+      # Inner condition was rewritten in the first pass and re-walked
+      # idempotently via attach_with_relations inside encode_relation
+      # for the {:plan_id, _, _} wrapper. Verify A and B still bind to
+      # the inner join's left/right respectively.
+      assert %Relation{rel_type: {:join, inner}} = outer.left
+      a_plan_id = inner.left.common.plan_id
+      b_plan_id = inner.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, eq}} = inner.join_condition
+      [a_arg, b_arg] = eq.arguments
+      assert {:unresolved_attribute, a_attr} = a_arg.expr_type
+      assert {:unresolved_attribute, b_attr} = b_arg.expr_type
+      assert a_attr.plan_id == a_plan_id
+      assert b_attr.plan_id == b_plan_id
     end
 
     test "drop over join preserves side assignment when col_exprs reference right first" do

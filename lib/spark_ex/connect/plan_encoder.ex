@@ -3012,8 +3012,11 @@ defmodule SparkEx.Connect.PlanEncoder do
   # This is fine for the common case where the same inner-join term is
   # referenced consistently within a single rewrite pass; two structurally
   # equal but separately-wrapped inner joins would miss the cache and get
-  # fresh registrations. Self-join over the same Plan term hits the cache
-  # and collapses both sides to the same synth (matches PySpark's
+  # fresh registrations. **The cache-miss failure mode is benign** — extra
+  # synth allocations and a duplicate inline-plan-id encoding, but no
+  # wrong-results binding (each registration produces a self-consistent
+  # synth/inline-plan-id pair). Self-join over the same Plan term hits the
+  # cache and collapses both sides to the same synth (matches PySpark's
   # per-DataFrame-instance plan_id).
   defp register_inline_plan_id(plan, plan_ids, refs, counter) do
     normalized = normalize_referenced_plan(plan)
