@@ -52,7 +52,7 @@ defmodule SparkEx.DataFrame do
   """
   @spec new(GenServer.server(), plan()) :: t()
   def new(session, plan) do
-    %__MODULE__{session: session, plan: PlanIds.wrap(plan)}
+    %__MODULE__{session: session, plan: PlanIds.wrap(session, plan)}
   end
 
   @doc """
@@ -63,8 +63,8 @@ defmodule SparkEx.DataFrame do
   DataFrame metadata (session, tags) while updating the plan.
   """
   @spec update_plan(t(), plan()) :: t()
-  def update_plan(%__MODULE__{} = df, plan) do
-    %__MODULE__{df | _schema: nil, plan: PlanIds.wrap(plan)}
+  def update_plan(%__MODULE__{session: session} = df, plan) do
+    %__MODULE__{df | _schema: nil, plan: PlanIds.wrap(session, plan)}
   end
 
   # ── Transforms (lazy — return new DataFrame) ──

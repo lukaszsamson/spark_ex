@@ -827,6 +827,12 @@ defmodule SparkEx.Session do
     with {:ok, connect_opts} <- resolve_connect_opts(url_opt, connect_opts_opt),
          {:ok, session_identity} <- resolve_session_identity(opts, connect_opts),
          {:ok, channel} <- Channel.connect(connect_opts, grpc_opts) do
+      # Register a session-scoped plan_id allocator in ETS so DataFrames
+      # constructed in caller processes draw plan_ids from the same
+      # namespace as encoder-allocated synthetic ids; prevents
+      # cross-process collisions (see SparkEx.Internal.PlanIds).
+      SparkEx.Internal.PlanIds.register_session(self())
+
       state = %__MODULE__{
         channel: channel,
         connect_opts: connect_opts,
@@ -1742,14 +1748,22 @@ defmodule SparkEx.Session do
   end
 
   @impl true
-  def terminate(_reason, %{released: true}), do: :ok
-  def terminate(_reason, %{channel: nil}), do: :ok
+  def terminate(_reason, %{released: true}) do
+    SparkEx.Internal.PlanIds.unregister_session(self())
+    :ok
+  end
+
+  def terminate(_reason, %{channel: nil}) do
+    SparkEx.Internal.PlanIds.unregister_session(self())
+    :ok
+  end
 
   def terminate(_reason, %{channel: channel} = state) do
     # Best-effort release before disconnect with timeout to prevent blocking
     task = Task.async(fn -> Client.release_session(state) end)
     Task.yield(task, 5_000) || Task.shutdown(task)
     safe_disconnect(channel)
+    SparkEx.Internal.PlanIds.unregister_session(self())
     :ok
   end
 
@@ -3090,8 +3104,20 @@ defmodule SparkEx.Session do
     safe_encode_with(&CommandEncoder.encode/2, command, counter)
   end
 
-  defp safe_encode_with(encode_fn, plan, counter) do
-    {encode_fn.(plan, counter), nil}
+  defp safe_encode_with(encode_fn, plan, _counter) do
+    # The threaded counter parameter is vestigial: we ignore the
+    # caller-supplied value and instead start the encode pass from the
+    # session's shared `:atomics` allocator. This ensures the encoder's
+    # synthetic plan_ids (with_relations containers, register_inline
+    # wrappers) live in the same id namespace as the stamped DataFrame
+    # plan_ids that arrived in `plan` — which were allocated from the
+    # same atomic in the caller's process. After encoding, the returned
+    # counter is written back so subsequent caller-side wraps and
+    # encoder passes continue past it.
+    start = SparkEx.Internal.PlanIds.peek(self())
+    {result, end_counter} = encode_fn.(plan, start)
+    SparkEx.Internal.PlanIds.set(self(), end_counter)
+    {{result, end_counter}, nil}
   rescue
     e ->
       formatted = Exception.format(:error, e, __STACKTRACE__)

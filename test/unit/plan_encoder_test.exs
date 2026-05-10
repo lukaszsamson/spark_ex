@@ -979,7 +979,63 @@ defmodule SparkEx.Connect.PlanEncoderTest do
                  {:unresolved_attribute, %Expression.UnresolvedAttribute{plan_id: ^source_id}}
              } = pos_arg
     end
+
+    test "cross-process plan_id allocation has no collisions" do
+      # Regression for the cross-process collision uncovered in PR #40
+      # review: DataFrames are typically built in a caller process and
+      # encoded in a Session GenServer process; both must draw from one
+      # plan_id namespace or a stamped DataFrame id can collide with an
+      # encoder-allocated synthetic id (e.g. the with_relations
+      # container). Spark Connect 3.5.x rejects the resulting ambiguous
+      # plan with IndexOutOfBoundsException.
+      #
+      # This test simulates that pattern: a fake "session" process owns
+      # the allocator ETS slot; DataFrames are built in the current
+      # process drawing ids from that session's allocator; the encode
+      # then synchronously walks the plan tree and we assert every
+      # encoded RelationCommon.plan_id is unique.
+      session = spawn_link(fn -> Process.sleep(:infinity) end)
+      SparkEx.Internal.PlanIds.register_session(session)
+      on_exit(fn -> SparkEx.Internal.PlanIds.unregister_session(session) end)
+
+      source = SparkEx.DataFrame.new(session, {:sql, "SELECT id FROM s", nil})
+      sub = SparkEx.DataFrame.scalar(source)
+
+      base = SparkEx.DataFrame.new(session, {:range, 0, 1, 1, nil})
+      df = SparkEx.DataFrame.select(base, [SparkEx.Column.alias_(sub, "v")])
+
+      start = SparkEx.Internal.PlanIds.peek(session)
+      {encoded, _} = PlanEncoder.encode(df.plan, start)
+
+      ids = collect_relation_plan_ids(encoded)
+      assert ids == Enum.uniq(ids), "duplicate plan_ids in encoded plan: #{inspect(ids)}"
+    end
   end
+
+  defp collect_relation_plan_ids(%Plan{op_type: {:root, relation}}),
+    do: collect_relation_plan_ids(relation, [])
+
+  defp collect_relation_plan_ids(_, acc \\ [])
+
+  defp collect_relation_plan_ids(%Relation{} = relation, acc) do
+    acc = if relation.common, do: [relation.common.plan_id | acc], else: acc
+    collect_relation_plan_ids(relation.rel_type, acc)
+  end
+
+  defp collect_relation_plan_ids(%_{} = struct, acc) do
+    struct |> Map.from_struct() |> Map.values() |> Enum.reduce(acc, &collect_relation_plan_ids/2)
+  end
+
+  defp collect_relation_plan_ids(list, acc) when is_list(list),
+    do: Enum.reduce(list, acc, &collect_relation_plan_ids/2)
+
+  defp collect_relation_plan_ids(tuple, acc) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.reduce(acc, &collect_relation_plan_ids/2)
+
+  defp collect_relation_plan_ids(map, acc) when is_map(map),
+    do: map |> Map.values() |> Enum.reduce(acc, &collect_relation_plan_ids/2)
+
+  defp collect_relation_plan_ids(_, acc), do: acc
 
   describe "collect_metrics encoding" do
     test "encodes collect_metrics plan" do

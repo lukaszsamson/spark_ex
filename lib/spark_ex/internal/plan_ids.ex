@@ -1,64 +1,160 @@
 defmodule SparkEx.Internal.PlanIds do
   @moduledoc false
 
-  # Per-process monotonic plan_id allocator.
+  # Plan_id allocator.
   #
   # PySpark assigns a stable plan_id to each LogicalPlan at construction
-  # time. SparkEx mirrors that exactly, including PySpark's read-then-
-  # increment ordering: `_fresh_plan_id` returns the value before bumping
-  # the counter, so the first DataFrame in a session gets `plan_id = 0`.
-  # We use a *per-process* `:counters` ref (stashed in the process
-  # dictionary) instead of a global atomic so plan_ids within one process
-  # — typically one test, one caller of the public API, or one Session
-  # GenServer — are sequential and contiguous starting at 0.
+  # time using a session-scoped counter shared across the public API and
+  # the proto encoder. SparkEx must do the same: when a DataFrame is built
+  # in process A (test process or any caller) and later encoded in process
+  # B (the Session GenServer), both processes have to draw plan_ids from
+  # one shared counter — otherwise the encoded plan can contain two
+  # different relations with the same plan_id (caller's stamped id == an
+  # encoder-allocated synthetic id), which produces an ambiguous /
+  # invalid Spark Connect plan that the Spark 3.5.x analyzer rejects.
   #
-  # Why 0-based matters: Spark Connect 3.5.x's analyzer treats `plan_id =
-  # 0` as a fallback path for some rel_types whose proto field tags
-  # (`UnresolvedTableValuedFunction` field 43, `Transpose`,
-  # `SubqueryExpression` field 21) are absent from 3.5's proto surface.
-  # Starting at any other value sends the same `oneof rel_type` field but
-  # with a non-zero plan_id; the 3.5 analyzer then takes a strict-decode
-  # path that fails with IndexOutOfBoundsException ("Expected Relation to
-  # be set, but is empty") on those features. PySpark's choice of 0-based
-  # IDs preserves the fallback path; we follow.
+  # Architecture:
   #
-  # Cross-process plan composition is supported: a DataFrame built in
-  # process A may have plan_ids that equal ids B later allocates, but the
-  # encoded plan tree is built and serialized in a single process —
-  # collisions only matter when multiple processes feed the same encode
-  # pass, which is not the SparkEx flow (the Session GenServer owns the
-  # encode for its own DataFrames).
+  #   * Each `SparkEx.Session` GenServer creates an `:atomics` counter ref
+  #     in its `init/1` and registers `{pid, ref}` in the
+  #     `:spark_ex_plan_id_counters` ETS table.
+  #   * `DataFrame.new(session, plan)` (running in the caller's process)
+  #     looks up the session's counter ref and increments it directly via
+  #     `:atomics.add_get/3` — one ETS read, no GenServer roundtrip.
+  #   * `PlanEncoder.next_id/1` (running in the session's process during
+  #     encode) continues to use the threaded session-state counter
+  #     int. The session keeps `state.plan_id_counter` synced with the
+  #     atomic before each encode so the encoder draws from the same
+  #     namespace, and writes the encoder's returned counter back into
+  #     both the atomic and the state field afterwards.
+  #   * If `session` is not a registered SparkEx session (test fixtures
+  #     using `self()`, plan_encoder_test plans built standalone), the
+  #     allocator falls back to a per-process `:counters` ref stashed in
+  #     the process dictionary. Single-process tests cannot collide with
+  #     themselves and don't encode across processes, so the fallback is
+  #     safe.
+  #
+  # Counter values are 0-based (matching PySpark's `_fresh_plan_id`):
+  # `:atomics.add_get(ref, 1, 1)` returns the post-increment value, then
+  # we subtract 1 to get the pre-increment id. `:counters` is read-then-
+  # increment in the fallback for the same reason.
 
-  @key __MODULE__
+  @ets_table :spark_ex_plan_id_counters
 
-  @doc """
-  Returns the next plan_id (sequential per calling process, starting at 0).
-
-  PySpark allocates `_nextPlanId = 0` at session creation and `_fresh_plan_id`
-  returns the value *before* incrementing. We mirror that read-then-increment
-  ordering so the first DataFrame in a process gets `plan_id = 0`. Spark
-  Connect 3.5.x's analyzer treats `plan_id = 0` as a fallback path for some
-  rel_types whose proto field tags (e.g. `UnresolvedTableValuedFunction`,
-  `Transpose`) are absent in 3.5's proto surface — starting at 1 instead
-  caused IndexOutOfBoundsException on those tests.
-  """
-  @spec next() :: non_neg_integer()
-  def next do
-    ref = process_counter()
-    id = :counters.get(ref, 1)
-    :counters.add(ref, 1, 1)
-    id
+  @doc false
+  def init do
+    SparkEx.EtsTableOwner.ensure_table!(@ets_table, :set)
+    :ok
   end
 
   @doc """
-  Wraps a raw plan tuple with a stable id.
+  Registers a session-scoped allocator.
 
-  Idempotent: a plan that is already wrapped with `{:plan_id, _, _}` is
-  returned as-is so chained DataFrame ops do not pile wrappers.
+  Called from `SparkEx.Session.init/1`. The returned `:atomics` ref must be
+  kept on session state so it can be read/synced with the encoder counter.
   """
-  @spec wrap(term()) :: {:plan_id, non_neg_integer(), term()}
-  def wrap({:plan_id, _, _} = plan), do: plan
-  def wrap(plan), do: {:plan_id, next(), plan}
+  @spec register_session(pid()) :: :atomics.atomics_ref()
+  def register_session(session_pid) when is_pid(session_pid) do
+    init()
+    ref = :atomics.new(1, [])
+    :ets.insert(@ets_table, {session_pid, ref})
+    ref
+  end
+
+  @doc """
+  Removes a session's allocator (called from `Session.terminate/2`).
+  """
+  @spec unregister_session(pid()) :: :ok
+  def unregister_session(session_pid) when is_pid(session_pid) do
+    case :ets.whereis(@ets_table) do
+      :undefined -> :ok
+      _ -> :ets.delete(@ets_table, session_pid)
+    end
+
+    :ok
+  end
+
+  @doc """
+  Returns the next plan_id for the given session.
+
+  If `session` is a registered SparkEx.Session pid, draws from its shared
+  atomic counter. Otherwise falls back to a per-process counter (safe for
+  test fixtures that never encode cross-process).
+  """
+  @spec next(GenServer.server()) :: non_neg_integer()
+  def next(session) when is_pid(session) do
+    case :ets.whereis(@ets_table) do
+      :undefined ->
+        next_fallback()
+
+      _ ->
+        case :ets.lookup(@ets_table, session) do
+          [{_pid, ref}] -> :atomics.add_get(ref, 1, 1) - 1
+          [] -> next_fallback()
+        end
+    end
+  end
+
+  def next(_session), do: next_fallback()
+
+  @doc """
+  Reads the current counter value (next id that *would* be allocated).
+
+  Used by `SparkEx.Session` to sync `state.plan_id_counter` with the
+  session's atomic before encoding so the encoder's synthetic-id
+  allocations live in the same namespace as stamped DataFrame ids.
+  """
+  @spec peek(pid()) :: non_neg_integer()
+  def peek(session) when is_pid(session) do
+    case :ets.whereis(@ets_table) do
+      :undefined ->
+        peek_process_fallback()
+
+      _ ->
+        case :ets.lookup(@ets_table, session) do
+          [{_pid, ref}] -> :atomics.get(ref, 1)
+          [] -> peek_process_fallback()
+        end
+    end
+  end
+
+  defp peek_process_fallback do
+    case Process.get(__MODULE__) do
+      nil -> 0
+      ref -> :counters.get(ref, 1)
+    end
+  end
+
+  @doc """
+  Forces the session counter to `value` (used after an encode pass to
+  publish the encoder's threaded counter back to the shared allocator,
+  keeping caller-side DataFrame ids and encoder-side synthetic ids in
+  one namespace).
+  """
+  @spec set(pid(), non_neg_integer()) :: :ok
+  def set(session, value) when is_pid(session) and is_integer(value) do
+    case :ets.whereis(@ets_table) do
+      :undefined ->
+        :ok
+
+      _ ->
+        case :ets.lookup(@ets_table, session) do
+          [{_pid, ref}] -> :atomics.put(ref, 1, value)
+          [] -> :ok
+        end
+
+        :ok
+    end
+  end
+
+  @doc """
+  Wraps a raw plan tuple with a stable id allocated from `session`.
+
+  Idempotent: a plan that is already wrapped is returned as-is.
+  """
+  @spec wrap(GenServer.server(), term()) :: {:plan_id, non_neg_integer(), term()}
+  def wrap(_session, {:plan_id, _, _} = plan), do: plan
+  def wrap(session, plan), do: {:plan_id, next(session), plan}
 
   @doc "Extracts the plan_id from a wrapped plan."
   @spec id_of(term()) :: non_neg_integer()
@@ -67,24 +163,26 @@ defmodule SparkEx.Internal.PlanIds do
   def id_of(plan) do
     raise ArgumentError,
           "plan is not stamped with a stable plan_id (refactor expected " <>
-            "every DataFrame plan to be wrapped via SparkEx.Internal.PlanIds.wrap/1). " <>
+            "every DataFrame plan to be wrapped via SparkEx.Internal.PlanIds.wrap/2). " <>
             "Got: #{inspect(plan)}"
   end
 
-  # Application start hook (no-op now — kept for backward compatibility with
-  # callers that were initializing the old persistent_term-based allocator).
-  @doc false
-  def init, do: :ok
+  # ── Private ──
 
-  defp process_counter do
-    case Process.get(@key) do
-      nil ->
-        ref = :counters.new(1, [])
-        Process.put(@key, ref)
-        ref
+  defp next_fallback do
+    ref =
+      case Process.get(__MODULE__) do
+        nil ->
+          ref = :counters.new(1, [])
+          Process.put(__MODULE__, ref)
+          ref
 
-      ref ->
-        ref
-    end
+        ref ->
+          ref
+      end
+
+    id = :counters.get(ref, 1)
+    :counters.add(ref, 1, 1)
+    id
   end
 end
