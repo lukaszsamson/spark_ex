@@ -965,6 +965,120 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
   end
 
+  describe "Stream A — relation expression plan_id remap to encoded child input" do
+    # The encoded child relation gets its own plan_id; expressions captured against
+    # a foreign plan_id (e.g. via attach_with_relations / synthetic ids) must be
+    # rewritten to point at that encoded input. Mirrors the project/filter pattern.
+
+    test "sort remaps sort_order children to encoded input plan_id" do
+      child = {:sql, "SELECT 1 AS id", nil}
+      sort_orders = [{:sort_order, {:col, "id", 999}, :asc, :nulls_first}]
+      {plan, _} = PlanEncoder.encode({:sort, child, sort_orders}, 0)
+      assert %Relation{rel_type: {:sort, sort}} = root_relation(plan)
+      input_plan_id = sort.input.common.plan_id
+
+      ids =
+        Enum.flat_map(sort.order, fn so ->
+          case so.child.expr_type do
+            {:unresolved_attribute, attr} -> [attr.plan_id]
+            _ -> []
+          end
+        end)
+
+      assert Enum.uniq(ids) == [input_plan_id]
+    end
+
+    test "with_columns remaps alias body to encoded input plan_id" do
+      child = {:sql, "SELECT 1 AS id", nil}
+      aliases = [{:alias, {:col, "id", 999}, "id2"}]
+      {plan, _} = PlanEncoder.encode({:with_columns, child, aliases}, 0)
+      assert %Relation{rel_type: {:with_columns, wc}} = root_relation(plan)
+      input_plan_id = wc.input.common.plan_id
+
+      ids =
+        Enum.flat_map(wc.aliases, fn a ->
+          case a.expr.expr_type do
+            {:unresolved_attribute, attr} -> [attr.plan_id]
+            _ -> []
+          end
+        end)
+
+      assert Enum.uniq(ids) == [input_plan_id]
+    end
+
+    test "aggregate remaps grouping and aggregate expressions" do
+      child = {:sql, "SELECT * FROM emp", nil}
+      grouping = [{:col, "dept", 999}]
+      aggs = [{:fn, "sum", [{:col, "salary", 999}], false}]
+      {plan, _} = PlanEncoder.encode({:aggregate, child, :groupby, grouping, aggs}, 0)
+      assert %Relation{rel_type: {:aggregate, agg}} = root_relation(plan)
+      input_plan_id = agg.input.common.plan_id
+
+      grouping_ids =
+        Enum.flat_map(agg.grouping_expressions, fn e ->
+          case e.expr_type do
+            {:unresolved_attribute, attr} -> [attr.plan_id]
+            _ -> []
+          end
+        end)
+
+      agg_ids =
+        Enum.flat_map(agg.aggregate_expressions, fn e ->
+          case e.expr_type do
+            {:unresolved_function, f} ->
+              Enum.flat_map(f.arguments, fn arg ->
+                case arg.expr_type do
+                  {:unresolved_attribute, attr} -> [attr.plan_id]
+                  _ -> []
+                end
+              end)
+
+            _ ->
+              []
+          end
+        end)
+
+      assert Enum.uniq(grouping_ids) == [input_plan_id]
+      assert Enum.uniq(agg_ids) == [input_plan_id]
+    end
+
+    test "drop col_exprs are remapped to encoded input plan_id" do
+      child = {:sql, "SELECT 1 AS id, 2 AS x", nil}
+      {plan, _} = PlanEncoder.encode({:drop, child, [], [{:col, "x", 999}]}, 0)
+      assert %Relation{rel_type: {:drop, drop}} = root_relation(plan)
+      input_plan_id = drop.input.common.plan_id
+
+      ids =
+        Enum.flat_map(drop.columns, fn e ->
+          case e.expr_type do
+            {:unresolved_attribute, attr} -> [attr.plan_id]
+            _ -> []
+          end
+        end)
+
+      assert Enum.uniq(ids) == [input_plan_id]
+    end
+
+    test "repartition_by_expression remaps partition exprs" do
+      child = {:sql, "SELECT 1 AS id", nil}
+
+      {plan, _} =
+        PlanEncoder.encode({:repartition_by_expression, child, [{:col, "id", 999}], 4}, 0)
+
+      assert %Relation{rel_type: {:repartition_by_expression, r}} = root_relation(plan)
+
+      ids =
+        Enum.flat_map(r.partition_exprs, fn e ->
+          case e.expr_type do
+            {:unresolved_attribute, attr} -> [attr.plan_id]
+            _ -> []
+          end
+        end)
+
+      assert Enum.uniq(ids) == [r.input.common.plan_id]
+    end
+  end
+
   defp root_relation(%Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}}),
     do: wr.root
 
