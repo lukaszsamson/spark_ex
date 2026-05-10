@@ -59,21 +59,26 @@ defmodule SparkEx.WriterV2 do
   end
 
   @doc """
-  Sets a single writer option.
+  Sets a single writer option. A `nil` value removes the key (mirroring
+  PySpark's `option(k, None)` behaviour).
   """
   @spec option(t(), String.t(), term()) :: t()
+  def option(%__MODULE__{} = writer, key, nil) when is_binary(key) do
+    %{writer | options: Map.delete(writer.options, key)}
+  end
+
   def option(%__MODULE__{} = writer, key, value)
       when is_binary(key) do
     %{writer | options: Map.put(writer.options, key, normalize_option_value(value))}
   end
 
   @doc """
-  Merges a map of options into the writer.
+  Merges a map of options into the writer. Entries whose value is `nil`
+  remove the key.
   """
   @spec options(t(), map() | keyword()) :: t()
   def options(%__MODULE__{} = writer, opts) when is_map(opts) do
-    merged = Map.merge(writer.options, stringify_options(opts))
-    %{writer | options: merged}
+    merge_pairs(writer, :options, opts)
   end
 
   def options(%__MODULE__{} = writer, opts) when is_list(opts) do
@@ -83,9 +88,13 @@ defmodule SparkEx.WriterV2 do
   end
 
   @doc """
-  Sets a single table property.
+  Sets a single table property. A `nil` value removes the key.
   """
   @spec table_property(t(), String.t(), term()) :: t()
+  def table_property(%__MODULE__{} = writer, key, nil) when is_binary(key) do
+    %{writer | table_properties: Map.delete(writer.table_properties, key)}
+  end
+
   def table_property(%__MODULE__{} = writer, key, value)
       when is_binary(key) do
     %{
@@ -95,18 +104,30 @@ defmodule SparkEx.WriterV2 do
   end
 
   @doc """
-  Merges a map of table properties.
+  Merges a map of table properties. Entries whose value is `nil` remove
+  the key.
   """
   @spec table_properties(t(), map() | keyword()) :: t()
   def table_properties(%__MODULE__{} = writer, props) when is_map(props) do
-    merged = Map.merge(writer.table_properties, stringify_options(props))
-    %{writer | table_properties: merged}
+    merge_pairs(writer, :table_properties, props)
   end
 
   def table_properties(%__MODULE__{} = writer, props) when is_list(props) do
     props
     |> Enum.into(%{})
     |> then(&table_properties(writer, &1))
+  end
+
+  defp merge_pairs(writer, field, opts) do
+    {drops, sets} =
+      Enum.reduce(opts, {[], []}, fn {k, v}, {drops, sets} ->
+        key = to_string(k)
+        if is_nil(v), do: {[key | drops], sets}, else: {drops, [{key, v} | sets]}
+      end)
+
+    current = Map.fetch!(writer, field)
+    new_value = current |> Map.drop(drops) |> Map.merge(stringify_options(Map.new(sets)))
+    Map.put(writer, field, new_value)
   end
 
   @doc """
@@ -179,37 +200,33 @@ defmodule SparkEx.WriterV2 do
   end
 
   @doc """
-  Overwrites rows in the table.
-
-  Without a condition, this maps to `overwritePartitions()` (the
-  no-condition form in Spark's `DataFrameWriterV2`). Pass a `Column`
-  condition to perform a conditional overwrite.
-
-  ## Examples
-
-      # Overwrite all touched partitions (no condition)
-      overwrite(writer)
-
-      # Overwrite with condition
-      overwrite(writer, col("date") |> SparkEx.Column.eq(lit("2024-01-01")))
-  """
-  @spec overwrite(t()) :: :ok | {:error, term()}
-  def overwrite(%__MODULE__{} = writer) do
-    execute_v2(writer, :overwrite_partitions, [])
-  end
-
-  @doc """
   Overwrites rows in the table matching the given condition.
+
+  `condition` must be a `SparkEx.Column` expression or a column name as
+  a string (mirroring PySpark's `overwrite(condition: ColumnOrName)`).
+  Use `overwrite_partitions/2` for the no-condition form that overwrites
+  all partitions touched by the DataFrame.
   """
-  @spec overwrite(t(), SparkEx.Column.t()) :: :ok | {:error, term()}
-  def overwrite(%__MODULE__{} = writer, %SparkEx.Column{} = condition) do
+  @spec overwrite(t(), SparkEx.Column.t() | String.t()) :: :ok | {:error, term()}
+  def overwrite(%__MODULE__{} = writer, condition) do
     overwrite(writer, condition, [])
   end
 
-  @spec overwrite(t(), SparkEx.Column.t(), keyword()) :: :ok | {:error, term()}
+  @spec overwrite(t(), SparkEx.Column.t() | String.t(), keyword()) :: :ok | {:error, term()}
   def overwrite(%__MODULE__{} = writer, %SparkEx.Column{} = condition, opts) when is_list(opts) do
     writer = %{writer | overwrite_condition: condition.expr}
     execute_v2(writer, :overwrite, opts)
+  end
+
+  def overwrite(%__MODULE__{} = writer, name, opts) when is_binary(name) and is_list(opts) do
+    writer = %{writer | overwrite_condition: {:col, name}}
+    execute_v2(writer, :overwrite, opts)
+  end
+
+  def overwrite(%__MODULE__{}, condition, _opts) do
+    raise ArgumentError,
+          "overwrite condition must be a SparkEx.Column or column name string, got: " <>
+            inspect(condition)
   end
 
   @doc """

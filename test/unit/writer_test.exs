@@ -136,7 +136,7 @@ defmodule SparkEx.Unit.WriterTest do
       w = DataFrame.write(df)
       assert %Writer{} = w
       assert w.df == df
-      assert w.mode == :error_if_exists
+      assert w.mode == nil
       assert w.options == %{}
     end
   end

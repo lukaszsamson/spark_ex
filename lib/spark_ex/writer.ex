@@ -36,7 +36,7 @@ defmodule SparkEx.Writer do
   defstruct [
     :df,
     :source,
-    mode: :error_if_exists,
+    mode: nil,
     options: %{},
     sort_by: [],
     partition_by: [],
@@ -47,7 +47,7 @@ defmodule SparkEx.Writer do
   @type t :: %__MODULE__{
           df: SparkEx.DataFrame.t(),
           source: String.t() | nil,
-          mode: atom(),
+          mode: atom() | nil,
           options: %{String.t() => String.t()},
           sort_by: [String.t()],
           partition_by: [String.t()],
@@ -83,7 +83,9 @@ defmodule SparkEx.Writer do
   - `:error_if_exists` — error if data already exists (default)
   - `:ignore` — silently ignore if data already exists
   """
-  @spec mode(t(), atom() | String.t()) :: t()
+  @spec mode(t(), atom() | String.t() | nil) :: t()
+  def mode(%__MODULE__{} = writer, nil), do: writer
+
   def mode(%__MODULE__{} = writer, save_mode) when is_binary(save_mode) do
     atom_mode =
       case String.downcase(save_mode) do
@@ -112,24 +114,43 @@ defmodule SparkEx.Writer do
   Sets a single writer option.
   """
   @spec option(t(), String.t(), term()) :: t()
+  def option(%__MODULE__{} = writer, key, nil) when is_binary(key) do
+    %{writer | options: Map.delete(writer.options, key)}
+  end
+
   def option(%__MODULE__{} = writer, key, value)
       when is_binary(key) do
     %{writer | options: Map.put(writer.options, key, normalize_option_value(value))}
   end
 
   @doc """
-  Merges a map of options into the writer.
+  Merges a map of options into the writer. Entries whose value is `nil`
+  remove the key (mirroring PySpark's `option(k, None)` behaviour).
   """
   @spec options(t(), map() | keyword()) :: t()
   def options(%__MODULE__{} = writer, opts) when is_map(opts) do
-    merged = Map.merge(writer.options, stringify_options(opts))
-    %{writer | options: merged}
+    merge_options(writer, opts)
   end
 
   def options(%__MODULE__{} = writer, opts) when is_list(opts) do
     opts
     |> Enum.into(%{})
     |> then(&options(writer, &1))
+  end
+
+  defp merge_options(writer, opts) do
+    {drop_keys, set_pairs} =
+      Enum.reduce(opts, {[], []}, fn {k, v}, {drops, sets} ->
+        key = to_string(k)
+        if is_nil(v), do: {[key | drops], sets}, else: {drops, [{key, v} | sets]}
+      end)
+
+    new_options =
+      writer.options
+      |> Map.drop(drop_keys)
+      |> Map.merge(stringify_options(Map.new(set_pairs)))
+
+    %{writer | options: new_options}
   end
 
   @doc """
@@ -184,28 +205,35 @@ defmodule SparkEx.Writer do
   @doc """
   Saves the DataFrame to the given path.
 
-  Executes the write operation on the Spark server.
+  Executes the write operation on the Spark server. Mirrors PySpark's
+  `save(path=None, format=None, mode=None, partitionBy=None, **options)`:
+  any of those parameters passed at call time override the corresponding
+  builder state.
   """
   @spec save(t(), String.t() | nil, keyword()) :: :ok | {:error, term()}
   def save(writer, path \\ nil, opts \\ [])
 
   def save(%__MODULE__{} = writer, nil, opts) do
-    write_opts = build_write_opts(writer, [])
-    execute_write(writer.df, write_opts, opts)
+    {effective_writer, exec_opts} = apply_call_time_writer_opts(writer, opts)
+    write_opts = build_write_opts(effective_writer, [])
+    execute_write(effective_writer.df, write_opts, exec_opts)
   end
 
   def save(%__MODULE__{} = writer, path, opts) when is_binary(path) do
-    write_opts = build_write_opts(writer, path: path)
-    execute_write(writer.df, write_opts, opts)
+    {effective_writer, exec_opts} = apply_call_time_writer_opts(writer, opts)
+    write_opts = build_write_opts(effective_writer, path: path)
+    execute_write(effective_writer.df, write_opts, exec_opts)
   end
 
   @doc """
-  Saves the DataFrame as a named table.
+  Saves the DataFrame as a named table. Like `save/3`, accepts call-time
+  `:format`, `:mode`, `:partition_by`, and a top-level option map.
   """
   @spec save_as_table(t(), String.t(), keyword()) :: :ok | {:error, term()}
   def save_as_table(%__MODULE__{} = writer, table_name, opts \\ []) when is_binary(table_name) do
-    write_opts = build_write_opts(writer, table: table_name)
-    execute_write(writer.df, write_opts, opts)
+    {effective_writer, exec_opts} = apply_call_time_writer_opts(writer, opts)
+    write_opts = build_write_opts(effective_writer, table: table_name)
+    execute_write(effective_writer.df, write_opts, exec_opts)
   end
 
   @doc """
@@ -480,6 +508,33 @@ defmodule SparkEx.Writer do
     case Keyword.get(opts, :partition_by) do
       nil -> writer
       cols -> partition_by(writer, cols)
+    end
+  end
+
+  defp apply_call_time_writer_opts(writer, opts) when is_list(opts) do
+    {writer_opts, options_overrides, exec_opts} =
+      split_convenience_opts(opts, [:mode, :format, :partition_by])
+
+    writer =
+      writer
+      |> maybe_set_mode(writer_opts)
+      |> maybe_set_format(writer_opts)
+      |> maybe_set_partition_by(writer_opts)
+
+    writer =
+      if options_overrides == %{} do
+        writer
+      else
+        options(writer, options_overrides)
+      end
+
+    {writer, exec_opts}
+  end
+
+  defp maybe_set_format(writer, opts) do
+    case Keyword.get(opts, :format) do
+      nil -> writer
+      f -> format(writer, f)
     end
   end
 
