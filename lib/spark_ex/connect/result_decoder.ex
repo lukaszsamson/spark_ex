@@ -142,9 +142,20 @@ defmodule SparkEx.Connect.ResultDecoder do
   invariants enforced by `decode_stream/2` are applied here so that a
   drifting `to_local_iterator` consumer sees an integrity error rather
   than silently merging foreign-session rows.
+
+  ## Options
+
+    * `:on_metrics` — 1-arity function invoked once when the stream is
+      finalized with the merged observed/execution metrics map
+      `%{observed_metrics: ..., execution_metrics: ...}`. Mirrors PySpark's
+      `to_local_iterator` Observation behavior: metrics carried on
+      response frames (often only on the trailing frames) are accumulated
+      across the lifetime of the stream and delivered once on close.
   """
-  @spec rows_stream(Enumerable.t(), SparkEx.Session.t() | nil) :: Enumerable.t()
-  def rows_stream(stream, session \\ nil) do
+  @spec rows_stream(Enumerable.t(), SparkEx.Session.t() | nil, keyword()) :: Enumerable.t()
+  def rows_stream(stream, session \\ nil, opts \\ []) do
+    on_metrics = Keyword.get(opts, :on_metrics)
+
     Stream.transform(
       stream,
       fn ->
@@ -152,7 +163,9 @@ defmodule SparkEx.Connect.ResultDecoder do
           current_chunked_batch: nil,
           num_records: 0,
           server_side_session_id: nil,
-          errored: false
+          errored: false,
+          observed_metrics: %{},
+          execution_metrics: %{}
         }
       end,
       fn
@@ -161,8 +174,12 @@ defmodule SparkEx.Connect.ResultDecoder do
 
         {:ok, %ExecutePlanResponse{} = resp}, state ->
           case check_response_integrity(resp, session, state) do
-            {:ok, state} -> handle_rows_stream_response(resp, state)
-            {:error, reason} -> emit_rows_stream_error(reason, state)
+            {:ok, state} ->
+              state = merge_metrics_from_response(state, resp)
+              handle_rows_stream_response(resp, state)
+
+            {:error, reason} ->
+              emit_rows_stream_error(reason, state)
           end
 
         {:error, %GRPC.RPCError{} = error}, state ->
@@ -182,23 +199,40 @@ defmodule SparkEx.Connect.ResultDecoder do
           emit_rows_stream_error(reason, state)
       end,
       fn state ->
-        case state do
-          %{errored: true} ->
-            :ok
-
-          %{current_chunked_batch: nil} ->
-            :ok
-
-          _current ->
-            # Source enumerable terminated mid-chunked batch without a
-            # `result_complete` marker. The truncation has already been
-            # surfaced upstream (or the consumer halted early); we no
-            # longer raise from the after-fun so that the stream remains
-            # safe to enumerate.
-            :ok
-        end
+        deliver_rows_stream_metrics(state, on_metrics)
+        :ok
       end
     )
+  end
+
+  defp merge_metrics_from_response(state, %ExecutePlanResponse{} = resp) do
+    %{
+      state
+      | observed_metrics: merge_observed_metrics(state.observed_metrics, resp.observed_metrics),
+        execution_metrics: merge_execution_metrics(state.execution_metrics, resp.metrics)
+    }
+  end
+
+  defp deliver_rows_stream_metrics(_state, nil), do: :ok
+
+  defp deliver_rows_stream_metrics(%{} = state, on_metrics) when is_function(on_metrics, 1) do
+    payload = %{
+      observed_metrics: state.observed_metrics,
+      execution_metrics: state.execution_metrics
+    }
+
+    try do
+      on_metrics.(payload)
+    catch
+      kind, reason ->
+        require Logger
+
+        Logger.debug(fn ->
+          "rows_stream on_metrics callback raised: #{inspect(kind)} #{inspect(reason)}"
+        end)
+    end
+
+    :ok
   end
 
   defp handle_rows_stream_response(%ExecutePlanResponse{} = resp, state) do

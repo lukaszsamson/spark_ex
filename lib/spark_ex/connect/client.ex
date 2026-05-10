@@ -1583,7 +1583,14 @@ defmodule SparkEx.Connect.Client do
       telemetry_metadata
     )
 
-    sleep_ms = backoff_with_retry_info(attempt, policy, server_retry_delay_ms)
+    # Backoff escalates with the larger of `attempt` and `empty_eof_streak`.
+    # Without this, repeated graceful-EOF reattaches under the streak limit
+    # would all sleep for `initial_backoff_ms` (since `attempt` stays at 0)
+    # and hammer the server at a constant rate. Folding the streak in lets
+    # the backoff grow exponentially during the EOF spin even before any
+    # streak crossing converts an EOF into a real attempt.
+    backoff_attempt = max(attempt, state.empty_eof_streak)
+    sleep_ms = backoff_with_retry_info(backoff_attempt, policy, server_retry_delay_ms)
     policy.sleep_fun.(sleep_ms)
 
     {next_attempt, next_streak} =

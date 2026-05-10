@@ -2011,6 +2011,14 @@ defmodule SparkEx.DataFrame do
           {:error, reason}, acc -> {:halt, {:error, reason, acc}}
         end)
       end
+
+  ## Options
+
+    * `:on_metrics` — 1-arity callback invoked once on stream finalize
+      with the merged observed/execution metrics map
+      `%{observed_metrics: ..., execution_metrics: ...}`. Mirrors the
+      PySpark `to_local_iterator` Observation flow where metric frames
+      arriving alongside the result are surfaced after iteration.
   """
   @spec to_local_iterator(t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
   def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
@@ -2026,7 +2034,9 @@ defmodule SparkEx.DataFrame do
         # the collected-result path, surfacing drift as `{:error, _}`
         # elements instead of merging foreign-session rows silently.
         session_state = fetch_session_state(df.session)
-        {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state)}
+        decoder_opts = Keyword.take(opts, [:on_metrics])
+
+        {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state, decoder_opts)}
 
       {:error, _} = error ->
         error

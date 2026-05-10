@@ -601,6 +601,82 @@ defmodule SparkEx.Connect.ResultDecoderTest do
     end
   end
 
+  describe "rows_stream/3 :on_metrics callback" do
+    alias SparkEx.Test.DecoderFakes
+    alias Spark.Connect.Expression.Literal
+
+    test "delivers merged observed + execution metrics on stream finalize" do
+      lit = fn n -> %Literal{literal_type: {:integer, n}} end
+
+      frames = [
+        DecoderFakes.observed(observed: [{"obs1", [{"k", lit.(7)}]}]),
+        DecoderFakes.metrics(execution: %{{"scan", 1} => %{"rows" => 10}}),
+        DecoderFakes.result_complete()
+      ]
+
+      parent = self()
+      ref = make_ref()
+
+      assert [] =
+               frames
+               |> ResultDecoder.rows_stream(nil, on_metrics: &send(parent, {ref, &1}))
+               |> Enum.to_list()
+
+      assert_receive {^ref, payload}, 200
+      assert %{observed_metrics: observed, execution_metrics: execution} = payload
+      assert Map.has_key?(observed, "obs1")
+      assert %{{"scan", 1} => %{"rows" => 10}} = execution
+    end
+
+    test "fires on_metrics even when stream is empty" do
+      parent = self()
+      ref = make_ref()
+
+      [] |> ResultDecoder.rows_stream(nil, on_metrics: &send(parent, {ref, &1})) |> Enum.to_list()
+
+      assert_receive {^ref, %{observed_metrics: %{}, execution_metrics: %{}}}, 200
+    end
+
+    test "fires on_metrics after a mid-stream error" do
+      parent = self()
+      ref = make_ref()
+
+      frames = [
+        DecoderFakes.observed(observed: [{"obs1", []}]),
+        DecoderFakes.grpc_error(13, "boom")
+      ]
+
+      result =
+        frames
+        |> ResultDecoder.rows_stream(nil, on_metrics: &send(parent, {ref, &1}))
+        |> Enum.to_list()
+
+      assert [{:error, %GRPC.RPCError{status: 13}}] = result
+      assert_receive {^ref, %{observed_metrics: observed}}, 200
+      assert Map.has_key?(observed, "obs1")
+    end
+
+    test "is a no-op when no callback supplied (back-compat with 2-arity)" do
+      frames = [
+        DecoderFakes.observed(observed: [{"obs1", []}]),
+        DecoderFakes.result_complete()
+      ]
+
+      assert [] = frames |> ResultDecoder.rows_stream(nil) |> Enum.to_list()
+    end
+
+    test "swallows callback exceptions so finalize never crashes the stream" do
+      frames = [DecoderFakes.result_complete()]
+
+      raising = fn _ -> raise "callback boom" end
+
+      assert [] =
+               frames
+               |> ResultDecoder.rows_stream(nil, on_metrics: raising)
+               |> Enum.to_list()
+    end
+  end
+
   describe "column_value_transform/1" do
     test "char(n) strips trailing spaces" do
       dt = %Spark.Connect.DataType{
