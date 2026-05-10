@@ -193,6 +193,115 @@ defmodule SparkEx.Connect.ErrorsTest do
     end
   end
 
+  describe "cause-chain walking (walk_cause_chain/2)" do
+    alias Spark.Connect.FetchErrorDetailsResponse
+
+    test "returns a chain entry for each cause in order" do
+      root = %FetchErrorDetailsResponse.Error{
+        message: "query failed",
+        error_type_hierarchy: ["org.apache.spark.SparkException"],
+        stack_trace: [
+          %FetchErrorDetailsResponse.StackTraceElement{
+            declaring_class: "org.apache.spark.Foo",
+            method_name: "run",
+            file_name: "Foo.scala",
+            line_number: 42
+          }
+        ],
+        cause_idx: 1,
+        spark_throwable: nil
+      }
+
+      cause = %FetchErrorDetailsResponse.Error{
+        message: "root cause",
+        error_type_hierarchy: ["java.lang.RuntimeException"],
+        stack_trace: [],
+        cause_idx: nil,
+        spark_throwable: nil
+      }
+
+      errors_tuple = {root, cause}
+      chain = Errors.walk_cause_chain(errors_tuple, 0)
+
+      assert length(chain) == 2
+      [root_entry, cause_entry] = chain
+      assert root_entry.message == "query failed"
+      assert root_entry.error_type_hierarchy == ["org.apache.spark.SparkException"]
+      assert length(root_entry.stack_trace) == 1
+      assert hd(root_entry.stack_trace).declaring_class == "org.apache.spark.Foo"
+      assert cause_entry.message == "root cause"
+      assert cause_entry.error_type_hierarchy == ["java.lang.RuntimeException"]
+    end
+
+    test "cycle in cause_idx chain terminates safely" do
+      err0 = %FetchErrorDetailsResponse.Error{
+        message: "a",
+        error_type_hierarchy: [],
+        stack_trace: [],
+        cause_idx: 1,
+        spark_throwable: nil
+      }
+
+      err1 = %FetchErrorDetailsResponse.Error{
+        message: "b",
+        error_type_hierarchy: [],
+        stack_trace: [],
+        cause_idx: 0,
+        spark_throwable: nil
+      }
+
+      chain = Errors.walk_cause_chain({err0, err1}, 0)
+      assert length(chain) == 2
+    end
+
+    test "out-of-bounds cause_idx terminates without crash" do
+      err = %FetchErrorDetailsResponse.Error{
+        message: "a",
+        error_type_hierarchy: [],
+        stack_trace: [],
+        cause_idx: 99,
+        spark_throwable: nil
+      }
+
+      chain = Errors.walk_cause_chain({err}, 0)
+      assert length(chain) == 1
+    end
+  end
+
+  describe "format_jvm_stacktrace/1" do
+    test "first line includes exception class and message" do
+      chain = [
+        %{
+          message: "query failed",
+          error_type_hierarchy: ["org.apache.spark.SparkException"],
+          stack_trace: [
+            %{declaring_class: "Foo", method_name: "bar", file_name: "Foo.scala", line_number: 1}
+          ]
+        },
+        %{
+          message: "root cause",
+          error_type_hierarchy: ["java.lang.RuntimeException"],
+          stack_trace: []
+        }
+      ]
+
+      result = Errors.format_jvm_stacktrace(chain)
+
+      assert result =~ "org.apache.spark.SparkException: query failed"
+      assert result =~ "\tat Foo.bar(Foo.scala:1)"
+      assert result =~ "Caused by: java.lang.RuntimeException: root cause"
+    end
+
+    test "returns nil when error_type_hierarchy is empty" do
+      chain = [%{message: "x", error_type_hierarchy: [], stack_trace: []}]
+      assert Errors.format_jvm_stacktrace(chain) == nil
+    end
+
+    test "returns nil for empty chain" do
+      assert Errors.format_jvm_stacktrace([]) == nil
+    end
+  end
+
   describe "SparkEx.Error.Remote exception" do
     test "message/1 formats error with class and sql_state" do
       error = %Remote{

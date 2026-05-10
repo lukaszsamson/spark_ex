@@ -342,23 +342,27 @@ defmodule SparkEx.Connect.Errors do
 
   defp enrich_from_response(error, %FetchErrorDetailsResponse{} = resp) do
     case {resp.root_error_idx, resp.errors} do
-      {idx, errors}
-      when is_integer(idx) and is_list(errors) and idx >= 0 and length(errors) > idx ->
+      {idx, errors} when is_integer(idx) and is_list(errors) and idx >= 0 ->
         errors_tuple = List.to_tuple(errors)
-        root = elem(errors_tuple, idx)
-        throwable_fields = extract_throwable_fields(error, root.spark_throwable)
-        cause_chain = walk_cause_chain(errors_tuple, idx)
-        stack_trace_inline = format_jvm_stacktrace(cause_chain) || error.stack_trace_inline
 
-        %{
+        if idx >= tuple_size(errors_tuple) do
           error
-          | server_message: root.message,
-            stacktrace: map_stack_trace(root.stack_trace),
-            error_type_hierarchy: root.error_type_hierarchy || [],
-            cause_chain: cause_chain,
-            stack_trace_inline: stack_trace_inline
-        }
-        |> Map.merge(throwable_fields, fn _k, existing, new -> new || existing end)
+        else
+          root = elem(errors_tuple, idx)
+          throwable_fields = extract_throwable_fields(error, root.spark_throwable)
+          cause_chain = walk_cause_chain(errors_tuple, idx)
+          stack_trace_inline = format_jvm_stacktrace(cause_chain) || error.stack_trace_inline
+
+          %{
+            error
+            | server_message: root.message,
+              stacktrace: map_stack_trace(root.stack_trace),
+              error_type_hierarchy: root.error_type_hierarchy || [],
+              cause_chain: cause_chain,
+              stack_trace_inline: stack_trace_inline
+          }
+          |> Map.merge(throwable_fields, fn _k, existing, new -> new || existing end)
+        end
 
       _ ->
         error
@@ -380,7 +384,8 @@ defmodule SparkEx.Connect.Errors do
   # Walk the cause_idx chain starting from `idx`, mirroring PySpark's
   # `_extract_jvm_stacktrace` recursion. Guards against cycles by tracking
   # visited indices.
-  defp walk_cause_chain(errors_tuple, idx) do
+  @doc false
+  def walk_cause_chain(errors_tuple, idx) do
     walk_cause_chain(errors_tuple, idx, %{})
   end
 
@@ -442,20 +447,19 @@ defmodule SparkEx.Connect.Errors do
     end
   end
 
-  defp format_jvm_stacktrace([]), do: nil
+  @doc false
+  def format_jvm_stacktrace([]), do: nil
 
-  defp format_jvm_stacktrace([root | _] = chain) do
-    head =
-      case root.error_type_hierarchy do
-        [top | _] -> top
-        _ -> nil
-      end
+  @doc false
+  def format_jvm_stacktrace([root | _] = chain) do
+    case root.error_type_hierarchy do
+      [top | _] ->
+        header = "#{top}: #{root.message}"
+        lines = format_chain(chain, [header], true)
+        Enum.join(lines, "\n")
 
-    if head do
-      lines = format_chain(chain, [head], true)
-      Enum.join(lines, "\n")
-    else
-      nil
+      _ ->
+        nil
     end
   end
 
