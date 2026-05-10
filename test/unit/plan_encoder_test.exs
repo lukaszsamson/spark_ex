@@ -1079,6 +1079,50 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert {:unresolved_attribute, a_attr} = arg.expr_type
       assert is_integer(a_attr.plan_id)
     end
+
+    test "join condition preserves left/right assignment when right side is referenced first" do
+      left = {:sql, "SELECT 1 AS id", nil}
+      right = {:sql, "SELECT 2 AS id", nil}
+
+      condition = {:fn, "==", [{:col, "id", right}, {:col, "id", left}], false}
+      {plan, _} = PlanEncoder.encode({:join, left, right, condition, :inner, []}, 0)
+
+      assert %Relation{rel_type: {:join, join}} = root_relation(plan)
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, eq}} = join.join_condition
+      [right_arg, left_arg] = eq.arguments
+      assert {:unresolved_attribute, right_attr} = right_arg.expr_type
+      assert {:unresolved_attribute, left_attr} = left_arg.expr_type
+      assert right_attr.plan_id == right_plan_id
+      assert left_attr.plan_id == left_plan_id
+    end
+
+    test "aggregate over join preserves side assignment when grouping references right first" do
+      left = {:sql, "SELECT 1 AS dept, 2 AS salary", nil}
+      right = {:sql, "SELECT 3 AS dept, 4 AS bonus", nil}
+      join = {:join, left, right, nil, :inner, ["dept"]}
+      grouping = [{:col, "dept", right}]
+      agg = [{:fn, "sum", [{:col, "salary", left}], false}]
+
+      {plan, _} = PlanEncoder.encode({:aggregate, join, :groupby, grouping, agg}, 0)
+
+      assert %Relation{rel_type: {:aggregate, aggregate}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = aggregate.input
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      [grouping_expr] = aggregate.grouping_expressions
+      assert {:unresolved_attribute, grouping_attr} = grouping_expr.expr_type
+      assert grouping_attr.plan_id == right_plan_id
+
+      [agg_expr] = aggregate.aggregate_expressions
+      assert {:unresolved_function, sum} = agg_expr.expr_type
+      [sum_arg] = sum.arguments
+      assert {:unresolved_attribute, sum_attr} = sum_arg.expr_type
+      assert sum_attr.plan_id == left_plan_id
+    end
   end
 
   describe "Stream A — relation expression plan_id remap to encoded child input" do

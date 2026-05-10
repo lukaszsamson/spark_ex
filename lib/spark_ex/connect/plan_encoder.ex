@@ -2148,6 +2148,15 @@ defmodule SparkEx.Connect.PlanEncoder do
        ) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
+    {plan_ids, refs, counter} =
+      maybe_register_join_child_plan_ids(
+        child_plan,
+        [grouping_exprs, agg_exprs],
+        plan_ids,
+        refs,
+        counter
+      )
+
     {grouping_exprs, plan_ids, refs, counter} =
       rewrite_expr_list(grouping_exprs, plan_ids, refs, counter)
 
@@ -2162,6 +2171,15 @@ defmodule SparkEx.Connect.PlanEncoder do
          counter
        ) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {plan_ids, refs, counter} =
+      maybe_register_join_child_plan_ids(
+        child_plan,
+        [grouping_exprs, agg_exprs, [pivot_col]],
+        plan_ids,
+        refs,
+        counter
+      )
 
     {grouping_exprs, plan_ids, refs, counter} =
       rewrite_expr_list(grouping_exprs, plan_ids, refs, counter)
@@ -2180,6 +2198,15 @@ defmodule SparkEx.Connect.PlanEncoder do
          counter
        ) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {plan_ids, refs, counter} =
+      maybe_register_join_child_plan_ids(
+        child_plan,
+        [grouping_exprs, agg_exprs | grouping_sets],
+        plan_ids,
+        refs,
+        counter
+      )
 
     {grouping_exprs, plan_ids, refs, counter} =
       rewrite_expr_list(grouping_exprs, plan_ids, refs, counter)
@@ -2208,6 +2235,13 @@ defmodule SparkEx.Connect.PlanEncoder do
        ) do
     {left_plan, plan_ids, refs, counter} = rewrite_plan(left_plan, plan_ids, refs, counter)
     {right_plan, plan_ids, refs, counter} = rewrite_plan(right_plan, plan_ids, refs, counter)
+
+    {plan_ids, refs, counter} =
+      if contains_referenced_plan?(join_condition) do
+        register_join_child_plan_ids(left_plan, right_plan, plan_ids, refs, counter)
+      else
+        {plan_ids, refs, counter}
+      end
 
     {join_condition, plan_ids, refs, counter} =
       case join_condition do
@@ -2760,6 +2794,67 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp rewrite_expr(value, plan_ids, refs, counter), do: {value, plan_ids, refs, counter}
 
+  defp maybe_register_join_child_plan_ids(
+         {:join, left_plan, right_plan, _join_condition, _join_type, _using_columns},
+         exprs,
+         plan_ids,
+         refs,
+         counter
+       ) do
+    if contains_referenced_plan?(exprs) do
+      register_join_child_plan_ids(left_plan, right_plan, plan_ids, refs, counter)
+    else
+      {plan_ids, refs, counter}
+    end
+  end
+
+  defp maybe_register_join_child_plan_ids(_plan, _exprs, plan_ids, refs, counter),
+    do: {plan_ids, refs, counter}
+
+  defp register_join_child_plan_ids(left_plan, right_plan, plan_ids, refs, counter) do
+    {plan_ids, refs, _left_plan_id, counter} = ensure_plan_id(left_plan, plan_ids, refs, counter)
+
+    {plan_ids, refs, _right_plan_id, counter} =
+      ensure_plan_id(right_plan, plan_ids, refs, counter)
+
+    {plan_ids, refs, counter}
+  end
+
+  defp contains_referenced_plan?(%Column{expr: expr}), do: contains_referenced_plan?(expr)
+
+  defp contains_referenced_plan?({:col, name, plan})
+       when is_binary(name) and not is_integer(plan),
+       do: true
+
+  defp contains_referenced_plan?({:metadata_col, name, plan})
+       when is_binary(name) and not is_integer(plan),
+       do: true
+
+  defp contains_referenced_plan?({:col_regex, name, plan})
+       when is_binary(name) and not is_integer(plan),
+       do: true
+
+  defp contains_referenced_plan?({:star, target, plan})
+       when (is_binary(target) or is_nil(target)) and not is_integer(plan),
+       do: true
+
+  defp contains_referenced_plan?(list) when is_list(list),
+    do: Enum.any?(list, &contains_referenced_plan?/1)
+
+  defp contains_referenced_plan?(tuple) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.any?(&contains_referenced_plan?/1)
+  end
+
+  defp contains_referenced_plan?(map) when is_map(map) do
+    map
+    |> Map.values()
+    |> Enum.any?(&contains_referenced_plan?/1)
+  end
+
+  defp contains_referenced_plan?(_value), do: false
+
   defp ensure_plan_id(referenced_plan, plan_ids, refs, counter) do
     case extract_explicit_referenced_plan_id(referenced_plan) do
       {:ok, plan_id, explicit_plan} ->
@@ -2994,18 +3089,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   # shared state so that foreign plan_id → candidate assignments are consistent
   # across all lists (important when the child has multiple candidate plan_ids,
   # e.g. aggregate over a join). Returns remapped lists in the same order.
-  #
-  # Known limitation (GPT-09, deferred): the mapping from a foreign synthetic id
-  # to a candidate plan_id is resolved by first-encounter order, not by the join
-  # side the original DataFrame belonged to. An aggregate where the first
-  # referenced expression comes from the right join child will have that foreign
-  # id assigned to candidates[0] (the left plan_id). Correct side-stable
-  # assignment requires stable plan_ids at DataFrame.col/2 creation time, which
-  # is the scope of GPT-09.
   defp remap_multiple_expr_lists_plan_ids_to_input(expr_lists, %Relation{} = input_relation) do
     candidate_plan_ids = source_relation_plan_ids(input_relation)
     known_plan_ids = MapSet.new(candidate_plan_ids)
-    state = %{assignments: %{}, next_candidate_idx: 0}
+    state = initial_remap_state(expr_lists, candidate_plan_ids, known_plan_ids)
 
     {remapped_lists, _state} =
       Enum.map_reduce(expr_lists, state, fn exprs, acc ->
@@ -3019,14 +3106,14 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp remap_expr_plan_ids(expr, candidate_plan_ids) do
     known_plan_ids = MapSet.new(candidate_plan_ids)
-    state = %{assignments: %{}, next_candidate_idx: 0}
+    state = initial_remap_state(expr, candidate_plan_ids, known_plan_ids)
     {updated, _state} = do_remap_expr_plan_ids(expr, candidate_plan_ids, known_plan_ids, state)
     updated
   end
 
   defp remap_expr_list_plan_ids(exprs, candidate_plan_ids) do
     known_plan_ids = MapSet.new(candidate_plan_ids)
-    state = %{assignments: %{}, next_candidate_idx: 0}
+    state = initial_remap_state(exprs, candidate_plan_ids, known_plan_ids)
 
     {updated, _state} =
       Enum.map_reduce(exprs, state, fn expr, acc ->
@@ -3035,6 +3122,57 @@ defmodule SparkEx.Connect.PlanEncoder do
 
     updated
   end
+
+  defp initial_remap_state(exprs, candidate_plan_ids, known_plan_ids) do
+    foreign_plan_ids =
+      exprs
+      |> collect_remap_plan_ids(MapSet.new())
+      |> Enum.reject(&MapSet.member?(known_plan_ids, &1))
+      |> Enum.sort()
+
+    assignments =
+      foreign_plan_ids
+      |> Enum.zip(candidate_plan_ids)
+      |> Map.new()
+
+    %{assignments: assignments, next_candidate_idx: map_size(assignments)}
+  end
+
+  defp collect_remap_plan_ids({:col, name, plan_id}, acc)
+       when is_binary(name) and is_integer(plan_id),
+       do: MapSet.put(acc, plan_id)
+
+  defp collect_remap_plan_ids({:metadata_col, name, plan_id}, acc)
+       when is_binary(name) and is_integer(plan_id),
+       do: MapSet.put(acc, plan_id)
+
+  defp collect_remap_plan_ids({:col_regex, name, plan_id}, acc)
+       when is_binary(name) and is_integer(plan_id),
+       do: MapSet.put(acc, plan_id)
+
+  defp collect_remap_plan_ids({:star, target, plan_id}, acc)
+       when (is_binary(target) or is_nil(target)) and is_integer(plan_id),
+       do: MapSet.put(acc, plan_id)
+
+  defp collect_remap_plan_ids(%Column{expr: expr}, acc), do: collect_remap_plan_ids(expr, acc)
+
+  defp collect_remap_plan_ids(list, acc) when is_list(list) do
+    Enum.reduce(list, acc, &collect_remap_plan_ids/2)
+  end
+
+  defp collect_remap_plan_ids(tuple, acc) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.reduce(acc, &collect_remap_plan_ids/2)
+  end
+
+  defp collect_remap_plan_ids(map, acc) when is_map(map) do
+    map
+    |> Map.values()
+    |> Enum.reduce(acc, &collect_remap_plan_ids/2)
+  end
+
+  defp collect_remap_plan_ids(_value, acc), do: acc
 
   defp do_remap_expr_plan_ids({:col, name, plan_id}, candidates, known_ids, state)
        when is_binary(name) and is_integer(plan_id) do
