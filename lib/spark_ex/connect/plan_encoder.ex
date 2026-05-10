@@ -1022,6 +1022,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:lateral_join, left_plan, right_plan, join_condition, join_type}, counter) do
     {plan_id, counter} = next_id(counter)
     {left, counter} = encode_relation(left_plan, counter)
+    right_plan = remap_lateral_right_plan_to_left(right_plan, left)
     {right, counter} = encode_relation(right_plan, counter)
 
     lateral_join =
@@ -2479,6 +2480,7 @@ defmodule SparkEx.Connect.PlanEncoder do
          counter
        ) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {col_expr, plan_ids, refs, counter} = rewrite_expr(col_expr, plan_ids, refs, counter)
     {{:stat_sample_by, child_plan, col_expr, fractions, seed}, plan_ids, refs, counter}
   end
 
@@ -2487,8 +2489,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:catalog, _} = plan, plan_ids, refs, counter),
     do: {plan, plan_ids, refs, counter}
 
-  defp rewrite_plan({:table_valued_function, _name, _args} = plan, plan_ids, refs, counter),
-    do: {plan, plan_ids, refs, counter}
+  defp rewrite_plan({:table_valued_function, name, args}, plan_ids, refs, counter) do
+    {args, plan_ids, refs, counter} = rewrite_expr_list(args, plan_ids, refs, counter)
+    {{:table_valued_function, name, args}, plan_ids, refs, counter}
+  end
 
   defp rewrite_plan(
          {:inline_udtf, _name, _args, _command, _return_type, _eval_type, _python_ver,
@@ -2937,6 +2941,16 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp remap_join_condition_plan_ids(expr, left_plan_id, right_plan_id) do
     remap_expr_plan_ids(expr, [left_plan_id, right_plan_id])
   end
+
+  # Lateral join right side may reference columns from the left plan. After the
+  # rewrite_plan pass those references carry synthetic plan_ids; remap them to
+  # the encoded left relation so the server can resolve them. Currently handles
+  # TVF args, which is the common shape for lateral right sides.
+  defp remap_lateral_right_plan_to_left({:table_valued_function, name, args}, %Relation{} = left) do
+    {:table_valued_function, name, remap_expr_list_plan_ids_to_input(args, left)}
+  end
+
+  defp remap_lateral_right_plan_to_left(plan, _left), do: plan
 
   defp safe_rename_columns_map?(string_renames) do
     sources = Enum.map(string_renames, &elem(&1, 0))

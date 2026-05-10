@@ -1195,6 +1195,65 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
   end
 
+  describe "Stream A — TVF / sample_by / lateral_join expression rewrite" do
+    # GPT-02 / GPT-03 / GPT-24: rewrite_plan must descend into TVF args and
+    # stat_sample_by col_expr; lateral_join must remap right-side TVF args
+    # against the encoded left plan id.
+
+    test "GPT-03: stat_sample_by col_expr with embedded plan resolves to encoded input" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1 AS dept", nil}}
+      bound_col = {:col, "dept", df.plan}
+
+      {plan, _} =
+        PlanEncoder.encode(
+          {:stat_sample_by, df.plan, bound_col, [{"a", 0.1}], 42},
+          0
+        )
+
+      assert %Relation{rel_type: {:sample_by, sample}} = root_relation(plan)
+      input_plan_id = sample.input.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_attribute, attr}} = sample.col
+      assert attr.plan_id == input_plan_id
+    end
+
+    test "GPT-02: table_valued_function args with embedded plan get assigned plan_ids" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      bound_arg = {:col, "arr", df.plan}
+      tvf = {:table_valued_function, "explode", [bound_arg]}
+
+      {plan, _} = PlanEncoder.encode(tvf, 0)
+
+      # Top-level wraps in WithRelations because the embedded plan was hoisted
+      # into refs. The TVF arg's plan_id must be an integer (assigned by rewrite).
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = plan
+
+      assert %Relation{rel_type: {:unresolved_table_valued_function, tvf_proto}} = wr.root
+      [arg] = tvf_proto.arguments
+      assert %Expression{expr_type: {:unresolved_attribute, attr}} = arg
+      assert is_integer(attr.plan_id)
+      # And the with_relations wrapper carries the referenced plan.
+      assert length(wr.references) == 1
+    end
+
+    test "GPT-24: lateral_join with TVF right side remaps args to encoded left plan_id" do
+      left_df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      bound_arg = {:col, "arr", left_df.plan}
+      tvf = {:table_valued_function, "explode", [bound_arg]}
+
+      {plan, _} =
+        PlanEncoder.encode({:lateral_join, left_df.plan, tvf, nil, :inner}, 0)
+
+      assert %Relation{rel_type: {:lateral_join, lj}} = root_relation(plan)
+      left_plan_id = lj.left.common.plan_id
+
+      assert %Relation{rel_type: {:unresolved_table_valued_function, tvf_proto}} = lj.right
+      [arg] = tvf_proto.arguments
+      assert %Expression{expr_type: {:unresolved_attribute, attr}} = arg
+      assert attr.plan_id == left_plan_id
+    end
+  end
+
   defp root_relation(%Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}}),
     do: wr.root
 
