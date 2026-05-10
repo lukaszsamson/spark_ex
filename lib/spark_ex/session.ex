@@ -276,7 +276,7 @@ defmodule SparkEx.Session do
           error
       end
     else
-      GenServer.call(session, {:execute_plan_stream, plan, opts}, call_timeout(opts))
+      GenServer.call(session, {:execute_plan_reattachable_stream, plan, opts}, call_timeout(opts))
     end
   end
 

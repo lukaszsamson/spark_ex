@@ -61,6 +61,11 @@ defmodule SparkEx.DataFrameTest do
 
       {:reply, {:ok, stream}, test_pid}
     end
+
+    @impl true
+    def handle_call({:execute_plan_reattachable_stream, plan, opts}, from, test_pid) do
+      handle_call({:execute_plan_stream, plan, opts}, from, test_pid)
+    end
   end
 
   def build_test_ipc_data do

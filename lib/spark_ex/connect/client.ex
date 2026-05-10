@@ -595,12 +595,15 @@ defmodule SparkEx.Connect.Client do
   def execute_plan_reattachable_response_stream(session, plan, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, :infinity)
     tags = Keyword.get(opts, :tags, [])
-    operation_id = generate_operation_id()
-    request = build_execute_request(session, plan, tags, operation_id, true, opts)
 
-    execute_reattachable(session, request, operation_id, timeout, opts, fn responses ->
-      {:ok, responses}
-    end)
+    with :ok <- validate_tags(tags) do
+      operation_id = generate_operation_id()
+      request = build_execute_request(session, plan, tags, operation_id, true, opts)
+
+      execute_reattachable(session, request, operation_id, timeout, opts, fn responses ->
+        {:ok, responses}
+      end)
+    end
   end
 
   @doc """
