@@ -475,6 +475,58 @@ defmodule SparkEx.Functions do
   defp to_col_or_lit(value) when is_number(value), do: {:lit, value}
 
   @doc """
+  Computes the ceiling of the given value.
+
+  Optionally accepts a `scale` (Column or integer) controlling rounding precision.
+
+  ## Examples
+
+      ceil(col("x"))
+      ceil(col("x"), 2)
+  """
+  @spec ceil(Column.t() | String.t()) :: Column.t()
+  def ceil(col) do
+    %Column{expr: {:fn, "ceil", [to_expr(col)], false}}
+  end
+
+  @spec ceil(Column.t() | String.t(), Column.t() | String.t() | integer()) :: Column.t()
+  def ceil(col, scale) do
+    %Column{expr: {:fn, "ceil", [to_expr(col), to_expr_or_lit_int(scale)], false}}
+  end
+
+  @doc """
+  Alias for `ceil/1`.
+  """
+  @spec ceiling(Column.t() | String.t()) :: Column.t()
+  def ceiling(col), do: ceil(col)
+
+  @doc """
+  Alias for `ceil/2`.
+  """
+  @spec ceiling(Column.t() | String.t(), Column.t() | String.t() | integer()) :: Column.t()
+  def ceiling(col, scale), do: ceil(col, scale)
+
+  @doc """
+  Computes the floor of the given value.
+
+  Optionally accepts a `scale` (Column or integer) controlling rounding precision.
+
+  ## Examples
+
+      floor(col("x"))
+      floor(col("x"), 2)
+  """
+  @spec floor(Column.t() | String.t()) :: Column.t()
+  def floor(col) do
+    %Column{expr: {:fn, "floor", [to_expr(col)], false}}
+  end
+
+  @spec floor(Column.t() | String.t(), Column.t() | String.t() | integer()) :: Column.t()
+  def floor(col, scale) do
+    %Column{expr: {:fn, "floor", [to_expr(col), to_expr_or_lit_int(scale)], false}}
+  end
+
+  @doc """
   Splits string by regex pattern.
 
   ## Examples
@@ -550,6 +602,108 @@ defmodule SparkEx.Functions do
       end
 
     %Column{expr: {:fn, "approx_count_distinct", args, false}}
+  end
+
+  @doc """
+  Approximate percentile of a numeric column.
+
+  `accuracy` defaults to `10000` (matching PySpark) and can be a Column or integer.
+  `percentage` may be a single float, a list of floats, or a Column expression.
+
+  ## Examples
+
+      approx_percentile("value", [0.25, 0.5, 0.75])
+      approx_percentile("value", 0.5, 1_000_000)
+  """
+  @spec approx_percentile(
+          Column.t() | String.t(),
+          Column.t() | float() | [float()],
+          Column.t() | String.t() | integer()
+        ) :: Column.t()
+  def approx_percentile(col, percentage, accuracy \\ 10_000) do
+    pct_expr =
+      case percentage do
+        %Column{expr: e} -> e
+        list when is_list(list) -> {:lit, list}
+        other -> {:lit, other}
+      end
+
+    %Column{
+      expr:
+        {:fn, "approx_percentile", [to_expr(col), pct_expr, to_expr_or_lit_int(accuracy)], false}
+    }
+  end
+
+  @doc """
+  Extracts all matches for the given regex group.
+
+  `idx` is optional; when omitted, the server defaults to group 1.
+
+  ## Examples
+
+      regexp_extract_all(col("s"), "(\\d+)")
+      regexp_extract_all(col("s"), "(\\d+)-(\\d+)", 2)
+  """
+  @spec regexp_extract_all(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
+  def regexp_extract_all(str, regexp) do
+    %Column{
+      expr: {:fn, "regexp_extract_all", [to_expr(str), to_lit_string_or_expr(regexp)], false}
+    }
+  end
+
+  @spec regexp_extract_all(
+          Column.t() | String.t(),
+          Column.t() | String.t(),
+          Column.t() | integer()
+        ) :: Column.t()
+  def regexp_extract_all(str, regexp, idx) do
+    %Column{
+      expr:
+        {:fn, "regexp_extract_all",
+         [to_expr(str), to_lit_string_or_expr(regexp), to_expr_or_lit_int(idx)], false}
+    }
+  end
+
+  @doc """
+  Builds a count-min sketch with the given relative error and confidence.
+
+  `seed` is optional; when omitted, the server picks a random seed (matching PySpark).
+
+  ## Examples
+
+      count_min_sketch(col("id"), 1.0, 0.3)
+      count_min_sketch(col("id"), 1.0, 0.3, 42)
+  """
+  @spec count_min_sketch(
+          Column.t() | String.t(),
+          Column.t() | number(),
+          Column.t() | number()
+        ) :: Column.t()
+  def count_min_sketch(col, eps, confidence) do
+    %Column{
+      expr:
+        {:fn, "count_min_sketch", [to_expr(col), to_expr_or_lit(eps), to_expr_or_lit(confidence)],
+         false}
+    }
+  end
+
+  @spec count_min_sketch(
+          Column.t() | String.t(),
+          Column.t() | number(),
+          Column.t() | number(),
+          Column.t() | String.t() | integer()
+        ) :: Column.t()
+  def count_min_sketch(col, eps, confidence, seed) do
+    %Column{
+      expr:
+        {:fn, "count_min_sketch",
+         [
+           to_expr(col),
+           to_expr_or_lit(eps),
+           to_expr_or_lit(confidence),
+           to_expr_or_lit_int(seed)
+         ], false}
+    }
   end
 
   @doc """
@@ -636,13 +790,14 @@ defmodule SparkEx.Functions do
   """
   @spec sentences(Column.t() | String.t(), String.t() | nil, String.t() | nil) :: Column.t()
   def sentences(col, language \\ nil, country \\ nil) do
-    args =
-      case {language, country} do
-        {nil, nil} -> [to_expr(col)]
-        {l, c} -> [to_expr(col), lit_expr(l), lit_expr(c)]
-      end
+    # PySpark sends 3 args, defaulting language/country to lit("") when nil so the
+    # locale-omitted overload is used server-side. Always emit 3 args here too.
+    lang = if is_nil(language), do: "", else: language
+    cty = if is_nil(country), do: "", else: country
 
-    %Column{expr: {:fn, "sentences", args, false}}
+    %Column{
+      expr: {:fn, "sentences", [to_expr(col), lit_expr(lang), lit_expr(cty)], false}
+    }
   end
 
   @doc """
@@ -1042,7 +1197,8 @@ defmodule SparkEx.Functions do
   end
 
   @doc """
-  Alias for `aggregate/3`.
+  Same shape as `aggregate/3`, but sends the SQL function name `reduce` on the wire,
+  matching PySpark's `functions.reduce`.
   """
   @spec reduce(
           Column.t() | String.t(),
@@ -1050,7 +1206,33 @@ defmodule SparkEx.Functions do
           (Column.t(), Column.t() -> Column.t()),
           (Column.t() -> Column.t()) | nil
         ) :: Column.t()
-  def reduce(col, zero, func, finish \\ nil), do: aggregate(col, zero, func, finish)
+  def reduce(col, zero, func, finish \\ nil)
+
+  def reduce(col, zero, func, nil) when is_function(func, 2) do
+    col_expr = to_expr(col)
+    zero_expr = to_expr_or_lit(zero)
+    {body, vars} = build_lambda(func, ["acc", "x"])
+
+    %Column{expr: {:fn, "reduce", [col_expr, zero_expr, {:lambda, body, vars}], false}}
+  end
+
+  def reduce(col, zero, func, finish) when is_function(func, 2) and is_function(finish, 1) do
+    col_expr = to_expr(col)
+    zero_expr = to_expr_or_lit(zero)
+    {merge_body, merge_vars} = build_lambda(func, ["acc", "x"])
+    {finish_body, finish_vars} = build_lambda(finish, ["acc"])
+
+    %Column{
+      expr:
+        {:fn, "reduce",
+         [
+           col_expr,
+           zero_expr,
+           {:lambda, merge_body, merge_vars},
+           {:lambda, finish_body, finish_vars}
+         ], false}
+    }
+  end
 
   @doc """
   Filters entries in a map column using a predicate on key and value.
@@ -1155,15 +1337,22 @@ defmodule SparkEx.Functions do
   @spec window(Column.t() | String.t(), String.t(), String.t() | nil, String.t() | nil) ::
           Column.t()
   def window(time_col, window_duration, slide_duration \\ nil, start_time \\ nil) do
+    check_window_duration!(window_duration, "window_duration")
+
     args =
       cond do
         slide_duration != nil and start_time != nil ->
+          check_window_duration!(slide_duration, "slide_duration")
+          check_window_duration!(start_time, "start_time")
           [to_expr(time_col), {:lit, window_duration}, {:lit, slide_duration}, {:lit, start_time}]
 
         slide_duration != nil ->
+          check_window_duration!(slide_duration, "slide_duration")
           [to_expr(time_col), {:lit, window_duration}, {:lit, slide_duration}]
 
         start_time != nil ->
+          check_window_duration!(start_time, "start_time")
+
           [
             to_expr(time_col),
             {:lit, window_duration},
@@ -1176,6 +1365,13 @@ defmodule SparkEx.Functions do
       end
 
     %Column{expr: {:fn, "window", args, false}}
+  end
+
+  defp check_window_duration!(value, _name) when is_binary(value) and value != "", do: :ok
+
+  defp check_window_duration!(value, name) do
+    raise ArgumentError,
+          "expected #{name} to be a non-empty string duration, got: #{inspect(value)}"
   end
 
   # ── Timestamp construction functions (hand-written due to overloaded signatures) ──
@@ -1264,17 +1460,13 @@ defmodule SparkEx.Functions do
       raise ArgumentError, "make_timestamp keyword form requires :date and :time"
     end
 
+    # Match PySpark 4.1+ behavior: make_timestamp(date, time[, timezone]) is a
+    # native overload, so we send the date/time columns directly without
+    # extracting year/month/day/hour/minute/second client-side.
     date_expr = to_expr(Keyword.fetch!(opts, :date))
     time_expr = to_expr(Keyword.fetch!(opts, :time))
 
-    args = [
-      {:fn, "year", [date_expr], false},
-      {:fn, "month", [date_expr], false},
-      {:fn, "dayofmonth", [date_expr], false},
-      {:fn, "hour", [time_expr], false},
-      {:fn, "minute", [time_expr], false},
-      {:fn, "second", [time_expr], false}
-    ]
+    args = [date_expr, time_expr]
 
     args =
       if Keyword.has_key?(opts, :timezone) do
@@ -1365,16 +1557,18 @@ defmodule SparkEx.Functions do
   @doc """
   Parses a JSON string column into a struct/array/map column using the given schema.
 
-  The schema can be a DDL string or a Spark DataType protobuf struct.
+  The schema can be a DDL string, a `%Column{}` expression (e.g. from `schema_of_json/1`),
+  or a Spark DataType protobuf struct.
 
   ## Examples
 
       from_json(col("json_str"), "a INT, b STRING")
+      from_json(col("json_str"), schema_of_json(col("json_str")))
       from_json(col("json_str"), "a INT", %{"mode" => "FAILFAST"})
   """
   @spec from_json(
           Column.t() | String.t(),
-          String.t() | SparkEx.Types.data_type_proto(),
+          String.t() | Column.t() | SparkEx.Types.data_type_proto(),
           map() | nil
         ) ::
           Column.t()
@@ -1386,6 +1580,17 @@ defmodule SparkEx.Functions do
       case options do
         nil -> [to_expr(col), {:lit, schema}]
         opts -> [to_expr(col), {:lit, schema}, options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "from_json", args, false}}
+  end
+
+  def from_json(col, %Column{} = schema, options)
+      when is_map(options) or is_nil(options) do
+    args =
+      case options do
+        nil -> [to_expr(col), to_expr(schema)]
+        opts -> [to_expr(col), to_expr(schema), options_expr(opts)]
       end
 
     %Column{expr: {:fn, "from_json", args, false}}
@@ -1418,18 +1623,34 @@ defmodule SparkEx.Functions do
   @doc """
   Parses a CSV string column into a struct column using the given schema.
 
+  The schema can be a DDL string or a `%Column{}` expression (e.g. from `schema_of_csv/1`).
+
   ## Examples
 
       from_csv(col("csv_str"), "a INT, b STRING")
+      from_csv(col("csv_str"), schema_of_csv(col("csv_str")))
       from_csv(col("csv_str"), "a INT, b STRING", %{"sep" => "|"})
   """
-  @spec from_csv(Column.t() | String.t(), String.t(), map() | nil) :: Column.t()
+  @spec from_csv(Column.t() | String.t(), String.t() | Column.t(), map() | nil) :: Column.t()
   def from_csv(col, schema, options \\ nil)
+
+  def from_csv(col, schema, options)
       when is_binary(schema) and (is_map(options) or is_nil(options)) do
     args =
       case options do
         nil -> [to_expr(col), {:lit, schema}]
         opts -> [to_expr(col), {:lit, schema}, options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "from_csv", args, false}}
+  end
+
+  def from_csv(col, %Column{} = schema, options)
+      when is_map(options) or is_nil(options) do
+    args =
+      case options do
+        nil -> [to_expr(col), to_expr(schema)]
+        opts -> [to_expr(col), to_expr(schema), options_expr(opts)]
       end
 
     %Column{expr: {:fn, "from_csv", args, false}}
@@ -1457,18 +1678,34 @@ defmodule SparkEx.Functions do
   @doc """
   Parses an XML string column into a struct column using the given schema.
 
+  The schema can be a DDL string or a `%Column{}` expression (e.g. from `schema_of_xml/1`).
+
   ## Examples
 
       from_xml(col("xml_str"), "a INT, b STRING")
+      from_xml(col("xml_str"), schema_of_xml(col("xml_str")))
       from_xml(col("xml_str"), "a INT, b STRING", %{"rowTag" => "item"})
   """
-  @spec from_xml(Column.t() | String.t(), String.t(), map() | nil) :: Column.t()
+  @spec from_xml(Column.t() | String.t(), String.t() | Column.t(), map() | nil) :: Column.t()
   def from_xml(col, schema, options \\ nil)
+
+  def from_xml(col, schema, options)
       when is_binary(schema) and (is_map(options) or is_nil(options)) do
     args =
       case options do
         nil -> [to_expr(col), {:lit, schema}]
         opts -> [to_expr(col), {:lit, schema}, options_expr(opts)]
+      end
+
+    %Column{expr: {:fn, "from_xml", args, false}}
+  end
+
+  def from_xml(col, %Column{} = schema, options)
+      when is_map(options) or is_nil(options) do
+    args =
+      case options do
+        nil -> [to_expr(col), to_expr(schema)]
+        opts -> [to_expr(col), to_expr(schema), options_expr(opts)]
       end
 
     %Column{expr: {:fn, "from_xml", args, false}}

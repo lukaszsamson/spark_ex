@@ -898,7 +898,9 @@ defmodule SparkEx.DataFrame do
   ## Examples
 
       df |> DataFrame.sample(0.1)
+      df |> DataFrame.sample(0.1, 42)
       df |> DataFrame.sample(0.5, with_replacement: true, seed: 42)
+      df |> DataFrame.sample(true, 0.5, 42)
   """
   @spec sample(t(), boolean() | float(), float() | keyword(), integer() | keyword()) :: t()
   def sample(df, with_replacement_or_fraction, fraction_or_opts \\ [], seed_or_opts \\ [])
@@ -936,6 +938,19 @@ defmodule SparkEx.DataFrame do
       df
       | _schema: nil,
         plan: {:sample, df.plan, 0.0, fraction, with_replacement, seed, false}
+    }
+  end
+
+  # Positional `sample(fraction, seed)` form for parity with PySpark's
+  # `DataFrame.sample(fraction, seed)`.
+  def sample(%__MODULE__{} = df, fraction, seed, _ignored)
+      when is_float(fraction) and is_integer(seed) do
+    validate_sample_fraction!(fraction, false)
+
+    %__MODULE__{
+      df
+      | _schema: nil,
+        plan: {:sample, df.plan, 0.0, fraction, false, seed, false}
     }
   end
 
