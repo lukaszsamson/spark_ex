@@ -890,6 +890,8 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       shared = SparkEx.DataFrame.new(self(), {:sql, "SELECT id, val FROM t", nil})
       other = SparkEx.DataFrame.new(self(), {:sql, "SELECT id FROM other", nil})
 
+      shared_id = SparkEx.Internal.PlanIds.id_of(shared.plan)
+
       # The shared DF appears as a join child …
       join_plan = {:join, shared.plan, other.plan, nil, :inner, []}
 
@@ -905,21 +907,22 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
       assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
 
-      # The subquery references the shared DF exactly once (no duplicate
-      # entry from the heuristic) and the join's left child + the column
-      # reference + the with_relations entry all share the same encoded
-      # plan_id (post-renumbering).
+      # The subquery references the shared DF — its plan_id matches the
+      # shared DF's stable id (no synthetic remap, no duplicate references).
       assert [%Relation{common: %{plan_id: ref_id}}] = wr.references
+      assert ref_id == shared_id
 
+      # The join's left child also encodes with the same stable id.
       assert %Relation{rel_type: {:project, project}} = wr.root
       assert %Relation{rel_type: {:join, join}} = project.input
-      assert join.left.common.plan_id == ref_id
+      assert join.left.common.plan_id == shared_id
 
+      # Column reference inside the project resolves to the same id.
       [_subq_expr, col_expr] = project.expressions
 
       assert %Expression{
                expr_type:
-                 {:unresolved_attribute, %Expression.UnresolvedAttribute{plan_id: ^ref_id}}
+                 {:unresolved_attribute, %Expression.UnresolvedAttribute{plan_id: ^shared_id}}
              } = col_expr
     end
 
@@ -952,6 +955,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       # order is needed, and the encoder emits a with_relations reference for
       # the source DataFrame.
       source = SparkEx.DataFrame.new(self(), {:sql, "SELECT a FROM src", nil})
+      source_id = SparkEx.Internal.PlanIds.id_of(source.plan)
 
       arg_col = SparkEx.DataFrame.col(source, "a")
       sql_plan = {:sql, "SELECT ? AS x", [arg_col]}
@@ -962,16 +966,17 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       # reference a free plan_id (source's stable id, not bound to :sql itself).
       assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
 
-      # The source DataFrame appears as a reference; the column expression
-      # in :sql args resolves to the same encoded plan_id (post-renumbering).
-      assert [%Relation{common: %{plan_id: ref_id}}] = wr.references
+      assert Enum.any?(wr.references, fn %Relation{common: %{plan_id: id}} ->
+               id == source_id
+             end),
+             "expected source DataFrame to appear in with_relations.references"
 
       assert %Relation{rel_type: {:sql, sql_rel}} = wr.root
       [pos_arg] = sql_rel.pos_arguments
 
       assert %Expression{
                expr_type:
-                 {:unresolved_attribute, %Expression.UnresolvedAttribute{plan_id: ^ref_id}}
+                 {:unresolved_attribute, %Expression.UnresolvedAttribute{plan_id: ^source_id}}
              } = pos_arg
     end
   end
