@@ -880,7 +880,7 @@ defmodule SparkEx.DataFrameTest do
 
       result = DataFrame.lateral_join(left, right, nil, :inner)
 
-      assert {:lateral_join, {:sql, _, _}, {:table_valued_function, "range", _}, nil, :inner} =
+      assert {:join, {:sql, _, _}, {:table_valued_function, "range", _}, nil, :inner, []} =
                unwrap_plan(result)
     end
   end

@@ -110,14 +110,11 @@ defmodule SparkEx.Test.WireGoldens do
     rewrite_plan_ids(plan, plan_ids)
   end
 
-  import Bitwise
-
-  # Plan_ids are allocated from a global atomic counter starting at 2^31, so
-  # encoded bytes vary between runs. Renumber stable ids (≥ 2^31) to
-  # deterministic positions based on first-occurrence in a structural walk.
-  # Counter-based ids (< 2^31) are stable per encoding pass and left alone.
+  # All plan_ids are allocated from `SparkEx.Internal.PlanIds`, a process-
+  # global atomic counter that does not reset between runs, so encoded bytes
+  # vary across runs. Renumber every observed plan_id to a deterministic
+  # position based on first-occurrence in a structural walk.
   @plan_id_base 1_000_000
-  @stable_threshold 1 <<< 31
 
   @plan_id_carriers [
     Spark.Connect.RelationCommon,
@@ -128,7 +125,7 @@ defmodule SparkEx.Test.WireGoldens do
   ]
 
   defp collect_plan_ids(%mod{plan_id: id} = struct, acc)
-       when mod in @plan_id_carriers and is_integer(id) and id >= @stable_threshold do
+       when mod in @plan_id_carriers and is_integer(id) do
     acc = Map.put_new(acc, id, map_size(acc) + @plan_id_base)
     descend_collect(struct, acc)
   end
@@ -151,7 +148,7 @@ defmodule SparkEx.Test.WireGoldens do
   end
 
   defp rewrite_plan_ids(%mod{plan_id: id} = struct, plan_ids)
-       when mod in @plan_id_carriers and is_integer(id) and id >= @stable_threshold do
+       when mod in @plan_id_carriers and is_integer(id) do
     rewritten = %{struct | plan_id: Map.get(plan_ids, id, id)}
     rewrite_struct_fields(rewritten, plan_ids)
   end

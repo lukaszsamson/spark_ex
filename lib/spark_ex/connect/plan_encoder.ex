@@ -1826,7 +1826,12 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   # --- Private ---
 
-  defp next_id(counter), do: {counter, counter + 1}
+  # All synthetic plan_ids (with_relations containers, register_inline
+  # wrappers, anonymous-leaf plans) are drawn from the global allocator so
+  # they never collide with the stable ids attached to DataFrame plans.
+  # The threaded `counter` parameter is preserved for API stability but
+  # only its return value matters when callers re-read the session state.
+  defp next_id(counter), do: {SparkEx.Internal.PlanIds.next(), counter + 1}
 
   defp attach_with_relations({:compressed_operation, _, _, _} = plan, counter) do
     {plan, counter}

@@ -10,7 +10,8 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       {plan, counter} = PlanEncoder.encode({:sql, "SELECT 1", nil}, 0)
 
       assert %Plan{op_type: {:root, %Relation{} = rel}} = plan
-      assert %RelationCommon{plan_id: 0} = rel.common
+      assert %RelationCommon{plan_id: id} = rel.common
+      assert is_integer(id)
       assert {:sql, %SQL{query: "SELECT 1"}} = rel.rel_type
       assert counter == 1
     end

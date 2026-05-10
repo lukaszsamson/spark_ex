@@ -4,26 +4,28 @@ defmodule SparkEx.Internal.PlanIds do
   # Global, monotonically-increasing allocator for DataFrame plan_ids.
   #
   # PySpark assigns a stable plan_id to each LogicalPlan at construction time;
-  # SparkEx mirrors that with a global atomic counter. Stable ids let the
-  # encoder skip the counter+remap heuristic — every column reference can carry
-  # the source DataFrame's id directly, and `RelationCommon.plan_id` is set
-  # from the same id when the plan is encoded.
+  # SparkEx mirrors that with a global :atomics counter. Stable ids let the
+  # encoder skip the counter+remap heuristic — every column reference can
+  # carry the source DataFrame's id directly, and `RelationCommon.plan_id` is
+  # set from the same id when the plan is encoded.
   #
-  # Started at a high base (2^31) so stable ids cannot collide with encoder
-  # counter ids (which start near 0 inside `PlanEncoder.encode/2` for synthetic
-  # wrappers like `with_relations`).
-
-  import Bitwise
+  # Counter starts at 1 and increments forever. The encoder's per-pass
+  # counter (used for synthetic ids like `with_relations` containers) also
+  # draws from this allocator via `next_id/1`, so all ids are unique across
+  # the entire process lifetime — no collisions between stable and synthetic
+  # ids regardless of plan-tree composition.
+  #
+  # Spark Connect's `RelationCommon.plan_id` is `int64` on the wire, but
+  # internal Scala code uses `Int` in some paths; ids stay safely within
+  # signed-int32 range for any reasonable process lifetime.
 
   @key __MODULE__
-  @base 1 <<< 31
 
   @doc false
   def init do
     case :persistent_term.get(@key, :undefined) do
       :undefined ->
         ref = :atomics.new(1, [])
-        :atomics.put(ref, 1, @base)
         :persistent_term.put(@key, ref)
         ref
 
@@ -32,7 +34,7 @@ defmodule SparkEx.Internal.PlanIds do
     end
   end
 
-  @doc "Returns the next plan_id (monotonic, ≥ 2^31)."
+  @doc "Returns the next plan_id (monotonic, ≥ 1)."
   @spec next() :: pos_integer()
   def next do
     ref =

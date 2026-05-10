@@ -2460,6 +2460,7 @@ defmodule SparkEx.DataFrame do
 
   defp merge_tags(%__MODULE__{tags: []}, opts), do: opts
   defp merge_tags(%__MODULE__{tags: tags}, opts), do: Keyword.put(opts, :tags, tags)
+  defp tvf_plan?({:plan_id, _, inner}), do: tvf_plan?(inner)
   defp tvf_plan?({:table_valued_function, _, _}), do: true
   defp tvf_plan?(_), do: false
 
