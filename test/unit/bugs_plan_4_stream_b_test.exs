@@ -94,13 +94,24 @@ defmodule SparkEx.BugsPlan4.StreamBTest do
 
               elem =
                 if i == 0 do
-                  # An unsupported response_type kind triggers
-                  # `{:error, {:unsupported_response_type, :extension}}` from
-                  # `dispatch_response_type/3`, which halts decode_stream/2.
+                  # A malformed arrow_batch (chunk_index past expected) makes
+                  # `dispatch_response_type/3` return an integrity error,
+                  # which halts decode_stream/2. Plan-5 Stream C made the
+                  # decoder skip unknown response_type tags for forward-compat,
+                  # so we drive the lazy-halt assertion through a real decode
+                  # error instead.
                   {:ok,
                    %ExecutePlanResponse{
                      response_id: "boom",
-                     response_type: {:extension, %Google.Protobuf.Any{}}
+                     response_type:
+                       {:arrow_batch,
+                        %ExecutePlanResponse.ArrowBatch{
+                          row_count: 0,
+                          data: <<>>,
+                          start_offset: 0,
+                          chunk_index: 7,
+                          num_chunks_in_batch: 1
+                        }}
                    }}
                 else
                   # Filler that nobody should ever pull — invalid arrow data
@@ -126,7 +137,7 @@ defmodule SparkEx.BugsPlan4.StreamBTest do
         {:ok, upstream}
       end
 
-      assert {:error, {:unsupported_response_type, :extension}} =
+      assert {:error, {:invalid_arrow_batch, _}} =
                Client.execute_plan(session, %Plan{},
                  execute_stream_fun: execute_stream_fun,
                  reattach_stream_fun: fn _ -> {:ok, []} end,

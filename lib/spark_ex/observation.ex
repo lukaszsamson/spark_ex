@@ -74,6 +74,15 @@ defmodule SparkEx.Observation do
 
   def register_observation(%__MODULE__{id: id, name: name}, metric_exprs, session_id)
       when is_list(metric_exprs) do
+    # Spark forbids reusing an Observation across multiple `observe()` calls
+    # (see PySpark's REUSE_OBSERVATION assertion). Mark the id on first
+    # registration; raise if it shows up again.
+    unless :ets.insert_new(@table, {{:obs_attached, id}, true}) do
+      raise ArgumentError,
+            "[REUSE_OBSERVATION] Observation \"#{name}\" was already attached. " <>
+              "Create a new SparkEx.Observation.new/1 for each observe/3 call."
+    end
+
     aliases = aliases_from_exprs(metric_exprs)
     :ets.insert(@table, {{:obs_aliases, id}, aliases})
     :ets.insert(@table, {{:obs_route, session_id, name}, id})

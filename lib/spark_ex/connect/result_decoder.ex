@@ -31,6 +31,8 @@ defmodule SparkEx.Connect.ResultDecoder do
           arrow_batches: [binary()],
           schema: term() | nil,
           server_side_session_id: String.t() | nil,
+          command_result: term() | nil,
+          command_results: [term()],
           observed_metrics: map(),
           execution_metrics: map()
         }
@@ -81,6 +83,7 @@ defmodule SparkEx.Connect.ResultDecoder do
 
               case dispatch_response_type(resp.response_type, state, session) do
                 {:cont, state} -> {:cont, {:ok, state}}
+                {:halt, state} -> {:halt, {:ok, state}}
                 {:error, _} = error -> {:halt, error}
               end
 
@@ -264,7 +267,12 @@ defmodule SparkEx.Connect.ResultDecoder do
           case check_response_integrity(resp, session, state) do
             {:ok, state} ->
               state = update_state_with_resp(state, resp)
-              dispatch_explorer_response(resp.response_type, state, session)
+
+              case dispatch_explorer_response(resp.response_type, state, session) do
+                {:cont, {:ok, state}} -> {:cont, {:ok, state}}
+                {:halt, {:ok, state}} -> {:halt, {:ok, state}}
+                {:halt, {:error, _} = err} -> {:halt, err}
+              end
 
             {:error, _} = error ->
               {:halt, error}
@@ -300,6 +308,10 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp dispatch_explorer_response({:execution_progress, progress}, state, session) do
     emit_progress_telemetry(progress, session)
     {:cont, {:ok, state}}
+  end
+
+  defp dispatch_explorer_response({:result_complete, _}, state, _session) do
+    {:halt, {:ok, state}}
   end
 
   defp dispatch_explorer_response(_other, state, _session), do: {:cont, {:ok, state}}
@@ -351,6 +363,8 @@ defmodule SparkEx.Connect.ResultDecoder do
       total_bytes: 0,
       max_rows: max_rows,
       max_bytes: max_bytes,
+      command_result: nil,
+      command_results: [],
       observed_metrics: %{},
       execution_metrics: %{}
     }
@@ -396,6 +410,46 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
+  defp dispatch_arrow_response({:sql_command_result, result}, state, _session) do
+    relation = Map.get(result || %{}, :relation)
+    {:cont, {:ok, push_command_result(state, {:sql_command, relation})}}
+  end
+
+  defp dispatch_arrow_response({:write_stream_operation_start_result, result}, state, _),
+    do: {:cont, {:ok, push_command_result(state, {:write_stream_start, result})}}
+
+  defp dispatch_arrow_response({:streaming_query_command_result, result}, state, _),
+    do: {:cont, {:ok, push_command_result(state, {:streaming_query, result})}}
+
+  defp dispatch_arrow_response({:streaming_query_manager_command_result, result}, state, _),
+    do: {:cont, {:ok, push_command_result(state, {:streaming_query_manager, result})}}
+
+  defp dispatch_arrow_response({:streaming_query_listener_events_result, result}, state, _),
+    do: {:cont, {:ok, push_command_result(state, {:listener_events, result})}}
+
+  defp dispatch_arrow_response({:checkpoint_command_result, result}, state, _),
+    do: {:cont, {:ok, push_command_result(state, {:checkpoint, result})}}
+
+  defp dispatch_arrow_response({:create_resource_profile_command_result, result}, state, _),
+    do: {:cont, {:ok, push_command_result(state, {:create_resource_profile, result})}}
+
+  defp dispatch_arrow_response({:ml_command_result, result}, state, _),
+    do: {:cont, {:ok, push_command_result(state, {:ml, result})}}
+
+  defp dispatch_arrow_response({:get_resources_command_result, result}, state, _),
+    do: {:cont, {:ok, push_command_result(state, {:get_resources, result})}}
+
+  defp dispatch_arrow_response({:pipeline_command_result, result}, state, _),
+    do: {:cont, {:ok, push_command_result(state, {:pipeline, result})}}
+
+  defp dispatch_arrow_response({:pipeline_event_result, result}, state, _),
+    do: {:cont, {:ok, push_command_result(state, {:pipeline_event, result})}}
+
+  defp dispatch_arrow_response({:pipeline_query_function_execution_signal, result}, state, _),
+    do:
+      {:cont,
+       {:ok, push_command_result(state, {:pipeline_query_function_execution_signal, result})}}
+
   defp dispatch_arrow_response(_other, state, _session), do: {:cont, {:ok, state}}
 
   defp finalize_arrow_stream_result({:ok, %{arrow: _} = arrow_result}), do: {:ok, arrow_result}
@@ -428,7 +482,7 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
-  defp dispatch_response_type({:result_complete, _}, state, _session), do: {:cont, state}
+  defp dispatch_response_type({:result_complete, _}, state, _session), do: {:halt, state}
 
   defp dispatch_response_type({:sql_command_result, result}, state, _session) do
     relation = Map.get(result || %{}, :relation)
@@ -476,12 +530,14 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp dispatch_response_type({:metrics, _}, state, _session), do: {:cont, state}
   defp dispatch_response_type(nil, state, _session), do: {:cont, state}
 
-  defp dispatch_response_type({:extension, _ext}, _state, _session) do
-    {:error, {:unsupported_response_type, :extension}}
-  end
-
-  defp dispatch_response_type({tag, _}, _state, _session) when is_atom(tag) do
-    {:error, {:unsupported_response_type, tag}}
+  # Forward-compat: unknown / future response_type variants (including
+  # `:extension`) are logged and skipped rather than halting the stream.
+  # This matches PySpark, which iterates responses and silently advances
+  # past types it doesn't recognize.
+  defp dispatch_response_type({tag, _}, state, _session) when is_atom(tag) do
+    require Logger
+    Logger.debug(fn -> "ignoring unknown ExecutePlanResponse response_type: #{inspect(tag)}" end)
+    {:cont, state}
   end
 
   defp push_command_result(state, tagged_tuple) do
@@ -708,6 +764,8 @@ defmodule SparkEx.Connect.ResultDecoder do
        arrow_batches: arrow_batches,
        schema: state.schema,
        server_side_session_id: state.server_side_session_id,
+       command_result: Map.get(state, :command_result),
+       command_results: Enum.reverse(Map.get(state, :command_results, [])),
        observed_metrics: state.observed_metrics,
        execution_metrics: state.execution_metrics
      }}

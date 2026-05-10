@@ -2014,7 +2014,11 @@ defmodule SparkEx.DataFrame do
   """
   @spec to_local_iterator(t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
   def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
-    case SparkEx.Session.execute_plan_stream(df.session, df.plan, merge_tags(df, opts)) do
+    case SparkEx.Session.execute_plan_reattachable_stream(
+           df.session,
+           df.plan,
+           merge_tags(df, opts)
+         ) do
       {:ok, stream} ->
         # Pass the underlying %Session{} struct so streaming gRPC errors flow
         # through Errors.from_grpc_error/2 the same way collected results do.

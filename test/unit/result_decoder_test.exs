@@ -119,13 +119,16 @@ defmodule SparkEx.Connect.ResultDecoderTest do
              ]
     end
 
-    test "returns unsupported_response_type error for opaque extension responses" do
+    test "skips unknown response_type variants (forward-compat)" do
+      # Plan-5 Stream C: unknown / future ExecutePlanResponse variants are
+      # logged at debug and ignored rather than halting the stream. This
+      # mirrors PySpark, which silently advances past response_types it
+      # doesn't recognize so a server upgrade can't take down older clients.
       stream = [
         {:ok, %ExecutePlanResponse{response_type: {:extension, %Google.Protobuf.Any{}}}}
       ]
 
-      assert {:error, {:unsupported_response_type, :extension}} =
-               ResultDecoder.decode_stream(stream)
+      assert {:ok, %{rows: []}} = ResultDecoder.decode_stream(stream)
     end
 
     test "captures observed metrics" do

@@ -136,8 +136,7 @@ defmodule SparkEx.Connect.SessionIntegrityTest do
         {:ok,
          %ExecutePlanResponse{
            session_id: "c",
-           server_side_session_id: "",
-           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+           server_side_session_id: ""
          }},
         {:ok,
          %ExecutePlanResponse{
