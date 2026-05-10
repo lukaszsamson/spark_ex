@@ -1,49 +1,32 @@
 defmodule SparkEx.Internal.PlanIds do
   @moduledoc false
 
-  # Global, monotonically-increasing allocator for DataFrame plan_ids.
+  # Per-process monotonic plan_id allocator.
   #
-  # PySpark assigns a stable plan_id to each LogicalPlan at construction time;
-  # SparkEx mirrors that with a global :atomics counter. Stable ids let the
-  # encoder skip the counter+remap heuristic — every column reference can
-  # carry the source DataFrame's id directly, and `RelationCommon.plan_id` is
-  # set from the same id when the plan is encoded.
+  # PySpark assigns a stable plan_id to each LogicalPlan at construction time.
+  # SparkEx mirrors that, but uses a *per-process* `:counters` ref (stashed in
+  # the process dictionary) instead of a global atomic. Within a single
+  # process — typically one test, one caller of the SparkEx public API, or
+  # one Session GenServer — plan_ids are sequential and contiguous starting
+  # at 1. That matches PySpark's per-session sequential allocation, which
+  # Spark Connect's analyzer relies on (some 3.5.x paths use plan_id as an
+  # array index and reject sparse / large values).
   #
-  # Counter starts at 1 and increments forever. The encoder's per-pass
-  # counter (used for synthetic ids like `with_relations` containers) also
-  # draws from this allocator via `next_id/1`, so all ids are unique across
-  # the entire process lifetime — no collisions between stable and synthetic
-  # ids regardless of plan-tree composition.
-  #
-  # Spark Connect's `RelationCommon.plan_id` is `int64` on the wire, but
-  # internal Scala code uses `Int` in some paths; ids stay safely within
-  # signed-int32 range for any reasonable process lifetime.
+  # Cross-process plan composition is supported: when a DataFrame built in
+  # process A is referenced from process B, A's plan_ids may equal ids B
+  # later allocates, but the encoded plan tree is built and serialized in a
+  # single process — collisions only matter when multiple processes feed the
+  # same encode pass, which is not the SparkEx flow (the Session GenServer
+  # owns the encode for its own DataFrames).
 
   @key __MODULE__
 
-  @doc false
-  def init do
-    case :persistent_term.get(@key, :undefined) do
-      :undefined ->
-        ref = :atomics.new(1, [])
-        :persistent_term.put(@key, ref)
-        ref
-
-      ref ->
-        ref
-    end
-  end
-
-  @doc "Returns the next plan_id (monotonic, ≥ 1)."
+  @doc "Returns the next plan_id (sequential per calling process, starting at 1)."
   @spec next() :: pos_integer()
   def next do
-    ref =
-      case :persistent_term.get(@key, :undefined) do
-        :undefined -> init()
-        ref -> ref
-      end
-
-    :atomics.add_get(ref, 1, 1)
+    ref = process_counter()
+    :counters.add(ref, 1, 1)
+    :counters.get(ref, 1)
   end
 
   @doc """
@@ -65,5 +48,22 @@ defmodule SparkEx.Internal.PlanIds do
           "plan is not stamped with a stable plan_id (refactor expected " <>
             "every DataFrame plan to be wrapped via SparkEx.Internal.PlanIds.wrap/1). " <>
             "Got: #{inspect(plan)}"
+  end
+
+  # Application start hook (no-op now — kept for backward compatibility with
+  # callers that were initializing the old persistent_term-based allocator).
+  @doc false
+  def init, do: :ok
+
+  defp process_counter do
+    case Process.get(@key) do
+      nil ->
+        ref = :counters.new(1, [])
+        Process.put(@key, ref)
+        ref
+
+      ref ->
+        ref
+    end
   end
 end
