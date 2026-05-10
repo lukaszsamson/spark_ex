@@ -1691,13 +1691,26 @@ defmodule SparkEx.Functions do
 
   Emits an unresolved `time_trunc` call so Spark operates on TIME rather
   than re-routing through `date_trunc` (which expects a timestamp).
+
+  Both `unit` and `time_col` accept a `Column` or a bare string (resolved as a
+  column reference). To pass a literal unit string such as `"HOUR"`, wrap it
+  with `lit/1`:
+
+      time_trunc(lit("HOUR"), col("ts"))
   """
   @spec time_trunc(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
   def time_trunc(unit, time_col) do
     %Column{expr: {:fn, "time_trunc", [to_expr(unit), to_expr(time_col)], false}}
   end
 
-  @doc "Extracts a part of a URL. Optional key for query string extraction."
+  @doc """
+  Extracts a part of a URL. Optional key for query string extraction.
+
+  All string arguments are resolved as column references. To pass a literal
+  part name such as `"HOST"`, wrap it with `lit/1`:
+
+      parse_url(col("url"), lit("HOST"))
+  """
   @spec parse_url(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t() | nil) ::
           Column.t()
   def parse_url(url, part, key \\ nil) do
@@ -1710,7 +1723,14 @@ defmodule SparkEx.Functions do
     %Column{expr: {:fn, "parse_url", args, false}}
   end
 
-  @doc "Try to extract a part of a URL, returns null on failure. Optional key for query string."
+  @doc """
+  Try to extract a part of a URL, returns null on failure. Optional key for query string.
+
+  All string arguments are resolved as column references. To pass a literal
+  part name such as `"HOST"`, wrap it with `lit/1`:
+
+      try_parse_url(col("url"), lit("HOST"))
+  """
   @spec try_parse_url(
           Column.t() | String.t(),
           Column.t() | String.t(),
@@ -1739,7 +1759,14 @@ defmodule SparkEx.Functions do
     %Column{expr: {:fn, "substr", args, false}}
   end
 
-  @doc "SQL LIKE pattern match. Optional escape character."
+  @doc """
+  SQL LIKE pattern match. Optional escape character.
+
+  All string arguments are resolved as column references. To pass a literal
+  pattern such as `"%abc%"`, wrap it with `lit/1`:
+
+      like_(col("name"), lit("%abc%"))
+  """
   @spec like_(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t() | nil) ::
           Column.t()
   def like_(col, pattern, escape \\ nil) do
@@ -1752,7 +1779,14 @@ defmodule SparkEx.Functions do
     %Column{expr: {:fn, "like", args, false}}
   end
 
-  @doc "Case-insensitive LIKE. Optional escape character."
+  @doc """
+  Case-insensitive LIKE. Optional escape character.
+
+  All string arguments are resolved as column references. To pass a literal
+  pattern such as `"%abc%"`, wrap it with `lit/1`:
+
+      ilike_(col("name"), lit("%abc%"))
+  """
   @spec ilike_(Column.t() | String.t(), Column.t() | String.t(), Column.t() | String.t() | nil) ::
           Column.t()
   def ilike_(col, pattern, escape \\ nil) do
@@ -1816,9 +1850,9 @@ defmodule SparkEx.Functions do
   @doc """
   Generates a random UUID string with deterministic seed (Spark 4.x+).
 
-  `seed` accepts a Column or integer literal.
+  `seed` accepts a `Column`, a string column name, or an integer literal.
   """
-  @spec uuid(Column.t() | integer()) :: Column.t()
+  @spec uuid(Column.t() | String.t() | integer()) :: Column.t()
   def uuid(seed) do
     %Column{expr: {:fn, "uuid", [to_expr_or_lit_int(seed)], false}}
   end
@@ -1837,9 +1871,17 @@ defmodule SparkEx.Functions do
   def uniform(min, max, seed \\ nil) do
     seed_expr =
       case seed do
-        nil -> {:lit, Random.long_seed()}
-        %Column{expr: e} -> e
-        s when is_integer(s) -> {:lit, s}
+        nil ->
+          {:lit, Random.long_seed()}
+
+        %Column{expr: e} ->
+          e
+
+        s when is_integer(s) ->
+          {:lit, s}
+
+        other ->
+          raise ArgumentError, "seed must be a Column, integer, or nil; got #{inspect(other)}"
       end
 
     args = [
@@ -1861,9 +1903,17 @@ defmodule SparkEx.Functions do
   def randstr(length, seed \\ nil) do
     seed_expr =
       case seed do
-        nil -> {:lit, Random.long_seed()}
-        %Column{expr: e} -> e
-        s when is_integer(s) -> {:lit, s}
+        nil ->
+          {:lit, Random.long_seed()}
+
+        %Column{expr: e} ->
+          e
+
+        s when is_integer(s) ->
+          {:lit, s}
+
+        other ->
+          raise ArgumentError, "seed must be a Column, integer, or nil; got #{inspect(other)}"
       end
 
     %Column{expr: {:fn, "randstr", [to_col_or_lit(length), seed_expr], false}}
