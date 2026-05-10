@@ -898,7 +898,9 @@ defmodule SparkEx.DataFrame do
   ## Examples
 
       df |> DataFrame.sample(0.1)
+      df |> DataFrame.sample(0.1, 42)
       df |> DataFrame.sample(0.5, with_replacement: true, seed: 42)
+      df |> DataFrame.sample(true, 0.5, 42)
   """
   @spec sample(t(), boolean() | float(), float() | keyword(), integer() | keyword()) :: t()
   def sample(df, with_replacement_or_fraction, fraction_or_opts \\ [], seed_or_opts \\ [])

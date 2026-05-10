@@ -608,7 +608,7 @@ defmodule SparkEx.Functions do
   Approximate percentile of a numeric column.
 
   `accuracy` defaults to `10000` (matching PySpark) and can be a Column or integer.
-  `percentage` may be a single float, a list/tuple of floats, or a Column expression.
+  `percentage` may be a single float, a list of floats, or a Column expression.
 
   ## Examples
 
@@ -617,8 +617,8 @@ defmodule SparkEx.Functions do
   """
   @spec approx_percentile(
           Column.t() | String.t(),
-          term(),
-          Column.t() | String.t() | integer() | nil
+          Column.t() | float() | [float()],
+          Column.t() | String.t() | integer()
         ) :: Column.t()
   def approx_percentile(col, percentage, accuracy \\ 10_000) do
     pct_expr =
@@ -1557,11 +1557,13 @@ defmodule SparkEx.Functions do
   @doc """
   Parses a JSON string column into a struct/array/map column using the given schema.
 
-  The schema can be a DDL string or a Spark DataType protobuf struct.
+  The schema can be a DDL string, a `%Column{}` expression (e.g. from `schema_of_json/1`),
+  or a Spark DataType protobuf struct.
 
   ## Examples
 
       from_json(col("json_str"), "a INT, b STRING")
+      from_json(col("json_str"), schema_of_json(col("json_str")))
       from_json(col("json_str"), "a INT", %{"mode" => "FAILFAST"})
   """
   @spec from_json(
@@ -1621,9 +1623,12 @@ defmodule SparkEx.Functions do
   @doc """
   Parses a CSV string column into a struct column using the given schema.
 
+  The schema can be a DDL string or a `%Column{}` expression (e.g. from `schema_of_csv/1`).
+
   ## Examples
 
       from_csv(col("csv_str"), "a INT, b STRING")
+      from_csv(col("csv_str"), schema_of_csv(col("csv_str")))
       from_csv(col("csv_str"), "a INT, b STRING", %{"sep" => "|"})
   """
   @spec from_csv(Column.t() | String.t(), String.t() | Column.t(), map() | nil) :: Column.t()
@@ -1673,9 +1678,12 @@ defmodule SparkEx.Functions do
   @doc """
   Parses an XML string column into a struct column using the given schema.
 
+  The schema can be a DDL string or a `%Column{}` expression (e.g. from `schema_of_xml/1`).
+
   ## Examples
 
       from_xml(col("xml_str"), "a INT, b STRING")
+      from_xml(col("xml_str"), schema_of_xml(col("xml_str")))
       from_xml(col("xml_str"), "a INT, b STRING", %{"rowTag" => "item"})
   """
   @spec from_xml(Column.t() | String.t(), String.t() | Column.t(), map() | nil) :: Column.t()
