@@ -2944,10 +2944,15 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   # Lateral join right side may reference columns from the left plan. After the
   # rewrite_plan pass those references carry synthetic plan_ids; remap them to
-  # the encoded left relation so the server can resolve them. Currently handles
-  # TVF args, which is the common shape for lateral right sides.
-  defp remap_lateral_right_plan_to_left({:table_valued_function, name, args}, %Relation{} = left) do
-    {:table_valued_function, name, remap_expr_list_plan_ids_to_input(args, left)}
+  # the left relation's own plan_id (not its inputs — the right side resolves
+  # against the output of the left relation, not its underlying sources).
+  # Currently handles TVF args, which is the common shape for lateral right sides.
+  defp remap_lateral_right_plan_to_left(
+         {:table_valued_function, name, args},
+         %Relation{common: %RelationCommon{plan_id: left_plan_id}}
+       ) do
+    remapped = remap_expr_list_plan_ids(args, [left_plan_id])
+    {:table_valued_function, name, remapped}
   end
 
   defp remap_lateral_right_plan_to_left(plan, _left), do: plan

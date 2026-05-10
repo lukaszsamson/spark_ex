@@ -11,7 +11,7 @@ defmodule SparkEx.Test.StreamAWireGoldensTest do
   require SparkEx.Test.WireGoldens
   alias SparkEx.Test.WireGoldens
 
-  # A common SQL child used across goldens — plan_id 0 after encoding.
+  # A common SQL child used across goldens — plan_id assigned by encode counter.
   @child {:sql, "SELECT 1 AS id, 2 AS val, 3 AS dept", nil}
   # A foreign plan_id used to assert the relation rewrites it to the input id.
   @foreign 999

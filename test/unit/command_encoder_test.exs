@@ -5,6 +5,7 @@ defmodule SparkEx.Unit.CommandEncoderTest do
     Command,
     CommonInlineUserDefinedDataSource,
     CreateDataFrameViewCommand,
+    Expression,
     Plan,
     Relation,
     PythonDataSource,
@@ -272,6 +273,40 @@ defmodule SparkEx.Unit.CommandEncoderTest do
 
       assert %Command{command_type: {:write_operation_v2, write_v2}} = command
       assert write_v2.overwrite_condition != nil
+    end
+
+    test "GPT-11: partitioned_by with bound column remaps plan_id to encoded input" do
+      child = {:sql, "SELECT 1 AS id, 2 AS date", nil}
+
+      {%Plan{op_type: {:command, command}}, _} =
+        CommandEncoder.encode(
+          {:write_operation_v2, child, "t",
+           [mode: :create, partitioned_by: [{:col, "date", 999}]]},
+          0
+        )
+
+      assert %Command{command_type: {:write_operation_v2, write_v2}} = command
+      [part_expr] = write_v2.partitioning_columns
+      assert %Expression{expr_type: {:unresolved_attribute, attr}} = part_expr
+      # plan_id must be the encoded input's plan_id, not the foreign 999
+      refute attr.plan_id == 999
+      assert is_integer(attr.plan_id)
+    end
+
+    test "GPT-11: overwrite_condition with bound column remaps plan_id to encoded input" do
+      child = {:sql, "SELECT 1 AS id, 2 AS date", nil}
+
+      {%Plan{op_type: {:command, command}}, _} =
+        CommandEncoder.encode(
+          {:write_operation_v2, child, "t",
+           [mode: :overwrite, overwrite_condition: {:col, "date", 999}]},
+          0
+        )
+
+      assert %Command{command_type: {:write_operation_v2, write_v2}} = command
+      assert %Expression{expr_type: {:unresolved_attribute, attr}} = write_v2.overwrite_condition
+      refute attr.plan_id == 999
+      assert is_integer(attr.plan_id)
     end
   end
 

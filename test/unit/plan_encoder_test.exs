@@ -1236,7 +1236,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert length(wr.references) == 1
     end
 
-    test "GPT-24: lateral_join with TVF right side remaps args to encoded left plan_id" do
+    test "GPT-24: lateral_join with TVF right side remaps args to encoded left plan_id (leaf left)" do
       left_df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
       bound_arg = {:col, "arr", left_df.plan}
       tvf = {:table_valued_function, "explode", [bound_arg]}
@@ -1251,6 +1251,30 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       [arg] = tvf_proto.arguments
       assert %Expression{expr_type: {:unresolved_attribute, attr}} = arg
       assert attr.plan_id == left_plan_id
+    end
+
+    test "GPT-24: lateral_join remaps TVF args to non-leaf left plan_id (not its inputs)" do
+      # left is a project (non-leaf) — args must point at the project's plan_id,
+      # not the underlying SQL child's plan_id.
+      left_df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      project_plan = {:project, left_df.plan, [{:col, "arr"}]}
+      bound_arg = {:col, "arr", project_plan}
+      tvf = {:table_valued_function, "explode", [bound_arg]}
+
+      {plan, _} =
+        PlanEncoder.encode({:lateral_join, project_plan, tvf, nil, :inner}, 0)
+
+      assert %Relation{rel_type: {:lateral_join, lj}} = root_relation(plan)
+      left_plan_id = lj.left.common.plan_id
+      assert %Relation{rel_type: {:project, project}} = lj.left
+      sql_plan_id = project.input.common.plan_id
+
+      assert %Relation{rel_type: {:unresolved_table_valued_function, tvf_proto}} = lj.right
+      [arg] = tvf_proto.arguments
+      assert %Expression{expr_type: {:unresolved_attribute, attr}} = arg
+      # Must match the project's plan_id, NOT the SQL child's plan_id.
+      assert attr.plan_id == left_plan_id
+      refute attr.plan_id == sql_plan_id
     end
   end
 
