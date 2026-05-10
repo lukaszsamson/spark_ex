@@ -338,7 +338,8 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:sort, child_plan, sort_orders, is_global}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
-    orders = Enum.map(sort_orders, &encode_sort_order/1)
+    remapped = remap_expr_list_plan_ids_to_input(sort_orders, child)
+    orders = Enum.map(remapped, &encode_sort_order/1)
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -354,8 +355,10 @@ defmodule SparkEx.Connect.PlanEncoder do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
+    remapped_aliases = remap_expr_list_plan_ids_to_input(aliases, child)
+
     alias_protos =
-      Enum.map(aliases, fn
+      Enum.map(remapped_aliases, fn
         {:alias, expr, name} ->
           %Expression.Alias{
             expr: encode_expression(expr),
@@ -388,7 +391,8 @@ defmodule SparkEx.Connect.PlanEncoder do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
-    columns = Enum.map(col_exprs, &encode_expression/1)
+    remapped = remap_expr_list_plan_ids_to_input(col_exprs, child)
+    columns = Enum.map(remapped, &encode_expression/1)
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -426,6 +430,9 @@ defmodule SparkEx.Connect.PlanEncoder do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
+    [remapped_grouping, remapped_agg] =
+      remap_multiple_expr_lists_plan_ids_to_input([grouping_exprs, agg_exprs], child)
+
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
       rel_type:
@@ -433,8 +440,8 @@ defmodule SparkEx.Connect.PlanEncoder do
          %Spark.Connect.Aggregate{
            input: child,
            group_type: encode_group_type(group_type),
-           grouping_expressions: Enum.map(grouping_exprs, &encode_expression/1),
-           aggregate_expressions: Enum.map(agg_exprs, &encode_expression/1)
+           grouping_expressions: Enum.map(remapped_grouping, &encode_expression/1),
+           aggregate_expressions: Enum.map(remapped_agg, &encode_expression/1)
          }}
     }
 
@@ -448,8 +455,17 @@ defmodule SparkEx.Connect.PlanEncoder do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
+    # Remap all expression lists (grouping, agg, and each grouping set) with a
+    # single shared state so foreign plan_id→candidate assignments are consistent
+    # when the child has multiple candidate plan_ids (e.g. aggregate over a join).
+    [remapped_grouping, remapped_agg | remapped_sets] =
+      remap_multiple_expr_lists_plan_ids_to_input(
+        [grouping_exprs, agg_exprs | grouping_sets],
+        child
+      )
+
     grouping_sets_proto =
-      Enum.map(grouping_sets, fn set ->
+      Enum.map(remapped_sets, fn set ->
         %Spark.Connect.Aggregate.GroupingSets{
           grouping_set: Enum.map(set, &encode_expression/1)
         }
@@ -462,8 +478,8 @@ defmodule SparkEx.Connect.PlanEncoder do
          %Spark.Connect.Aggregate{
            input: child,
            group_type: :GROUP_TYPE_GROUPING_SETS,
-           grouping_expressions: Enum.map(grouping_exprs, &encode_expression/1),
-           aggregate_expressions: Enum.map(agg_exprs, &encode_expression/1),
+           grouping_expressions: Enum.map(remapped_grouping, &encode_expression/1),
+           aggregate_expressions: Enum.map(remapped_agg, &encode_expression/1),
            grouping_sets: grouping_sets_proto
          }}
     }
@@ -478,6 +494,14 @@ defmodule SparkEx.Connect.PlanEncoder do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
+    # Include pivot_col as a single-element list so it shares the same remap
+    # state as grouping and agg expressions.
+    [remapped_grouping, remapped_agg, [remapped_pivot_col]] =
+      remap_multiple_expr_lists_plan_ids_to_input(
+        [grouping_exprs, agg_exprs, [pivot_col]],
+        child
+      )
+
     pivot_values_protos =
       case pivot_values do
         nil -> []
@@ -491,10 +515,10 @@ defmodule SparkEx.Connect.PlanEncoder do
          %Spark.Connect.Aggregate{
            input: child,
            group_type: :GROUP_TYPE_PIVOT,
-           grouping_expressions: Enum.map(grouping_exprs, &encode_expression/1),
-           aggregate_expressions: Enum.map(agg_exprs, &encode_expression/1),
+           grouping_expressions: Enum.map(remapped_grouping, &encode_expression/1),
+           aggregate_expressions: Enum.map(remapped_agg, &encode_expression/1),
            pivot: %Spark.Connect.Aggregate.Pivot{
-             col: encode_expression(pivot_col),
+             col: encode_expression(remapped_pivot_col),
              values: pivot_values_protos
            }
          }}
@@ -697,6 +721,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:repartition_by_expression, child_plan, exprs, num_partitions}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
+    remapped = remap_expr_list_plan_ids_to_input(exprs, child)
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -704,7 +729,7 @@ defmodule SparkEx.Connect.PlanEncoder do
         {:repartition_by_expression,
          %Spark.Connect.RepartitionByExpression{
            input: child,
-           partition_exprs: Enum.map(exprs, &encode_expression/1),
+           partition_exprs: Enum.map(remapped, &encode_expression/1),
            num_partitions: num_partitions
          }}
     }
@@ -780,6 +805,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:hint, child_plan, name, parameters}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
+    remapped = remap_expr_list_plan_ids_to_input(parameters, child)
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -788,7 +814,7 @@ defmodule SparkEx.Connect.PlanEncoder do
          %Spark.Connect.Hint{
            input: child,
            name: name,
-           parameters: Enum.map(parameters, &encode_expression/1)
+           parameters: Enum.map(remapped, &encode_expression/1)
          }}
     }
 
@@ -802,13 +828,16 @@ defmodule SparkEx.Connect.PlanEncoder do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
+    remapped_ids = remap_expr_list_plan_ids_to_input(ids, child)
+
     values_proto =
       case values do
         nil ->
           nil
 
         vals when is_list(vals) ->
-          %Spark.Connect.Unpivot.Values{values: Enum.map(vals, &encode_expression/1)}
+          remapped_vals = remap_expr_list_plan_ids_to_input(vals, child)
+          %Spark.Connect.Unpivot.Values{values: Enum.map(remapped_vals, &encode_expression/1)}
       end
 
     relation = %Relation{
@@ -817,7 +846,7 @@ defmodule SparkEx.Connect.PlanEncoder do
         {:unpivot,
          %Spark.Connect.Unpivot{
            input: child,
-           ids: Enum.map(ids, &encode_expression/1),
+           ids: Enum.map(remapped_ids, &encode_expression/1),
            values: values_proto,
            variable_column_name: variable_column_name,
            value_column_name: value_column_name
@@ -830,6 +859,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:transpose, child_plan, index_columns}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
+    remapped = remap_expr_list_plan_ids_to_input(index_columns, child)
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -837,7 +867,7 @@ defmodule SparkEx.Connect.PlanEncoder do
         {:transpose,
          %Spark.Connect.Transpose{
            input: child,
-           index_columns: Enum.map(index_columns, &encode_expression/1)
+           index_columns: Enum.map(remapped, &encode_expression/1)
          }}
     }
 
@@ -961,9 +991,15 @@ defmodule SparkEx.Connect.PlanEncoder do
         else: %{as_of_join | join_type: to_string(join_type)}
 
     as_of_join =
-      if tolerance == {:lit, nil},
-        do: as_of_join,
-        else: %{as_of_join | tolerance: encode_expression(tolerance)}
+      if tolerance == {:lit, nil} do
+        as_of_join
+      else
+        remapped =
+          tolerance
+          |> remap_join_condition_plan_ids(left_plan_id, right_plan_id)
+
+        %{as_of_join | tolerance: encode_expression(remapped)}
+      end
 
     as_of_join =
       if allow_exact_matches == nil,
@@ -986,6 +1022,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:lateral_join, left_plan, right_plan, join_condition, join_type}, counter) do
     {plan_id, counter} = next_id(counter)
     {left, counter} = encode_relation(left_plan, counter)
+    right_plan = remap_lateral_right_plan_to_left(right_plan, left)
     {right, counter} = encode_relation(right_plan, counter)
 
     lateral_join =
@@ -1021,6 +1058,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:collect_metrics, child_plan, name, metrics}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
+    remapped = remap_expr_list_plan_ids_to_input(metrics, child)
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -1029,7 +1067,7 @@ defmodule SparkEx.Connect.PlanEncoder do
          %Spark.Connect.CollectMetrics{
            input: child,
            name: name,
-           metrics: Enum.map(metrics, &encode_expression/1)
+           metrics: Enum.map(remapped, &encode_expression/1)
          }}
     }
 
@@ -1198,6 +1236,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   def encode_relation({:stat_sample_by, child_plan, col_expr, fractions, seed}, counter) do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
+    remapped_col = remap_expr_plan_ids_to_input(col_expr, child)
 
     encoded_fractions =
       Enum.map(fractions, fn {stratum, fraction} ->
@@ -1213,7 +1252,7 @@ defmodule SparkEx.Connect.PlanEncoder do
         {:sample_by,
          %Spark.Connect.StatSampleBy{
            input: child,
-           col: encode_expression(col_expr),
+           col: encode_expression(remapped_col),
            fractions: encoded_fractions,
            seed: seed
          }}
@@ -2441,6 +2480,7 @@ defmodule SparkEx.Connect.PlanEncoder do
          counter
        ) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {col_expr, plan_ids, refs, counter} = rewrite_expr(col_expr, plan_ids, refs, counter)
     {{:stat_sample_by, child_plan, col_expr, fractions, seed}, plan_ids, refs, counter}
   end
 
@@ -2449,8 +2489,10 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:catalog, _} = plan, plan_ids, refs, counter),
     do: {plan, plan_ids, refs, counter}
 
-  defp rewrite_plan({:table_valued_function, _name, _args} = plan, plan_ids, refs, counter),
-    do: {plan, plan_ids, refs, counter}
+  defp rewrite_plan({:table_valued_function, name, args}, plan_ids, refs, counter) do
+    {args, plan_ids, refs, counter} = rewrite_expr_list(args, plan_ids, refs, counter)
+    {{:table_valued_function, name, args}, plan_ids, refs, counter}
+  end
 
   defp rewrite_plan(
          {:inline_udtf, _name, _args, _command, _return_type, _eval_type, _python_ver,
@@ -2602,6 +2644,20 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_expr({:fn, name, args, is_distinct}, plan_ids, refs, counter) do
     {args, plan_ids, refs, counter} = rewrite_expr_list(args, plan_ids, refs, counter)
     {{:fn, name, args, is_distinct}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:call_function, name, args}, plan_ids, refs, counter) do
+    {args, plan_ids, refs, counter} = rewrite_expr_list(args, plan_ids, refs, counter)
+    {{:call_function, name, args}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:named_arg, key, value}, plan_ids, refs, counter) do
+    {value, plan_ids, refs, counter} = rewrite_expr(value, plan_ids, refs, counter)
+    {{:named_arg, key, value}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_expr({:sort_order, _, _, _} = expr, plan_ids, refs, counter) do
+    rewrite_sort_order(expr, plan_ids, refs, counter)
   end
 
   defp rewrite_expr({:alias, expr, name}, plan_ids, refs, counter) do
@@ -2886,6 +2942,21 @@ defmodule SparkEx.Connect.PlanEncoder do
     remap_expr_plan_ids(expr, [left_plan_id, right_plan_id])
   end
 
+  # Lateral join right side may reference columns from the left plan. After the
+  # rewrite_plan pass those references carry synthetic plan_ids; remap them to
+  # the left relation's own plan_id (not its inputs — the right side resolves
+  # against the output of the left relation, not its underlying sources).
+  # Currently handles TVF args, which is the common shape for lateral right sides.
+  defp remap_lateral_right_plan_to_left(
+         {:table_valued_function, name, args},
+         %Relation{common: %RelationCommon{plan_id: left_plan_id}}
+       ) do
+    remapped = remap_expr_list_plan_ids(args, [left_plan_id])
+    {:table_valued_function, name, remapped}
+  end
+
+  defp remap_lateral_right_plan_to_left(plan, _left), do: plan
+
   defp safe_rename_columns_map?(string_renames) do
     sources = Enum.map(string_renames, &elem(&1, 0))
     targets = Enum.map(string_renames, &elem(&1, 1))
@@ -2894,14 +2965,56 @@ defmodule SparkEx.Connect.PlanEncoder do
       MapSet.disjoint?(MapSet.new(sources), MapSet.new(targets))
   end
 
-  defp remap_expr_plan_ids_to_input(expr, %Relation{} = input_relation) do
+  @doc """
+  Remaps DataFrame-bound `plan_id`s in `expr` to the encoded child input
+  relation's plan_id(s).
+
+  Used by relation encoders (and command encoders, e.g. WriterV2) to mirror
+  the project/filter pattern: expressions captured against a synthetic /
+  foreign plan_id must point at the encoded input the server can resolve.
+  """
+  @spec remap_expr_plan_ids_to_input(term(), Relation.t()) :: term()
+  def remap_expr_plan_ids_to_input(expr, %Relation{} = input_relation) do
     candidate_plan_ids = source_relation_plan_ids(input_relation)
     remap_expr_plan_ids(expr, candidate_plan_ids)
   end
 
-  defp remap_expr_list_plan_ids_to_input(exprs, %Relation{} = input_relation) do
+  @doc """
+  List variant of `remap_expr_plan_ids_to_input/2` that threads a single
+  shared remap state across all expressions so foreign-id assignments stay
+  consistent within the list.
+  """
+  @spec remap_expr_list_plan_ids_to_input([term()], Relation.t()) :: [term()]
+  def remap_expr_list_plan_ids_to_input(exprs, %Relation{} = input_relation) do
     candidate_plan_ids = source_relation_plan_ids(input_relation)
     remap_expr_list_plan_ids(exprs, candidate_plan_ids)
+  end
+
+  # Remap multiple expression lists against the same child input using a single
+  # shared state so that foreign plan_id → candidate assignments are consistent
+  # across all lists (important when the child has multiple candidate plan_ids,
+  # e.g. aggregate over a join). Returns remapped lists in the same order.
+  #
+  # Known limitation (GPT-09, deferred): the mapping from a foreign synthetic id
+  # to a candidate plan_id is resolved by first-encounter order, not by the join
+  # side the original DataFrame belonged to. An aggregate where the first
+  # referenced expression comes from the right join child will have that foreign
+  # id assigned to candidates[0] (the left plan_id). Correct side-stable
+  # assignment requires stable plan_ids at DataFrame.col/2 creation time, which
+  # is the scope of GPT-09.
+  defp remap_multiple_expr_lists_plan_ids_to_input(expr_lists, %Relation{} = input_relation) do
+    candidate_plan_ids = source_relation_plan_ids(input_relation)
+    known_plan_ids = MapSet.new(candidate_plan_ids)
+    state = %{assignments: %{}, next_candidate_idx: 0}
+
+    {remapped_lists, _state} =
+      Enum.map_reduce(expr_lists, state, fn exprs, acc ->
+        Enum.map_reduce(exprs, acc, fn expr, s ->
+          do_remap_expr_plan_ids(expr, candidate_plan_ids, known_plan_ids, s)
+        end)
+      end)
+
+    remapped_lists
   end
 
   defp remap_expr_plan_ids(expr, candidate_plan_ids) do
@@ -3006,6 +3119,116 @@ defmodule SparkEx.Connect.PlanEncoder do
       end)
 
     {{:lambda, body, variables}, state}
+  end
+
+  defp do_remap_expr_plan_ids(
+         {:window, fn_expr, partition_spec, order_spec, frame_spec},
+         candidates,
+         known_ids,
+         state
+       ) do
+    {fn_expr, state} = do_remap_expr_plan_ids(fn_expr, candidates, known_ids, state)
+
+    {partition_spec, state} =
+      Enum.map_reduce(partition_spec, state, fn expr, acc ->
+        do_remap_expr_plan_ids(expr, candidates, known_ids, acc)
+      end)
+
+    {order_spec, state} =
+      Enum.map_reduce(order_spec, state, fn expr, acc ->
+        do_remap_expr_plan_ids(expr, candidates, known_ids, acc)
+      end)
+
+    {{:window, fn_expr, partition_spec, order_spec, frame_spec}, state}
+  end
+
+  defp do_remap_expr_plan_ids(
+         {:update_fields, struct_expr, field_name, value_expr},
+         candidates,
+         known_ids,
+         state
+       )
+       when is_binary(field_name) do
+    {struct_expr, state} = do_remap_expr_plan_ids(struct_expr, candidates, known_ids, state)
+
+    {value_expr, state} =
+      case value_expr do
+        nil -> {nil, state}
+        _ -> do_remap_expr_plan_ids(value_expr, candidates, known_ids, state)
+      end
+
+    {{:update_fields, struct_expr, field_name, value_expr}, state}
+  end
+
+  defp do_remap_expr_plan_ids({:call_function, name, args}, candidates, known_ids, state) do
+    {args, state} =
+      Enum.map_reduce(args, state, fn arg, acc ->
+        do_remap_expr_plan_ids(arg, candidates, known_ids, acc)
+      end)
+
+    {{:call_function, name, args}, state}
+  end
+
+  defp do_remap_expr_plan_ids({:named_arg, key, value}, candidates, known_ids, state) do
+    {value, state} = do_remap_expr_plan_ids(value, candidates, known_ids, state)
+    {{:named_arg, key, value}, state}
+  end
+
+  defp do_remap_expr_plan_ids({:outer, child}, candidates, known_ids, state) do
+    {child, state} = do_remap_expr_plan_ids(child, candidates, known_ids, state)
+    {{:outer, child}, state}
+  end
+
+  defp do_remap_expr_plan_ids(
+         {:subquery, subquery_type, plan_id, opts},
+         candidates,
+         known_ids,
+         state
+       )
+       when is_integer(plan_id) and is_list(opts) do
+    {opts, state} =
+      case Keyword.get(opts, :in_values) do
+        nil ->
+          {opts, state}
+
+        values ->
+          {values, state} =
+            Enum.map_reduce(values, state, fn value, acc ->
+              do_remap_expr_plan_ids(value, candidates, known_ids, acc)
+            end)
+
+          {Keyword.put(opts, :in_values, values), state}
+      end
+
+    {opts, state} =
+      case Keyword.get(opts, :table_arg_options) do
+        nil ->
+          {opts, state}
+
+        table_opts ->
+          partition_spec = Keyword.get(table_opts, :partition_spec, [])
+
+          {partition_spec, state} =
+            Enum.map_reduce(partition_spec, state, fn expr, acc ->
+              do_remap_expr_plan_ids(expr, candidates, known_ids, acc)
+            end)
+
+          order_spec = Keyword.get(table_opts, :order_spec, [])
+
+          {order_spec, state} =
+            Enum.map_reduce(order_spec, state, fn expr, acc ->
+              do_remap_expr_plan_ids(expr, candidates, known_ids, acc)
+            end)
+
+          table_opts =
+            table_opts
+            |> Keyword.put(:partition_spec, partition_spec)
+            |> Keyword.put(:order_spec, order_spec)
+
+          {Keyword.put(opts, :table_arg_options, table_opts), state}
+      end
+
+    {{:subquery, subquery_type, plan_id, opts}, state}
   end
 
   defp do_remap_expr_plan_ids(%Column{expr: expr} = col, candidates, known_ids, state) do

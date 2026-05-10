@@ -965,6 +965,319 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
   end
 
+  describe "Stream A — do_remap_expr_plan_ids traversal of new expression forms" do
+    # Each clause added in this stream must descend into nested col references so
+    # they get their plan_id rewritten; otherwise bound cols inside window
+    # functions / subquery in_values / call_function / named_arg pass through
+    # with stale synthetic ids that Spark Connect can't resolve.
+
+    test "remaps col plan_id inside window partition and order specs" do
+      child = {:sql, "SELECT 1 AS id, 2 AS val", nil}
+
+      window_expr = {
+        :window,
+        {:fn, "sum", [{:col, "val", 999}], false},
+        [{:col, "id", 999}],
+        [{:sort_order, {:col, "val", 999}, :asc, :nulls_first}],
+        nil
+      }
+
+      {plan, _} = PlanEncoder.encode({:project, child, [window_expr]}, 0)
+      assert %Relation{rel_type: {:project, project}} = root_relation(plan)
+      input_plan_id = project.input.common.plan_id
+
+      [%Expression{expr_type: {:window, window}}] = project.expressions
+
+      partition_ids =
+        Enum.flat_map(window.partition_spec, fn e ->
+          case e.expr_type do
+            {:unresolved_attribute, a} -> [a.plan_id]
+            _ -> []
+          end
+        end)
+
+      assert Enum.uniq(partition_ids) == [input_plan_id]
+    end
+
+    test "remaps col plan_id inside call_function args" do
+      child = {:sql, "SELECT 1 AS id", nil}
+      call_expr = {:call_function, "my_udf", [{:col, "id", 999}]}
+      {plan, _} = PlanEncoder.encode({:project, child, [call_expr]}, 0)
+      assert %Relation{rel_type: {:project, project}} = root_relation(plan)
+      input_plan_id = project.input.common.plan_id
+
+      [%Expression{expr_type: {:call_function, cf}}] = project.expressions
+
+      ids =
+        Enum.flat_map(cf.arguments, fn e ->
+          case e.expr_type do
+            {:unresolved_attribute, a} -> [a.plan_id]
+            _ -> []
+          end
+        end)
+
+      assert Enum.uniq(ids) == [input_plan_id]
+    end
+
+    test "remaps col plan_id inside named_arg value" do
+      child = {:sql, "SELECT 1 AS id", nil}
+      named_expr = {:named_arg, "key", {:col, "id", 999}}
+      {plan, _} = PlanEncoder.encode({:project, child, [named_expr]}, 0)
+      assert %Relation{rel_type: {:project, project}} = root_relation(plan)
+      input_plan_id = project.input.common.plan_id
+
+      [%Expression{expr_type: {:named_argument_expression, na}}] = project.expressions
+
+      assert %Expression{expr_type: {:unresolved_attribute, attr}} = na.value
+      assert attr.plan_id == input_plan_id
+    end
+
+    test "remaps col plan_id inside subquery in_values and threads state" do
+      child = {:sql, "SELECT 1 AS id", nil}
+      sub_plan_id = 77
+      sub_plan = {:plan_id, sub_plan_id, {:sql, "SELECT 42 AS x", nil}}
+
+      in_expr =
+        {:subquery, :in, sub_plan, in_values: [{:col, "id", 999}, {:col, "id", 999}]}
+
+      {plan, _} = PlanEncoder.encode({:project, child, [in_expr]}, 0)
+      assert %Relation{rel_type: {:project, project}} = root_relation(plan)
+      input_plan_id = project.input.common.plan_id
+
+      [%Expression{expr_type: {:subquery_expression, sq}}] = project.expressions
+
+      ids =
+        Enum.flat_map(sq.in_subquery_values, fn e ->
+          case e.expr_type do
+            {:unresolved_attribute, a} -> [a.plan_id]
+            _ -> []
+          end
+        end)
+
+      assert Enum.all?(ids, &(&1 == input_plan_id))
+    end
+
+    test "aggregate remaps grouping and agg expressions with shared state (multi-candidate child)" do
+      # aggregate over a join → child has two candidate plan_ids
+      left = {:sql, "SELECT 1 AS dept, 2 AS salary", nil}
+      right = {:sql, "SELECT 3 AS dept, 4 AS bonus", nil}
+      join = {:join, left, right, nil, :inner, ["dept"]}
+      grouping = [{:col, "dept", 999}]
+      agg = [{:fn, "sum", [{:col, "salary", 888}], false}]
+      {plan, _} = PlanEncoder.encode({:aggregate, join, :groupby, grouping, agg}, 0)
+
+      assert %Relation{rel_type: {:aggregate, agg_proto}} = root_relation(plan)
+
+      # Both foreign ids (999, 888) must be resolved to integer plan_ids
+      [g_expr] = agg_proto.grouping_expressions
+      assert {:unresolved_attribute, g_attr} = g_expr.expr_type
+      assert is_integer(g_attr.plan_id)
+
+      [a_expr] = agg_proto.aggregate_expressions
+      assert {:unresolved_function, af} = a_expr.expr_type
+      [arg] = af.arguments
+      assert {:unresolved_attribute, a_attr} = arg.expr_type
+      assert is_integer(a_attr.plan_id)
+    end
+  end
+
+  describe "Stream A — relation expression plan_id remap to encoded child input" do
+    # The encoded child relation gets its own plan_id; expressions captured against
+    # a foreign plan_id (e.g. via attach_with_relations / synthetic ids) must be
+    # rewritten to point at that encoded input. Mirrors the project/filter pattern.
+
+    test "sort remaps sort_order children to encoded input plan_id" do
+      child = {:sql, "SELECT 1 AS id", nil}
+      sort_orders = [{:sort_order, {:col, "id", 999}, :asc, :nulls_first}]
+      {plan, _} = PlanEncoder.encode({:sort, child, sort_orders}, 0)
+      assert %Relation{rel_type: {:sort, sort}} = root_relation(plan)
+      input_plan_id = sort.input.common.plan_id
+
+      ids =
+        Enum.flat_map(sort.order, fn so ->
+          case so.child.expr_type do
+            {:unresolved_attribute, attr} -> [attr.plan_id]
+            _ -> []
+          end
+        end)
+
+      assert Enum.uniq(ids) == [input_plan_id]
+    end
+
+    test "with_columns remaps alias body to encoded input plan_id" do
+      child = {:sql, "SELECT 1 AS id", nil}
+      aliases = [{:alias, {:col, "id", 999}, "id2"}]
+      {plan, _} = PlanEncoder.encode({:with_columns, child, aliases}, 0)
+      assert %Relation{rel_type: {:with_columns, wc}} = root_relation(plan)
+      input_plan_id = wc.input.common.plan_id
+
+      ids =
+        Enum.flat_map(wc.aliases, fn a ->
+          case a.expr.expr_type do
+            {:unresolved_attribute, attr} -> [attr.plan_id]
+            _ -> []
+          end
+        end)
+
+      assert Enum.uniq(ids) == [input_plan_id]
+    end
+
+    test "aggregate remaps grouping and aggregate expressions" do
+      child = {:sql, "SELECT * FROM emp", nil}
+      grouping = [{:col, "dept", 999}]
+      aggs = [{:fn, "sum", [{:col, "salary", 999}], false}]
+      {plan, _} = PlanEncoder.encode({:aggregate, child, :groupby, grouping, aggs}, 0)
+      assert %Relation{rel_type: {:aggregate, agg}} = root_relation(plan)
+      input_plan_id = agg.input.common.plan_id
+
+      grouping_ids =
+        Enum.flat_map(agg.grouping_expressions, fn e ->
+          case e.expr_type do
+            {:unresolved_attribute, attr} -> [attr.plan_id]
+            _ -> []
+          end
+        end)
+
+      agg_ids =
+        Enum.flat_map(agg.aggregate_expressions, fn e ->
+          case e.expr_type do
+            {:unresolved_function, f} ->
+              Enum.flat_map(f.arguments, fn arg ->
+                case arg.expr_type do
+                  {:unresolved_attribute, attr} -> [attr.plan_id]
+                  _ -> []
+                end
+              end)
+
+            _ ->
+              []
+          end
+        end)
+
+      assert Enum.uniq(grouping_ids) == [input_plan_id]
+      assert Enum.uniq(agg_ids) == [input_plan_id]
+    end
+
+    test "drop col_exprs are remapped to encoded input plan_id" do
+      child = {:sql, "SELECT 1 AS id, 2 AS x", nil}
+      {plan, _} = PlanEncoder.encode({:drop, child, [], [{:col, "x", 999}]}, 0)
+      assert %Relation{rel_type: {:drop, drop}} = root_relation(plan)
+      input_plan_id = drop.input.common.plan_id
+
+      ids =
+        Enum.flat_map(drop.columns, fn e ->
+          case e.expr_type do
+            {:unresolved_attribute, attr} -> [attr.plan_id]
+            _ -> []
+          end
+        end)
+
+      assert Enum.uniq(ids) == [input_plan_id]
+    end
+
+    test "repartition_by_expression remaps partition exprs" do
+      child = {:sql, "SELECT 1 AS id", nil}
+
+      {plan, _} =
+        PlanEncoder.encode({:repartition_by_expression, child, [{:col, "id", 999}], 4}, 0)
+
+      assert %Relation{rel_type: {:repartition_by_expression, r}} = root_relation(plan)
+
+      ids =
+        Enum.flat_map(r.partition_exprs, fn e ->
+          case e.expr_type do
+            {:unresolved_attribute, attr} -> [attr.plan_id]
+            _ -> []
+          end
+        end)
+
+      assert Enum.uniq(ids) == [r.input.common.plan_id]
+    end
+  end
+
+  describe "Stream A — TVF / sample_by / lateral_join expression rewrite" do
+    # GPT-02 / GPT-03 / GPT-24: rewrite_plan must descend into TVF args and
+    # stat_sample_by col_expr; lateral_join must remap right-side TVF args
+    # against the encoded left plan id.
+
+    test "GPT-03: stat_sample_by col_expr with embedded plan resolves to encoded input" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1 AS dept", nil}}
+      bound_col = {:col, "dept", df.plan}
+
+      {plan, _} =
+        PlanEncoder.encode(
+          {:stat_sample_by, df.plan, bound_col, [{"a", 0.1}], 42},
+          0
+        )
+
+      assert %Relation{rel_type: {:sample_by, sample}} = root_relation(plan)
+      input_plan_id = sample.input.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_attribute, attr}} = sample.col
+      assert attr.plan_id == input_plan_id
+    end
+
+    test "GPT-02: table_valued_function args with embedded plan get assigned plan_ids" do
+      df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      bound_arg = {:col, "arr", df.plan}
+      tvf = {:table_valued_function, "explode", [bound_arg]}
+
+      {plan, _} = PlanEncoder.encode(tvf, 0)
+
+      # Top-level wraps in WithRelations because the embedded plan was hoisted
+      # into refs. The TVF arg's plan_id must be an integer (assigned by rewrite).
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = plan
+
+      assert %Relation{rel_type: {:unresolved_table_valued_function, tvf_proto}} = wr.root
+      [arg] = tvf_proto.arguments
+      assert %Expression{expr_type: {:unresolved_attribute, attr}} = arg
+      assert is_integer(attr.plan_id)
+      # And the with_relations wrapper carries the referenced plan.
+      assert length(wr.references) == 1
+    end
+
+    test "GPT-24: lateral_join with TVF right side remaps args to encoded left plan_id (leaf left)" do
+      left_df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      bound_arg = {:col, "arr", left_df.plan}
+      tvf = {:table_valued_function, "explode", [bound_arg]}
+
+      {plan, _} =
+        PlanEncoder.encode({:lateral_join, left_df.plan, tvf, nil, :inner}, 0)
+
+      assert %Relation{rel_type: {:lateral_join, lj}} = root_relation(plan)
+      left_plan_id = lj.left.common.plan_id
+
+      assert %Relation{rel_type: {:unresolved_table_valued_function, tvf_proto}} = lj.right
+      [arg] = tvf_proto.arguments
+      assert %Expression{expr_type: {:unresolved_attribute, attr}} = arg
+      assert attr.plan_id == left_plan_id
+    end
+
+    test "GPT-24: lateral_join remaps TVF args to non-leaf left plan_id (not its inputs)" do
+      # left is a project (non-leaf) — args must point at the project's plan_id,
+      # not the underlying SQL child's plan_id.
+      left_df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      project_plan = {:project, left_df.plan, [{:col, "arr"}]}
+      bound_arg = {:col, "arr", project_plan}
+      tvf = {:table_valued_function, "explode", [bound_arg]}
+
+      {plan, _} =
+        PlanEncoder.encode({:lateral_join, project_plan, tvf, nil, :inner}, 0)
+
+      assert %Relation{rel_type: {:lateral_join, lj}} = root_relation(plan)
+      left_plan_id = lj.left.common.plan_id
+      assert %Relation{rel_type: {:project, project}} = lj.left
+      sql_plan_id = project.input.common.plan_id
+
+      assert %Relation{rel_type: {:unresolved_table_valued_function, tvf_proto}} = lj.right
+      [arg] = tvf_proto.arguments
+      assert %Expression{expr_type: {:unresolved_attribute, attr}} = arg
+      # Must match the project's plan_id, NOT the SQL child's plan_id.
+      assert attr.plan_id == left_plan_id
+      refute attr.plan_id == sql_plan_id
+    end
+  end
+
   defp root_relation(%Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}}),
     do: wr.root
 

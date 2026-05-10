@@ -41,8 +41,10 @@ defmodule SparkEx.Functions do
 
   def col(name) when is_binary(name) do
     if String.ends_with?(name, ".*") do
-      target = String.slice(name, 0, byte_size(name) - 2)
-      %Column{expr: {:star, target}}
+      # PySpark requires UnresolvedStar.unparsed_target to end with ".*"
+      # (see python/pyspark/sql/connect/expressions.py UnresolvedStar.__init__).
+      # The target keeps the full qualified name including the trailing ".*".
+      %Column{expr: {:star, name}}
     else
       %Column{expr: {:col, name}}
     end
