@@ -357,7 +357,7 @@ defmodule SparkEx.Catalog do
          {:create_table, table_name, path, source, description, normalized_schema,
           normalized_options}}
 
-      df = %DataFrame{session: session, plan: plan}
+      df = DataFrame.new(session, plan)
 
       case DataFrame.collect(df) do
         {:ok, _} -> {:ok, df}
@@ -391,7 +391,7 @@ defmodule SparkEx.Catalog do
         {:catalog,
          {:create_external_table, table_name, path, source, normalized_schema, normalized_options}}
 
-      df = %DataFrame{session: session, plan: plan}
+      df = DataFrame.new(session, plan)
 
       case DataFrame.collect(df) do
         {:ok, _} -> {:ok, df}
@@ -405,7 +405,7 @@ defmodule SparkEx.Catalog do
   # ── Private Helpers ──
 
   defp execute_catalog(session, cat_plan) do
-    df = %DataFrame{session: session, plan: {:catalog, cat_plan}}
+    df = DataFrame.new(session, {:catalog, cat_plan})
     DataFrame.collect(df)
   end
 

@@ -27,12 +27,16 @@ defmodule SparkEx.CatalogTest do
          }}
 
     @impl true
-    def handle_call({:execute_collect, {:catalog, {:current_catalog}}, _opts}, _from, state) do
+    def handle_call(
+          {:execute_collect, {:plan_id, _, {:catalog, {:current_catalog}}}, _opts},
+          _from,
+          state
+        ) do
       {:reply, {:ok, [%{"current_catalog" => state.current_catalog}]}, state}
     end
 
     def handle_call(
-          {:execute_collect, {:catalog, {:get_table, table_name, db_name}}, _opts},
+          {:execute_collect, {:plan_id, _, {:catalog, {:get_table, table_name, db_name}}}, _opts},
           _from,
           state
         ) do
@@ -52,7 +56,8 @@ defmodule SparkEx.CatalogTest do
     end
 
     def handle_call(
-          {:execute_collect, {:catalog, {:list_columns, table_name, db_name}}, _opts},
+          {:execute_collect, {:plan_id, _, {:catalog, {:list_columns, table_name, db_name}}},
+           _opts},
           _from,
           state
         ) do
@@ -71,12 +76,16 @@ defmodule SparkEx.CatalogTest do
       {:reply, {:ok, [row]}, state}
     end
 
-    def handle_call({:execute_collect, {:catalog, {:current_database}}, _opts}, _from, state) do
+    def handle_call(
+          {:execute_collect, {:plan_id, _, {:catalog, {:current_database}}}, _opts},
+          _from,
+          state
+        ) do
       {:reply, {:ok, [%{"current_database" => state.current_db}]}, state}
     end
 
     def handle_call(
-          {:execute_collect, {:catalog, {:list_tables, db_name, pattern}}, _opts},
+          {:execute_collect, {:plan_id, _, {:catalog, {:list_tables, db_name, pattern}}}, _opts},
           _from,
           state
         ) do
@@ -85,7 +94,8 @@ defmodule SparkEx.CatalogTest do
     end
 
     def handle_call(
-          {:execute_collect, {:catalog, {:table_exists, table_name, db_name}}, _opts},
+          {:execute_collect, {:plan_id, _, {:catalog, {:table_exists, table_name, db_name}}},
+           _opts},
           _from,
           state
         ) do
@@ -94,7 +104,8 @@ defmodule SparkEx.CatalogTest do
     end
 
     def handle_call(
-          {:execute_collect, {:catalog, {:list_functions, db_name, pattern}}, _opts},
+          {:execute_collect, {:plan_id, _, {:catalog, {:list_functions, db_name, pattern}}},
+           _opts},
           _from,
           state
         ) do
@@ -103,7 +114,8 @@ defmodule SparkEx.CatalogTest do
     end
 
     def handle_call(
-          {:execute_collect, {:catalog, {:function_exists, function_name, db_name}}, _opts},
+          {:execute_collect,
+           {:plan_id, _, {:catalog, {:function_exists, function_name, db_name}}}, _opts},
           _from,
           state
         ) do
@@ -124,8 +136,10 @@ defmodule SparkEx.CatalogTest do
 
     def handle_call(
           {:execute_collect,
-           {:catalog,
-            {:create_table, _table_name, _path, _source, _description, schema, options}}, _opts},
+           {:plan_id, _,
+            {:catalog,
+             {:create_table, _table_name, _path, _source, _description, schema, options}}},
+           _opts},
           _from,
           state
         ) do
@@ -135,7 +149,8 @@ defmodule SparkEx.CatalogTest do
 
     def handle_call(
           {:execute_collect,
-           {:catalog, {:create_external_table, _table_name, _path, _source, schema, options}},
+           {:plan_id, _,
+            {:catalog, {:create_external_table, _table_name, _path, _source, schema, options}}},
            _opts},
           _from,
           state
@@ -145,7 +160,7 @@ defmodule SparkEx.CatalogTest do
     end
 
     def handle_call(
-          {:execute_collect, {:catalog, {:list_databases, _pattern}}, _opts},
+          {:execute_collect, {:plan_id, _, {:catalog, {:list_databases, _pattern}}}, _opts},
           _from,
           state
         ) do
@@ -154,7 +169,8 @@ defmodule SparkEx.CatalogTest do
     end
 
     def handle_call(
-          {:execute_collect, {:catalog, {:cache_table, table_name, storage_level}}, _opts},
+          {:execute_collect, {:plan_id, _, {:catalog, {:cache_table, table_name, storage_level}}},
+           _opts},
           _from,
           state
         ) do

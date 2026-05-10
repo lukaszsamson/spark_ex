@@ -1,6 +1,8 @@
 defmodule SparkEx.ReviewFixesTest do
   use ExUnit.Case, async: true
 
+  import SparkEx.Test.PlanHelpers
+
   alias SparkEx.StreamWriter
   alias SparkEx.EtsTableOwner
 
@@ -44,7 +46,7 @@ defmodule SparkEx.ReviewFixesTest do
 
   describe "StreamWriter.trigger/2 validation" do
     setup do
-      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
       writer = %StreamWriter{df: df}
       %{writer: writer}
     end
@@ -194,7 +196,7 @@ defmodule SparkEx.ReviewFixesTest do
 
   describe "StreamWriter.output_mode (M16/F2)" do
     test "forwards raw mode string for server-side normalization" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
       writer = %SparkEx.StreamWriter{df: df}
 
       assert SparkEx.StreamWriter.output_mode(writer, "Append").output_mode == "Append"
@@ -202,7 +204,7 @@ defmodule SparkEx.ReviewFixesTest do
     end
 
     test "rejects empty / non-string output mode" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
       writer = %SparkEx.StreamWriter{df: df}
 
       assert_raise ArgumentError, ~r/non-empty string/, fn ->
@@ -217,7 +219,7 @@ defmodule SparkEx.ReviewFixesTest do
 
   describe "Writer.mode catch-all (REV_OPUS #60)" do
     test "rejects invalid atom mode" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
       writer = %SparkEx.Writer{df: df}
 
       assert_raise ArgumentError, ~r/unknown save mode/, fn ->
@@ -226,7 +228,7 @@ defmodule SparkEx.ReviewFixesTest do
     end
 
     test "rejects invalid string mode" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
       writer = %SparkEx.Writer{df: df}
 
       assert_raise ArgumentError, ~r/unknown save mode/, fn ->
@@ -337,7 +339,7 @@ defmodule SparkEx.ReviewFixesTest do
 
   describe "Writer.partition_by empty list validation" do
     test "rejects empty column list" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
       writer = %SparkEx.Writer{df: df}
 
       assert_raise ArgumentError, ~r/partition_by columns should not be empty/, fn ->
@@ -350,7 +352,7 @@ defmodule SparkEx.ReviewFixesTest do
 
   describe "DataFrame.drop type validation" do
     test "rejects non-string/atom/Column values" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
 
       assert_raise ArgumentError, ~r/drop expects column names/, fn ->
         SparkEx.DataFrame.drop(df, [123])
@@ -358,15 +360,15 @@ defmodule SparkEx.ReviewFixesTest do
     end
 
     test "accepts string column names" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
       result = SparkEx.DataFrame.drop(df, ["col1", "col2"])
-      assert %SparkEx.DataFrame{plan: {:drop, _, ["col1", "col2"], []}} = result
+      assert {:drop, _, ["col1", "col2"], []} = unwrap_plan(result)
     end
 
     test "accepts atom column names" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
       result = SparkEx.DataFrame.drop(df, [:col1])
-      assert %SparkEx.DataFrame{plan: {:drop, _, ["col1"], []}} = result
+      assert {:drop, _, ["col1"], []} = unwrap_plan(result)
     end
   end
 
@@ -391,7 +393,7 @@ defmodule SparkEx.ReviewFixesTest do
 
   describe "DataFrame.normalize_column_expr negative integer (REV_OPUS #47)" do
     test "rejects negative integer column index" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
 
       assert_raise FunctionClauseError, fn ->
         SparkEx.DataFrame.select(df, [-1])
@@ -399,7 +401,7 @@ defmodule SparkEx.ReviewFixesTest do
     end
 
     test "accepts non-negative integer column index" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
       result = SparkEx.DataFrame.select(df, [0])
       assert %SparkEx.DataFrame{} = result
     end

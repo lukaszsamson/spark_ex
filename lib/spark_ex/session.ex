@@ -1479,7 +1479,7 @@ defmodule SparkEx.Session do
 
           byte_size(arrow_ipc) <= cache_threshold ->
             plan = {:local_relation, arrow_ipc, schema_ddl}
-            df = %SparkEx.DataFrame{session: self(), plan: plan}
+            df = SparkEx.DataFrame.new(self(), plan)
             {:reply, {:ok, df}, state}
 
           true ->
@@ -1501,7 +1501,7 @@ defmodule SparkEx.Session do
         end
 
       {:ok, {:sql_relation, query, args}} ->
-        df = %SparkEx.DataFrame{session: self(), plan: {:sql, query, args}}
+        df = SparkEx.DataFrame.new(self(), {:sql, query, args})
         {:reply, {:ok, df}, state}
 
       {:error, _} = error ->
@@ -1540,7 +1540,7 @@ defmodule SparkEx.Session do
         case upload_missing_cache_artifacts(state, artifacts) do
           {:ok, state} ->
             plan = {:chunked_cached_local_relation, data_hashes, schema_hash}
-            df = %SparkEx.DataFrame{session: self(), plan: plan}
+            df = SparkEx.DataFrame.new(self(), plan)
             {:reply, {:ok, df}, state}
 
           {:error, _reason} = error ->

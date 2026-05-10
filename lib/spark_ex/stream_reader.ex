@@ -137,18 +137,15 @@ defmodule SparkEx.StreamReader do
     call_time_options = merge_source_options(opts, [:format, :schema])
     merged_options = Map.merge(reader.options, call_time_options)
 
-    %DataFrame{
-      session: reader.session,
-      plan: {:read_data_source_streaming, format, paths, schema, merged_options}
-    }
+    DataFrame.new(
+      reader.session,
+      {:read_data_source_streaming, format, paths, schema, merged_options}
+    )
   end
 
   @spec table(t(), String.t()) :: DataFrame.t()
   def table(%__MODULE__{} = reader, table_name) when is_binary(table_name) do
-    %DataFrame{
-      session: reader.session,
-      plan: {:read_named_table_streaming, table_name, reader.options}
-    }
+    DataFrame.new(reader.session, {:read_named_table_streaming, table_name, reader.options})
   end
 
   # Format-specific convenience functions
@@ -169,10 +166,7 @@ defmodule SparkEx.StreamReader do
 
     options = normalize_options(extra)
 
-    %DataFrame{
-      session: session,
-      plan: {:read_data_source_streaming, "rate", [], nil, options}
-    }
+    DataFrame.new(session, {:read_data_source_streaming, "rate", [], nil, options})
   end
 
   @spec text(GenServer.server(), String.t(), keyword()) :: DataFrame.t()
@@ -212,10 +206,7 @@ defmodule SparkEx.StreamReader do
     schema = opts |> Keyword.get(:schema, nil) |> normalize_schema()
     options = merge_source_options(opts, [:schema])
 
-    %DataFrame{
-      session: session,
-      plan: {:read_data_source_streaming, format, paths, schema, options}
-    }
+    DataFrame.new(session, {:read_data_source_streaming, format, paths, schema, options})
   end
 
   defp normalize_stream_paths!(path) when is_binary(path) do

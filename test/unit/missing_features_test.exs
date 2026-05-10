@@ -98,9 +98,9 @@ defmodule SparkEx.MissingFeaturesTest do
 
   describe "DataFrame.agg/2" do
     test "creates aggregate plan via empty group_by" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
       result = DataFrame.agg(df, [Functions.count(Functions.col("id"))])
-      assert %DataFrame{plan: {:aggregate, _, :groupby, [], _}} = result
+      assert {:aggregate, _, :groupby, [], _} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -557,17 +557,19 @@ defmodule SparkEx.MissingFeaturesTest do
 
   describe "filter/2 with string predicate" do
     test "accepts a string SQL expression" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
       result = DataFrame.filter(df, "age > 18")
-      assert %DataFrame{plan: {:filter, _, {:expr, "age > 18"}}} = result
+      assert {:filter, _, {:expr, "age > 18"}} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
   describe "repartition/2 with columns only (no partition count)" do
     test "repartitions by columns without explicit count" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
       result = DataFrame.repartition(df, [Functions.col("key")])
-      assert %DataFrame{plan: {:repartition_by_expression, _, [{:col, "key"}], nil}} = result
+
+      assert {:repartition_by_expression, _, [{:col, "key"}], nil} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -772,19 +774,16 @@ defmodule SparkEx.MissingFeaturesTest do
 
   describe "DataFrame.to_json_rows/1" do
     test "creates project with to_json(struct(*))" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
       result = DataFrame.to_json_rows(df)
 
-      assert %DataFrame{
-               plan:
-                 {:project, _,
-                  [
-                    {:alias,
-                     {:fn, "to_json",
-                      [{:fn, "struct", [{:star, nil, {:sql, "SELECT 1", nil}}], false}], false},
-                     "value"}
-                  ]}
-             } = result
+      assert {:project, _,
+              [
+                {:alias,
+                 {:fn, "to_json",
+                  [{:fn, "struct", [{:star, nil, {:sql, "SELECT 1", nil}}], false}], false},
+                 "value"}
+              ]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -792,18 +791,15 @@ defmodule SparkEx.MissingFeaturesTest do
 
   describe "DataFrame.repartition_by_id/3" do
     test "creates repartition by expression wrapping DirectShufflePartitionID" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
       result = DataFrame.repartition_by_id(df, 4, Functions.col("part"))
 
-      assert %DataFrame{
-               plan:
-                 {:repartition_by_expression, _, [{:direct_shuffle_partition_id, {:col, "part"}}],
-                  4}
-             } = result
+      assert {:repartition_by_expression, _, [{:direct_shuffle_partition_id, {:col, "part"}}], 4} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "rejects non-positive partition counts" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
       assert_raise ArgumentError, fn -> DataFrame.repartition_by_id(df, 0, "part") end
       assert_raise ArgumentError, fn -> DataFrame.repartition_by_id(df, -1, "part") end
       assert_raise ArgumentError, fn -> DataFrame.repartition_by_id(df, nil, "part") end
@@ -824,15 +820,19 @@ defmodule SparkEx.MissingFeaturesTest do
 
   describe "DataFrame.parse/3" do
     test "creates parse plan for CSV" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
       result = DataFrame.parse(df, :csv, "a INT, b STRING")
-      assert %DataFrame{plan: {:parse, _, :csv, "a INT, b STRING", nil}} = result
+
+      assert {:parse, _, :csv, "a INT, b STRING", nil} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "creates parse plan for JSON with options" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
       result = DataFrame.parse(df, :json, "a INT", %{"mode" => "FAILFAST"})
-      assert %DataFrame{plan: {:parse, _, :json, "a INT", %{"mode" => "FAILFAST"}}} = result
+
+      assert {:parse, _, :json, "a INT", %{"mode" => "FAILFAST"}} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 

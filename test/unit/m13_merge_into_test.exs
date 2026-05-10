@@ -5,7 +5,7 @@ defmodule SparkEx.M13.MergeIntoTest do
   alias SparkEx.Functions
 
   defp make_df(plan \\ :source_plan) do
-    %DataFrame{session: self(), plan: plan}
+    DataFrame.new(self(), plan)
   end
 
   describe "new/2" do
@@ -13,7 +13,7 @@ defmodule SparkEx.M13.MergeIntoTest do
       m = MergeIntoWriter.new(make_df(), "target_table")
 
       assert %MergeIntoWriter{
-               source_df: %DataFrame{plan: :source_plan},
+               source_df: %DataFrame{plan: {:plan_id, _, :source_plan}},
                target_table: "target_table",
                condition: nil,
                match_actions: [],
@@ -237,7 +237,7 @@ defmodule SparkEx.M13.MergeIntoTest do
 
       assert %MergeIntoWriter{
                target_table: "my_table",
-               source_df: %DataFrame{plan: :source_plan},
+               source_df: %DataFrame{plan: {:plan_id, _, :source_plan}},
                condition: {:fn, "==", [{:col, "source.id"}, {:col, "target.id"}], false}
              } = m
     end

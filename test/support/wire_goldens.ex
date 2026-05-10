@@ -106,7 +106,78 @@ defmodule SparkEx.Test.WireGoldens do
   @spec canonicalize(Plan.t()) :: Plan.t()
   def canonicalize(%Plan{} = plan) do
     {plan, _} = walk(plan, %{})
-    plan
+    plan_ids = collect_plan_ids(plan, %{})
+    rewrite_plan_ids(plan, plan_ids)
+  end
+
+  import Bitwise
+
+  # Plan_ids are allocated from a global atomic counter starting at 2^31, so
+  # encoded bytes vary between runs. Renumber stable ids (≥ 2^31) to
+  # deterministic positions based on first-occurrence in a structural walk.
+  # Counter-based ids (< 2^31) are stable per encoding pass and left alone.
+  @plan_id_base 1_000_000
+  @stable_threshold 1 <<< 31
+
+  @plan_id_carriers [
+    Spark.Connect.RelationCommon,
+    Spark.Connect.Expression.UnresolvedAttribute,
+    Spark.Connect.Expression.UnresolvedRegex,
+    Spark.Connect.Expression.UnresolvedStar,
+    Spark.Connect.SubqueryExpression
+  ]
+
+  defp collect_plan_ids(%mod{plan_id: id} = struct, acc)
+       when mod in @plan_id_carriers and is_integer(id) and id >= @stable_threshold do
+    acc = Map.put_new(acc, id, map_size(acc) + @plan_id_base)
+    descend_collect(struct, acc)
+  end
+
+  defp collect_plan_ids(%_{} = struct, acc), do: descend_collect(struct, acc)
+
+  defp collect_plan_ids(list, acc) when is_list(list),
+    do: Enum.reduce(list, acc, &collect_plan_ids/2)
+
+  defp collect_plan_ids(tuple, acc) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.reduce(acc, &collect_plan_ids/2)
+
+  defp collect_plan_ids(map, acc) when is_map(map),
+    do: map |> Map.values() |> Enum.reduce(acc, &collect_plan_ids/2)
+
+  defp collect_plan_ids(_, acc), do: acc
+
+  defp descend_collect(%_{} = struct, acc) do
+    struct |> Map.from_struct() |> Map.values() |> Enum.reduce(acc, &collect_plan_ids/2)
+  end
+
+  defp rewrite_plan_ids(%mod{plan_id: id} = struct, plan_ids)
+       when mod in @plan_id_carriers and is_integer(id) and id >= @stable_threshold do
+    rewritten = %{struct | plan_id: Map.get(plan_ids, id, id)}
+    rewrite_struct_fields(rewritten, plan_ids)
+  end
+
+  defp rewrite_plan_ids(%_{} = struct, plan_ids), do: rewrite_struct_fields(struct, plan_ids)
+
+  defp rewrite_plan_ids(list, plan_ids) when is_list(list),
+    do: Enum.map(list, &rewrite_plan_ids(&1, plan_ids))
+
+  defp rewrite_plan_ids(tuple, plan_ids) when is_tuple(tuple) do
+    tuple |> Tuple.to_list() |> Enum.map(&rewrite_plan_ids(&1, plan_ids)) |> List.to_tuple()
+  end
+
+  defp rewrite_plan_ids(map, plan_ids) when is_map(map) do
+    Map.new(map, fn {k, v} -> {k, rewrite_plan_ids(v, plan_ids)} end)
+  end
+
+  defp rewrite_plan_ids(other, _plan_ids), do: other
+
+  defp rewrite_struct_fields(struct, plan_ids) do
+    fields =
+      struct
+      |> Map.from_struct()
+      |> Enum.map(fn {k, v} -> {k, rewrite_plan_ids(v, plan_ids)} end)
+
+    struct(struct.__struct__, fields)
   end
 
   defp walk(%Plan{} = plan, acc), do: walk_struct(plan, acc)

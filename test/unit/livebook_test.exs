@@ -50,7 +50,7 @@ defmodule SparkEx.LivebookTest do
             explorer: explorer
           )
 
-        df = %DataFrame{session: session, plan: {:sql, "SELECT 1"}}
+        df = DataFrame.new(session, {:sql, "SELECT 1"})
         %{df: df}
       end
 
@@ -85,7 +85,7 @@ defmodule SparkEx.LivebookTest do
             explorer: {:error, :explorer_failed}
           )
 
-        df = %DataFrame{session: session, plan: {:sql, "SELECT 1"}}
+        df = DataFrame.new(session, {:sql, "SELECT 1"})
 
         assert_raise RuntimeError, ~r/Livebook preview failed: :explorer_failed/, fn ->
           SparkEx.Livebook.preview(df)
@@ -101,7 +101,7 @@ defmodule SparkEx.LivebookTest do
             explain: {:error, :explain_failed}
           )
 
-        df = %DataFrame{session: session, plan: {:sql, "SELECT 1"}}
+        df = DataFrame.new(session, {:sql, "SELECT 1"})
 
         assert_raise RuntimeError, ~r/Livebook explain failed: :explain_failed/, fn ->
           SparkEx.Livebook.explain(df)
@@ -116,7 +116,7 @@ defmodule SparkEx.LivebookTest do
             explorer: {:ok, Explorer.DataFrame.new(%{"id" => [1]})}
           )
 
-        df = %DataFrame{session: session, plan: {:sql, "SELECT 1"}}
+        df = DataFrame.new(session, {:sql, "SELECT 1"})
 
         assert_raise RuntimeError, ~r/Livebook schema failed: :schema_failed/, fn ->
           SparkEx.Livebook.schema(df)
@@ -136,7 +136,7 @@ defmodule SparkEx.LivebookTest do
             explorer: explorer
           )
 
-        df = %DataFrame{session: session, plan: {:sql, "SELECT 1"}}
+        df = DataFrame.new(session, {:sql, "SELECT 1"})
         %{df: df}
       end
 

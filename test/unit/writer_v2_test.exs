@@ -6,7 +6,7 @@ defmodule SparkEx.Unit.WriterV2Test do
   alias SparkEx.Functions
 
   setup do
-    df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+    df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
     writer = %WriterV2{df: df, table_name: "my_table"}
     %{df: df, writer: writer}
   end
@@ -154,7 +154,7 @@ defmodule SparkEx.Unit.WriterV2Test do
 
     test "delegates to create_or_replace" do
       {:ok, session} = CreateOrReplaceSession.start_link(self())
-      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(session, {:sql, "SELECT 1", nil})
 
       writer =
         df

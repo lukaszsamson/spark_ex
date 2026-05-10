@@ -1,6 +1,8 @@
 defmodule SparkEx.M11.GroupedDataTest do
   use ExUnit.Case, async: true
 
+  import SparkEx.Test.PlanHelpers
+
   alias SparkEx.DataFrame
   alias SparkEx.GroupedData
   alias SparkEx.Functions
@@ -24,7 +26,7 @@ defmodule SparkEx.M11.GroupedDataTest do
   end
 
   defp make_grouped(cols \\ ["dept"], session \\ self()) do
-    df = %DataFrame{session: session, plan: {:sql, "SELECT * FROM t", nil}}
+    df = DataFrame.new(session, {:sql, "SELECT * FROM t", nil})
     DataFrame.group_by(df, cols)
   end
 
@@ -64,37 +66,29 @@ defmodule SparkEx.M11.GroupedDataTest do
     test "count with no columns uses count(1) and alias" do
       result = make_grouped() |> GroupedData.count()
 
-      assert %DataFrame{
-               plan:
-                 {:aggregate, _, :groupby, [{:col, "dept"}],
-                  [{:alias, {:fn, "count", [{:lit, 1}], false}, "count"}]}
-             } = result
+      assert {:aggregate, _, :groupby, [{:col, "dept"}],
+              [{:alias, {:fn, "count", [{:lit, 1}], false}, "count"}]} = unwrap_plan(result)
     end
 
     test "count with specific columns" do
       result = make_grouped() |> GroupedData.count(["salary"])
 
-      assert %DataFrame{
-               plan:
-                 {:aggregate, _, :groupby, [{:col, "dept"}],
-                  [{:fn, "count", [{:col, "salary"}], false}]}
-             } = result
+      assert {:aggregate, _, :groupby, [{:col, "dept"}],
+              [{:fn, "count", [{:col, "salary"}], false}]} = unwrap_plan(result)
     end
 
     test "count with single column string" do
       result = make_grouped() |> GroupedData.count("salary")
 
-      assert %DataFrame{
-               plan: {:aggregate, _, :groupby, _, [{:fn, "count", [{:col, "salary"}], false}]}
-             } = result
+      assert {:aggregate, _, :groupby, _, [{:fn, "count", [{:col, "salary"}], false}]} =
+               unwrap_plan(result)
     end
 
     test "count with Column structs" do
       result = make_grouped() |> GroupedData.count([Functions.col("salary")])
 
-      assert %DataFrame{
-               plan: {:aggregate, _, :groupby, _, [{:fn, "count", [{:col, "salary"}], false}]}
-             } = result
+      assert {:aggregate, _, :groupby, _, [{:fn, "count", [{:col, "salary"}], false}]} =
+               unwrap_plan(result)
     end
   end
 
@@ -103,7 +97,7 @@ defmodule SparkEx.M11.GroupedDataTest do
       {:ok, session} = FakeSession.start_link(schema: numeric_schema())
       result = make_grouped(["dept"], session) |> GroupedData.min()
 
-      assert %DataFrame{plan: {:aggregate, _, :groupby, _, agg_exprs}} = result
+      assert {:aggregate, _, :groupby, _, agg_exprs} = unwrap_plan(result)
       assert length(agg_exprs) == 2
       assert {:fn, "min", [{:col, "salary"}], false} = hd(agg_exprs)
     end
@@ -114,7 +108,7 @@ defmodule SparkEx.M11.GroupedDataTest do
       {:ok, session} = FakeSession.start_link(schema: numeric_schema())
       result = make_grouped(["dept"], session) |> GroupedData.max()
 
-      assert %DataFrame{plan: {:aggregate, _, :groupby, _, agg_exprs}} = result
+      assert {:aggregate, _, :groupby, _, agg_exprs} = unwrap_plan(result)
       assert length(agg_exprs) == 2
     end
   end
@@ -124,7 +118,7 @@ defmodule SparkEx.M11.GroupedDataTest do
       {:ok, session} = FakeSession.start_link(schema: numeric_schema())
       result = make_grouped(["dept"], session) |> GroupedData.sum()
 
-      assert %DataFrame{plan: {:aggregate, _, :groupby, _, agg_exprs}} = result
+      assert {:aggregate, _, :groupby, _, agg_exprs} = unwrap_plan(result)
       assert length(agg_exprs) == 2
     end
 
@@ -132,9 +126,8 @@ defmodule SparkEx.M11.GroupedDataTest do
       {:ok, session} = FakeSession.start_link(schema: numeric_schema())
       result = make_grouped(["dept"], session) |> GroupedData.sum("salary")
 
-      assert %DataFrame{
-               plan: {:aggregate, _, :groupby, _, [{:fn, "sum", [{:col, "salary"}], false}]}
-             } = result
+      assert {:aggregate, _, :groupby, _, [{:fn, "sum", [{:col, "salary"}], false}]} =
+               unwrap_plan(result)
     end
   end
 
@@ -143,7 +136,7 @@ defmodule SparkEx.M11.GroupedDataTest do
       {:ok, session} = FakeSession.start_link(schema: numeric_schema())
       result = make_grouped(["dept"], session) |> GroupedData.avg()
 
-      assert %DataFrame{plan: {:aggregate, _, :groupby, _, agg_exprs}} = result
+      assert {:aggregate, _, :groupby, _, agg_exprs} = unwrap_plan(result)
       assert length(agg_exprs) == 2
     end
   end
@@ -153,9 +146,8 @@ defmodule SparkEx.M11.GroupedDataTest do
       {:ok, session} = FakeSession.start_link(schema: numeric_schema())
       result = make_grouped(["dept"], session) |> GroupedData.mean(["salary"])
 
-      assert %DataFrame{
-               plan: {:aggregate, _, :groupby, _, [{:fn, "avg", [{:col, "salary"}], false}]}
-             } = result
+      assert {:aggregate, _, :groupby, _, [{:fn, "avg", [{:col, "salary"}], false}]} =
+               unwrap_plan(result)
     end
   end
 
@@ -200,12 +192,9 @@ defmodule SparkEx.M11.GroupedDataTest do
         |> GroupedData.pivot("course", ["dotNET", "Java"])
         |> GroupedData.agg([Functions.sum(Functions.col("earnings"))])
 
-      assert %DataFrame{
-               plan:
-                 {:aggregate, _, :pivot, [{:col, "dept"}],
-                  [{:fn, "sum", [{:col, "earnings"}], false}], {:col, "course"},
-                  ["dotNET", "Java"]}
-             } = result
+      assert {:aggregate, _, :pivot, [{:col, "dept"}],
+              [{:fn, "sum", [{:col, "earnings"}], false}], {:col, "course"}, ["dotNET", "Java"]} =
+               unwrap_plan(result)
     end
 
     test "pivot + count convenience" do
@@ -214,12 +203,9 @@ defmodule SparkEx.M11.GroupedDataTest do
         |> GroupedData.pivot("course", ["dotNET"])
         |> GroupedData.count()
 
-      assert %DataFrame{
-               plan:
-                 {:aggregate, _, :pivot, [{:col, "dept"}],
-                  [{:alias, {:fn, "count", [{:lit, 1}], false}, "count"}], {:col, "course"},
-                  ["dotNET"]}
-             } = result
+      assert {:aggregate, _, :pivot, [{:col, "dept"}],
+              [{:alias, {:fn, "count", [{:lit, 1}], false}, "count"}], {:col, "course"},
+              ["dotNET"]} = unwrap_plan(result)
     end
   end
 

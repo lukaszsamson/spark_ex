@@ -64,8 +64,8 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
   describe "join encoding with bound columns" do
     test "preserves expression join condition rather than rewriting to USING" do
-      left = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM emp", nil}}
-      right = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM dept", nil}}
+      left = DataFrame.new(self(), {:sql, "SELECT * FROM emp", nil})
+      right = DataFrame.new(self(), {:sql, "SELECT * FROM dept", nil})
 
       join_condition = Column.eq(DataFrame.col(left, "dept_id"), DataFrame.col(right, "dept_id"))
       joined = DataFrame.join(left, right, join_condition, :inner)
@@ -79,8 +79,8 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "maps multi-predicate join conditions to only left/right plan ids" do
-      left = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM emp", nil}}
-      right = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM dept", nil}}
+      left = DataFrame.new(self(), {:sql, "SELECT * FROM emp", nil})
+      right = DataFrame.new(self(), {:sql, "SELECT * FROM dept", nil})
 
       join_condition =
         Column.and_(
@@ -112,7 +112,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "maps bound self-join filter and projection to concrete join sides" do
-      base = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM emp", nil}}
+      base = DataFrame.new(self(), {:sql, "SELECT * FROM emp", nil})
       e1 = DataFrame.alias_(base, "e1")
       e2 = DataFrame.alias_(base, "e2")
 
@@ -146,7 +146,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "maps triple self-join filter and projection to all join inputs" do
-      base = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM nums", nil}}
+      base = DataFrame.new(self(), {:sql, "SELECT * FROM nums", nil})
       a = DataFrame.alias_(base, "a")
       b = DataFrame.alias_(base, "b")
       c = DataFrame.alias_(base, "c")
@@ -219,7 +219,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "maps bound expressions to child relation plan id" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1 AS id, 2 AS name_a", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1 AS id, 2 AS name_a", nil})
       selected = DataFrame.select(df, [DataFrame.col(df, "id"), DataFrame.col_regex(df, "^name")])
       {plan, _counter} = PlanEncoder.encode(selected.plan, 0)
       assert %Relation{rel_type: {:project, project}} = root_relation(plan)
@@ -1271,7 +1271,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
     test "filter over nested join encodes without crashing and binds outer ref correctly" do
       # Nested join with referenced_plans at multiple levels — would crash
-      # before the {:plan_id, _, _} rewrite_plan clause was added (the inline
+      # before the _ rewrite_plan clause was added (the inline
       # wrapping introduced inner wrappers that re-entered rewrite_plan via
       # encode_relation({:plan_id, …}) → attach_with_relations).
       a = {:sql, "SELECT 1 AS x", nil}
@@ -1295,7 +1295,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
       # Inner condition was rewritten in the first pass and re-walked
       # idempotently via attach_with_relations inside encode_relation
-      # for the {:plan_id, _, _} wrapper. Verify A and B still bind to
+      # for the _ wrapper. Verify A and B still bind to
       # the inner join's left/right respectively.
       assert %Relation{rel_type: {:join, inner}} = outer.left
       a_plan_id = inner.left.common.plan_id
@@ -1450,7 +1450,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     # against the encoded left plan id.
 
     test "GPT-03: stat_sample_by col_expr with embedded plan resolves to encoded input" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1 AS dept", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1 AS dept", nil})
       bound_col = {:col, "dept", df.plan}
 
       {plan, _} =
@@ -1467,7 +1467,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "GPT-02: table_valued_function args with embedded plan get assigned plan_ids" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT array(1,2,3) AS arr", nil})
       bound_arg = {:col, "arr", df.plan}
       tvf = {:table_valued_function, "explode", [bound_arg]}
 
@@ -1486,7 +1486,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "GPT-24: lateral_join with TVF right side remaps args to encoded left plan_id (leaf left)" do
-      left_df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      left_df = DataFrame.new(self(), {:sql, "SELECT array(1,2,3) AS arr", nil})
       bound_arg = {:col, "arr", left_df.plan}
       tvf = {:table_valued_function, "explode", [bound_arg]}
 
@@ -1505,7 +1505,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     test "GPT-24: lateral_join remaps TVF args to non-leaf left plan_id (not its inputs)" do
       # left is a project (non-leaf) — args must point at the project's plan_id,
       # not the underlying SQL child's plan_id.
-      left_df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      left_df = DataFrame.new(self(), {:sql, "SELECT array(1,2,3) AS arr", nil})
       project_plan = {:project, left_df.plan, [{:col, "arr"}]}
       bound_arg = {:col, "arr", project_plan}
       tvf = {:table_valued_function, "explode", [bound_arg]}

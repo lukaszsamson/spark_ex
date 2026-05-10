@@ -1,6 +1,7 @@
 defmodule SparkEx.Unit.SessionLifecycleTest do
   use ExUnit.Case, async: true
   import ExUnit.CaptureLog
+  import SparkEx.Test.PlanHelpers
 
   alias Spark.Connect.{CloneSessionRequest, ReleaseSessionRequest, UserContext}
 
@@ -94,7 +95,7 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
 
   describe "DataFrame.tag/2" do
     test "adds a tag to a DataFrame" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:range, 0, 10, 1, nil}}
+      df = SparkEx.DataFrame.new(self(), {:range, 0, 10, 1, nil})
       tagged = SparkEx.DataFrame.tag(df, "my-tag")
 
       assert tagged.tags == ["my-tag"]
@@ -103,7 +104,7 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
     end
 
     test "accumulates multiple tags" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:range, 0, 10, 1, nil}}
+      df = SparkEx.DataFrame.new(self(), {:range, 0, 10, 1, nil})
 
       tagged =
         df
@@ -114,13 +115,13 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
     end
 
     test "tags are empty by default" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:range, 0, 10, 1, nil}}
+      df = SparkEx.DataFrame.new(self(), {:range, 0, 10, 1, nil})
       assert df.tags == []
     end
 
     test "tags are preserved through transforms" do
       df =
-        %SparkEx.DataFrame{session: self(), plan: {:range, 0, 10, 1, nil}}
+        SparkEx.DataFrame.new(self(), {:range, 0, 10, 1, nil})
         |> SparkEx.DataFrame.tag("etl")
         |> SparkEx.DataFrame.limit(5)
 
@@ -128,12 +129,12 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
     end
 
     test "rejects empty tags" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:range, 0, 10, 1, nil}}
+      df = SparkEx.DataFrame.new(self(), {:range, 0, 10, 1, nil})
       assert_raise ArgumentError, ~r/non-empty string/, fn -> SparkEx.DataFrame.tag(df, "") end
     end
 
     test "rejects tags containing commas" do
-      df = %SparkEx.DataFrame{session: self(), plan: {:range, 0, 10, 1, nil}}
+      df = SparkEx.DataFrame.new(self(), {:range, 0, 10, 1, nil})
 
       assert_raise ArgumentError, ~r/cannot contain ','/, fn ->
         SparkEx.DataFrame.tag(df, "a,b")
@@ -400,9 +401,10 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
 
       request = {:create_dataframe, [%{"id" => 1}], [schema: schema]}
 
-      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, nil}}}, %{}} =
-               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+      {:reply, {:ok, df}, %{}} =
+        SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
 
+      assert {:sql, query, nil} = unwrap_plan(df)
       assert query =~ "from_json(_spark_ex_json, 'id BIGINT'"
     end
 
@@ -415,9 +417,10 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
 
       request = {:create_dataframe, rows, [schema: "note STRING"]}
 
-      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, nil}}}, %{}} =
-               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+      {:reply, {:ok, df}, %{}} =
+        SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
 
+      assert {:sql, query, nil} = unwrap_plan(df)
       # Both rows must be present in the VALUES clause, with the JSON
       # text — including the embedded "(?)" — escaped into the SQL.
       assert query =~ ~s|('{\"note\":\"what is (?) here\"}')|
@@ -463,9 +466,10 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
 
       # GPT-16: PySpark infers "_1", "_2", ... when no schema is provided.
       # The DataFrame is built via Arrow IPC; the plan is a 3-tuple.
-      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:local_relation, ipc, schema}}}, %{}} =
-               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+      {:reply, {:ok, df}, %{}} =
+        SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
 
+      assert {:local_relation, ipc, schema} = unwrap_plan(df)
       assert is_binary(ipc)
       # Schema DDL must contain the inferred _1 and _2 column names.
       assert schema =~ "_1"
@@ -538,9 +542,10 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       rows = [%{"bin" => {:binary, "data"}, "n" => 1}]
       request = {:create_dataframe, rows, []}
 
-      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, _nil}}}, %{}} =
-               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+      {:reply, {:ok, df}, %{}} =
+        SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
 
+      assert {:sql, query, _nil} = unwrap_plan(df)
       assert query =~ "BIGINT"
       refute query =~ "TINYINT"
       # Verify the integer column did NOT produce a narrower type.
@@ -553,9 +558,10 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       rows = [%{"bin" => {:binary, "data"}, "d" => Decimal.new("1.5")}]
       request = {:create_dataframe, rows, []}
 
-      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, _nil}}}, %{}} =
-               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+      {:reply, {:ok, df}, %{}} =
+        SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
 
+      assert {:sql, query, _nil} = unwrap_plan(df)
       assert query =~ "DECIMAL(38, 18)"
       refute query =~ "DECIMAL(2,"
     end
@@ -565,9 +571,10 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       rows = [%{"d" => ~D[2024-01-15]}]
       request = {:create_dataframe, rows, [schema: "d DATE"]}
 
-      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, _nil}}}, %{}} =
-               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+      {:reply, {:ok, df}, %{}} =
+        SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
 
+      assert {:sql, query, _nil} = unwrap_plan(df)
       # The ISO-8601 date string must appear in the generated SQL.
       assert query =~ "2024-01-15"
     end
@@ -576,9 +583,10 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       rows = [%{"ts" => ~N[2024-06-01 12:00:00]}]
       request = {:create_dataframe, rows, [schema: "ts TIMESTAMP_NTZ"]}
 
-      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, _nil}}}, %{}} =
-               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+      {:reply, {:ok, df}, %{}} =
+        SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
 
+      assert {:sql, query, _nil} = unwrap_plan(df)
       assert query =~ "2024-06-01T12:00:00"
     end
   end

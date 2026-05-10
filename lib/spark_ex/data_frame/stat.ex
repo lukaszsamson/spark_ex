@@ -29,7 +29,7 @@ defmodule SparkEx.DataFrame.Stat do
 
   def describe(%DataFrame{} = df, cols) when is_list(cols) do
     validate_string_list!(cols, "column names")
-    %DataFrame{df | plan: {:stat_describe, df.plan, cols}}
+    DataFrame.update_plan(df, {:stat_describe, df.plan, cols})
   end
 
   def describe(%DataFrame{} = df, col) when is_binary(col) do
@@ -52,7 +52,7 @@ defmodule SparkEx.DataFrame.Stat do
 
   def summary(%DataFrame{} = df, statistics) when is_list(statistics) do
     validate_string_list!(statistics, "statistics")
-    %DataFrame{df | plan: {:stat_summary, df.plan, statistics}}
+    DataFrame.update_plan(df, {:stat_summary, df.plan, statistics})
   end
 
   def summary(%DataFrame{} = df, stat) when is_binary(stat) do
@@ -70,7 +70,7 @@ defmodule SparkEx.DataFrame.Stat do
   """
   @spec crosstab(DataFrame.t(), String.t(), String.t()) :: DataFrame.t()
   def crosstab(%DataFrame{} = df, col1, col2) when is_binary(col1) and is_binary(col2) do
-    %DataFrame{df | plan: {:stat_crosstab, df.plan, col1, col2}}
+    DataFrame.update_plan(df, {:stat_crosstab, df.plan, col1, col2})
   end
 
   @doc """
@@ -87,7 +87,7 @@ defmodule SparkEx.DataFrame.Stat do
   def freq_items(%DataFrame{} = df, cols, support) when is_list(cols) and is_number(support) do
     validate_string_list!(cols, "column names")
     validate_support!(support)
-    %DataFrame{df | plan: {:stat_freq_items, df.plan, cols, support}}
+    DataFrame.update_plan(df, {:stat_freq_items, df.plan, cols, support})
   end
 
   def freq_items(%DataFrame{} = df, cols, opts) when is_list(cols) and is_list(opts) do
@@ -132,7 +132,7 @@ defmodule SparkEx.DataFrame.Stat do
     col_expr = normalize_col_expr(col)
     frac_list = Enum.map(fractions, fn {k, v} -> {k, v * 1.0} end)
     seed = normalize_seed(seed)
-    %DataFrame{df | plan: {:stat_sample_by, df.plan, col_expr, frac_list, seed}}
+    DataFrame.update_plan(df, {:stat_sample_by, df.plan, col_expr, frac_list, seed})
   end
 
   # ── Eager methods (return scalar values) ──
@@ -220,7 +220,7 @@ defmodule SparkEx.DataFrame.Stat do
 
     plan = {:stat_approx_quantile, df.plan, cols, probabilities, relative_error / 1}
 
-    case DataFrame.collect(%DataFrame{session: df.session, plan: plan}) do
+    case DataFrame.collect(DataFrame.new(df.session, plan)) do
       {:ok, [row]} ->
         # Result is a single row with one column containing a nested array:
         # single col: [[q1, q2, ...]], multi col: [[q1_a, q2_a], [q1_b, q2_b]]
@@ -276,7 +276,7 @@ defmodule SparkEx.DataFrame.Stat do
   defp parse_nested_quantile(v), do: {:error, {:invalid_quantile_payload, v}}
 
   defp collect_scalar(session, plan) do
-    case DataFrame.collect(%DataFrame{session: session, plan: plan}) do
+    case DataFrame.collect(DataFrame.new(session, plan)) do
       {:ok, [row]} when is_map(row) ->
         first_column_value(row)
 

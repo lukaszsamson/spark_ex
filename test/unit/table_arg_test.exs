@@ -6,7 +6,7 @@ defmodule SparkEx.TableArgTest do
 
   test "order_by appends sort keys across chained calls" do
     table_arg =
-      %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
       |> DataFrame.as_table()
       |> TableArg.partition_by(["dept"])
       |> TableArg.order_by(["age"])
