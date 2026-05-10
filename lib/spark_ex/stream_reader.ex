@@ -70,8 +70,11 @@ defmodule SparkEx.StreamReader do
 
   @spec options(t(), map() | keyword()) :: t()
   def options(%__MODULE__{} = reader, opts) when is_map(opts) or is_list(opts) do
+    # Collapse to a map first so duplicate keys resolve via last-wins semantics.
+    pairs = if is_map(opts), do: opts, else: Enum.into(opts, %{})
+
     {drops, sets} =
-      Enum.reduce(opts, {[], []}, fn {k, v}, {drops, sets} ->
+      Enum.reduce(pairs, {[], []}, fn {k, v}, {drops, sets} ->
         key = to_string(k)
         if is_nil(v), do: {[key | drops], sets}, else: {drops, [{key, v} | sets]}
       end)

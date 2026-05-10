@@ -80,8 +80,10 @@ defmodule SparkEx.Writer do
 
   - `:append` — append to existing data
   - `:overwrite` — overwrite existing data
-  - `:error_if_exists` — error if data already exists (default)
+  - `:error_if_exists` — error if data already exists
   - `:ignore` — silently ignore if data already exists
+  - `nil` — no-op, keeps the current mode (default is `nil`, which resolves to
+    `SAVE_MODE_UNSPECIFIED` in the Spark Connect protocol)
   """
   @spec mode(t(), atom() | String.t() | nil) :: t()
   def mode(%__MODULE__{} = writer, nil), do: writer

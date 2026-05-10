@@ -89,8 +89,11 @@ defmodule SparkEx.Reader do
   """
   @spec options(t(), map() | keyword()) :: t()
   def options(%__MODULE__{} = reader, opts) when is_map(opts) or is_list(opts) do
+    # Collapse to a map first so duplicate keys resolve via last-wins semantics.
+    pairs = if is_map(opts), do: opts, else: Enum.into(opts, %{})
+
     {drops, sets} =
-      Enum.reduce(opts, {[], []}, fn {k, v}, {drops, sets} ->
+      Enum.reduce(pairs, {[], []}, fn {k, v}, {drops, sets} ->
         key = to_string(k)
         if is_nil(v), do: {[key | drops], sets}, else: {drops, [{key, v} | sets]}
       end)
@@ -447,12 +450,12 @@ defmodule SparkEx.Reader do
   end
 
   defp merge_source_options(opts, reserved_keys) do
-    nested_options = opts |> Keyword.get(:options, %{}) |> normalize_options()
+    nested_options = opts |> Keyword.get(:options, %{}) |> normalize_options_reject_nil()
 
     top_level_options =
       opts
       |> Keyword.drop([:options | reserved_keys])
-      |> normalize_options()
+      |> normalize_options_reject_nil()
 
     Map.merge(top_level_options, nested_options)
   end
@@ -475,6 +478,14 @@ defmodule SparkEx.Reader do
 
   defp normalize_options(opts) when is_map(opts) do
     SparkEx.Internal.OptionUtils.stringify_options(opts)
+  end
+
+  defp normalize_options_reject_nil(opts) when is_list(opts) do
+    SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
+  end
+
+  defp normalize_options_reject_nil(opts) when is_map(opts) do
+    SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
   end
 
   defp normalize_option_value(value) do
