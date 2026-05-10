@@ -87,19 +87,48 @@ defmodule SparkEx.Error do
       :stacktrace,
       :server_message,
       :grpc_status,
-      :retry_delay_ms
+      :retry_delay_ms,
+      :classes,
+      :error_type_hierarchy,
+      :stack_trace_inline,
+      :cause_chain,
+      :breaking_change_info
     ]
+
+    @type stack_frame :: %{
+            declaring_class: String.t(),
+            method_name: String.t(),
+            file_name: String.t() | nil,
+            line_number: integer()
+          }
+
+    @type cause :: %{
+            message: String.t() | nil,
+            error_type_hierarchy: [String.t()],
+            stack_trace: [stack_frame()]
+          }
+
+    @type breaking_change :: %{
+            optional(:migration_message) => [String.t()],
+            optional(:needs_audit) => boolean() | nil,
+            optional(:mitigation_config) => %{key: String.t(), value: String.t()}
+          }
 
     @type t :: %__MODULE__{
             error_class: String.t() | nil,
             message: String.t(),
             sql_state: String.t() | nil,
-            message_parameters: map() | nil,
+            message_parameters: map() | String.t() | nil,
             query_contexts: [map()] | nil,
-            stacktrace: [map()] | nil,
+            stacktrace: [stack_frame()] | nil,
             server_message: String.t() | nil,
             grpc_status: non_neg_integer() | nil,
-            retry_delay_ms: non_neg_integer() | nil
+            retry_delay_ms: non_neg_integer() | nil,
+            classes: [String.t()] | nil,
+            error_type_hierarchy: [String.t()] | nil,
+            stack_trace_inline: String.t() | nil,
+            cause_chain: [cause()] | nil,
+            breaking_change_info: breaking_change() | nil
           }
 
     @impl true
@@ -235,14 +264,20 @@ defmodule SparkEx.Connect.Errors do
   defp fetch_error_details(error_info, grpc_error, session) do
     error_id = Map.get(error_info.metadata, "errorId")
 
-    # Build initial error from ErrorInfo metadata (available even without FetchErrorDetails)
+    # Build initial error from ErrorInfo metadata (available even without FetchErrorDetails).
+    # PySpark's _convert_exception (errors/exceptions/connect.py) reads `classes`
+    # (JSON list of Java exception class names) and `stackTrace` (raw JVM stacktrace
+    # string) directly from ErrorInfo metadata; mirror that so callers can pattern
+    # match on Java exception class names without a separate FetchErrorDetails call.
     base_error = %SparkEx.Error.Remote{
       message: grpc_error.message,
       grpc_status: grpc_error.status,
       error_class: Map.get(error_info.metadata, "errorClass"),
       sql_state: Map.get(error_info.metadata, "sqlState"),
       message_parameters: parse_json(Map.get(error_info.metadata, "messageParameters")),
-      server_message: Map.get(error_info.metadata, "message")
+      server_message: Map.get(error_info.metadata, "message"),
+      classes: parse_classes(Map.get(error_info.metadata, "classes")),
+      stack_trace_inline: Map.get(error_info.metadata, "stackTrace")
     }
 
     if error_id do
@@ -309,10 +344,20 @@ defmodule SparkEx.Connect.Errors do
     case {resp.root_error_idx, resp.errors} do
       {idx, errors}
       when is_integer(idx) and is_list(errors) and idx >= 0 and length(errors) > idx ->
-        root = Enum.at(errors, idx)
+        errors_tuple = List.to_tuple(errors)
+        root = elem(errors_tuple, idx)
         throwable_fields = extract_throwable_fields(error, root.spark_throwable)
+        cause_chain = walk_cause_chain(errors_tuple, idx)
+        stack_trace_inline = format_jvm_stacktrace(cause_chain) || error.stack_trace_inline
 
-        %{error | server_message: root.message}
+        %{
+          error
+          | server_message: root.message,
+            stacktrace: map_stack_trace(root.stack_trace),
+            error_type_hierarchy: root.error_type_hierarchy || [],
+            cause_chain: cause_chain,
+            stack_trace_inline: stack_trace_inline
+        }
         |> Map.merge(throwable_fields, fn _k, existing, new -> new || existing end)
 
       _ ->
@@ -326,11 +371,117 @@ defmodule SparkEx.Connect.Errors do
       sql_state: t.sql_state,
       message_parameters: t.message_parameters,
       query_contexts: map_query_contexts(t.query_contexts || []),
-      stacktrace: Map.get(t, :stack_trace) || Map.get(t, :stacktrace)
+      breaking_change_info: map_breaking_change_info(t.breaking_change_info)
     }
   end
 
   defp extract_throwable_fields(_error, _other), do: %{}
+
+  # Walk the cause_idx chain starting from `idx`, mirroring PySpark's
+  # `_extract_jvm_stacktrace` recursion. Guards against cycles by tracking
+  # visited indices.
+  defp walk_cause_chain(errors_tuple, idx) do
+    walk_cause_chain(errors_tuple, idx, MapSet.new())
+  end
+
+  defp walk_cause_chain(errors_tuple, idx, seen) do
+    cond do
+      MapSet.member?(seen, idx) ->
+        []
+
+      idx < 0 or idx >= tuple_size(errors_tuple) ->
+        []
+
+      true ->
+        err = elem(errors_tuple, idx)
+        seen = MapSet.put(seen, idx)
+
+        entry = %{
+          message: err.message,
+          error_type_hierarchy: err.error_type_hierarchy || [],
+          stack_trace: map_stack_trace(err.stack_trace)
+        }
+
+        case err.cause_idx do
+          nil -> [entry]
+          cause when is_integer(cause) -> [entry | walk_cause_chain(errors_tuple, cause, seen)]
+        end
+    end
+  end
+
+  defp map_stack_trace(nil), do: []
+
+  defp map_stack_trace(frames) when is_list(frames) do
+    Enum.map(frames, fn f ->
+      %{
+        declaring_class: f.declaring_class,
+        method_name: f.method_name,
+        file_name: f.file_name,
+        line_number: f.line_number
+      }
+    end)
+  end
+
+  defp map_breaking_change_info(nil), do: nil
+
+  defp map_breaking_change_info(%FetchErrorDetailsResponse.BreakingChangeInfo{} = bci) do
+    base = %{migration_message: bci.migration_message || []}
+
+    base =
+      case bci.needs_audit do
+        nil -> base
+        v -> Map.put(base, :needs_audit, v)
+      end
+
+    case bci.mitigation_config do
+      nil ->
+        base
+
+      %FetchErrorDetailsResponse.MitigationConfig{key: k, value: v} ->
+        Map.put(base, :mitigation_config, %{key: k, value: v})
+    end
+  end
+
+  defp format_jvm_stacktrace([]), do: nil
+
+  defp format_jvm_stacktrace([root | _] = chain) do
+    head =
+      case root.error_type_hierarchy do
+        [top | _] -> top
+        _ -> nil
+      end
+
+    if head do
+      lines = format_chain(chain, [head], true)
+      Enum.join(lines, "\n")
+    else
+      nil
+    end
+  end
+
+  defp format_chain([], acc, _root?), do: Enum.reverse(acc)
+
+  defp format_chain([err | rest], acc, root?) do
+    acc =
+      if root? do
+        acc
+      else
+        head =
+          case err.error_type_hierarchy do
+            [top | _] -> top
+            _ -> ""
+          end
+
+        ["Caused by: #{head}: #{err.message}" | acc]
+      end
+
+    acc =
+      Enum.reduce(err.stack_trace, acc, fn f, inner ->
+        ["\tat #{f.declaring_class}.#{f.method_name}(#{f.file_name}:#{f.line_number})" | inner]
+      end)
+
+    format_chain(rest, acc, false)
+  end
 
   defp map_query_contexts(contexts) do
     Enum.map(contexts, fn ctx ->
@@ -347,12 +498,28 @@ defmodule SparkEx.Connect.Errors do
     end)
   end
 
+  # PySpark hands `messageParameters` in as `dict(json.loads(raw))`, but the
+  # spec only guarantees JSON. Surface non-map JSON (lists, primitives) as the
+  # raw string so the user can see *something*; this is more useful than a
+  # silent nil and avoids losing diagnostic data on a server-shape change.
   defp parse_json(nil), do: nil
   defp parse_json(""), do: nil
 
   defp parse_json(str) when is_binary(str) do
     case Jason.decode(str) do
       {:ok, map} when is_map(map) -> map
+      {:ok, _other} -> str
+      _ -> str
+    end
+  end
+
+  # `classes` is documented as a JSON array of Java exception class names.
+  defp parse_classes(nil), do: nil
+  defp parse_classes(""), do: nil
+
+  defp parse_classes(str) when is_binary(str) do
+    case Jason.decode(str) do
+      {:ok, list} when is_list(list) -> Enum.filter(list, &is_binary/1)
       _ -> nil
     end
   end

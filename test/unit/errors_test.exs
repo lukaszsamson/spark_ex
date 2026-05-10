@@ -133,6 +133,66 @@ defmodule SparkEx.Connect.ErrorsTest do
     end
   end
 
+  describe "ErrorInfo metadata enrichment" do
+    test "parses `classes` JSON list and `stackTrace` string from metadata" do
+      error_info = %Google.Rpc.ErrorInfo{
+        metadata: %{
+          "classes" => ~s(["org.apache.spark.SparkException","java.lang.RuntimeException"]),
+          "stackTrace" => "org.apache.spark.SparkException: boom\n\tat A.m(F.java:1)"
+        }
+      }
+
+      details = [
+        %Google.Protobuf.Any{
+          type_url: "type.googleapis.com/google.rpc.ErrorInfo",
+          value: Protobuf.encode(error_info)
+        }
+      ]
+
+      grpc_error = %GRPC.RPCError{status: 13, message: "internal", details: details}
+      error = Errors.from_grpc_error(grpc_error, build_fake_session())
+
+      assert error.classes == ["org.apache.spark.SparkException", "java.lang.RuntimeException"]
+      assert error.stack_trace_inline =~ "org.apache.spark.SparkException: boom"
+    end
+
+    test "non-map messageParameters JSON is preserved as raw string instead of dropped" do
+      error_info = %Google.Rpc.ErrorInfo{
+        metadata: %{
+          "messageParameters" => ~s(["unexpected","list"])
+        }
+      }
+
+      details = [
+        %Google.Protobuf.Any{
+          type_url: "type.googleapis.com/google.rpc.ErrorInfo",
+          value: Protobuf.encode(error_info)
+        }
+      ]
+
+      grpc_error = %GRPC.RPCError{status: 3, message: "bad", details: details}
+      error = Errors.from_grpc_error(grpc_error, build_fake_session())
+
+      assert error.message_parameters == ~s(["unexpected","list"])
+    end
+
+    test "malformed `classes` JSON yields nil rather than crashing" do
+      error_info = %Google.Rpc.ErrorInfo{metadata: %{"classes" => "not-json"}}
+
+      details = [
+        %Google.Protobuf.Any{
+          type_url: "type.googleapis.com/google.rpc.ErrorInfo",
+          value: Protobuf.encode(error_info)
+        }
+      ]
+
+      grpc_error = %GRPC.RPCError{status: 3, message: "bad", details: details}
+      error = Errors.from_grpc_error(grpc_error, build_fake_session())
+
+      assert error.classes == nil
+    end
+  end
+
   describe "SparkEx.Error.Remote exception" do
     test "message/1 formats error with class and sql_state" do
       error = %Remote{
