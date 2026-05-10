@@ -3252,13 +3252,10 @@ defmodule SparkEx.Connect.PlanEncoder do
     end
   end
 
-  defp extract_explicit_referenced_plan_id(%{plan_id: plan_id, plan: plan})
-       when is_integer(plan_id),
-       do: {:ok, plan_id, plan}
-
-  defp extract_explicit_referenced_plan_id({plan_id, plan}) when is_integer(plan_id),
-    do: {:ok, plan_id, plan}
-
+  # Only `{:plan_id, id, plan}` has a producer (`PlanIds.wrap/1` via every
+  # DataFrame) — the map and 2-tuple forms accepted earlier had no callers
+  # in lib/. Tightened to the 3-tuple shape in PR #40 review; if a future
+  # caller needs an alternate shape, normalize to this form first.
   defp extract_explicit_referenced_plan_id({:plan_id, plan_id, plan}) when is_integer(plan_id),
     do: {:ok, plan_id, plan}
 
