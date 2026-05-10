@@ -430,8 +430,8 @@ defmodule SparkEx.Connect.PlanEncoder do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
-    remapped_grouping = remap_expr_list_plan_ids_to_input(grouping_exprs, child)
-    remapped_agg = remap_expr_list_plan_ids_to_input(agg_exprs, child)
+    [remapped_grouping, remapped_agg] =
+      remap_multiple_expr_lists_plan_ids_to_input([grouping_exprs, agg_exprs], child)
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
@@ -455,15 +455,19 @@ defmodule SparkEx.Connect.PlanEncoder do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
-    remapped_grouping = remap_expr_list_plan_ids_to_input(grouping_exprs, child)
-    remapped_agg = remap_expr_list_plan_ids_to_input(agg_exprs, child)
+    # Remap all expression lists (grouping, agg, and each grouping set) with a
+    # single shared state so foreign plan_id→candidate assignments are consistent
+    # when the child has multiple candidate plan_ids (e.g. aggregate over a join).
+    [remapped_grouping, remapped_agg | remapped_sets] =
+      remap_multiple_expr_lists_plan_ids_to_input(
+        [grouping_exprs, agg_exprs | grouping_sets],
+        child
+      )
 
     grouping_sets_proto =
-      Enum.map(grouping_sets, fn set ->
-        remapped_set = remap_expr_list_plan_ids_to_input(set, child)
-
+      Enum.map(remapped_sets, fn set ->
         %Spark.Connect.Aggregate.GroupingSets{
-          grouping_set: Enum.map(remapped_set, &encode_expression/1)
+          grouping_set: Enum.map(set, &encode_expression/1)
         }
       end)
 
@@ -490,9 +494,13 @@ defmodule SparkEx.Connect.PlanEncoder do
     {plan_id, counter} = next_id(counter)
     {child, counter} = encode_relation(child_plan, counter)
 
-    remapped_grouping = remap_expr_list_plan_ids_to_input(grouping_exprs, child)
-    remapped_agg = remap_expr_list_plan_ids_to_input(agg_exprs, child)
-    remapped_pivot_col = remap_expr_plan_ids_to_input(pivot_col, child)
+    # Include pivot_col as a single-element list so it shares the same remap
+    # state as grouping and agg expressions.
+    [remapped_grouping, remapped_agg, [remapped_pivot_col]] =
+      remap_multiple_expr_lists_plan_ids_to_input(
+        [grouping_exprs, agg_exprs, [pivot_col]],
+        child
+      )
 
     pivot_values_protos =
       case pivot_values do
@@ -2948,6 +2956,25 @@ defmodule SparkEx.Connect.PlanEncoder do
     remap_expr_list_plan_ids(exprs, candidate_plan_ids)
   end
 
+  # Remap multiple expression lists against the same child input using a single
+  # shared state so that foreign plan_id → candidate assignments are consistent
+  # across all lists (important when the child has multiple candidate plan_ids,
+  # e.g. aggregate over a join). Returns remapped lists in the same order.
+  defp remap_multiple_expr_lists_plan_ids_to_input(expr_lists, %Relation{} = input_relation) do
+    candidate_plan_ids = source_relation_plan_ids(input_relation)
+    known_plan_ids = MapSet.new(candidate_plan_ids)
+    state = %{assignments: %{}, next_candidate_idx: 0}
+
+    {remapped_lists, _state} =
+      Enum.map_reduce(expr_lists, state, fn exprs, acc ->
+        Enum.map_reduce(exprs, acc, fn expr, s ->
+          do_remap_expr_plan_ids(expr, candidate_plan_ids, known_plan_ids, s)
+        end)
+      end)
+
+    remapped_lists
+  end
+
   defp remap_expr_plan_ids(expr, candidate_plan_ids) do
     known_plan_ids = MapSet.new(candidate_plan_ids)
     state = %{assignments: %{}, next_candidate_idx: 0}
@@ -3117,36 +3144,36 @@ defmodule SparkEx.Connect.PlanEncoder do
          state
        )
        when is_integer(plan_id) and is_list(opts) do
-    opts =
+    {opts, state} =
       case Keyword.get(opts, :in_values) do
         nil ->
-          opts
+          {opts, state}
 
         values ->
-          {values, _state} =
+          {values, state} =
             Enum.map_reduce(values, state, fn value, acc ->
               do_remap_expr_plan_ids(value, candidates, known_ids, acc)
             end)
 
-          Keyword.put(opts, :in_values, values)
+          {Keyword.put(opts, :in_values, values), state}
       end
 
-    opts =
+    {opts, state} =
       case Keyword.get(opts, :table_arg_options) do
         nil ->
-          opts
+          {opts, state}
 
         table_opts ->
           partition_spec = Keyword.get(table_opts, :partition_spec, [])
 
-          {partition_spec, _state} =
+          {partition_spec, state} =
             Enum.map_reduce(partition_spec, state, fn expr, acc ->
               do_remap_expr_plan_ids(expr, candidates, known_ids, acc)
             end)
 
           order_spec = Keyword.get(table_opts, :order_spec, [])
 
-          {order_spec, _state} =
+          {order_spec, state} =
             Enum.map_reduce(order_spec, state, fn expr, acc ->
               do_remap_expr_plan_ids(expr, candidates, known_ids, acc)
             end)
@@ -3156,7 +3183,7 @@ defmodule SparkEx.Connect.PlanEncoder do
             |> Keyword.put(:partition_spec, partition_spec)
             |> Keyword.put(:order_spec, order_spec)
 
-          Keyword.put(opts, :table_arg_options, table_opts)
+          {Keyword.put(opts, :table_arg_options, table_opts), state}
       end
 
     {{:subquery, subquery_type, plan_id, opts}, state}
