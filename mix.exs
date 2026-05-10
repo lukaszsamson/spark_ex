@@ -55,6 +55,7 @@ defmodule SparkEx.MixProject do
 
       # Dev/test
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.35", only: :dev, runtime: false}
     ]
   end

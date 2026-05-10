@@ -47,7 +47,7 @@ jobs:
       - run: mix test
 
   format:
-    name: Format & Dialyzer
+    name: Format, Credo & Dialyzer
     runs-on: ubuntu-latest
     env:
       MIX_ENV: test
@@ -76,6 +76,7 @@ jobs:
       - run: mix deps.get
       - run: mix compile
       - run: mix format --check-formatted
+      - run: mix credo
       - run: mix dialyzer
 
   integration:
