@@ -253,6 +253,34 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Like `execute_plan_stream/3`, but returns a reattachable response stream.
+
+  The returned enumerable yields `{:ok, ExecutePlanResponse.t()} | {:error, term()}`
+  and survives graceful-EOF reattach + retryable transient errors. Used by
+  long-lived consumers like `DataFrame.to_local_iterator/2` so a mid-stream
+  disconnect does not lose the in-progress result.
+  """
+  @spec execute_plan_reattachable_stream(GenServer.server(), term(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def execute_plan_reattachable_stream(session, plan, opts \\ []) do
+    if real_session_process?(session) do
+      case GenServer.call(
+             session,
+             {:prepare_execute_plan_stream, plan, opts},
+             call_timeout(opts)
+           ) do
+        {:ok, stream_state, proto_plan, stream_opts} ->
+          Client.execute_plan_reattachable_response_stream(stream_state, proto_plan, stream_opts)
+
+        {:error, _} = error ->
+          error
+      end
+    else
+      GenServer.call(session, {:execute_plan_reattachable_stream, plan, opts}, call_timeout(opts))
+    end
+  end
+
+  @doc """
   Executes a plan and returns an `Explorer.DataFrame`.
 
   Pushes a LIMIT into the plan unless `unsafe: true`. Enforces row/byte bounds.
@@ -3137,9 +3165,25 @@ defmodule SparkEx.Session do
 
   @spark_ex_version Mix.Project.config()[:version]
 
+  # Mirrors PySpark's user_agent shape: `<base> spark/<v> os/<system>`.
+  # PySpark hard-codes the bundled pyspark version; we don't track a Spark
+  # version (the proto we vendor targets Spark 4.x). Use the spark_ex
+  # package version under `spark_ex/<v>` and add `spark/connect-1` as the
+  # protocol marker plus `os/<system>` so server-side telemetry can
+  # distinguish clients without relying on the free-form base.
   defp default_client_type do
     otp_release = :erlang.system_info(:otp_release) |> List.to_string()
-    "elixir/#{System.version()}/otp#{otp_release}/spark_ex/#{@spark_ex_version}"
+    os = os_name()
+
+    "elixir/#{System.version()}/otp#{otp_release}/spark_ex/#{@spark_ex_version} " <>
+      "spark/connect-1 os/#{os}"
+  end
+
+  defp os_name do
+    case :os.type() do
+      {:unix, name} -> Atom.to_string(name)
+      {:win32, _} -> "windows"
+    end
   end
 
   defp extract_count([row]) when is_map(row) and map_size(row) == 1 do

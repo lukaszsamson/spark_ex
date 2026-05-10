@@ -38,7 +38,6 @@ defmodule SparkEx.Connect.Client do
 
   # gRPC status codes considered transient (eligible for retry)
   @status_unavailable 14
-  @status_deadline_exceeded 4
   @status_internal 13
   @status_not_found 5
 
@@ -578,6 +577,32 @@ defmodule SparkEx.Connect.Client do
       {:ok, stream} -> {:ok, stream}
       {:error, %GRPC.RPCError{} = error} -> {:error, Errors.from_grpc_error(error, session)}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Executes a plan and returns a lazy reattachable response stream.
+
+  The returned enumerable yields `{:ok, ExecutePlanResponse.t()} | {:error, term()}`
+  tuples and transparently handles graceful-EOF reattach and retryable
+  error reattach. The stream registers an asynchronous `release_until`
+  checkpoint after each consumed response and `release_all` on
+  completion / terminal error, mirroring PySpark's
+  `ExecutePlanResponseReattachableIterator`.
+  """
+  @spec execute_plan_reattachable_response_stream(SparkEx.Session.t(), Plan.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def execute_plan_reattachable_response_stream(session, plan, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, :infinity)
+    tags = Keyword.get(opts, :tags, [])
+
+    with :ok <- validate_tags(tags) do
+      operation_id = generate_operation_id()
+      request = build_execute_request(session, plan, tags, operation_id, true, opts)
+
+      execute_reattachable(session, request, operation_id, timeout, opts, fn responses ->
+        {:ok, responses}
+      end)
     end
   end
 
@@ -1380,13 +1405,22 @@ defmodule SparkEx.Connect.Client do
           attempt: 0,
           last_response_id: nil,
           result_complete?: false,
-          emitted_count: 0
+          emitted_count: 0,
+          # Tracks consecutive graceful-EOF reattaches that did not yield a
+          # new response. Once it crosses @empty_eof_streak_limit, each
+          # additional empty EOF counts as a real attempt so we can hit the
+          # policy cap rather than spinning forever.
+          empty_eof_streak: 0
         }
       end,
       &reattach_stream_step/1,
       &reattach_stream_finalize/1
     )
   end
+
+  # Maximum number of consecutive zero-progress graceful-EOFs before each
+  # additional empty EOF counts toward the retry budget.
+  @empty_eof_streak_limit 3
 
   defp reattach_stream_step(%{result_complete?: true, iter: iter} = state) do
     case pull_iter(iter) do
@@ -1420,8 +1454,31 @@ defmodule SparkEx.Connect.Client do
           | iter: new_iter,
             last_response_id: new_id,
             result_complete?: complete?,
-            emitted_count: state.emitted_count + 1
+            emitted_count: state.emitted_count + 1,
+            empty_eof_streak: 0
         }
+
+        # Per-response release: PySpark's reattach iterator fires
+        # release_until(last_response_id) after each consumed response (and
+        # release_all on result_complete). Mirror that here so the server
+        # can drop its retry buffer as the client makes progress.
+        new_state =
+          if complete? do
+            fire_release_all(
+              new_state.ctx.release_execute_fun,
+              new_state.ctx.release_execute_timeout
+            )
+
+            new_state
+          else
+            fire_release_checkpoint(
+              new_state.ctx.release_execute_fun,
+              new_id,
+              new_state.ctx.release_execute_timeout
+            )
+
+            new_state
+          end
 
         {[{:ok, resp}], new_state}
 
@@ -1434,42 +1491,63 @@ defmodule SparkEx.Connect.Client do
   end
 
   defp reattach_stream_finalize(state) do
+    # PySpark's reattach iterator calls _release_all() in close() even after
+    # an inline release on result_complete / terminal error — the server
+    # is idempotent and benign-not-found is treated as success. Always run
+    # release_execute_best_effort on finalize so timeout / error telemetry
+    # remains observable for callers that rely on it.
     %{ctx: ctx} = state
     release_execute_best_effort(ctx.release_execute_fun, [], ctx.release_execute_timeout)
   end
 
   defp handle_graceful_eof(state) do
-    fire_release_checkpoint(state.ctx.release_execute_fun, state.last_response_id)
+    # PySpark does NOT release-until on graceful EOF; reattach drives the
+    # next batch. Server holds the retry buffer until the next consumed
+    # response or release_all.
     perform_reattach(state, {:graceful_eof, nil})
   end
 
-  defp handle_inner_error(state, %GRPC.RPCError{status: status} = error)
-       when status in [@status_unavailable, @status_deadline_exceeded] do
-    fire_release_checkpoint(state.ctx.release_execute_fun, state.last_response_id)
-    perform_reattach(state, {:transient_error, error})
-  end
+  defp handle_inner_error(state, %GRPC.RPCError{} = grpc_error) do
+    remote = Errors.from_grpc_error(grpc_error, state.ctx.session)
 
-  defp handle_inner_error(
-         state,
-         %GRPC.RPCError{status: @status_internal, message: message} = error
-       )
-       when is_binary(message) do
-    if String.contains?(message, "INVALID_CURSOR.DISCONNECTED") do
-      fire_release_checkpoint(state.ctx.release_execute_fun, state.last_response_id)
-      perform_reattach(state, {:transient_error, error})
+    if retryable_error?(remote) do
+      # No pre-reattach release: reattach replays from last_response_id;
+      # releasing first would tell the server to drop the very buffer the
+      # reattach is about to read. PySpark only releases on consumed
+      # responses or terminal completion.
+      perform_reattach(state, {:transient_error, grpc_error})
     else
-      {[{:error, Errors.from_grpc_error(error, state.ctx.session)}],
-       %{state | result_complete?: true}}
+      emit_terminal_error(state, remote)
     end
   end
 
-  defp handle_inner_error(state, %GRPC.RPCError{} = error) do
-    {[{:error, Errors.from_grpc_error(error, state.ctx.session)}],
-     %{state | result_complete?: true}}
+  defp handle_inner_error(state, other) do
+    emit_terminal_error(state, other)
   end
 
-  defp handle_inner_error(state, other) do
-    {[{:error, other}], %{state | result_complete?: true}}
+  defp emit_terminal_error(state, error) do
+    # On terminal error PySpark calls _release_all() to drop the server-side
+    # buffer. We do the same and mark result_complete? so downstream halts.
+    fire_release_all(state.ctx.release_execute_fun, state.ctx.release_execute_timeout)
+    {[{:error, error}], %{state | result_complete?: true}}
+  end
+
+  defp fire_release_all(release_execute_fun, timeout_ms) do
+    Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
+      task =
+        Task.async(fn ->
+          try do
+            release_execute_fun.([])
+          catch
+            _, _ -> :ok
+          end
+        end)
+
+      _ = Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill)
+      :ok
+    end)
+
+    :ok
   end
 
   defp perform_reattach(state, reason) do
@@ -1508,14 +1586,43 @@ defmodule SparkEx.Connect.Client do
       telemetry_metadata
     )
 
-    sleep_ms = backoff_with_retry_info(attempt, policy, server_retry_delay_ms)
+    # Backoff escalates with the larger of `attempt` and `empty_eof_streak`.
+    # Without this, repeated graceful-EOF reattaches under the streak limit
+    # would all sleep for `initial_backoff_ms` (since `attempt` stays at 0)
+    # and hammer the server at a constant rate. Folding the streak in lets
+    # the backoff grow exponentially during the EOF spin even before any
+    # streak crossing converts an EOF into a real attempt.
+    backoff_attempt = max(attempt, state.empty_eof_streak)
+    sleep_ms = backoff_with_retry_info(backoff_attempt, policy, server_retry_delay_ms)
     policy.sleep_fun.(sleep_ms)
 
-    next_attempt = if match?({:graceful_eof, _}, reason), do: attempt, else: attempt + 1
+    {next_attempt, next_streak} =
+      case reason do
+        {:graceful_eof, _} ->
+          streak = state.empty_eof_streak + 1
+          # Once we've spun through @empty_eof_streak_limit zero-progress
+          # graceful EOFs, start charging each subsequent EOF against the
+          # retry budget so we eventually surface :reattach_incomplete_result
+          # instead of looping forever.
+          if streak > @empty_eof_streak_limit do
+            {attempt + 1, streak}
+          else
+            {attempt, streak}
+          end
+
+        _ ->
+          {attempt + 1, 0}
+      end
 
     case ctx.reattach_stream_fun.(state.last_response_id) do
       {:ok, new_stream} ->
-        new_state = %{state | iter: start_iter(new_stream), attempt: next_attempt}
+        new_state = %{
+          state
+          | iter: start_iter(new_stream),
+            attempt: next_attempt,
+            empty_eof_streak: next_streak
+        }
+
         reattach_stream_step(new_state)
 
       {:error,
@@ -1604,15 +1711,21 @@ defmodule SparkEx.Connect.Client do
 
   defp pull_iter(_), do: :done
 
-  defp fire_release_checkpoint(_release_execute_fun, nil), do: :ok
+  defp fire_release_checkpoint(_release_execute_fun, nil, _timeout_ms), do: :ok
 
-  defp fire_release_checkpoint(release_execute_fun, response_id) do
+  defp fire_release_checkpoint(release_execute_fun, response_id, timeout_ms) do
     Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
-      try do
-        release_execute_fun.(until_response_id: response_id)
-      catch
-        _, _ -> :ok
-      end
+      task =
+        Task.async(fn ->
+          try do
+            release_execute_fun.(until_response_id: response_id)
+          catch
+            _, _ -> :ok
+          end
+        end)
+
+      _ = Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill)
+      :ok
     end)
 
     :ok
@@ -2249,8 +2362,6 @@ defmodule SparkEx.Connect.Client do
         nil
     end)
   end
-
-  defp extract_server_retry_delay(_), do: nil
 
   defp safe_decode_retry_info(value) do
     {:ok, Protobuf.decode(value, Google.Rpc.RetryInfo)}

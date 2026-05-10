@@ -539,5 +539,70 @@ defmodule SparkEx.Unit.ReattachTest do
 
       assert_receive {:reattach_slept, 7}
     end
+
+    test "graceful-EOF backoff escalates with the empty-EOF streak", %{session: session} do
+      # CLAUDE-55: Without folding the EOF streak into the backoff
+      # exponent, repeated graceful-EOF reattaches under the streak limit
+      # all sleep for `initial_backoff_ms` (since `attempt` stays at 0)
+      # and hammer the server at a constant rate. Verify each EOF tick
+      # scales the sleep by the configured multiplier.
+      parent = self()
+
+      on_exit(fn -> SparkEx.RetryPolicyRegistry.set_policies(%{}) end)
+
+      SparkEx.RetryPolicyRegistry.set_policies(
+        reattach: %{
+          initial_backoff_ms: 10,
+          max_backoff_ms: 10_000,
+          backoff_multiplier: 2.0,
+          jitter_ms: nil,
+          jitter_fun: nil,
+          min_jitter_threshold_ms: 1_000_000,
+          sleep_fun: fn ms -> send(parent, {:reattach_slept, ms}) end
+        }
+      )
+
+      eof_attempts = :counters.new(1, [:atomics])
+
+      execute_stream_fun = fn _request, _timeout ->
+        {:ok, [{:ok, %ExecutePlanResponse{response_id: "r1"}}]}
+      end
+
+      reattach_stream_fun = fn _last_response_id ->
+        n = :counters.get(eof_attempts, 1)
+        :counters.add(eof_attempts, 1, 1)
+
+        if n < 2 do
+          {:ok, []}
+        else
+          {:ok,
+           [
+             {:ok,
+              %ExecutePlanResponse{
+                response_id: "r#{n + 2}",
+                response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+              }}
+           ]}
+        end
+      end
+
+      assert {:ok, %{rows: []}} =
+               Client.execute_plan(session, %Plan{},
+                 execute_stream_fun: execute_stream_fun,
+                 reattach_stream_fun: reattach_stream_fun,
+                 release_execute_fun: fn _opts -> {:ok, nil} end
+               )
+
+      sleeps =
+        for _ <- 1..3 do
+          assert_receive {:reattach_slept, ms}
+          ms
+        end
+
+      [first, second, third] = sleeps
+      assert first == 10
+      assert second == 20
+      assert third == 40
+    end
   end
 end
