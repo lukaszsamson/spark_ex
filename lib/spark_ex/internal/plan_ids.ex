@@ -42,10 +42,10 @@ defmodule SparkEx.Internal.PlanIds do
   @ets_table :spark_ex_plan_id_counters
 
   @doc false
-  def init do
-    SparkEx.EtsTableOwner.ensure_table!(@ets_table, :set)
-    :ok
-  end
+  # The ETS table is owned by `SparkEx.EtsTableOwner` (declared in its
+  # `@tables`). This is a no-op kept for back-compat with the
+  # `SparkEx.Application.start/2` hook.
+  def init, do: :ok
 
   @doc """
   Registers a session-scoped allocator.
@@ -55,7 +55,6 @@ defmodule SparkEx.Internal.PlanIds do
   """
   @spec register_session(pid()) :: :atomics.atomics_ref()
   def register_session(session_pid) when is_pid(session_pid) do
-    init()
     ref = :atomics.new(1, [])
     :ets.insert(@ets_table, {session_pid, ref})
     ref
@@ -122,28 +121,6 @@ defmodule SparkEx.Internal.PlanIds do
     case Process.get(__MODULE__) do
       nil -> 0
       ref -> :counters.get(ref, 1)
-    end
-  end
-
-  @doc """
-  Forces the session counter to `value` (used after an encode pass to
-  publish the encoder's threaded counter back to the shared allocator,
-  keeping caller-side DataFrame ids and encoder-side synthetic ids in
-  one namespace).
-  """
-  @spec set(pid(), non_neg_integer()) :: :ok
-  def set(session, value) when is_pid(session) and is_integer(value) do
-    case :ets.whereis(@ets_table) do
-      :undefined ->
-        :ok
-
-      _ ->
-        case :ets.lookup(@ets_table, session) do
-          [{_pid, ref}] -> :atomics.put(ref, 1, value)
-          [] -> :ok
-        end
-
-        :ok
     end
   end
 

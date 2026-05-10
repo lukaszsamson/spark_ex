@@ -932,7 +932,13 @@ defmodule SparkEx.Session do
   end
 
   def handle_call(:next_plan_id, _from, state) do
-    id = state.plan_id_counter
+    # The authoritative allocator is the session-scoped `:atomics` ref
+    # registered in `SparkEx.Internal.PlanIds`. `DataFrame.new/2` from
+    # caller processes and `PlanEncoder.next_id/1` in this process both
+    # draw from it, so `state.plan_id_counter` would lag and could
+    # return duplicate ids. Pull from the atomic instead and keep
+    # `state.plan_id_counter` in sync only for legacy reads.
+    id = SparkEx.Internal.PlanIds.next(self())
     {:reply, id, %{state | plan_id_counter: id + 1}}
   end
 
@@ -3104,20 +3110,15 @@ defmodule SparkEx.Session do
     safe_encode_with(&CommandEncoder.encode/2, command, counter)
   end
 
-  defp safe_encode_with(encode_fn, plan, _counter) do
-    # The threaded counter parameter is vestigial: we ignore the
-    # caller-supplied value and instead start the encode pass from the
-    # session's shared `:atomics` allocator. This ensures the encoder's
-    # synthetic plan_ids (with_relations containers, register_inline
-    # wrappers) live in the same id namespace as the stamped DataFrame
-    # plan_ids that arrived in `plan` — which were allocated from the
-    # same atomic in the caller's process. After encoding, the returned
-    # counter is written back so subsequent caller-side wraps and
-    # encoder passes continue past it.
-    start = SparkEx.Internal.PlanIds.peek(self())
-    {result, end_counter} = encode_fn.(plan, start)
-    SparkEx.Internal.PlanIds.set(self(), end_counter)
-    {{result, end_counter}, nil}
+  defp safe_encode_with(encode_fn, plan, counter) do
+    # Synthetic ids are reserved from the shared session-scoped atomic
+    # inside the encoder (`PlanEncoder.next_id/1` calls
+    # `SparkEx.Internal.PlanIds.next(self())`), so caller-side
+    # `DataFrame.new/2` calls and encoder allocations race-safely on
+    # the same counter. The threaded `counter` is vestigial as far as
+    # uniqueness is concerned; pass it through for backward
+    # compatibility.
+    {encode_fn.(plan, counter), nil}
   rescue
     e ->
       formatted = Exception.format(:error, e, __STACKTRACE__)

@@ -27,13 +27,6 @@ defmodule SparkEx.Connect.PlanEncoder do
   """
   @spec encode(term(), non_neg_integer()) :: {Plan.t(), non_neg_integer()}
   def encode(plan, counter) do
-    # Ensure the encoder's synthetic-id namespace starts above any
-    # already-stamped plan_ids drawn from the caller's allocator.
-    # `Session.safe_encode_with/3` already passes the session's atomic
-    # value here, but direct callers (unit tests) may pass 0; clamp up
-    # to the per-process fallback counter so encoder ids and stamped
-    # DataFrame ids stay in one namespace and cannot collide.
-    counter = max(counter, SparkEx.Internal.PlanIds.peek(self()))
     {plan, counter} = attach_with_relations(plan, counter)
 
     case plan do
@@ -1442,7 +1435,6 @@ defmodule SparkEx.Connect.PlanEncoder do
   """
   @spec encode_count(term(), non_neg_integer()) :: {Plan.t(), non_neg_integer()}
   def encode_count(plan, counter) do
-    counter = max(counter, SparkEx.Internal.PlanIds.peek(self()))
     {plan, counter} = attach_with_relations(plan, counter)
     {child, counter} = encode_relation(plan, counter)
     {plan_id, counter} = next_id(counter)
@@ -1834,14 +1826,16 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   # --- Private ---
 
-  # The threaded `counter` is the session's plan_id allocator value at
-  # the start of this encode pass (synced from the session-scoped
-  # `:atomics` ref in `Session.safe_encode_with/3`). Both DataFrame
-  # construction (caller process) and encoder synthetic ids (this
-  # process) draw from the same namespace, so simple sequential
-  # allocation here cannot collide with stamped DataFrame plan_ids in
-  # the input tree.
-  defp next_id(counter), do: {counter, counter + 1}
+  # Synthetic encoder ids are reserved from the shared session-scoped
+  # `:atomics` allocator (looked up by the encoder process's own pid in
+  # `SparkEx.Internal.PlanIds`). This is the same atomic that
+  # `DataFrame.new/2` increments from caller processes, so an encode
+  # running concurrently with caller-side DataFrame construction cannot
+  # produce a duplicate plan_id. The threaded `counter` is kept for API
+  # stability but plays no role in id allocation — it's just incremented
+  # so existing callers that re-read the session counter still observe
+  # forward motion.
+  defp next_id(counter), do: {SparkEx.Internal.PlanIds.next(self()), counter + 1}
 
   defp attach_with_relations({:compressed_operation, _, _, _} = plan, counter) do
     {plan, counter}

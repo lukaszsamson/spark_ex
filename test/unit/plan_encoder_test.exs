@@ -3,6 +3,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
   alias SparkEx.Connect.PlanEncoder
   alias SparkEx.{DataFrame, Column}
+  alias SparkEx.Test.TestSession
   alias Spark.Connect.{Expression, Plan, Relation, RelationCommon, SQL, Range}
 
   describe "encode/2 with SQL" do
@@ -981,22 +982,13 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "cross-process plan_id allocation has no collisions" do
-      # Regression for the cross-process collision uncovered in PR #40
-      # review: DataFrames are typically built in a caller process and
-      # encoded in a Session GenServer process; both must draw from one
-      # plan_id namespace or a stamped DataFrame id can collide with an
-      # encoder-allocated synthetic id (e.g. the with_relations
-      # container). Spark Connect 3.5.x rejects the resulting ambiguous
-      # plan with IndexOutOfBoundsException.
-      #
-      # This test simulates that pattern: a fake "session" process owns
-      # the allocator ETS slot; DataFrames are built in the current
-      # process drawing ids from that session's allocator; the encode
-      # then synchronously walks the plan tree and we assert every
-      # encoded RelationCommon.plan_id is unique.
-      session = spawn_link(fn -> Process.sleep(:infinity) end)
-      SparkEx.Internal.PlanIds.register_session(session)
-      on_exit(fn -> SparkEx.Internal.PlanIds.unregister_session(session) end)
+      # Regression for the cross-process collision finding: DataFrames are
+      # built in a caller process and encoded in a Session GenServer
+      # process; both must draw from one plan_id namespace. The encoder
+      # uses `self()` to look up the session's atomic, so we encode
+      # *inside* a session-like GenServer to mirror production.
+      {:ok, session} = TestSession.start_link()
+      on_exit(fn -> if Process.alive?(session), do: TestSession.stop(session) end)
 
       source = SparkEx.DataFrame.new(session, {:sql, "SELECT id FROM s", nil})
       sub = SparkEx.DataFrame.scalar(source)
@@ -1004,11 +996,87 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       base = SparkEx.DataFrame.new(session, {:range, 0, 1, 1, nil})
       df = SparkEx.DataFrame.select(base, [SparkEx.Column.alias_(sub, "v")])
 
-      start = SparkEx.Internal.PlanIds.peek(session)
-      {encoded, _} = PlanEncoder.encode(df.plan, start)
+      encoded = TestSession.encode(session, df.plan)
 
       ids = collect_relation_plan_ids(encoded)
       assert ids == Enum.uniq(ids), "duplicate plan_ids in encoded plan: #{inspect(ids)}"
+    end
+
+    test "concurrent DataFrame allocation during encode never returns a duplicate id" do
+      # Regression for the "encoder can move shared counter backwards"
+      # finding: while one process is encoding, other processes can keep
+      # calling `DataFrame.new/2` and bump the session atomic. The encoder
+      # MUST reserve each synthetic id from that same atomic (not from a
+      # peek-then-set window) so under contention no id is ever issued
+      # twice across the lifetime of the session.
+      {:ok, session} = TestSession.start_link()
+      on_exit(fn -> if Process.alive?(session), do: TestSession.stop(session) end)
+
+      caller_count = 32
+      per_caller = 250
+      encoder_iterations = 200
+
+      caller_task =
+        Task.async_stream(
+          1..caller_count,
+          fn _i ->
+            for _ <- 1..per_caller, do: SparkEx.Internal.PlanIds.next(session)
+          end,
+          max_concurrency: caller_count,
+          ordered: false
+        )
+
+      encoder_task =
+        Task.async(fn ->
+          for _ <- 1..encoder_iterations do
+            base = SparkEx.DataFrame.new(session, {:sql, "SELECT 1", nil})
+            other = SparkEx.DataFrame.new(session, {:sql, "SELECT 2", nil})
+            sub = SparkEx.DataFrame.scalar(base)
+            plan = SparkEx.DataFrame.select(other, [SparkEx.Column.alias_(sub, "v")])
+            encoded = TestSession.encode(session, plan.plan)
+            collect_relation_plan_ids(encoded)
+          end
+        end)
+
+      caller_ids =
+        caller_task
+        |> Enum.to_list()
+        |> Enum.flat_map(fn {:ok, ids} -> ids end)
+
+      encoder_id_lists = Task.await(encoder_task, 30_000)
+
+      assert length(caller_ids) == length(Enum.uniq(caller_ids)),
+             "duplicate ids across concurrent DataFrame.new callers"
+
+      Enum.each(encoder_id_lists, fn ids ->
+        assert ids == Enum.uniq(ids),
+               "duplicate plan_ids inside a single encoded plan: #{inspect(ids)}"
+      end)
+    end
+
+    test "session A's allocator survives session B termination" do
+      # Regression for the ETS ownership finding: previously the session
+      # that first called `PlanIds.register_session/1` also created the
+      # ETS table, so its exit tore the table down and orphaned every
+      # other session's allocator. The table is now owned by
+      # `SparkEx.EtsTableOwner`, so session B's exit must not affect
+      # session A's allocator.
+      {:ok, session_a} = TestSession.start_link()
+      {:ok, session_b} = TestSession.start_link()
+
+      id_a_before = SparkEx.Internal.PlanIds.next(session_a)
+      id_b = SparkEx.Internal.PlanIds.next(session_b)
+      assert is_integer(id_a_before) and is_integer(id_b)
+
+      ref = Process.monitor(session_b)
+      TestSession.stop(session_b)
+      assert_receive {:DOWN, ^ref, :process, ^session_b, _}, 1_000
+
+      # session_a's allocator must still work and continue monotonically.
+      id_a_after = SparkEx.Internal.PlanIds.next(session_a)
+      assert id_a_after > id_a_before
+
+      TestSession.stop(session_a)
     end
   end
 
