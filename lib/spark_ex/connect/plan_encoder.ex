@@ -1992,6 +1992,30 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp explicit_reference_plan?({:plan_id, plan_id, _plan}) when is_integer(plan_id), do: true
   defp explicit_reference_plan?(_), do: false
 
+  # ── rewrite_plan/4 ──
+  #
+  # Walks a plan term, rewriting embedded expressions to use canonical plan_ids
+  # and accumulating cross-plan references. Each clause must:
+  #
+  #   1. Recurse into child plan(s) first so child plan_ids are allocated.
+  #   2. **If the relation rewrites expressions AND the (post-rewrite) child can
+  #      be a `:join` (or the relation itself is a join-shaped form like
+  #      `:as_of_join` / `:lateral_join`), call `maybe_register_join_child_plan_ids/5`
+  #      (or `register_join_child_plan_ids/5` for direct left/right) BEFORE
+  #      rewriting the expressions.** This guarantees the join's left/right
+  #      plan_ids are registered in canonical order, so the later
+  #      `remap_*_plan_ids_to_input` step binds foreign synthetic ids back to
+  #      the correct join side. See GPT-09: skipping this on a relation whose
+  #      expressions reference the right side first will silently bind those
+  #      columns to the left side's plan_id.
+  #   3. Rewrite expressions/aliases/sort_orders.
+  #
+  # Adding a new rewrite_plan clause that handles expressions over a child plan
+  # without (2) is a silent regression — there is currently no static check for
+  # the invariant. The regression tests in
+  # `test/unit/plan_encoder_test.exs` ("Stream A — relation expression plan_id
+  # remap to encoded child input" describe block) cover the patched relations;
+  # mirror one of those tests for any new clause that takes expressions.
   defp rewrite_plan({:with_relations, root_plan, reference_plans}, plan_ids, refs, counter) do
     {root_plan, plan_ids, refs, counter} = rewrite_plan(root_plan, plan_ids, refs, counter)
 
@@ -2004,6 +2028,12 @@ defmodule SparkEx.Connect.PlanEncoder do
     {{:with_relations, root_plan, reference_plans}, plan_ids, refs, counter}
   end
 
+  # NOTE: :sql args are typically literal placeholder values; passing Column
+  # expressions bound to both sides of a join is contrived but possible. Such
+  # args bypass the GPT-09 join-side ordering helper because :sql is a leaf
+  # relation (no child plan to register). If that pattern shows up in the wild,
+  # the fix is to thread the parent context's left/right registration into the
+  # SQL placeholder path rather than registering here.
   defp rewrite_plan({:sql, query, args}, plan_ids, refs, counter) do
     {args, plan_ids, refs, counter} = rewrite_args(args, plan_ids, refs, counter)
     {{:sql, query, args}, plan_ids, refs, counter}
