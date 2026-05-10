@@ -1,7 +1,7 @@
 defmodule SparkEx.Connect.Channel do
   @moduledoc false
 
-  @default_port 15002
+  @default_port 15_002
   # Spark Connect / PySpark default: 128 MiB for both directions.
   @default_max_message_size 128 * 1024 * 1024
 
@@ -46,11 +46,11 @@ defmodule SparkEx.Connect.Channel do
 
       iex> {:ok, opts} = SparkEx.Connect.Channel.parse_uri("sc://localhost:15002")
       iex> {opts.host, opts.port, opts.use_ssl, opts.token, opts.extra_params}
-      {"localhost", 15002, false, nil, %{}}
+      {"localhost", 15_002, false, nil, %{}}
 
       iex> {:ok, opts} = SparkEx.Connect.Channel.parse_uri("sc://spark-host:15002/;use_ssl=true;token=abc123")
       iex> {opts.host, opts.port, opts.use_ssl, opts.token}
-      {"spark-host", 15002, true, "abc123"}
+      {"spark-host", 15_002, true, "abc123"}
   """
   @spec parse_uri(String.t()) :: {:ok, connect_opts()} | {:error, term()}
   def parse_uri(uri_string) when is_binary(uri_string) do

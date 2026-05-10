@@ -145,7 +145,7 @@ defmodule SparkEx.Integration.StreamingStatGapsTest do
       desc = Stat.describe(df)
       {:ok, rows} = DataFrame.collect(desc)
       # Should still have summary rows (count=0)
-      assert length(rows) > 0
+      assert rows != []
       summaries = Map.new(rows, &{&1["summary"], &1})
       assert summaries["count"]["id"] == "0"
     end

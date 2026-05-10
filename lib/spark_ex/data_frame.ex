@@ -217,77 +217,7 @@ defmodule SparkEx.DataFrame do
     end
 
     ascending = Keyword.get(opts, :ascending)
-
-    sort_exprs =
-      case ascending do
-        nil ->
-          Enum.map(columns, &normalize_sort_expr/1)
-
-        asc when is_boolean(asc) ->
-          direction = if asc, do: :asc, else: :desc
-          null_order = if asc, do: :nulls_first, else: :nulls_last
-
-          Enum.map(columns, fn col ->
-            expr =
-              case col do
-                %Column{expr: {:sort_order, inner, _, _}} ->
-                  inner
-
-                %Column{expr: e} ->
-                  e
-
-                name when is_binary(name) ->
-                  {:col, name}
-
-                name when is_atom(name) ->
-                  {:col, Atom.to_string(name)}
-
-                idx when is_integer(idx) ->
-                  raise ArgumentError,
-                        "integer sort keys are not supported; use a column name (string/atom) or Column expression, got: #{inspect(idx)}"
-              end
-
-            {:sort_order, expr, direction, null_order}
-          end)
-
-        asc_list when is_list(asc_list) ->
-          if length(asc_list) != length(columns) do
-            raise ArgumentError,
-                  "ascending list length (#{length(asc_list)}) must match columns length (#{length(columns)})"
-          end
-
-          Enum.zip(columns, asc_list)
-          |> Enum.map(fn {col, asc} ->
-            asc = normalize_ascending_flag!(asc)
-            direction = if asc, do: :asc, else: :desc
-            null_order = if asc, do: :nulls_first, else: :nulls_last
-
-            expr =
-              case col do
-                %Column{expr: {:sort_order, inner, _, _}} ->
-                  inner
-
-                %Column{expr: e} ->
-                  e
-
-                name when is_binary(name) ->
-                  {:col, name}
-
-                name when is_atom(name) ->
-                  {:col, Atom.to_string(name)}
-
-                idx when is_integer(idx) ->
-                  raise ArgumentError,
-                        "integer sort keys are not supported; use a column name (string/atom) or Column expression, got: #{inspect(idx)}"
-              end
-
-            {:sort_order, expr, direction, null_order}
-          end)
-
-        other ->
-          raise ArgumentError,
-                "ascending must be a boolean, a list of booleans, or nil, got: #{inspect(other)}"
-      end
+    sort_exprs = build_sort_exprs(columns, ascending)
 
     %__MODULE__{df | _schema: nil, plan: {:sort, df.plan, sort_exprs}}
   end
@@ -801,12 +731,10 @@ defmodule SparkEx.DataFrame do
     ensure_same_session!(left, right, :union_by_name)
 
     allow_missing =
-      cond do
-        Keyword.has_key?(opts, :allow_missing_columns) ->
-          Keyword.fetch!(opts, :allow_missing_columns)
-
-        true ->
-          Keyword.get(opts, :allow_missing, false)
+      if Keyword.has_key?(opts, :allow_missing_columns) do
+        Keyword.fetch!(opts, :allow_missing_columns)
+      else
+        Keyword.get(opts, :allow_missing, false)
       end
 
     unless is_boolean(allow_missing) do
@@ -952,77 +880,7 @@ defmodule SparkEx.DataFrame do
     end
 
     ascending = Keyword.get(opts, :ascending)
-
-    sort_exprs =
-      case ascending do
-        nil ->
-          Enum.map(columns, &normalize_sort_expr/1)
-
-        asc when is_boolean(asc) ->
-          direction = if asc, do: :asc, else: :desc
-          null_order = if asc, do: :nulls_first, else: :nulls_last
-
-          Enum.map(columns, fn col ->
-            expr =
-              case col do
-                %Column{expr: {:sort_order, inner, _, _}} ->
-                  inner
-
-                %Column{expr: e} ->
-                  e
-
-                name when is_binary(name) ->
-                  {:col, name}
-
-                name when is_atom(name) ->
-                  {:col, Atom.to_string(name)}
-
-                idx when is_integer(idx) ->
-                  raise ArgumentError,
-                        "integer sort keys are not supported; use a column name (string/atom) or Column expression, got: #{inspect(idx)}"
-              end
-
-            {:sort_order, expr, direction, null_order}
-          end)
-
-        asc_list when is_list(asc_list) ->
-          if length(asc_list) != length(columns) do
-            raise ArgumentError,
-                  "ascending list length (#{length(asc_list)}) must match columns length (#{length(columns)})"
-          end
-
-          Enum.zip(columns, asc_list)
-          |> Enum.map(fn {col, asc} ->
-            asc = normalize_ascending_flag!(asc)
-            direction = if asc, do: :asc, else: :desc
-            null_order = if asc, do: :nulls_first, else: :nulls_last
-
-            expr =
-              case col do
-                %Column{expr: {:sort_order, inner, _, _}} ->
-                  inner
-
-                %Column{expr: e} ->
-                  e
-
-                name when is_binary(name) ->
-                  {:col, name}
-
-                name when is_atom(name) ->
-                  {:col, Atom.to_string(name)}
-
-                idx when is_integer(idx) ->
-                  raise ArgumentError,
-                        "integer sort keys are not supported; use a column name (string/atom) or Column expression, got: #{inspect(idx)}"
-              end
-
-            {:sort_order, expr, direction, null_order}
-          end)
-
-        other ->
-          raise ArgumentError,
-                "ascending must be a boolean, a list of booleans, or nil, got: #{inspect(other)}"
-      end
+    sort_exprs = build_sort_exprs(columns, ascending)
 
     %__MODULE__{df | _schema: nil, plan: {:sort, df.plan, sort_exprs, false}}
   end
@@ -2724,6 +2582,51 @@ defmodule SparkEx.DataFrame do
     raise ArgumentError, "ascending list values must be booleans, got: #{inspect(value)}"
   end
 
+  # Extracts the inner (non-sort-order) expression from a column/name for use
+  # when a uniform ascending direction is applied externally.
+  defp col_to_inner_expr(%Column{expr: {:sort_order, inner, _, _}}), do: inner
+  defp col_to_inner_expr(%Column{expr: e}), do: e
+  defp col_to_inner_expr(name) when is_binary(name), do: {:col, name}
+  defp col_to_inner_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
+
+  defp col_to_inner_expr(idx) when is_integer(idx) do
+    raise ArgumentError,
+          "integer sort keys are not supported; use a column name (string/atom) or Column expression, got: #{inspect(idx)}"
+  end
+
+  defp build_sort_exprs(columns, nil) do
+    Enum.map(columns, &normalize_sort_expr/1)
+  end
+
+  defp build_sort_exprs(columns, asc) when is_boolean(asc) do
+    direction = if asc, do: :asc, else: :desc
+    null_order = if asc, do: :nulls_first, else: :nulls_last
+
+    Enum.map(columns, fn col ->
+      {:sort_order, col_to_inner_expr(col), direction, null_order}
+    end)
+  end
+
+  defp build_sort_exprs(columns, asc_list) when is_list(asc_list) do
+    if length(asc_list) != length(columns) do
+      raise ArgumentError,
+            "ascending list length (#{length(asc_list)}) must match columns length (#{length(columns)})"
+    end
+
+    Enum.zip(columns, asc_list)
+    |> Enum.map(fn {col, asc} ->
+      asc = normalize_ascending_flag!(asc)
+      direction = if asc, do: :asc, else: :desc
+      null_order = if asc, do: :nulls_first, else: :nulls_last
+      {:sort_order, col_to_inner_expr(col), direction, null_order}
+    end)
+  end
+
+  defp build_sort_exprs(_columns, other) do
+    raise ArgumentError,
+          "ascending must be a boolean, a list of booleans, or nil, got: #{inspect(other)}"
+  end
+
   defp normalize_sample_seed!(nil), do: Random.long_seed()
   defp normalize_sample_seed!(seed) when is_integer(seed), do: seed
 
@@ -2959,35 +2862,49 @@ defmodule SparkEx.DataFrame do
   end
 
   defp normalize_join_type(join_type) do
-    normalized =
-      case join_type do
-        type when is_atom(type) ->
-          type |> Atom.to_string() |> String.downcase() |> String.replace("_", "")
+    normalized = join_type_to_normalized_string(join_type)
+    join_type_string_to_atom(normalized, join_type)
+  end
 
-        type when is_binary(type) ->
-          type |> String.downcase() |> String.replace("_", "")
+  defp join_type_to_normalized_string(join_type) when is_atom(join_type) do
+    join_type |> Atom.to_string() |> String.downcase() |> String.replace("_", "")
+  end
 
-        _ ->
-          raise ArgumentError,
-                "invalid join type: #{inspect(join_type)}. Expected one of: :inner, :outer, :full, :full_outer, :left, :left_outer, :right, :right_outer, :semi, :left_semi, :anti, :left_anti, :cross"
-      end
+  defp join_type_to_normalized_string(join_type) when is_binary(join_type) do
+    join_type |> String.downcase() |> String.replace("_", "")
+  end
 
-    case normalized do
-      "inner" -> :inner
-      "outer" -> :full
-      "full" -> :full
-      "fullouter" -> :full
-      "left" -> :left
-      "leftouter" -> :left
-      "right" -> :right
-      "rightouter" -> :right
-      "semi" -> :left_semi
-      "leftsemi" -> :left_semi
-      "anti" -> :left_anti
-      "leftanti" -> :left_anti
-      "cross" -> :cross
-      _ -> raise ArgumentError, "invalid join type: #{inspect(join_type)}"
-    end
+  defp join_type_to_normalized_string(join_type) do
+    raise ArgumentError,
+          "invalid join type: #{inspect(join_type)}. Expected one of: :inner, :outer, :full, :full_outer, :left, :left_outer, :right, :right_outer, :semi, :left_semi, :anti, :left_anti, :cross"
+  end
+
+  defp join_type_string_to_atom(normalized, _original) when normalized in ["inner"], do: :inner
+
+  defp join_type_string_to_atom(normalized, _original)
+       when normalized in ["outer", "full", "fullouter"],
+       do: :full
+
+  defp join_type_string_to_atom(normalized, _original)
+       when normalized in ["left", "leftouter"],
+       do: :left
+
+  defp join_type_string_to_atom(normalized, _original)
+       when normalized in ["right", "rightouter"],
+       do: :right
+
+  defp join_type_string_to_atom(normalized, _original)
+       when normalized in ["semi", "leftsemi"],
+       do: :left_semi
+
+  defp join_type_string_to_atom(normalized, _original)
+       when normalized in ["anti", "leftanti"],
+       do: :left_anti
+
+  defp join_type_string_to_atom("cross", _original), do: :cross
+
+  defp join_type_string_to_atom(_normalized, original) do
+    raise ArgumentError, "invalid join type: #{inspect(original)}"
   end
 
   defp normalize_as_of_join_type(join_type) do

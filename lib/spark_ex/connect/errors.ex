@@ -310,44 +310,41 @@ defmodule SparkEx.Connect.Errors do
       {idx, errors}
       when is_integer(idx) and is_list(errors) and idx >= 0 and length(errors) > idx ->
         root = Enum.at(errors, idx)
-
-        throwable_fields =
-          case root.spark_throwable do
-            %FetchErrorDetailsResponse.SparkThrowable{} = t ->
-              contexts =
-                Enum.map(t.query_contexts || [], fn ctx ->
-                  %{
-                    context_type: ctx.context_type,
-                    object_type: ctx.object_type,
-                    object_name: ctx.object_name,
-                    start_index: ctx.start_index,
-                    stop_index: ctx.stop_index,
-                    fragment: ctx.fragment,
-                    call_site: ctx.call_site,
-                    summary: ctx.summary
-                  }
-                end)
-
-              %{
-                error_class: t.error_class || error.error_class,
-                sql_state: t.sql_state || error.sql_state,
-                message_parameters: t.message_parameters || error.message_parameters,
-                query_contexts: contexts,
-                stacktrace: Map.get(t, :stack_trace) || Map.get(t, :stacktrace)
-              }
-
-            _ ->
-              %{}
-          end
+        throwable_fields = extract_throwable_fields(error, root.spark_throwable)
 
         %{error | server_message: root.message}
-        |> Map.merge(throwable_fields, fn _k, existing, new ->
-          new || existing
-        end)
+        |> Map.merge(throwable_fields, fn _k, existing, new -> new || existing end)
 
       _ ->
         error
     end
+  end
+
+  defp extract_throwable_fields(_error, %FetchErrorDetailsResponse.SparkThrowable{} = t) do
+    %{
+      error_class: t.error_class,
+      sql_state: t.sql_state,
+      message_parameters: t.message_parameters,
+      query_contexts: map_query_contexts(t.query_contexts || []),
+      stacktrace: Map.get(t, :stack_trace) || Map.get(t, :stacktrace)
+    }
+  end
+
+  defp extract_throwable_fields(_error, _other), do: %{}
+
+  defp map_query_contexts(contexts) do
+    Enum.map(contexts, fn ctx ->
+      %{
+        context_type: ctx.context_type,
+        object_type: ctx.object_type,
+        object_name: ctx.object_name,
+        start_index: ctx.start_index,
+        stop_index: ctx.stop_index,
+        fragment: ctx.fragment,
+        call_site: ctx.call_site,
+        summary: ctx.summary
+      }
+    end)
   end
 
   defp parse_json(nil), do: nil

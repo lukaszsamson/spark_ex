@@ -231,7 +231,7 @@ defmodule SparkEx.Integration.DataFrameTest do
       for mode <- [:simple, :extended, :codegen, :cost, :formatted] do
         assert {:ok, explain_str} = DataFrame.explain(df, mode)
         assert is_binary(explain_str)
-        assert String.length(explain_str) > 0
+        assert String.explain_str() != []
       end
     end
   end
@@ -727,7 +727,7 @@ defmodule SparkEx.Integration.DataFrameTest do
         |> DataFrame.limit(2)
 
       assert {:ok, rows} = DataFrame.collect(df)
-      assert length(rows) >= 1
+      assert rows != []
       assert Enum.all?(rows, &is_binary(&1["name"]))
     end
   end

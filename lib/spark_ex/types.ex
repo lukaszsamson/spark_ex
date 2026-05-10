@@ -452,37 +452,63 @@ defmodule SparkEx.Types do
   end
 
   defp proto_type_to_json(%Spark.Connect.DataType{kind: {kind, value}}) do
-    case kind do
-      :null -> "void"
-      :boolean -> "boolean"
-      :byte -> "byte"
-      :short -> "short"
-      :integer -> "integer"
-      :long -> "long"
-      :float -> "float"
-      :double -> "double"
-      :string -> string_proto_to_json(value)
-      :char -> "char(#{value.length})"
-      :var_char -> "varchar(#{value.length})"
-      :binary -> "binary"
-      :date -> "date"
-      :time -> time_proto_to_json(value)
-      :timestamp -> "timestamp"
-      :timestamp_ntz -> "timestamp_ntz"
-      :day_time_interval -> day_time_interval_proto_to_json(value)
-      :year_month_interval -> year_month_interval_proto_to_json(value)
-      :calendar_interval -> "interval"
-      :decimal -> "decimal(#{value.precision},#{value.scale})"
-      :array -> array_proto_to_json(value)
-      :map -> map_proto_to_json(value)
-      :struct -> struct_proto_to_json(value)
-      :variant -> "variant"
-      :geometry -> geometry_proto_to_json(value)
-      :geography -> geography_proto_to_json(value)
-      :unparsed -> value.data_type_string
-      _ -> raise ArgumentError, "unsupported Spark.Connect.DataType kind: #{inspect(kind)}"
-    end
+    proto_kind_to_json(kind, value)
   end
+
+  defp proto_kind_to_json(kind, _value)
+       when kind in [
+              :null,
+              :boolean,
+              :byte,
+              :short,
+              :integer,
+              :long,
+              :float,
+              :double,
+              :binary,
+              :date,
+              :timestamp,
+              :timestamp_ntz,
+              :calendar_interval,
+              :variant
+            ] do
+    proto_scalar_kind_to_json(kind)
+  end
+
+  defp proto_kind_to_json(:string, value), do: string_proto_to_json(value)
+  defp proto_kind_to_json(:char, value), do: "char(#{value.length})"
+  defp proto_kind_to_json(:var_char, value), do: "varchar(#{value.length})"
+  defp proto_kind_to_json(:time, value), do: time_proto_to_json(value)
+  defp proto_kind_to_json(:decimal, value), do: "decimal(#{value.precision},#{value.scale})"
+  defp proto_kind_to_json(:day_time_interval, value), do: day_time_interval_proto_to_json(value)
+
+  defp proto_kind_to_json(:year_month_interval, value),
+    do: year_month_interval_proto_to_json(value)
+
+  defp proto_kind_to_json(:array, value), do: array_proto_to_json(value)
+  defp proto_kind_to_json(:map, value), do: map_proto_to_json(value)
+  defp proto_kind_to_json(:struct, value), do: struct_proto_to_json(value)
+  defp proto_kind_to_json(:geometry, value), do: geometry_proto_to_json(value)
+  defp proto_kind_to_json(:geography, value), do: geography_proto_to_json(value)
+  defp proto_kind_to_json(:unparsed, value), do: value.data_type_string
+
+  defp proto_kind_to_json(kind, _value),
+    do: raise(ArgumentError, "unsupported Spark.Connect.DataType kind: #{inspect(kind)}")
+
+  defp proto_scalar_kind_to_json(:null), do: "void"
+  defp proto_scalar_kind_to_json(:boolean), do: "boolean"
+  defp proto_scalar_kind_to_json(:byte), do: "byte"
+  defp proto_scalar_kind_to_json(:short), do: "short"
+  defp proto_scalar_kind_to_json(:integer), do: "integer"
+  defp proto_scalar_kind_to_json(:long), do: "long"
+  defp proto_scalar_kind_to_json(:float), do: "float"
+  defp proto_scalar_kind_to_json(:double), do: "double"
+  defp proto_scalar_kind_to_json(:binary), do: "binary"
+  defp proto_scalar_kind_to_json(:date), do: "date"
+  defp proto_scalar_kind_to_json(:timestamp), do: "timestamp"
+  defp proto_scalar_kind_to_json(:timestamp_ntz), do: "timestamp_ntz"
+  defp proto_scalar_kind_to_json(:calendar_interval), do: "interval"
+  defp proto_scalar_kind_to_json(:variant), do: "variant"
 
   defp time_proto_to_json(%Spark.Connect.DataType.Time{precision: precision})
        when is_integer(precision),
@@ -782,36 +808,35 @@ defmodule SparkEx.Types do
   @spec parse_ddl_type(String.t()) :: {:ok, data_type_proto()} | :error
   def parse_ddl_type(ddl) when is_binary(ddl) do
     trimmed = ddl |> String.trim() |> String.upcase()
-
-    case trimmed do
-      "" -> :error
-      "VOID" -> {:ok, type_to_proto(:null)}
-      "NULL" -> {:ok, type_to_proto(:null)}
-      "BOOLEAN" -> {:ok, type_to_proto(:boolean)}
-      "BOOL" -> {:ok, type_to_proto(:boolean)}
-      "TINYINT" -> {:ok, type_to_proto(:byte)}
-      "BYTE" -> {:ok, type_to_proto(:byte)}
-      "SMALLINT" -> {:ok, type_to_proto(:short)}
-      "SHORT" -> {:ok, type_to_proto(:short)}
-      "INT" -> {:ok, type_to_proto(:integer)}
-      "INTEGER" -> {:ok, type_to_proto(:integer)}
-      "BIGINT" -> {:ok, type_to_proto(:long)}
-      "LONG" -> {:ok, type_to_proto(:long)}
-      "FLOAT" -> {:ok, type_to_proto(:float)}
-      "REAL" -> {:ok, type_to_proto(:float)}
-      "DOUBLE" -> {:ok, type_to_proto(:double)}
-      "STRING" -> {:ok, type_to_proto(:string)}
-      "BINARY" -> {:ok, type_to_proto(:binary)}
-      "DATE" -> {:ok, type_to_proto(:date)}
-      "TIME" -> {:ok, type_to_proto(:time)}
-      "TIMESTAMP" -> {:ok, type_to_proto(:timestamp)}
-      "TIMESTAMP_NTZ" -> {:ok, type_to_proto(:timestamp_ntz)}
-      "VARIANT" -> {:ok, type_to_proto(:variant)}
-      "GEOMETRY" -> {:ok, type_to_proto(:geometry)}
-      "GEOGRAPHY" -> {:ok, type_to_proto(:geography)}
-      _ -> parse_decimal_ddl(trimmed)
-    end
+    parse_trimmed_ddl(trimmed)
   end
+
+  defp parse_trimmed_ddl(""), do: :error
+  defp parse_trimmed_ddl("VOID"), do: {:ok, type_to_proto(:null)}
+  defp parse_trimmed_ddl("NULL"), do: {:ok, type_to_proto(:null)}
+  defp parse_trimmed_ddl("BOOLEAN"), do: {:ok, type_to_proto(:boolean)}
+  defp parse_trimmed_ddl("BOOL"), do: {:ok, type_to_proto(:boolean)}
+  defp parse_trimmed_ddl("TINYINT"), do: {:ok, type_to_proto(:byte)}
+  defp parse_trimmed_ddl("BYTE"), do: {:ok, type_to_proto(:byte)}
+  defp parse_trimmed_ddl("SMALLINT"), do: {:ok, type_to_proto(:short)}
+  defp parse_trimmed_ddl("SHORT"), do: {:ok, type_to_proto(:short)}
+  defp parse_trimmed_ddl("INT"), do: {:ok, type_to_proto(:integer)}
+  defp parse_trimmed_ddl("INTEGER"), do: {:ok, type_to_proto(:integer)}
+  defp parse_trimmed_ddl("BIGINT"), do: {:ok, type_to_proto(:long)}
+  defp parse_trimmed_ddl("LONG"), do: {:ok, type_to_proto(:long)}
+  defp parse_trimmed_ddl("FLOAT"), do: {:ok, type_to_proto(:float)}
+  defp parse_trimmed_ddl("REAL"), do: {:ok, type_to_proto(:float)}
+  defp parse_trimmed_ddl("DOUBLE"), do: {:ok, type_to_proto(:double)}
+  defp parse_trimmed_ddl("STRING"), do: {:ok, type_to_proto(:string)}
+  defp parse_trimmed_ddl("BINARY"), do: {:ok, type_to_proto(:binary)}
+  defp parse_trimmed_ddl("DATE"), do: {:ok, type_to_proto(:date)}
+  defp parse_trimmed_ddl("TIME"), do: {:ok, type_to_proto(:time)}
+  defp parse_trimmed_ddl("TIMESTAMP"), do: {:ok, type_to_proto(:timestamp)}
+  defp parse_trimmed_ddl("TIMESTAMP_NTZ"), do: {:ok, type_to_proto(:timestamp_ntz)}
+  defp parse_trimmed_ddl("VARIANT"), do: {:ok, type_to_proto(:variant)}
+  defp parse_trimmed_ddl("GEOMETRY"), do: {:ok, type_to_proto(:geometry)}
+  defp parse_trimmed_ddl("GEOGRAPHY"), do: {:ok, type_to_proto(:geography)}
+  defp parse_trimmed_ddl(trimmed), do: parse_decimal_ddl(trimmed)
 
   defp parse_decimal_ddl("DECIMAL"), do: {:ok, type_to_proto({:decimal, 10, 0})}
   defp parse_decimal_ddl("NUMERIC"), do: {:ok, type_to_proto({:decimal, 10, 0})}

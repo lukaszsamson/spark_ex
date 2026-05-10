@@ -95,7 +95,7 @@ defmodule SparkEx.Integration.StreamingSinksTest do
                await_condition(
                  fn -> SparkEx.Reader.parquet(session, path) |> DataFrame.collect() end,
                  fn
-                   {:ok, values} -> length(values) > 0
+                   {:ok, values} -> values != []
                    _ -> false
                  end,
                  10_000
@@ -103,7 +103,7 @@ defmodule SparkEx.Integration.StreamingSinksTest do
 
       assert :ok = StreamingQuery.stop(query)
 
-      assert length(rows) > 0
+      assert rows != []
     end
 
     test "streaming json sink writes files", %{session: session} do
@@ -116,7 +116,7 @@ defmodule SparkEx.Integration.StreamingSinksTest do
                await_condition(
                  fn -> SparkEx.Reader.json(session, path) |> DataFrame.collect() end,
                  fn
-                   {:ok, values} -> length(values) > 0
+                   {:ok, values} -> values != []
                    _ -> false
                  end,
                  10_000
@@ -124,7 +124,7 @@ defmodule SparkEx.Integration.StreamingSinksTest do
 
       assert :ok = StreamingQuery.stop(query)
 
-      assert length(rows) > 0
+      assert rows != []
     end
 
     test "streaming csv sink writes files", %{session: session} do
@@ -140,7 +140,7 @@ defmodule SparkEx.Integration.StreamingSinksTest do
                    |> DataFrame.collect()
                  end,
                  fn
-                   {:ok, values} -> length(values) > 0
+                   {:ok, values} -> values != []
                    _ -> false
                  end,
                  10_000
@@ -148,7 +148,7 @@ defmodule SparkEx.Integration.StreamingSinksTest do
 
       assert :ok = StreamingQuery.stop(query)
 
-      assert length(rows) > 0
+      assert rows != []
     end
   end
 

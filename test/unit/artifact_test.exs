@@ -70,7 +70,7 @@ defmodule SparkEx.Unit.ArtifactTest do
     test "batch payload with single chunk artifacts" do
       chunk = %AddArtifactsRequest.ArtifactChunk{
         data: "binary data here",
-        crc: 12345
+        crc: 12_345
       }
 
       artifact = %AddArtifactsRequest.SingleChunkArtifact{
@@ -90,7 +90,7 @@ defmodule SparkEx.Unit.ArtifactTest do
       assert request.session_id == "sess-123"
       assert {:batch, %AddArtifactsRequest.Batch{artifacts: [art]}} = request.payload
       assert art.name == "my-lib.jar"
-      assert art.data.crc == 12345
+      assert art.data.crc == 12_345
     end
 
     test "CRC32 computation for artifact data" do

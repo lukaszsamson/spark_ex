@@ -152,7 +152,7 @@ defmodule SparkEx.Integration.M12.CatalogTest do
     test "list_functions returns built-in functions", %{session: session} do
       assert {:ok, functions} = Catalog.list_functions(session)
       assert is_list(functions)
-      assert length(functions) > 0
+      assert functions != []
 
       names = Enum.map(functions, & &1.name)
       assert "abs" in names

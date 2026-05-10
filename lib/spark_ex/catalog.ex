@@ -780,11 +780,9 @@ defmodule SparkEx.Catalog do
 
   defp format_properties(props) when is_map(props) do
     pairs =
-      props
-      |> Enum.map(fn {k, v} ->
+      Enum.map_join(props, ", ", fn {k, v} ->
         "#{sql_string(k)}=#{sql_string(v)}"
       end)
-      |> Enum.join(", ")
 
     "(" <> pairs <> ")"
   end
@@ -798,9 +796,7 @@ defmodule SparkEx.Catalog do
   end
 
   defp quote_identifier(parts) when is_list(parts) do
-    parts
-    |> Enum.map(&quote_identifier_part/1)
-    |> Enum.join(".")
+    Enum.map_join(parts, ".", &quote_identifier_part/1)
   end
 
   defp quote_identifier(name) when is_binary(name) do

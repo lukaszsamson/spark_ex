@@ -144,50 +144,7 @@ defmodule SparkEx.StreamWriter do
               "only one trigger type should be set, got: #{inspect(multiple)}"
     end
 
-    trigger_value =
-      cond do
-        Keyword.has_key?(opts, :processing_time) ->
-          value = Keyword.fetch!(opts, :processing_time)
-
-          if not is_binary(value) or String.trim(value) == "" do
-            raise ArgumentError,
-                  "processing_time must be a non-empty string, got: #{inspect(value)}"
-          end
-
-          {:processing_time, String.trim(value)}
-
-        Keyword.has_key?(opts, :available_now) ->
-          value = Keyword.fetch!(opts, :available_now)
-
-          if value != true do
-            raise ArgumentError,
-                  "available_now must be true, got: #{inspect(value)}"
-          end
-
-          :available_now
-
-        Keyword.has_key?(opts, :once) ->
-          value = Keyword.fetch!(opts, :once)
-
-          if value != true do
-            raise ArgumentError,
-                  "once must be true, got: #{inspect(value)}"
-          end
-
-          :once
-
-        Keyword.has_key?(opts, :continuous) ->
-          value = Keyword.fetch!(opts, :continuous)
-
-          if not is_binary(value) or String.trim(value) == "" do
-            raise ArgumentError,
-                  "continuous must be a non-empty string, got: #{inspect(value)}"
-          end
-
-          {:continuous, String.trim(value)}
-      end
-
-    %{writer | trigger: trigger_value}
+    %{writer | trigger: build_trigger_value(opts)}
   end
 
   @spec partition_by(t(), [String.t()]) :: t()
@@ -292,6 +249,49 @@ defmodule SparkEx.StreamWriter do
   end
 
   # --- Private ---
+
+  defp build_trigger_value(opts) do
+    cond do
+      Keyword.has_key?(opts, :processing_time) ->
+        build_trigger_processing_time(Keyword.fetch!(opts, :processing_time))
+
+      Keyword.has_key?(opts, :available_now) ->
+        build_trigger_flag(:available_now, Keyword.fetch!(opts, :available_now))
+
+      Keyword.has_key?(opts, :once) ->
+        build_trigger_flag(:once, Keyword.fetch!(opts, :once))
+
+      Keyword.has_key?(opts, :continuous) ->
+        build_trigger_continuous(Keyword.fetch!(opts, :continuous))
+    end
+  end
+
+  defp build_trigger_processing_time(value) do
+    if not is_binary(value) or String.trim(value) == "" do
+      raise ArgumentError,
+            "processing_time must be a non-empty string, got: #{inspect(value)}"
+    end
+
+    {:processing_time, String.trim(value)}
+  end
+
+  defp build_trigger_flag(key, value) do
+    if value != true do
+      raise ArgumentError,
+            "#{key} must be true, got: #{inspect(value)}"
+    end
+
+    key
+  end
+
+  defp build_trigger_continuous(value) do
+    if not is_binary(value) or String.trim(value) == "" do
+      raise ArgumentError,
+            "continuous must be a non-empty string, got: #{inspect(value)}"
+    end
+
+    {:continuous, String.trim(value)}
+  end
 
   defp build_write_opts(writer) do
     [

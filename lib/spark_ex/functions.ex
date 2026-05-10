@@ -1756,13 +1756,13 @@ defmodule SparkEx.Functions do
   end
 
   @doc """
-  Approximate percentile with PySpark's default accuracy (10000).
+  Approximate percentile with PySpark's default accuracy (10_000).
 
-  Equivalent to `percentile_approx(col, percentage, 10000)`.
+  Equivalent to `percentile_approx(col, percentage, 10_000)`.
   """
   @spec percentile_approx(Column.t() | String.t(), number() | [number()]) :: Column.t()
   def percentile_approx(col, percentage) do
-    percentile_approx(col, percentage, 10000)
+    percentile_approx(col, percentage, 10_000)
   end
 
   @doc "Generates a random UUID string."

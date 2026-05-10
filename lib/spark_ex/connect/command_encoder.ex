@@ -180,7 +180,7 @@ defmodule SparkEx.Connect.CommandEncoder do
 
           %Spark.Connect.SqlCommand{sql: query, named_arguments: named}
 
-        args when is_list(args) and length(args) > 0 ->
+        args when is_list(args) and args != [] ->
           pos =
             Enum.map(args, fn v ->
               PlanEncoder.encode_expression({:lit, v})

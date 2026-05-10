@@ -363,14 +363,7 @@ defmodule SparkEx.Reader do
       when is_binary(url) and is_binary(table) and is_binary(column_name) and
              is_integer(lower_bound) and is_integer(upper_bound) and
              is_integer(num_partitions) and num_partitions > 0 do
-    if String.trim(column_name) == "" do
-      raise ArgumentError, "column_name must be a non-empty string"
-    end
-
-    if lower_bound > upper_bound do
-      raise ArgumentError,
-            "lowerBound (#{lower_bound}) must not exceed upperBound (#{upper_bound})"
-    end
+    validate_jdbc_partition_args(column_name, lower_bound, upper_bound, properties)
 
     partition_options = %{
       "partitionColumn" => column_name,
@@ -379,18 +372,7 @@ defmodule SparkEx.Reader do
       "numPartitions" => Integer.to_string(num_partitions)
     }
 
-    extra_options =
-      case properties do
-        nil ->
-          %{}
-
-        props when is_map(props) or is_list(props) ->
-          normalize_options(props)
-
-        other ->
-          raise ArgumentError,
-                "properties must be nil, a map, or a keyword list, got: #{inspect(other)}"
-      end
+    extra_options = normalize_jdbc_properties(properties)
 
     merged =
       partition_options
@@ -402,6 +384,27 @@ defmodule SparkEx.Reader do
   end
 
   # --- Private ---
+
+  defp validate_jdbc_partition_args(column_name, lower_bound, upper_bound, _properties) do
+    if String.trim(column_name) == "" do
+      raise ArgumentError, "column_name must be a non-empty string"
+    end
+
+    if lower_bound > upper_bound do
+      raise ArgumentError,
+            "lowerBound (#{lower_bound}) must not exceed upperBound (#{upper_bound})"
+    end
+  end
+
+  defp normalize_jdbc_properties(nil), do: %{}
+
+  defp normalize_jdbc_properties(props) when is_map(props) or is_list(props),
+    do: normalize_options(props)
+
+  defp normalize_jdbc_properties(other) do
+    raise ArgumentError,
+          "properties must be nil, a map, or a keyword list, got: #{inspect(other)}"
+  end
 
   defp load_from_builder(reader, paths, opts) do
     format = Keyword.get(opts, :format, reader.format)

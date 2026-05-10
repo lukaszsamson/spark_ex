@@ -95,7 +95,10 @@
           ## Readability Checks
           #
           {Credo.Check.Readability.AliasOrder, []},
-          {Credo.Check.Readability.FunctionNames, []},
+          # Disabled: many public functions intentionally mirror PySpark/Scala camelCase
+          # API (e.g. unionAll, sparkSession, registerTempTable). Each has a snake_case
+          # sibling; the camelCase form is retained for API parity.
+          {Credo.Check.Readability.FunctionNames, false},
           {Credo.Check.Readability.LargeNumbers, []},
           {Credo.Check.Readability.MaxLineLength, [priority: :low, max_length: 120]},
           {Credo.Check.Readability.ModuleAttributeNames, []},
@@ -104,7 +107,9 @@
           {Credo.Check.Readability.ParenthesesInCondition, []},
           {Credo.Check.Readability.ParenthesesOnZeroArityDefs, []},
           {Credo.Check.Readability.PipeIntoAnonymousFunctions, []},
-          {Credo.Check.Readability.PredicateFunctionNames, []},
+          # Disabled: predicate names like is_streaming, is_local, is_cached, is_empty
+          # mirror PySpark API (isStreaming, isLocal, isCached, isEmpty) for parity.
+          {Credo.Check.Readability.PredicateFunctionNames, false},
           {Credo.Check.Readability.PreferImplicitTry, []},
           {Credo.Check.Readability.RedundantBlankLines, []},
           {Credo.Check.Readability.Semicolons, []},
@@ -121,7 +126,9 @@
           #
           {Credo.Check.Refactor.Apply, []},
           {Credo.Check.Refactor.CondStatements, []},
-          {Credo.Check.Refactor.CyclomaticComplexity, []},
+          # Bumped from default 9: protobuf plan/result encoding/decoding has
+          # naturally higher branching against many message variants.
+          {Credo.Check.Refactor.CyclomaticComplexity, [max_complexity: 12]},
           {Credo.Check.Refactor.FilterCount, []},
           {Credo.Check.Refactor.FilterFilter, []},
           {Credo.Check.Refactor.FunctionArity, []},
@@ -130,7 +137,9 @@
           {Credo.Check.Refactor.MatchInCondition, []},
           {Credo.Check.Refactor.NegatedConditionsInUnless, []},
           {Credo.Check.Refactor.NegatedConditionsWithElse, []},
-          {Credo.Check.Refactor.Nesting, []},
+          # Bumped from default 2: protobuf decoding paths often need an extra level
+          # of nesting to disambiguate message variants.
+          {Credo.Check.Refactor.Nesting, [max_nesting: 3]},
           {Credo.Check.Refactor.RedundantWithClauseResult, []},
           {Credo.Check.Refactor.RejectReject, []},
           {Credo.Check.Refactor.UnlessWithElse, []},

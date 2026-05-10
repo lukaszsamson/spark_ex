@@ -239,7 +239,14 @@ defmodule SparkEx.Unit.FunctionParityTest do
         "try_variant_get",
         "to_variant_object",
         "schema_of_variant",
-        "schema_of_variant_agg"
+        "schema_of_variant_agg",
+        # Hand-written in Functions module to accept column-name strings or numeric literals
+        "bit_get",
+        "getbit",
+        "position",
+        "repeat",
+        "slice",
+        "width_bucket"
       ])
 
     all_names = MapSet.union(registry_names, hand_written)
