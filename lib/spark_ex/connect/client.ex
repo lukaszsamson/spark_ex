@@ -1407,11 +1407,7 @@ defmodule SparkEx.Connect.Client do
           # new response. Once it crosses @empty_eof_streak_limit, each
           # additional empty EOF counts as a real attempt so we can hit the
           # policy cap rather than spinning forever.
-          empty_eof_streak: 0,
-          # Set to true once we have fired release_all for this operation
-          # (on result_complete or on a terminal error). Prevents the
-          # finalize callback from firing a duplicate release.
-          released_all?: false
+          empty_eof_streak: 0
         }
       end,
       &reattach_stream_step/1,
@@ -1470,9 +1466,14 @@ defmodule SparkEx.Connect.Client do
               new_state.ctx.release_execute_timeout
             )
 
-            %{new_state | released_all?: true}
+            new_state
           else
-            fire_release_checkpoint(new_state.ctx.release_execute_fun, new_id)
+            fire_release_checkpoint(
+              new_state.ctx.release_execute_fun,
+              new_id,
+              new_state.ctx.release_execute_timeout
+            )
+
             new_state
           end
 
@@ -1525,16 +1526,22 @@ defmodule SparkEx.Connect.Client do
     # On terminal error PySpark calls _release_all() to drop the server-side
     # buffer. We do the same and mark result_complete? so downstream halts.
     fire_release_all(state.ctx.release_execute_fun, state.ctx.release_execute_timeout)
-    {[{:error, error}], %{state | result_complete?: true, released_all?: true}}
+    {[{:error, error}], %{state | result_complete?: true}}
   end
 
-  defp fire_release_all(release_execute_fun, _timeout_ms) do
+  defp fire_release_all(release_execute_fun, timeout_ms) do
     Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
-      try do
-        release_execute_fun.([])
-      catch
-        _, _ -> :ok
-      end
+      task =
+        Task.async(fn ->
+          try do
+            release_execute_fun.([])
+          catch
+            _, _ -> :ok
+          end
+        end)
+
+      _ = Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill)
+      :ok
     end)
 
     :ok
@@ -1694,15 +1701,21 @@ defmodule SparkEx.Connect.Client do
 
   defp pull_iter(_), do: :done
 
-  defp fire_release_checkpoint(_release_execute_fun, nil), do: :ok
+  defp fire_release_checkpoint(_release_execute_fun, nil, _timeout_ms), do: :ok
 
-  defp fire_release_checkpoint(release_execute_fun, response_id) do
+  defp fire_release_checkpoint(release_execute_fun, response_id, timeout_ms) do
     Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
-      try do
-        release_execute_fun.(until_response_id: response_id)
-      catch
-        _, _ -> :ok
-      end
+      task =
+        Task.async(fn ->
+          try do
+            release_execute_fun.(until_response_id: response_id)
+          catch
+            _, _ -> :ok
+          end
+        end)
+
+      _ = Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill)
+      :ok
     end)
 
     :ok

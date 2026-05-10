@@ -314,7 +314,13 @@ defmodule SparkEx.Connect.ResultDecoder do
     {:halt, {:ok, state}}
   end
 
-  defp dispatch_explorer_response(_other, state, _session), do: {:cont, {:ok, state}}
+  defp dispatch_explorer_response(nil, state, _session), do: {:cont, {:ok, state}}
+
+  defp dispatch_explorer_response({tag, _} = _other, state, _session) when is_atom(tag) do
+    require Logger
+    Logger.debug(fn -> "ignoring unknown ExecutePlanResponse response_type: #{inspect(tag)}" end)
+    {:cont, {:ok, state}}
+  end
 
   defp finalize_explorer_stream_result({:ok, state}) do
     case state.current_chunked_batch do
@@ -450,7 +456,13 @@ defmodule SparkEx.Connect.ResultDecoder do
       {:cont,
        {:ok, push_command_result(state, {:pipeline_query_function_execution_signal, result})}}
 
-  defp dispatch_arrow_response(_other, state, _session), do: {:cont, {:ok, state}}
+  defp dispatch_arrow_response(nil, state, _session), do: {:cont, {:ok, state}}
+
+  defp dispatch_arrow_response({tag, _} = _other, state, _session) when is_atom(tag) do
+    require Logger
+    Logger.debug(fn -> "ignoring unknown ExecutePlanResponse response_type: #{inspect(tag)}" end)
+    {:cont, {:ok, state}}
+  end
 
   defp finalize_arrow_stream_result({:ok, %{arrow: _} = arrow_result}), do: {:ok, arrow_result}
 
