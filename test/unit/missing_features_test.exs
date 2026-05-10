@@ -298,16 +298,7 @@ defmodule SparkEx.MissingFeaturesTest do
       result = Functions.make_timestamp(date: Functions.col("d"), time: Functions.col("t"))
 
       assert %Column{
-               expr:
-                 {:fn, "make_timestamp",
-                  [
-                    {:fn, "year", [{:col, "d"}], false},
-                    {:fn, "month", [{:col, "d"}], false},
-                    {:fn, "dayofmonth", [{:col, "d"}], false},
-                    {:fn, "hour", [{:col, "t"}], false},
-                    {:fn, "minute", [{:col, "t"}], false},
-                    {:fn, "second", [{:col, "t"}], false}
-                  ], false}
+               expr: {:fn, "make_timestamp", [{:col, "d"}, {:col, "t"}], false}
              } = result
     end
 
@@ -320,17 +311,7 @@ defmodule SparkEx.MissingFeaturesTest do
         )
 
       assert %Column{
-               expr:
-                 {:fn, "make_timestamp",
-                  [
-                    {:fn, "year", [{:col, "d"}], false},
-                    {:fn, "month", [{:col, "d"}], false},
-                    {:fn, "dayofmonth", [{:col, "d"}], false},
-                    {:fn, "hour", [{:col, "t"}], false},
-                    {:fn, "minute", [{:col, "t"}], false},
-                    {:fn, "second", [{:col, "t"}], false},
-                    {:col, "tz"}
-                  ], false}
+               expr: {:fn, "make_timestamp", [{:col, "d"}, {:col, "t"}, {:col, "tz"}], false}
              } = result
     end
   end

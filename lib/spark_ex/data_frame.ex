@@ -939,6 +939,19 @@ defmodule SparkEx.DataFrame do
     }
   end
 
+  # Positional `sample(fraction, seed)` form for parity with PySpark's
+  # `DataFrame.sample(fraction, seed)`.
+  def sample(%__MODULE__{} = df, fraction, seed, _ignored)
+      when is_float(fraction) and is_integer(seed) do
+    validate_sample_fraction!(fraction, false)
+
+    %__MODULE__{
+      df
+      | _schema: nil,
+        plan: {:sample, df.plan, 0.0, fraction, false, seed, false}
+    }
+  end
+
   @doc """
   Randomly splits the DataFrame into multiple DataFrames using normalized weights.
   """

@@ -57,7 +57,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:bround, "bround", {:col_opt, [scale: 0]},
        group: :math, doc: "Banker's rounding to `scale` decimal places."},
       {:cbrt, "cbrt", :one_col, group: :math, doc: "Computes cube root."},
-      {:ceil, "ceil", :one_col, group: :math, doc: "Computes ceiling.", aliases: [:ceiling]},
+      # ceil hand-written in Functions to support optional scale argument
+      # {:ceil, "ceil", :one_col, ..., aliases: [:ceiling]} — see Functions.ceil/1,2
       {:conv, "conv", {:col_lit, 2}, group: :math, doc: "Converts number between bases."},
       {:cos, "cos", :one_col, group: :math, doc: "Computes cosine."},
       {:cosh, "cosh", :one_col, group: :math, doc: "Computes hyperbolic cosine."},
@@ -69,7 +70,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:exp, "exp", :one_col, group: :math, doc: "Computes exponential."},
       {:expm1, "expm1", :one_col, group: :math, doc: "Computes exp(x) - 1."},
       {:factorial, "factorial", :one_col, group: :math, doc: "Computes factorial."},
-      {:floor, "floor", :one_col, group: :math, doc: "Computes floor."},
+      # floor hand-written in Functions to support optional scale argument
+      # {:floor, "floor", :one_col, ...} — see Functions.floor/1,2
       {:hex, "hex", :one_col, group: :math, doc: "Hex string of integer/binary."},
       {:hypot, "hypot", :two_col, group: :math, doc: "Computes sqrt(a^2 + b^2)."},
       {:log, "ln", :one_col, group: :math, doc: "Computes natural logarithm.", aliases: [:ln]},
@@ -166,8 +168,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :string, doc: "Replaces regex matches."},
       {:regexp_count, "regexp_count", :two_col,
        group: :string, doc: "Counts regex pattern occurrences."},
-      {:regexp_extract_all, "regexp_extract_all", {:col_lit, 2},
-       group: :string, doc: "Extracts all matches for regex group."},
+      # regexp_extract_all hand-written in Functions: idx is optional (default omitted)
+      # {:regexp_extract_all, ...} — see Functions.regexp_extract_all/2,3
       {:regexp_instr, "regexp_instr", {:col_lit, 1},
        group: :string, doc: "Returns position of first regex match."},
       {:regexp_substr, "regexp_substr", {:col_lit, 1},
@@ -429,8 +431,10 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :collection, doc: "Creates map from array of entries."},
       {:map_contains_key, "map_contains_key", {:col_lit, 1},
        group: :collection, doc: "Returns true if map contains the given key."},
-      {:str_to_map, "str_to_map", {:col_opt, [pair_delim: nil, key_value_delim: nil]},
-       group: :collection, doc: "Creates map from delimited string."},
+      {:str_to_map, "str_to_map", {:col_opt, [pair_delim: ",", key_value_delim: ":"]},
+       group: :collection,
+       doc:
+         "Creates map from delimited string. Defaults to `,` as the pair delimiter and `:` as the key/value delimiter (matching PySpark)."},
       # slice hand-written in functions.ex to support Column args for start/length
       # {:slice, ...} — see Functions.slice/3
       {:sort_array, "sort_array", {:col_opt, [asc: true]},
@@ -463,8 +467,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :aggregate, doc: "Computes sum of distinct values.", is_distinct: true},
       # approx_count_distinct is hand-written in Functions to support rsd parameter
       # {:approx_count_distinct, ...} — see Functions.approx_count_distinct/1,2
-      {:approx_percentile, "approx_percentile", {:col_lit, 2},
-       group: :aggregate, doc: "Approximate percentile with accuracy parameter."},
+      # approx_percentile hand-written in Functions: accuracy defaults to 10000
+      # {:approx_percentile, ...} — see Functions.approx_percentile/2,3
       # percentile hand-written in functions.ex to support frequency parameter and list of percentages
       # {:percentile, ...} — see Functions.percentile/2,3
       {:corr, "corr", :two_col, group: :aggregate, doc: "Pearson correlation."},
@@ -681,9 +685,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:grouping, "grouping", :one_col,
        group: :misc, doc: "Indicates whether column is aggregated in grouping set."},
       {:grouping_id, "grouping_id", :n_col, group: :misc, doc: "Grouping ID for grouping set."},
-      {:count_min_sketch, "count_min_sketch", {:col_lit, 3},
-       group: :misc,
-       doc: "Creates a count-min sketch of a column with given eps, confidence, and seed."},
+      # count_min_sketch hand-written in Functions: seed is optional
+      # {:count_min_sketch, ...} — see Functions.count_min_sketch/3,4
       {:reflect_, "reflect", :n_col, group: :misc, doc: "Calls a JVM method via reflection."},
       {:java_method, "java_method", :n_col, group: :misc, doc: "Calls a JVM method."},
       {:try_reflect, "try_reflect", :n_col,

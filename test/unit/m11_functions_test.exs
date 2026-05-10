@@ -185,13 +185,13 @@ defmodule SparkEx.M11.FunctionsTest do
   end
 
   describe "reduce/3" do
-    test "is alias for aggregate/3" do
+    test "sends \"reduce\" as the SQL function name (matching PySpark)" do
       result =
         Functions.reduce(Functions.col("arr"), Functions.lit(0), fn acc, x ->
           Column.plus(acc, x)
         end)
 
-      assert %Column{expr: {:fn, "aggregate", _, false}} = result
+      assert %Column{expr: {:fn, "reduce", _, false}} = result
     end
   end
 

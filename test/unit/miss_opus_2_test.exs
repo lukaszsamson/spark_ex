@@ -472,9 +472,11 @@ defmodule SparkEx.MissOpus2Test do
   # ── 14.10 sentences with language/country ──
 
   describe "14.10 sentences with language/country" do
-    test "sentences/1 without language/country" do
+    test "sentences/1 without language/country defaults to empty-string locale" do
       result = Functions.sentences("s")
-      assert %Column{expr: {:fn, "sentences", [{:col, "s"}], false}} = result
+
+      assert %Column{expr: {:fn, "sentences", [{:col, "s"}, {:lit, ""}, {:lit, ""}], false}} =
+               result
     end
 
     test "sentences/3 with language and country" do
