@@ -1,4 +1,4 @@
-ExUnit.start(exclude: [:integration])
+ExUnit.start(exclude: [:integration, :parity_smoke])
 
 # When SPARK_REMOTE is set, detect the Spark version and configure ExUnit to
 # run integration tests while excluding tests that require a newer Spark version.
@@ -21,8 +21,9 @@ if System.get_env("SPARK_REMOTE") do
           do: {:min_spark, v}
 
     # Replace the exclude list: :integration is removed so integration tests
-    # run, and version-specific excludes are added.
-    ExUnit.configure(exclude: excludes)
+    # run, version-specific excludes are added, and :parity_smoke stays
+    # excluded (it requires offline-generated fixtures, not a live server).
+    ExUnit.configure(exclude: [:parity_smoke | excludes])
 
     if excludes != [] do
       IO.puts("Spark #{vsn} detected — excluding tests requiring: #{inspect(excludes)}")
