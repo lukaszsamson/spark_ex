@@ -381,12 +381,12 @@ defmodule SparkEx.Connect.Errors do
   # `_extract_jvm_stacktrace` recursion. Guards against cycles by tracking
   # visited indices.
   defp walk_cause_chain(errors_tuple, idx) do
-    walk_cause_chain(errors_tuple, idx, MapSet.new())
+    walk_cause_chain(errors_tuple, idx, %{})
   end
 
   defp walk_cause_chain(errors_tuple, idx, seen) do
     cond do
-      MapSet.member?(seen, idx) ->
+      Map.has_key?(seen, idx) ->
         []
 
       idx < 0 or idx >= tuple_size(errors_tuple) ->
@@ -394,7 +394,7 @@ defmodule SparkEx.Connect.Errors do
 
       true ->
         err = elem(errors_tuple, idx)
-        seen = MapSet.put(seen, idx)
+        seen = Map.put(seen, idx, true)
 
         entry = %{
           message: err.message,
