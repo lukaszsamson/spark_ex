@@ -2041,6 +2041,20 @@ defmodule SparkEx.Connect.PlanEncoder do
     {{:sql, query, args}, plan_ids, refs, counter}
   end
 
+  # `{:plan_id, id, inner}` wraps an already-encoded-or-pre-registered plan to
+  # force its inline `common.plan_id`. Two producers create this shape:
+  # explicit subquery references (carrying unrewritten leaf plans) and
+  # `register_inline_plan_id/4` (carrying already-rewritten subtrees that may
+  # contain further wrappers). `attach_with_relations/2` calls back into
+  # `rewrite_plan/4` from inside `encode_relation({:plan_id, …})`, so this
+  # clause must accept both cases. Recursing into `inner` is idempotent
+  # because column expressions whose plan_ids are already integers are
+  # left untouched by `rewrite_expr/4`.
+  defp rewrite_plan({:plan_id, plan_id, inner}, plan_ids, refs, counter) do
+    {inner, plan_ids, refs, counter} = rewrite_plan(inner, plan_ids, refs, counter)
+    {{:plan_id, plan_id, inner}, plan_ids, refs, counter}
+  end
+
   defp rewrite_plan(
          {:range, _start, _end, _step, _num_partitions} = plan,
          plan_ids,
@@ -2990,6 +3004,17 @@ defmodule SparkEx.Connect.PlanEncoder do
   # child) resolve to the same synthetic id WITHOUT adding a `with_relations`
   # reference. The net effect is that columns referencing the wrapped plan
   # bind directly to the inline encoded relation, with no remap needed.
+  #
+  # Note on normalization scope: `normalize_referenced_plan/1` strips a single
+  # outer `{:plan_id, _, _}` layer; it does not recursively unwrap inner
+  # wrappers. For nested registration (e.g. `df.join(df2, ...).join(df3, ...)`)
+  # the outer-level inline key includes any inner wrappers in its term shape.
+  # This is fine for the common case where the same inner-join term is
+  # referenced consistently within a single rewrite pass; two structurally
+  # equal but separately-wrapped inner joins would miss the cache and get
+  # fresh registrations. Self-join over the same Plan term hits the cache
+  # and collapses both sides to the same synth (matches PySpark's
+  # per-DataFrame-instance plan_id).
   defp register_inline_plan_id(plan, plan_ids, refs, counter) do
     normalized = normalize_referenced_plan(plan)
 

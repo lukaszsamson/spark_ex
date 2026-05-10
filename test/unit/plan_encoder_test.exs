@@ -1249,6 +1249,51 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert grouping_attr.plan_id == right_plan_id
     end
 
+    test "self-join collapses both sides to the same inline plan_id (PySpark parity)" do
+      # df.join(df, df.x == df.x) — both sides reference the same Plan term,
+      # so register_inline_plan_id finds an existing entry on the second call
+      # and reuses the same synth. Encoded join.left.plan_id == join.right.plan_id,
+      # mirroring PySpark's per-DataFrame-instance _plan_id.
+      df = {:sql, "SELECT 1 AS x", nil}
+      condition = {:fn, "==", [{:col, "x", df}, {:col, "x", df}], false}
+      {plan, _} = PlanEncoder.encode({:join, df, df, condition, :inner, []}, 0)
+
+      assert %Relation{rel_type: {:join, join}} = root_relation(plan)
+      assert join.left.common.plan_id == join.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, eq}} = join.join_condition
+      [left_arg, right_arg] = eq.arguments
+      assert {:unresolved_attribute, left_attr} = left_arg.expr_type
+      assert {:unresolved_attribute, right_attr} = right_arg.expr_type
+      assert left_attr.plan_id == right_attr.plan_id
+      assert left_attr.plan_id == join.left.common.plan_id
+    end
+
+    test "filter over nested join encodes without crashing and binds outer ref correctly" do
+      # Nested join with referenced_plans at multiple levels — would crash
+      # before the {:plan_id, _, _} rewrite_plan clause was added (the inline
+      # wrapping introduced inner wrappers that re-entered rewrite_plan via
+      # encode_relation({:plan_id, …}) → attach_with_relations).
+      a = {:sql, "SELECT 1 AS x", nil}
+      b = {:sql, "SELECT 2 AS y", nil}
+      c = {:sql, "SELECT 3 AS z", nil}
+      inner_cond = {:fn, "==", [{:col, "x", a}, {:col, "y", b}], false}
+      inner_join = {:join, a, b, inner_cond, :inner, []}
+      outer_join = {:join, inner_join, c, nil, :inner, ["x"]}
+      filter_cond = {:fn, ">", [{:col, "z", c}, {:lit, 0}], false}
+
+      {plan, _} = PlanEncoder.encode({:filter, outer_join, filter_cond}, 0)
+
+      assert %Relation{rel_type: {:filter, filter}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, outer}} = filter.input
+      c_plan_id = outer.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, gt}} = filter.condition
+      [c_arg, _] = gt.arguments
+      assert {:unresolved_attribute, c_attr} = c_arg.expr_type
+      assert c_attr.plan_id == c_plan_id
+    end
+
     test "drop over join preserves side assignment when col_exprs reference right first" do
       left = {:sql, "SELECT 1 AS y", nil}
       right = {:sql, "SELECT 2 AS x", nil}
