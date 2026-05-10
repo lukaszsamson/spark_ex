@@ -462,8 +462,14 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       request = {:create_dataframe, rows, []}
 
       # GPT-16: PySpark infers "_1", "_2", ... when no schema is provided.
-      assert {:reply, {:ok, %SparkEx.DataFrame{}}, %{}} =
+      # The DataFrame is built via Arrow IPC; the plan is a 3-tuple.
+      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:local_relation, ipc, schema}}}, %{}} =
                SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+
+      assert is_binary(ipc)
+      # Schema DDL must contain the inferred _1 and _2 column names.
+      assert schema =~ "_1"
+      assert schema =~ "_2"
     end
 
     test "tuple arity mismatch with schema raises ArgumentError" do
@@ -520,6 +526,60 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
         refute match?({:reply, {:error, {:invalid_schema_ddl, _}}, _}, result),
                "expected #{inspect(ddl)} to pass schema validation, got: #{inspect(result)}"
       end
+    end
+  end
+
+  describe "Session.create_dataframe local inference (GPT-18/67/66)" do
+    test "integers always infer as BIGINT in fallback schema inference (GPT-18)" do
+      # {:binary, ...} values are not natively handled by Explorer, which
+      # causes safe_list_of_maps_to_explorer to fail and the fallback
+      # infer_schema_ddl_from_rows path to be used instead.
+      # GPT-18: on that path, integers must always infer as BIGINT (not TINYINT/INT).
+      rows = [%{"bin" => {:binary, "data"}, "n" => 1}]
+      request = {:create_dataframe, rows, []}
+
+      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, _nil}}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+
+      assert query =~ "BIGINT"
+      refute query =~ "TINYINT"
+      # Verify the integer column did NOT produce a narrower type.
+      refute Regex.match?(~r/\bn SMALLINT\b/, query)
+    end
+
+    test "Decimal infers as DECIMAL(38, 18) in fallback schema inference (GPT-67)" do
+      # {:binary, ...} values force the fallback path where our Decimal
+      # inference applies. GPT-67: Decimal always infers as DECIMAL(38, 18).
+      rows = [%{"bin" => {:binary, "data"}, "d" => Decimal.new("1.5")}]
+      request = {:create_dataframe, rows, []}
+
+      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, _nil}}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+
+      assert query =~ "DECIMAL(38, 18)"
+      refute query =~ "DECIMAL(2,"
+    end
+
+    test "Date values are JSON-encoded as ISO-8601 strings (GPT-66)" do
+      # The JSON-relation path must not raise a Jason.EncodeError for date values.
+      rows = [%{"d" => ~D[2024-01-15]}]
+      request = {:create_dataframe, rows, [schema: "d DATE"]}
+
+      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, _nil}}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+
+      # The ISO-8601 date string must appear in the generated SQL.
+      assert query =~ "2024-01-15"
+    end
+
+    test "NaiveDateTime values are JSON-encoded as ISO-8601 strings (GPT-66)" do
+      rows = [%{"ts" => ~N[2024-06-01 12:00:00]}]
+      request = {:create_dataframe, rows, [schema: "ts TIMESTAMP_NTZ"]}
+
+      assert {:reply, {:ok, %SparkEx.DataFrame{plan: {:sql, query, _nil}}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+
+      assert query =~ "2024-06-01T12:00:00"
     end
   end
 

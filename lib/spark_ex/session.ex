@@ -3263,16 +3263,9 @@ defmodule SparkEx.Session do
             Keyword.put(opts, :schema, normalized_schema)
           )
 
-        match?({:json_schema, _}, normalized_schema) ->
-          {:json_schema, json_str} = normalized_schema
-          # Metadata-bearing struct schemas can't survive the SQL/JSON-relation
-          # path (DDL drops metadata) — go straight to the Arrow local-relation
-          # path with the JSON schema string in LocalRelation.schema.
-          prepare_list_data_with_schema_arrow_fallback(
-            normalized_data,
-            json_str,
-            Keyword.put(opts, :schema, json_str)
-          )
+        match?({:json_schema, _, _}, normalized_schema) ->
+          {:json_schema, json_str, ddl_str} = normalized_schema
+          prepare_list_data_with_json_schema(normalized_data, json_str, ddl_str, opts)
 
         is_nil(normalized_schema) ->
           prepare_list_data_inferred(normalized_data, Keyword.delete(opts, :schema))
@@ -3326,7 +3319,7 @@ defmodule SparkEx.Session do
         # reparse fields (binary_top_level_fields, non_string_top_level_map_fields,
         # etc.) keep working.
         if struct_has_field_metadata?(fields) do
-          {:ok, {:json_schema, SparkEx.Types.to_json(schema)}}
+          {:ok, {:json_schema, SparkEx.Types.to_json(schema), SparkEx.Types.to_ddl(schema)}}
         else
           {:ok, SparkEx.Types.schema_to_string(schema)}
         end
@@ -3383,19 +3376,16 @@ defmodule SparkEx.Session do
         end
 
       Enum.all?(data, &is_tuple/1) ->
-        with {:ok, names} <- column_names_for_tuple_data(data, schema) do
-          maps = Enum.map(data, fn tuple -> tuple_to_named_map(tuple, names) end)
+        normalize_tuple_rows(data, schema)
 
-          case schema do
-            binary when is_binary(binary) -> {:ok, maps, binary}
-            {:json_schema, _} = json_schema -> {:ok, maps, json_schema}
-            {:column_names, _} -> {:ok, maps, nil}
-            nil -> {:ok, maps, nil}
-          end
-        end
+      # PySpark treats list rows like tuple rows (multi-column); coerce to tuples.
+      Enum.all?(data, &is_list/1) ->
+        tupled = Enum.map(data, &List.to_tuple/1)
+        normalize_list_data_and_schema(tupled, schema)
 
       # PySpark wraps non-row primitive iterables as 1-column rows before
       # schema inference (`[1, 2, 3]` → `[(1,), (2,), (3,)]`).
+      # Maps, tuples, and lists are row-shaped and handled by the arms above.
       Enum.all?(data, &primitive_row?/1) ->
         wrapped = Enum.map(data, fn v -> {v} end)
         normalize_list_data_and_schema(wrapped, schema)
@@ -3407,48 +3397,54 @@ defmodule SparkEx.Session do
     end
   end
 
-  # Used to wrap "primitive" rows the same way PySpark does. Anything that is
-  # not already a row-shaped value (map / tuple / list of maps) is wrapped as a
-  # single-element row.
+  defp normalize_tuple_rows(data, schema) do
+    with {:ok, names} <- column_names_for_tuple_data(data, schema) do
+      maps = Enum.map(data, fn tuple -> tuple_to_named_map(tuple, names) end)
+
+      case schema do
+        binary when is_binary(binary) -> {:ok, maps, binary}
+        {:json_schema, _, _} = json_schema -> {:ok, maps, json_schema}
+        {:column_names, _} -> {:ok, maps, nil}
+        nil -> {:ok, maps, nil}
+      end
+    end
+  end
+
+  # Scalars that are not row-shaped (map / tuple / list). Struct values
+  # also fall through here and are treated as single-column values.
   defp primitive_row?(v) when is_map(v) and not is_struct(v), do: false
   defp primitive_row?(v) when is_tuple(v), do: false
+  defp primitive_row?(v) when is_list(v), do: false
   defp primitive_row?(_), do: true
 
   defp apply_column_names_to_map_rows(data, names) when is_list(names) do
+    # Collect all unique keys across all rows (union), sorted alphabetically
+    # for deterministic positional mapping — mirrors PySpark's
+    # `dict(sorted(d.items()))` approach. Missing keys in individual rows
+    # produce nil values (same as the existing list_of_maps_to_explorer path
+    # which fills missing keys with nil).
     sorted_keys =
       data
       |> Enum.flat_map(fn row -> Enum.map(row, fn {k, _} -> to_string(k) end) end)
       |> Enum.uniq()
       |> Enum.sort()
 
-    cond do
-      length(sorted_keys) != length(names) ->
-        {:error,
-         {:invalid_schema,
-          "column-name list of length #{length(names)} does not match data with #{length(sorted_keys)} unique keys"}}
+    if length(sorted_keys) != length(names) do
+      {:error,
+       {:invalid_schema,
+        "column-name list of length #{length(names)} does not match data with #{length(sorted_keys)} unique keys"}}
+    else
+      renamed =
+        Enum.map(data, fn row ->
+          stringified = Map.new(row, fn {k, v} -> {to_string(k), v} end)
 
-      not Enum.all?(data, fn row -> map_row_has_keys?(row, sorted_keys) end) ->
-        {:error,
-         {:invalid_schema,
-          "column-name list requires every row to contain the same keys; got rows with heterogeneous key sets"}}
+          sorted_keys
+          |> Enum.zip(names)
+          |> Map.new(fn {orig, new} -> {new, Map.get(stringified, orig)} end)
+        end)
 
-      true ->
-        renamed =
-          Enum.map(data, fn row ->
-            stringified = Map.new(row, fn {k, v} -> {to_string(k), v} end)
-
-            sorted_keys
-            |> Enum.zip(names)
-            |> Map.new(fn {orig, new} -> {new, Map.get(stringified, orig)} end)
-          end)
-
-        {:ok, renamed, nil}
+      {:ok, renamed, nil}
     end
-  end
-
-  defp map_row_has_keys?(row, sorted_keys) do
-    row_keys = row |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()
-    row_keys == sorted_keys
   end
 
   defp column_names_for_tuple_data(_data, {:column_names, names}), do: {:ok, names}
@@ -3471,7 +3467,7 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp column_names_for_tuple_data(data, {:json_schema, json}) do
+  defp column_names_for_tuple_data(data, {:json_schema, json, _ddl}) do
     # JSON schema (struct with metadata) — extract field names by decoding.
     case Jason.decode(json) do
       {:ok, %{"fields" => fields}} when is_list(fields) ->
@@ -3592,6 +3588,38 @@ defmodule SparkEx.Session do
           {:ok, {:sql_relation, query, nil}}
         end
       end
+    end
+  end
+
+  # Handles metadata-bearing struct schemas (json_schema 3-tuple form).
+  # When normalize_local_relation_arrow? is true AND the Explorer.DataFrame has
+  # complex dtypes, the SQL-JSON path must be used — it cannot carry field
+  # metadata, but at least complex-type Arrow incompatibilities are avoided.
+  # For simple-column frames (no complex dtypes), or when normalization is
+  # disabled, the Arrow local-relation path is used with the JSON schema string
+  # so that LocalRelation.schema preserves field metadata.
+  defp prepare_list_data_with_json_schema(data, json_str, ddl_str, opts) do
+    case safe_list_of_maps_to_explorer(data) do
+      {:ok, explorer_df} ->
+        if normalize_local_relation_arrow?(opts) and
+             dataframe_contains_complex_dtype?(explorer_df) do
+          # Complex-type columns: fall back to SQL-JSON path with DDL schema.
+          # Field metadata is not preserved on this path.
+          prepare_sql_json_relation(explorer_df, ddl_str)
+        else
+          # Simple columns: Arrow path with JSON schema preserves metadata.
+          # Disable JSON-relation normalization so the binary json_str schema
+          # is not embedded in a SQL `from_json(val, ...)` template.
+          prepare_local_data(
+            explorer_df,
+            opts
+            |> Keyword.put(:schema, json_str)
+            |> Keyword.put(:normalize_local_relation_arrow, false)
+          )
+        end
+
+      {:error, reason} ->
+        {:error, {:data_conversion_error, reason}}
     end
   end
 
@@ -4167,6 +4195,11 @@ defmodule SparkEx.Session do
   defp normalize_json_value(%Time{} = v), do: Time.to_iso8601(v)
   defp normalize_json_value(%DateTime{} = v), do: DateTime.to_iso8601(v)
   defp normalize_json_value(%NaiveDateTime{} = v), do: NaiveDateTime.to_iso8601(v)
+
+  # {:binary, data} is the tagged-tuple form used by callers who want binary
+  # values to survive the JSON-relation path. Encode as base64 to match the
+  # schema-aware normalize_binary_field_value path.
+  defp normalize_json_value({:binary, v}) when is_binary(v), do: Base.encode64(v)
 
   defp normalize_json_value(value), do: value
 
