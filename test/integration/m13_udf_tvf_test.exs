@@ -22,6 +22,8 @@ defmodule SparkEx.Integration.M13.UDFTVFTest do
   # ── Table-Valued Functions ──
 
   describe "DataFrame.table_function/3 (TVF)" do
+    @describetag min_spark: "4.0"
+
     test "range TVF produces rows", %{session: session} do
       df = DataFrame.table_function(session, "range", [lit(5)])
       {:ok, rows} = DataFrame.collect(df)

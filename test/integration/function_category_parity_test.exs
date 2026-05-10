@@ -100,6 +100,7 @@ defmodule SparkEx.Integration.FunctionCategoryParityTest do
     assert length(rows) == 2
   end
 
+  @tag min_spark: "4.0"
   test "additional map/generator functions execute", %{session: session} do
     df = SparkEx.sql(session, "SELECT map('a', 1, 'b', 2) AS mp")
 
@@ -125,6 +126,7 @@ defmodule SparkEx.Integration.FunctionCategoryParityTest do
     assert length(rows) == 2
   end
 
+  @tag min_spark: "4.0"
   test "tvf explode/inline execute", %{session: session} do
     tvf = SparkEx.tvf(session)
 
