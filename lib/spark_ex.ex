@@ -594,7 +594,7 @@ defmodule SparkEx do
   defp validate_optional_uuid_opt!(opts, key) do
     case Keyword.fetch(opts, key) do
       {:ok, value} when is_binary(value) ->
-        if UUID.valid_v4?(value) do
+        if UUID.valid_uuid?(value) do
           :ok
         else
           raise ArgumentError, "#{key} must be a UUID string, got: #{inspect(value)}"
