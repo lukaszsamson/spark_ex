@@ -457,11 +457,12 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
                SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
     end
 
-    test "tuple rows without a schema raise a clear error" do
+    test "tuple rows without a schema infer _1, _2, ... column names (GPT-16)" do
       rows = [{1, "a"}, {2, "b"}]
       request = {:create_dataframe, rows, []}
 
-      assert {:reply, {:error, {:invalid_schema, _}}, %{}} =
+      # GPT-16: PySpark infers "_1", "_2", ... when no schema is provided.
+      assert {:reply, {:ok, %SparkEx.DataFrame{}}, %{}} =
                SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
     end
 

@@ -3263,6 +3263,17 @@ defmodule SparkEx.Session do
             Keyword.put(opts, :schema, normalized_schema)
           )
 
+        match?({:json_schema, _}, normalized_schema) ->
+          {:json_schema, json_str} = normalized_schema
+          # Metadata-bearing struct schemas can't survive the SQL/JSON-relation
+          # path (DDL drops metadata) — go straight to the Arrow local-relation
+          # path with the JSON schema string in LocalRelation.schema.
+          prepare_list_data_with_schema_arrow_fallback(
+            normalized_data,
+            json_str,
+            Keyword.put(opts, :schema, json_str)
+          )
+
         is_nil(normalized_schema) ->
           prepare_list_data_inferred(normalized_data, Keyword.delete(opts, :schema))
       end
@@ -3292,6 +3303,13 @@ defmodule SparkEx.Session do
     {:error, {:invalid_data, "expected Explorer.DataFrame, list of maps, or column map"}}
   end
 
+  defp struct_has_field_metadata?(fields) when is_list(fields) do
+    Enum.any?(fields, fn
+      %{metadata: meta} when is_map(meta) and map_size(meta) > 0 -> true
+      _ -> false
+    end)
+  end
+
   defp normalize_create_dataframe_schema(opts) do
     case Keyword.get(opts, :schema, nil) do
       nil ->
@@ -3300,8 +3318,18 @@ defmodule SparkEx.Session do
       schema when is_binary(schema) ->
         {:ok, schema}
 
-      {:struct, _} = schema ->
-        {:ok, SparkEx.Types.schema_to_string(schema)}
+      {:struct, fields} = schema ->
+        # PySpark sends `_schema.json()` for explicit StructType schemas so that
+        # field nullability and metadata round-trip into the local relation.
+        # Only emit JSON when metadata is non-empty for at least one field;
+        # otherwise keep the DDL form so existing schema-string flows that
+        # reparse fields (binary_top_level_fields, non_string_top_level_map_fields,
+        # etc.) keep working.
+        if struct_has_field_metadata?(fields) do
+          {:ok, {:json_schema, SparkEx.Types.to_json(schema)}}
+        else
+          {:ok, SparkEx.Types.schema_to_string(schema)}
+        end
 
       schema when is_list(schema) ->
         cond do
@@ -3345,12 +3373,10 @@ defmodule SparkEx.Session do
     cond do
       Enum.all?(data, &(is_map(&1) and not is_struct(&1))) ->
         case schema do
-          {:column_names, _names} ->
-            # PySpark accepts list-of-dicts + name list, but the names
-            # are advisory only. Falling back to inference preserves
-            # the dict's own keys, which is the only semantics we can
-            # honour without re-keying user data.
-            {:ok, data, nil}
+          {:column_names, names} ->
+            # PySpark sorts dict items deterministically and renames the
+            # resulting columns to the requested names via toDF(*_cols).
+            apply_column_names_to_map_rows(data, names)
 
           _ ->
             {:ok, data, schema}
@@ -3362,16 +3388,67 @@ defmodule SparkEx.Session do
 
           case schema do
             binary when is_binary(binary) -> {:ok, maps, binary}
+            {:json_schema, _} = json_schema -> {:ok, maps, json_schema}
             {:column_names, _} -> {:ok, maps, nil}
             nil -> {:ok, maps, nil}
           end
         end
+
+      # PySpark wraps non-row primitive iterables as 1-column rows before
+      # schema inference (`[1, 2, 3]` → `[(1,), (2,), (3,)]`).
+      Enum.all?(data, &primitive_row?/1) ->
+        wrapped = Enum.map(data, fn v -> {v} end)
+        normalize_list_data_and_schema(wrapped, schema)
 
       true ->
         {:error,
          {:invalid_data,
           "expected list of maps or list of tuples for createDataFrame, got: #{inspect(data)}"}}
     end
+  end
+
+  # Used to wrap "primitive" rows the same way PySpark does. Anything that is
+  # not already a row-shaped value (map / tuple / list of maps) is wrapped as a
+  # single-element row.
+  defp primitive_row?(v) when is_map(v) and not is_struct(v), do: false
+  defp primitive_row?(v) when is_tuple(v), do: false
+  defp primitive_row?(_), do: true
+
+  defp apply_column_names_to_map_rows(data, names) when is_list(names) do
+    sorted_keys =
+      data
+      |> Enum.flat_map(fn row -> Enum.map(row, fn {k, _} -> to_string(k) end) end)
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    cond do
+      length(sorted_keys) != length(names) ->
+        {:error,
+         {:invalid_schema,
+          "column-name list of length #{length(names)} does not match data with #{length(sorted_keys)} unique keys"}}
+
+      not Enum.all?(data, fn row -> map_row_has_keys?(row, sorted_keys) end) ->
+        {:error,
+         {:invalid_schema,
+          "column-name list requires every row to contain the same keys; got rows with heterogeneous key sets"}}
+
+      true ->
+        renamed =
+          Enum.map(data, fn row ->
+            stringified = Map.new(row, fn {k, v} -> {to_string(k), v} end)
+
+            sorted_keys
+            |> Enum.zip(names)
+            |> Map.new(fn {orig, new} -> {new, Map.get(stringified, orig)} end)
+          end)
+
+        {:ok, renamed, nil}
+    end
+  end
+
+  defp map_row_has_keys?(row, sorted_keys) do
+    row_keys = row |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()
+    row_keys == sorted_keys
   end
 
   defp column_names_for_tuple_data(_data, {:column_names, names}), do: {:ok, names}
@@ -3394,10 +3471,39 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp column_names_for_tuple_data(_data, nil) do
-    {:error,
-     {:invalid_schema,
-      "tuple rows require a schema (DDL string or list of column names) so columns can be named"}}
+  defp column_names_for_tuple_data(data, {:json_schema, json}) do
+    # JSON schema (struct with metadata) — extract field names by decoding.
+    case Jason.decode(json) do
+      {:ok, %{"fields" => fields}} when is_list(fields) ->
+        names =
+          for %{"name" => name} <- fields, is_binary(name) do
+            name
+          end
+
+        if names == [] do
+          column_names_for_tuple_data(data, nil)
+        else
+          {:ok, names}
+        end
+
+      _ ->
+        column_names_for_tuple_data(data, nil)
+    end
+  end
+
+  defp column_names_for_tuple_data(data, nil) do
+    # PySpark assigns "_1", "_2", ... to tuple/list rows when no names are
+    # supplied (python/pyspark/sql/types.py:_infer_schema).
+    arity = data |> Enum.map(&tuple_size/1) |> Enum.max(fn -> 0 end)
+
+    if arity == 0 do
+      {:error,
+       {:invalid_data,
+        "cannot infer schema from empty tuples; provide a schema or non-empty rows"}}
+    else
+      names = Enum.map(1..arity, fn i -> "_#{i}" end)
+      {:ok, names}
+    end
   end
 
   defp tuple_to_named_map(tuple, names) when is_tuple(tuple) and is_list(names) do
@@ -3939,13 +4045,17 @@ defmodule SparkEx.Session do
 
   defp infer_single_type(nil), do: :null
   defp infer_single_type(v) when is_boolean(v), do: :boolean
-  defp infer_single_type(v) when is_integer(v), do: {:int, smallest_int_bits(v)}
+  # PySpark infers Python int as LongType regardless of the value's bit-width
+  # (python/pyspark/sql/types.py:_infer_type). Match that for parity even
+  # though Elixir integers can fit in narrower types.
+  defp infer_single_type(v) when is_integer(v), do: :long
   defp infer_single_type(v) when is_float(v), do: :double
 
-  defp infer_single_type(%Decimal{} = d) do
-    {p, s} = decimal_precision_scale(d)
-    {:decimal, p, s}
-  end
+  # PySpark infers decimal.Decimal as DecimalType(38, 18) regardless of the
+  # individual value's precision/scale (python/pyspark/sql/types.py:_type_mappings
+  # and `_infer_type`). Use the same fixed shape so server-side schema
+  # inference matches.
+  defp infer_single_type(%Decimal{}), do: {:decimal, 38, 18}
 
   defp infer_single_type(%Date{}), do: :date
   defp infer_single_type(%DateTime{}), do: :timestamp
@@ -3967,37 +4077,17 @@ defmodule SparkEx.Session do
 
   defp infer_single_type(_), do: :string
 
-  defp smallest_int_bits(v) when v >= -128 and v <= 127, do: 8
-  defp smallest_int_bits(v) when v >= -32_768 and v <= 32_767, do: 16
-  defp smallest_int_bits(v) when v >= -2_147_483_648 and v <= 2_147_483_647, do: 32
-  defp smallest_int_bits(_), do: 64
-
-  defp decimal_precision_scale(%Decimal{coef: coef, exp: exp}) when is_integer(coef) do
-    digits =
-      case coef do
-        0 -> 1
-        c when is_integer(c) -> c |> abs() |> Integer.digits() |> length()
-      end
-
-    scale = max(-exp, 0)
-    precision = max(digits, scale + 1)
-    {precision, scale}
-  end
-
-  defp decimal_precision_scale(_), do: {10, 0}
-
   defp merge_inferred_types(:null, type), do: type
   defp merge_inferred_types(type, :null), do: type
   defp merge_inferred_types(type, type), do: type
-  defp merge_inferred_types({:int, a}, {:int, b}), do: {:int, max(a, b)}
-  defp merge_inferred_types({:int, _}, :double), do: :double
-  defp merge_inferred_types(:double, {:int, _}), do: :double
+  defp merge_inferred_types(:long, :double), do: :double
+  defp merge_inferred_types(:double, :long), do: :double
 
-  defp merge_inferred_types({:int, bits}, {:decimal, p, s}),
-    do: widen_decimal_for_int(p, s, bits)
+  defp merge_inferred_types(:long, {:decimal, p, s}),
+    do: widen_decimal_for_long(p, s)
 
-  defp merge_inferred_types({:decimal, p, s}, {:int, bits}),
-    do: widen_decimal_for_int(p, s, bits)
+  defp merge_inferred_types({:decimal, p, s}, :long),
+    do: widen_decimal_for_long(p, s)
 
   defp merge_inferred_types({:decimal, p1, s1}, {:decimal, p2, s2}) do
     scale = max(s1, s2)
@@ -4030,23 +4120,14 @@ defmodule SparkEx.Session do
             "wrap mixed values in compatible types, or split into separate columns."
   end
 
-  defp widen_decimal_for_int(p, s, bits) do
-    int_digits = max_int_digits(bits)
-    {:decimal, max(p, int_digits + s), s}
+  defp widen_decimal_for_long(p, s) do
+    # 19 digits cover the full LongType range (-9.22e18..9.22e18).
+    {:decimal, max(p, 19 + s), s}
   end
-
-  defp max_int_digits(8), do: 3
-  defp max_int_digits(16), do: 5
-  defp max_int_digits(32), do: 10
-  defp max_int_digits(64), do: 19
-  defp max_int_digits(_), do: 19
 
   defp type_to_inferred_ddl(:null), do: "STRING"
   defp type_to_inferred_ddl(:boolean), do: "BOOLEAN"
-  defp type_to_inferred_ddl({:int, 8}), do: "TINYINT"
-  defp type_to_inferred_ddl({:int, 16}), do: "SMALLINT"
-  defp type_to_inferred_ddl({:int, 32}), do: "INT"
-  defp type_to_inferred_ddl({:int, 64}), do: "BIGINT"
+  defp type_to_inferred_ddl(:long), do: "BIGINT"
   defp type_to_inferred_ddl(:double), do: "DOUBLE"
   defp type_to_inferred_ddl({:decimal, p, s}), do: "DECIMAL(#{p}, #{s})"
   defp type_to_inferred_ddl(:date), do: "DATE"
@@ -4076,6 +4157,16 @@ defmodule SparkEx.Session do
   defp normalize_json_value(value) when is_list(value) do
     Enum.map(value, &normalize_json_value/1)
   end
+
+  # Date / Time / Timestamp values are not JSON-encodable through Jason without
+  # an Encoder protocol implementation. Spark accepts ISO-8601 strings for the
+  # corresponding DATE / TIME / TIMESTAMP / TIMESTAMP_NTZ schema types when the
+  # JSON local-relation path is used (mirrors PySpark's typed local-data path
+  # which sends string-formatted date/time literals).
+  defp normalize_json_value(%Date{} = v), do: Date.to_iso8601(v)
+  defp normalize_json_value(%Time{} = v), do: Time.to_iso8601(v)
+  defp normalize_json_value(%DateTime{} = v), do: DateTime.to_iso8601(v)
+  defp normalize_json_value(%NaiveDateTime{} = v), do: NaiveDateTime.to_iso8601(v)
 
   defp normalize_json_value(value), do: value
 
