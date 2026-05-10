@@ -333,8 +333,8 @@ defmodule SparkEx.M11.FunctionsTest do
       assert %Column{expr: {:fn, "json_array_length", [{:col, "json"}], false}} = result
     end
 
-    test "csv_xml: xpath_string/2" do
-      result = Functions.xpath_string(Functions.col("xml"), "//name")
+    test "csv_xml: xpath_string/2 (path is column-or-name)" do
+      result = Functions.xpath_string(Functions.col("xml"), Functions.lit("//name"))
 
       assert %Column{expr: {:fn, "xpath_string", [{:col, "xml"}, {:lit, "//name"}], false}} =
                result
@@ -345,8 +345,8 @@ defmodule SparkEx.M11.FunctionsTest do
       assert %Column{expr: {:fn, "typeof", [{:col, "x"}], false}} = result
     end
 
-    test "type: to_number/2" do
-      result = Functions.to_number(Functions.col("x"), "999.99")
+    test "type: to_number/2 (format is column-or-name)" do
+      result = Functions.to_number(Functions.col("x"), Functions.lit("999.99"))
       assert %Column{expr: {:fn, "to_number", [{:col, "x"}, {:lit, "999.99"}], false}} = result
     end
 
@@ -458,10 +458,16 @@ defmodule SparkEx.M11.FunctionsTest do
                Functions.try_to_time("ts")
     end
 
-    test "time_trunc/2 emits unresolved time_trunc with literal unit" do
+    test "time_trunc/2 emits unresolved time_trunc; bare-string unit is column-or-name" do
+      # Bare-string unit resolves as column ref (PySpark parity).
+      assert %Column{
+               expr: {:fn, "time_trunc", [{:col, "HOUR"}, {:col, "t"}], false}
+             } = Functions.time_trunc("HOUR", Functions.col("t"))
+
+      # Use lit/1 for a literal unit string.
       assert %Column{
                expr: {:fn, "time_trunc", [{:lit, "HOUR"}, {:col, "t"}], false}
-             } = Functions.time_trunc("HOUR", Functions.col("t"))
+             } = Functions.time_trunc(Functions.lit("HOUR"), Functions.col("t"))
     end
 
     test "time_diff/3 maps to time_diff" do
@@ -537,8 +543,8 @@ defmodule SparkEx.M11.FunctionsTest do
       assert %Column{expr: {:fn, "current_user", [], false}} = result
     end
 
-    test "to_varchar is alias for to_char_" do
-      result = Functions.to_varchar(Functions.col("x"), "FM9999")
+    test "to_varchar is alias for to_char_ (format is column-or-name)" do
+      result = Functions.to_varchar(Functions.col("x"), Functions.lit("FM9999"))
       assert %Column{expr: {:fn, "to_char", [{:col, "x"}, {:lit, "FM9999"}], false}} = result
     end
 
@@ -553,7 +559,7 @@ defmodule SparkEx.M11.FunctionsTest do
     end
 
     test "xpath_number is alias for xpath_double" do
-      result = Functions.xpath_number(Functions.col("xml"), "//price")
+      result = Functions.xpath_number(Functions.col("xml"), Functions.lit("//price"))
 
       assert %Column{expr: {:fn, "xpath_double", [{:col, "xml"}, {:lit, "//price"}], false}} =
                result

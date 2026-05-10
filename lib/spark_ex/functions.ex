@@ -482,10 +482,16 @@ defmodule SparkEx.Functions do
       split(col("s"), "\\\\.")
       split(col("s"), "\\\\.", 3)
   """
-  @spec split(Column.t() | String.t(), String.t(), integer()) :: Column.t()
-  def split(col, pattern, limit \\ -1) when is_integer(limit) do
+  @spec split(
+          Column.t() | String.t(),
+          Column.t() | String.t(),
+          Column.t() | String.t() | integer()
+        ) :: Column.t()
+  def split(col, pattern, limit \\ -1) do
     %Column{
-      expr: {:fn, "split", [to_expr(col), lit_expr(pattern), lit_expr(limit)], false}
+      expr:
+        {:fn, "split", [to_expr(col), to_lit_string_or_expr(pattern), to_expr_or_lit_int(limit)],
+         false}
     }
   end
 
@@ -546,40 +552,76 @@ defmodule SparkEx.Functions do
     %Column{expr: {:fn, "approx_count_distinct", args, false}}
   end
 
-  @doc "Left-trims whitespace or specified characters."
-  @spec ltrim(Column.t() | String.t(), String.t() | nil) :: Column.t()
+  @doc """
+  Left-trims whitespace or specified characters.
+
+  `trim_string` accepts a Column or string column name (bare strings resolve
+  to column references, matching PySpark). Wrap with `lit/1` for a literal
+  trim-character set.
+  """
+  @spec ltrim(Column.t() | String.t(), Column.t() | String.t() | nil) :: Column.t()
   def ltrim(col, trim_string \\ nil) do
     args =
       case trim_string do
         nil -> [to_expr(col)]
-        s -> [lit_expr(s), to_expr(col)]
+        s -> [to_expr(col), to_expr(s)]
       end
 
     %Column{expr: {:fn, "ltrim", args, false}}
   end
 
-  @doc "Right-trims whitespace or specified characters."
-  @spec rtrim(Column.t() | String.t(), String.t() | nil) :: Column.t()
+  @doc """
+  Right-trims whitespace or specified characters.
+
+  `trim_string` accepts a Column or string column name (bare strings resolve
+  to column references, matching PySpark). Wrap with `lit/1` for a literal
+  trim-character set.
+  """
+  @spec rtrim(Column.t() | String.t(), Column.t() | String.t() | nil) :: Column.t()
   def rtrim(col, trim_string \\ nil) do
     args =
       case trim_string do
         nil -> [to_expr(col)]
-        s -> [lit_expr(s), to_expr(col)]
+        s -> [to_expr(col), to_expr(s)]
       end
 
     %Column{expr: {:fn, "rtrim", args, false}}
   end
 
-  @doc "Trims whitespace or specified characters from both ends."
-  @spec trim(Column.t() | String.t(), String.t() | nil) :: Column.t()
+  @doc """
+  Trims whitespace or specified characters from both ends.
+
+  `trim_string` accepts a Column or string column name (bare strings resolve
+  to column references, matching PySpark). Wrap with `lit/1` for a literal
+  trim-character set.
+  """
+  @spec trim(Column.t() | String.t(), Column.t() | String.t() | nil) :: Column.t()
   def trim(col, trim_string \\ nil) do
     args =
       case trim_string do
         nil -> [to_expr(col)]
-        s -> [lit_expr(s), to_expr(col)]
+        s -> [to_expr(col), to_expr(s)]
       end
 
     %Column{expr: {:fn, "trim", args, false}}
+  end
+
+  @doc """
+  Trims characters from both sides of a string.
+
+  `trim_string` accepts a Column or string column name (bare strings resolve
+  to column references, matching PySpark). Wrap with `lit/1` for a literal
+  trim-character set.
+  """
+  @spec btrim(Column.t() | String.t(), Column.t() | String.t() | nil) :: Column.t()
+  def btrim(col, trim_string \\ nil) do
+    args =
+      case trim_string do
+        nil -> [to_expr(col)]
+        s -> [to_expr(col), to_expr(s)]
+      end
+
+    %Column{expr: {:fn, "btrim", args, false}}
   end
 
   @doc """
@@ -1652,7 +1694,7 @@ defmodule SparkEx.Functions do
   """
   @spec time_trunc(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
   def time_trunc(unit, time_col) do
-    %Column{expr: {:fn, "time_trunc", [to_lit_string_or_expr(unit), to_expr(time_col)], false}}
+    %Column{expr: {:fn, "time_trunc", [to_expr(unit), to_expr(time_col)], false}}
   end
 
   @doc "Extracts a part of a URL. Optional key for query string extraction."
@@ -1661,8 +1703,8 @@ defmodule SparkEx.Functions do
   def parse_url(url, part, key \\ nil) do
     args =
       case key do
-        nil -> [to_expr(url), to_lit_string_or_expr(part)]
-        k -> [to_expr(url), to_lit_string_or_expr(part), to_lit_string_or_expr(k)]
+        nil -> [to_expr(url), to_expr(part)]
+        k -> [to_expr(url), to_expr(part), to_expr(k)]
       end
 
     %Column{expr: {:fn, "parse_url", args, false}}
@@ -1677,8 +1719,8 @@ defmodule SparkEx.Functions do
   def try_parse_url(url, part, key \\ nil) do
     args =
       case key do
-        nil -> [to_expr(url), to_lit_string_or_expr(part)]
-        k -> [to_expr(url), to_lit_string_or_expr(part), to_lit_string_or_expr(k)]
+        nil -> [to_expr(url), to_expr(part)]
+        k -> [to_expr(url), to_expr(part), to_expr(k)]
       end
 
     %Column{expr: {:fn, "try_parse_url", args, false}}
@@ -1703,8 +1745,8 @@ defmodule SparkEx.Functions do
   def like_(col, pattern, escape \\ nil) do
     args =
       case escape do
-        nil -> [to_expr(col), to_lit_string_or_expr(pattern)]
-        e -> [to_expr(col), to_lit_string_or_expr(pattern), to_lit_string_or_expr(e)]
+        nil -> [to_expr(col), to_expr(pattern)]
+        e -> [to_expr(col), to_expr(pattern), to_expr(e)]
       end
 
     %Column{expr: {:fn, "like", args, false}}
@@ -1716,8 +1758,8 @@ defmodule SparkEx.Functions do
   def ilike_(col, pattern, escape \\ nil) do
     args =
       case escape do
-        nil -> [to_expr(col), to_lit_string_or_expr(pattern)]
-        e -> [to_expr(col), to_lit_string_or_expr(pattern), to_lit_string_or_expr(e)]
+        nil -> [to_expr(col), to_expr(pattern)]
+        e -> [to_expr(col), to_expr(pattern), to_expr(e)]
       end
 
     %Column{expr: {:fn, "ilike", args, false}}
@@ -1771,10 +1813,14 @@ defmodule SparkEx.Functions do
     %Column{expr: {:fn, "uuid", [], false}}
   end
 
-  @doc "Generates a random UUID string with deterministic seed (Spark 4.x+)."
-  @spec uuid(integer()) :: Column.t()
-  def uuid(seed) when is_integer(seed) do
-    %Column{expr: {:fn, "uuid", [{:lit, seed}], false}}
+  @doc """
+  Generates a random UUID string with deterministic seed (Spark 4.x+).
+
+  `seed` accepts a Column or integer literal.
+  """
+  @spec uuid(Column.t() | integer()) :: Column.t()
+  def uuid(seed) do
+    %Column{expr: {:fn, "uuid", [to_expr_or_lit_int(seed)], false}}
   end
 
   @doc """
@@ -1783,14 +1829,23 @@ defmodule SparkEx.Functions do
   Auto-generates a seed when none given. `min`/`max` accept Column,
   numeric, or column-name binary inputs.
   """
-  @spec uniform(Column.t() | String.t() | number(), term(), integer() | nil) :: Column.t()
+  @spec uniform(
+          Column.t() | String.t() | number(),
+          Column.t() | String.t() | number(),
+          Column.t() | integer() | nil
+        ) :: Column.t()
   def uniform(min, max, seed \\ nil) do
-    seed = seed || Random.long_seed()
+    seed_expr =
+      case seed do
+        nil -> {:lit, Random.long_seed()}
+        %Column{expr: e} -> e
+        s when is_integer(s) -> {:lit, s}
+      end
 
     args = [
       normalize_uniform_bound(min),
       normalize_uniform_bound(max),
-      {:lit, seed}
+      seed_expr
     ]
 
     %Column{expr: {:fn, "uniform", args, false}}
@@ -1802,10 +1857,16 @@ defmodule SparkEx.Functions do
   Auto-generates a seed when none given. `length` accepts a column or
   integer.
   """
-  @spec randstr(Column.t() | String.t() | integer(), integer() | nil) :: Column.t()
+  @spec randstr(Column.t() | String.t() | integer(), Column.t() | integer() | nil) :: Column.t()
   def randstr(length, seed \\ nil) do
-    seed = seed || Random.long_seed()
-    %Column{expr: {:fn, "randstr", [to_col_or_lit(length), {:lit, seed}], false}}
+    seed_expr =
+      case seed do
+        nil -> {:lit, Random.long_seed()}
+        %Column{expr: e} -> e
+        s when is_integer(s) -> {:lit, s}
+      end
+
+    %Column{expr: {:fn, "randstr", [to_col_or_lit(length), seed_expr], false}}
   end
 
   @doc """

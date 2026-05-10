@@ -192,6 +192,7 @@ defmodule SparkEx.Unit.FunctionParityTest do
         "ltrim",
         "rtrim",
         "trim",
+        "btrim",
         "sentences",
         "levenshtein",
         "array_join",

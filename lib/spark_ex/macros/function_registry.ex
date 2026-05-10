@@ -143,10 +143,9 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :string, doc: "Converts to lowercase.", aliases: [:lcase]},
       {:upper, "upper", :one_col,
        group: :string, doc: "Converts to uppercase.", aliases: [:ucase]},
-      # ltrim/rtrim/trim are hand-written in Functions to support optional trim character
-      # See Functions.ltrim/1,2, Functions.rtrim/1,2, Functions.trim/1,2
-      {:btrim, "btrim", {:col_opt, [trim_string: nil]},
-       group: :string, doc: "Trims characters from both sides."},
+      # ltrim/rtrim/trim/btrim are hand-written in Functions to support optional
+      # trim character that accepts a Column, column-name string, or nil.
+      # See Functions.ltrim/1,2, rtrim/1,2, trim/1,2, btrim/1,2.
       {:lpad, "lpad", {:col_lit, 2},
        group: :string, doc: "Left-pads string to length with pad string."},
       {:rpad, "rpad", {:col_lit, 2},
@@ -155,13 +154,12 @@ defmodule SparkEx.Macros.FunctionRegistry do
       # {:repeat, ...} — see Functions.repeat/2
       {:reverse, "reverse", :one_col, group: :string, doc: "Reverses string or array."},
       {:soundex, "soundex", :one_col, group: :string, doc: "Soundex code."},
-      {:substring, "substring", {:col_lit, 2},
+      {:substring, "substring", {:col_int, 2},
        group: :string, doc: "Returns substring from pos for len."},
       {:substring_index, "substring_index", {:col_lit, 2},
        group: :string, doc: "Returns substring before count occurrences of delimiter."},
       {:translate, "translate", {:col_lit, 2}, group: :string, doc: "Translates characters."},
-      {:instr, "instr", {:col_lit, 1},
-       group: :string, doc: "Position of first occurrence of substr."},
+      {:instr, "instr", :two_col, group: :string, doc: "Position of first occurrence of substr."},
       {:regexp_extract, "regexp_extract", {:col_lit, 2},
        group: :string, doc: "Extracts regex group."},
       {:regexp_replace, "regexp_replace", {:col_lit, 2},
@@ -174,7 +172,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :string, doc: "Returns position of first regex match."},
       {:regexp_substr, "regexp_substr", {:col_lit, 1},
        group: :string, doc: "Returns first substring matching regex."},
-      {:regexp_like, "regexp_like", {:col_lit, 1},
+      {:regexp_like, "regexp_like", :two_col,
        group: :string, doc: "Returns true if column matches regex.", aliases: [:regexp]},
       {:format_string, "format_string", {:lit_then_cols, 1},
        group: :string, doc: "printf-style formatting.", aliases: [:printf]},
@@ -275,9 +273,9 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:dayname, "dayname", :one_col, group: :datetime, doc: "Returns day name."},
       {:extract, "extract", :two_col,
        group: :datetime, doc: "Extracts date/time field.", aliases: [:date_part, :datepart]},
-      {:date_add, "date_add", {:col_lit, 1},
+      {:date_add, "date_add", {:col_int, 1},
        group: :datetime, doc: "Adds days to date.", aliases: [:dateadd]},
-      {:date_sub, "date_sub", {:col_lit, 1}, group: :datetime, doc: "Subtracts days from date."},
+      {:date_sub, "date_sub", {:col_int, 1}, group: :datetime, doc: "Subtracts days from date."},
       {:datediff, "datediff", :two_col,
        group: :datetime, doc: "Difference in days between dates.", aliases: [:date_diff]},
       {:date_format, "date_format", {:col_lit, 1},
@@ -345,8 +343,10 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :datetime, doc: "Creates time from hour, minute, second."},
       {:window_time, "window_time", :one_col,
        group: :datetime, doc: "Extracts the time column from a window column."},
-      {:session_window, "session_window", :two_col,
-       group: :datetime, doc: "Generates session window for streaming aggregations."}
+      {:session_window, "session_window", {:col_lit, 1},
+       group: :datetime,
+       doc:
+         "Generates session window for streaming aggregations. The gap-duration argument is treated as a literal duration string (e.g. \"5 minutes\"); pass a Column for a per-row gap."}
     ]
   end
 
@@ -383,8 +383,10 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :collection, doc: "Prepends element to array."},
       {:array_compact, "array_compact", :one_col,
        group: :collection, doc: "Removes null values from array."},
-      {:array_insert, "array_insert", :three_col,
-       group: :collection, doc: "Inserts element at position in array."},
+      {:array_insert, "array_insert", {:col_int_lit, 1},
+       group: :collection,
+       doc:
+         "Inserts element at position in array. The value argument is wrapped as a literal; pass a Column for a column reference."},
       {:array_remove, "array_remove", {:col_lit, 1},
        group: :collection, doc: "Removes all occurrences of element from array."},
       {:array_repeat, "array_repeat", {:col_lit, 1},
@@ -401,7 +403,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :collection, doc: "Returns element at index/key."},
       {:try_element_at, "try_element_at", :two_col,
        group: :collection, doc: "Returns element at index/key, null on out of bounds."},
-      {:get, "get", {:col_lit, 1},
+      {:get, "get", {:col_int, 1},
        group: :collection, doc: "Returns element at index from array."},
       {:explode, "explode", :one_col,
        group: :collection, doc: "Creates a row for each array/map element."},
@@ -563,8 +565,10 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :conditional, doc: "Returns zero if value is null."},
       # assert_true is hand-written in Functions to support errMsg parameter
       # {:assert_true, ...} — see Functions.assert_true/1,2
-      {:raise_error, "raise_error", :one_col,
-       group: :conditional, doc: "Raises a user-specified error message."}
+      {:raise_error, "raise_error", {:lit, 1},
+       group: :conditional,
+       doc:
+         "Raises a user-specified error message. The message argument is treated as a literal string; pass a Column to use a runtime value."}
     ]
   end
 
@@ -601,23 +605,23 @@ defmodule SparkEx.Macros.FunctionRegistry do
     [
       # schema_of_csv: hand-written in functions.ex (needs options parameter)
       # schema_of_xml: hand-written in functions.ex (needs options parameter)
-      {:xpath, "xpath", {:col_lit, 1},
+      {:xpath, "xpath", :two_col,
        group: :csv_xml, doc: "Evaluates XPath expression returning array of strings."},
-      {:xpath_boolean, "xpath_boolean", {:col_lit, 1},
+      {:xpath_boolean, "xpath_boolean", :two_col,
        group: :csv_xml, doc: "Evaluates XPath expression returning boolean."},
-      {:xpath_double, "xpath_double", {:col_lit, 1},
+      {:xpath_double, "xpath_double", :two_col,
        group: :csv_xml,
        doc: "Evaluates XPath expression returning double.",
        aliases: [:xpath_number]},
-      {:xpath_float, "xpath_float", {:col_lit, 1},
+      {:xpath_float, "xpath_float", :two_col,
        group: :csv_xml, doc: "Evaluates XPath expression returning float."},
-      {:xpath_int, "xpath_int", {:col_lit, 1},
+      {:xpath_int, "xpath_int", :two_col,
        group: :csv_xml, doc: "Evaluates XPath expression returning integer."},
-      {:xpath_long, "xpath_long", {:col_lit, 1},
+      {:xpath_long, "xpath_long", :two_col,
        group: :csv_xml, doc: "Evaluates XPath expression returning long."},
-      {:xpath_short, "xpath_short", {:col_lit, 1},
+      {:xpath_short, "xpath_short", :two_col,
        group: :csv_xml, doc: "Evaluates XPath expression returning short."},
-      {:xpath_string, "xpath_string", {:col_lit, 1},
+      {:xpath_string, "xpath_string", :two_col,
        group: :csv_xml, doc: "Evaluates XPath expression returning string."}
     ]
   end
@@ -629,11 +633,11 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :type, doc: "Converts to binary."},
       {:try_to_binary, "try_to_binary", {:col_opt, [format: nil]},
        group: :type, doc: "Try to convert to binary, returns null on failure."},
-      {:to_char_, "to_char", {:col_lit, 1},
+      {:to_char_, "to_char", :two_col,
        group: :type, doc: "Converts to character string with format.", aliases: [:to_varchar]},
-      {:to_number, "to_number", {:col_lit, 1},
+      {:to_number, "to_number", :two_col,
        group: :type, doc: "Converts string to number with format."},
-      {:try_to_number, "try_to_number", {:col_lit, 1},
+      {:try_to_number, "try_to_number", :two_col,
        group: :type, doc: "Try to convert to number, returns null on failure."}
     ]
   end
@@ -735,9 +739,9 @@ defmodule SparkEx.Macros.FunctionRegistry do
          group: :sketch, doc: "Returns n (number of items) from a KLL sketch (#{type})."},
         {:"kll_sketch_merge_#{type}", "kll_sketch_merge_#{type}", :two_col,
          group: :sketch, doc: "Merges KLL sketches (#{type})."},
-        {:"kll_sketch_get_quantile_#{type}", "kll_sketch_get_quantile_#{type}", {:col_lit, 1},
+        {:"kll_sketch_get_quantile_#{type}", "kll_sketch_get_quantile_#{type}", :two_col,
          group: :sketch, doc: "Gets quantile from a KLL sketch (#{type})."},
-        {:"kll_sketch_get_rank_#{type}", "kll_sketch_get_rank_#{type}", {:col_lit, 1},
+        {:"kll_sketch_get_rank_#{type}", "kll_sketch_get_rank_#{type}", :two_col,
          group: :sketch, doc: "Gets rank from a KLL sketch (#{type})."}
       ]
     end)
@@ -751,7 +755,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :geospatial, doc: "Creates geography from WKB binary."},
       {:st_geomfromwkb, "ST_GeomFromWKB", :one_col,
        group: :geospatial, doc: "Creates geometry from WKB binary."},
-      {:st_setsrid, "ST_SetSRID", {:col_lit, 1},
+      {:st_setsrid, "ST_SetSRID", {:col_int, 1},
        group: :geospatial, doc: "Sets the SRID of a geometry."},
       {:st_srid, "ST_SRID", :one_col, group: :geospatial, doc: "Returns the SRID of a geometry."}
     ]

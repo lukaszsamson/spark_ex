@@ -130,9 +130,17 @@ defmodule SparkEx.FunctionsTest do
                result
     end
 
-    test "regexp_like/2 builds expression" do
-      result = Functions.regexp_like(Functions.col("name"), "foo")
+    test "regexp_like/2 builds expression (pattern is column-or-name)" do
+      result = Functions.regexp_like(Functions.col("name"), Functions.lit("foo"))
       assert %Column{expr: {:fn, "regexp_like", [{:col, "name"}, {:lit, "foo"}], false}} = result
+    end
+
+    test "regexp_like/2 with bare-string pattern resolves as column ref" do
+      result = Functions.regexp_like(Functions.col("name"), "pattern_col")
+
+      assert %Column{
+               expr: {:fn, "regexp_like", [{:col, "name"}, {:col, "pattern_col"}], false}
+             } = result
     end
   end
 
