@@ -54,6 +54,7 @@ defmodule SparkEx.Test.WireGoldens do
   end
 
   @doc false
+  @dialyzer {:nowarn_function, __assert_golden__: 2}
   def __assert_golden__(name, plan_term) do
     {bytes, plan} = encode_canonical(plan_term)
     path = fixture_path(name)
@@ -63,17 +64,17 @@ defmodule SparkEx.Test.WireGoldens do
         File.mkdir_p!(Path.dirname(path))
         File.write!(path, bytes)
 
-        ExUnit.Assertions.flunk(
-          "golden updated: #{Path.relative_to_cwd(path)} (re-run without UPDATE_GOLDENS to verify)"
-        )
+        raise ExUnit.AssertionError,
+          message:
+            "golden updated: #{Path.relative_to_cwd(path)} (re-run without UPDATE_GOLDENS to verify)"
 
       not File.exists?(path) ->
         File.mkdir_p!(Path.dirname(path))
         File.write!(path, bytes)
 
-        ExUnit.Assertions.flunk(
-          "golden created: #{Path.relative_to_cwd(path)} — review and commit, then re-run"
-        )
+        raise ExUnit.AssertionError,
+          message:
+            "golden created: #{Path.relative_to_cwd(path)} — review and commit, then re-run"
 
       true ->
         expected = File.read!(path)
@@ -83,14 +84,15 @@ defmodule SparkEx.Test.WireGoldens do
         else
           decoded_expected = Plan.decode(expected)
 
-          ExUnit.Assertions.flunk("""
-          wire bytes diverged from golden #{Path.relative_to_cwd(path)}
-          expected (decoded):
-          #{inspect(decoded_expected, pretty: true, limit: :infinity)}
+          raise ExUnit.AssertionError,
+            message: """
+            wire bytes diverged from golden #{Path.relative_to_cwd(path)}
+            expected (decoded):
+            #{inspect(decoded_expected, pretty: true, limit: :infinity)}
 
-          actual (decoded):
-          #{inspect(plan, pretty: true, limit: :infinity)}
-          """)
+            actual (decoded):
+            #{inspect(plan, pretty: true, limit: :infinity)}
+            """
         end
     end
   end

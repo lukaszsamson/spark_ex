@@ -58,7 +58,7 @@ defmodule SparkEx.Test.ParitySmoke do
   and canonicalizes lambda variable names so that two proto trees from
   different sources can be structurally diffed.
   """
-  @spec normalize(Plan.t() | Relation.t() | term()) :: term()
+  @spec normalize(Plan.t() | term()) :: term()
   def normalize(value) do
     {value, _} = walk(value, %{})
     value
