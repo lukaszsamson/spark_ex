@@ -1079,6 +1079,255 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert {:unresolved_attribute, a_attr} = arg.expr_type
       assert is_integer(a_attr.plan_id)
     end
+
+    test "join condition preserves left/right assignment when right side is referenced first" do
+      left = {:sql, "SELECT 1 AS id", nil}
+      right = {:sql, "SELECT 2 AS id", nil}
+
+      condition = {:fn, "==", [{:col, "id", right}, {:col, "id", left}], false}
+      {plan, _} = PlanEncoder.encode({:join, left, right, condition, :inner, []}, 0)
+
+      assert %Relation{rel_type: {:join, join}} = root_relation(plan)
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, eq}} = join.join_condition
+      [right_arg, left_arg] = eq.arguments
+      assert {:unresolved_attribute, right_attr} = right_arg.expr_type
+      assert {:unresolved_attribute, left_attr} = left_arg.expr_type
+      assert right_attr.plan_id == right_plan_id
+      assert left_attr.plan_id == left_plan_id
+    end
+
+    test "aggregate over join preserves side assignment when grouping references right first" do
+      left = {:sql, "SELECT 1 AS dept, 2 AS salary", nil}
+      right = {:sql, "SELECT 3 AS dept, 4 AS bonus", nil}
+      join = {:join, left, right, nil, :inner, ["dept"]}
+      grouping = [{:col, "dept", right}]
+      agg = [{:fn, "sum", [{:col, "salary", left}], false}]
+
+      {plan, _} = PlanEncoder.encode({:aggregate, join, :groupby, grouping, agg}, 0)
+
+      assert %Relation{rel_type: {:aggregate, aggregate}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = aggregate.input
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      [grouping_expr] = aggregate.grouping_expressions
+      assert {:unresolved_attribute, grouping_attr} = grouping_expr.expr_type
+      assert grouping_attr.plan_id == right_plan_id
+
+      [agg_expr] = aggregate.aggregate_expressions
+      assert {:unresolved_function, sum} = agg_expr.expr_type
+      [sum_arg] = sum.arguments
+      assert {:unresolved_attribute, sum_attr} = sum_arg.expr_type
+      assert sum_attr.plan_id == left_plan_id
+    end
+
+    test "with_columns over join preserves side assignment when alias references right first" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+
+      aliases = [
+        {:alias, {:fn, "+", [{:col, "x", right}, {:col, "y", left}], false}, "c"}
+      ]
+
+      {plan, _} = PlanEncoder.encode({:with_columns, join, aliases}, 0)
+
+      assert %Relation{rel_type: {:with_columns, wc}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = wc.input
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      [alias_proto] = wc.aliases
+      assert {:unresolved_function, plus} = alias_proto.expr.expr_type
+      [right_arg, left_arg] = plus.arguments
+      assert {:unresolved_attribute, right_attr} = right_arg.expr_type
+      assert {:unresolved_attribute, left_attr} = left_arg.expr_type
+      assert right_attr.plan_id == right_plan_id
+      assert left_attr.plan_id == left_plan_id
+    end
+
+    test "filter over join preserves side assignment when condition references right first" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+      condition = {:fn, "==", [{:col, "x", right}, {:col, "y", left}], false}
+
+      {plan, _} = PlanEncoder.encode({:filter, join, condition}, 0)
+
+      assert %Relation{rel_type: {:filter, filter}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = filter.input
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, eq}} = filter.condition
+      [right_arg, left_arg] = eq.arguments
+      assert {:unresolved_attribute, right_attr} = right_arg.expr_type
+      assert {:unresolved_attribute, left_attr} = left_arg.expr_type
+      assert right_attr.plan_id == right_plan_id
+      assert left_attr.plan_id == left_plan_id
+    end
+
+    test "sort over join preserves side assignment when sort references right first" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+
+      sort_orders = [
+        {:sort_order, {:col, "x", right}, :asc, :nulls_first},
+        {:sort_order, {:col, "y", left}, :asc, :nulls_first}
+      ]
+
+      {plan, _} = PlanEncoder.encode({:sort, join, sort_orders}, 0)
+
+      assert %Relation{rel_type: {:sort, sort}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = sort.input
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      [right_so, left_so] = sort.order
+      assert {:unresolved_attribute, right_attr} = right_so.child.expr_type
+      assert {:unresolved_attribute, left_attr} = left_so.child.expr_type
+      assert right_attr.plan_id == right_plan_id
+      assert left_attr.plan_id == left_plan_id
+    end
+
+    test "filter over join binds correctly when only right side is referenced" do
+      # Single-side reference: prior sort+zip approach silently bound the lone
+      # foreign id to candidates[0] (left), which is wrong.
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+      condition = {:fn, ">", [{:col, "x", right}, {:lit, 0}], false}
+
+      {plan, _} = PlanEncoder.encode({:filter, join, condition}, 0)
+
+      assert %Relation{rel_type: {:filter, filter}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = filter.input
+      right_plan_id = join.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, gt}} = filter.condition
+      [right_arg, _] = gt.arguments
+      assert {:unresolved_attribute, right_attr} = right_arg.expr_type
+      assert right_attr.plan_id == right_plan_id
+    end
+
+    test "with_columns over join binds correctly when only right side is referenced" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+      aliases = [{:alias, {:col, "x", right}, "c"}]
+
+      {plan, _} = PlanEncoder.encode({:with_columns, join, aliases}, 0)
+
+      assert %Relation{rel_type: {:with_columns, wc}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = wc.input
+      right_plan_id = join.right.common.plan_id
+
+      [alias_proto] = wc.aliases
+      assert {:unresolved_attribute, attr} = alias_proto.expr.expr_type
+      assert attr.plan_id == right_plan_id
+    end
+
+    test "aggregate over join binds correctly when grouping references only right side" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+      grouping = [{:col, "x", right}]
+      agg = [{:fn, "count", [], false}]
+
+      {plan, _} = PlanEncoder.encode({:aggregate, join, :groupby, grouping, agg}, 0)
+
+      assert %Relation{rel_type: {:aggregate, aggregate}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = aggregate.input
+      right_plan_id = join.right.common.plan_id
+
+      [grouping_expr] = aggregate.grouping_expressions
+      assert {:unresolved_attribute, grouping_attr} = grouping_expr.expr_type
+      assert grouping_attr.plan_id == right_plan_id
+    end
+
+    test "self-join collapses both sides to the same inline plan_id (PySpark parity)" do
+      # df.join(df, df.x == df.x) — both sides reference the same Plan term,
+      # so register_inline_plan_id finds an existing entry on the second call
+      # and reuses the same synth. Encoded join.left.plan_id == join.right.plan_id,
+      # mirroring PySpark's per-DataFrame-instance _plan_id.
+      df = {:sql, "SELECT 1 AS x", nil}
+      condition = {:fn, "==", [{:col, "x", df}, {:col, "x", df}], false}
+      {plan, _} = PlanEncoder.encode({:join, df, df, condition, :inner, []}, 0)
+
+      assert %Relation{rel_type: {:join, join}} = root_relation(plan)
+      assert join.left.common.plan_id == join.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, eq}} = join.join_condition
+      [left_arg, right_arg] = eq.arguments
+      assert {:unresolved_attribute, left_attr} = left_arg.expr_type
+      assert {:unresolved_attribute, right_attr} = right_arg.expr_type
+      assert left_attr.plan_id == right_attr.plan_id
+      assert left_attr.plan_id == join.left.common.plan_id
+    end
+
+    test "filter over nested join encodes without crashing and binds outer ref correctly" do
+      # Nested join with referenced_plans at multiple levels — would crash
+      # before the {:plan_id, _, _} rewrite_plan clause was added (the inline
+      # wrapping introduced inner wrappers that re-entered rewrite_plan via
+      # encode_relation({:plan_id, …}) → attach_with_relations).
+      a = {:sql, "SELECT 1 AS x", nil}
+      b = {:sql, "SELECT 2 AS y", nil}
+      c = {:sql, "SELECT 3 AS z", nil}
+      inner_cond = {:fn, "==", [{:col, "x", a}, {:col, "y", b}], false}
+      inner_join = {:join, a, b, inner_cond, :inner, []}
+      outer_join = {:join, inner_join, c, nil, :inner, ["x"]}
+      filter_cond = {:fn, ">", [{:col, "z", c}, {:lit, 0}], false}
+
+      {plan, _} = PlanEncoder.encode({:filter, outer_join, filter_cond}, 0)
+
+      assert %Relation{rel_type: {:filter, filter}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, outer}} = filter.input
+      c_plan_id = outer.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, gt}} = filter.condition
+      [c_arg, _] = gt.arguments
+      assert {:unresolved_attribute, c_attr} = c_arg.expr_type
+      assert c_attr.plan_id == c_plan_id
+
+      # Inner condition was rewritten in the first pass and re-walked
+      # idempotently via attach_with_relations inside encode_relation
+      # for the {:plan_id, _, _} wrapper. Verify A and B still bind to
+      # the inner join's left/right respectively.
+      assert %Relation{rel_type: {:join, inner}} = outer.left
+      a_plan_id = inner.left.common.plan_id
+      b_plan_id = inner.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, eq}} = inner.join_condition
+      [a_arg, b_arg] = eq.arguments
+      assert {:unresolved_attribute, a_attr} = a_arg.expr_type
+      assert {:unresolved_attribute, b_attr} = b_arg.expr_type
+      assert a_attr.plan_id == a_plan_id
+      assert b_attr.plan_id == b_plan_id
+    end
+
+    test "drop over join preserves side assignment when col_exprs reference right first" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+      col_exprs = [{:col, "x", right}, {:col, "y", left}]
+
+      {plan, _} = PlanEncoder.encode({:drop, join, [], col_exprs}, 0)
+
+      assert %Relation{rel_type: {:drop, drop}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = drop.input
+      left_plan_id = join.left.common.plan_id
+      right_plan_id = join.right.common.plan_id
+
+      [right_expr, left_expr] = drop.columns
+      assert {:unresolved_attribute, right_attr} = right_expr.expr_type
+      assert {:unresolved_attribute, left_attr} = left_expr.expr_type
+      assert right_attr.plan_id == right_plan_id
+      assert left_attr.plan_id == left_plan_id
+    end
   end
 
   describe "Stream A — relation expression plan_id remap to encoded child input" do
