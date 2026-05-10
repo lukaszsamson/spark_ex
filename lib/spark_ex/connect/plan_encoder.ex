@@ -2002,20 +2002,22 @@ defmodule SparkEx.Connect.PlanEncoder do
   #      be a `:join` (or the relation itself is a join-shaped form like
   #      `:as_of_join` / `:lateral_join`), call `maybe_register_join_child_plan_ids/5`
   #      (or `register_join_child_plan_ids/5` for direct left/right) BEFORE
-  #      rewriting the expressions.** This guarantees the join's left/right
-  #      plan_ids are registered in canonical order, so the later
-  #      `remap_*_plan_ids_to_input` step binds foreign synthetic ids back to
-  #      the correct join side. See GPT-09: skipping this on a relation whose
-  #      expressions reference the right side first will silently bind those
-  #      columns to the left side's plan_id.
+  #      rewriting the expressions, AND substitute the wrapped left/right plans
+  #      back into the relation tuple.** The helper wraps each join child with
+  #      `{:plan_id, synth_id, plan}` so the encoded inline `common.plan_id`
+  #      matches the synth id that column expressions reference, eliminating
+  #      the need for a side-aware remap step. Skipping this on a relation
+  #      whose expressions reference one (or both) join sides will bind those
+  #      columns to the wrong inline plan_id (GPT-09).
   #   3. Rewrite expressions/aliases/sort_orders.
   #
   # Adding a new rewrite_plan clause that handles expressions over a child plan
   # without (2) is a silent regression — there is currently no static check for
   # the invariant. The regression tests in
   # `test/unit/plan_encoder_test.exs` ("Stream A — relation expression plan_id
-  # remap to encoded child input" describe block) cover the patched relations;
-  # mirror one of those tests for any new clause that takes expressions.
+  # remap to encoded child input" describe block) cover the patched relations
+  # for both right-first-of-two and single-side reference patterns; mirror one
+  # of those tests for any new clause that takes expressions.
   defp rewrite_plan({:with_relations, root_plan, reference_plans}, plan_ids, refs, counter) do
     {root_plan, plan_ids, refs, counter} = rewrite_plan(root_plan, plan_ids, refs, counter)
 
@@ -2113,7 +2115,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:project, child_plan, expressions}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(child_plan, expressions, plan_ids, refs, counter)
 
     {expressions, plan_ids, refs, counter} =
@@ -2125,7 +2127,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:filter, child_plan, condition}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(child_plan, condition, plan_ids, refs, counter)
 
     {condition, plan_ids, refs, counter} = rewrite_expr(condition, plan_ids, refs, counter)
@@ -2135,7 +2137,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:sort, child_plan, sort_orders}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(child_plan, sort_orders, plan_ids, refs, counter)
 
     {sort_orders, plan_ids, refs, counter} =
@@ -2147,7 +2149,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:sort, child_plan, sort_orders, is_global}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(child_plan, sort_orders, plan_ids, refs, counter)
 
     {sort_orders, plan_ids, refs, counter} =
@@ -2159,7 +2161,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:with_columns, child_plan, aliases}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(child_plan, aliases, plan_ids, refs, counter)
 
     {aliases, plan_ids, refs, counter} = rewrite_aliases(aliases, plan_ids, refs, counter)
@@ -2174,7 +2176,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:drop, child_plan, column_names, col_exprs}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(child_plan, col_exprs, plan_ids, refs, counter)
 
     {col_exprs, plan_ids, refs, counter} = rewrite_expr_list(col_exprs, plan_ids, refs, counter)
@@ -2199,7 +2201,7 @@ defmodule SparkEx.Connect.PlanEncoder do
        ) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(
         child_plan,
         [grouping_exprs, agg_exprs],
@@ -2223,7 +2225,7 @@ defmodule SparkEx.Connect.PlanEncoder do
        ) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(
         child_plan,
         [grouping_exprs, agg_exprs, [pivot_col]],
@@ -2250,7 +2252,7 @@ defmodule SparkEx.Connect.PlanEncoder do
        ) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(
         child_plan,
         [grouping_exprs, agg_exprs | grouping_sets],
@@ -2287,11 +2289,11 @@ defmodule SparkEx.Connect.PlanEncoder do
     {left_plan, plan_ids, refs, counter} = rewrite_plan(left_plan, plan_ids, refs, counter)
     {right_plan, plan_ids, refs, counter} = rewrite_plan(right_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {left_plan, right_plan, plan_ids, refs, counter} =
       if contains_referenced_plan?(join_condition) do
         register_join_child_plan_ids(left_plan, right_plan, plan_ids, refs, counter)
       else
-        {plan_ids, refs, counter}
+        {left_plan, right_plan, plan_ids, refs, counter}
       end
 
     {join_condition, plan_ids, refs, counter} =
@@ -2381,7 +2383,7 @@ defmodule SparkEx.Connect.PlanEncoder do
        ) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(child_plan, exprs, plan_ids, refs, counter)
 
     {exprs, plan_ids, refs, counter} = rewrite_expr_list(exprs, plan_ids, refs, counter)
@@ -2413,7 +2415,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:hint, child_plan, name, parameters}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(child_plan, parameters, plan_ids, refs, counter)
 
     {parameters, plan_ids, refs, counter} = rewrite_expr_list(parameters, plan_ids, refs, counter)
@@ -2428,7 +2430,7 @@ defmodule SparkEx.Connect.PlanEncoder do
        ) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(
         child_plan,
         [ids, values || []],
@@ -2452,7 +2454,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:transpose, child_plan, index_columns}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(child_plan, index_columns, plan_ids, refs, counter)
 
     {index_columns, plan_ids, refs, counter} =
@@ -2491,11 +2493,11 @@ defmodule SparkEx.Connect.PlanEncoder do
     {left_plan, plan_ids, refs, counter} = rewrite_plan(left_plan, plan_ids, refs, counter)
     {right_plan, plan_ids, refs, counter} = rewrite_plan(right_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {left_plan, right_plan, plan_ids, refs, counter} =
       if contains_referenced_plan?([left_as_of, right_as_of, join_expr, tolerance]) do
         register_join_child_plan_ids(left_plan, right_plan, plan_ids, refs, counter)
       else
-        {plan_ids, refs, counter}
+        {left_plan, right_plan, plan_ids, refs, counter}
       end
 
     {left_as_of, plan_ids, refs, counter} = rewrite_expr(left_as_of, plan_ids, refs, counter)
@@ -2516,11 +2518,11 @@ defmodule SparkEx.Connect.PlanEncoder do
     {left_plan, plan_ids, refs, counter} = rewrite_plan(left_plan, plan_ids, refs, counter)
     {right_plan, plan_ids, refs, counter} = rewrite_plan(right_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {left_plan, right_plan, plan_ids, refs, counter} =
       if contains_referenced_plan?(join_condition) do
         register_join_child_plan_ids(left_plan, right_plan, plan_ids, refs, counter)
       else
-        {plan_ids, refs, counter}
+        {left_plan, right_plan, plan_ids, refs, counter}
       end
 
     {join_condition, plan_ids, refs, counter} =
@@ -2532,7 +2534,7 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:collect_metrics, child_plan, name, metrics}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(child_plan, metrics, plan_ids, refs, counter)
 
     {metrics, plan_ids, refs, counter} = rewrite_expr_list(metrics, plan_ids, refs, counter)
@@ -2606,7 +2608,7 @@ defmodule SparkEx.Connect.PlanEncoder do
        ) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter} =
+    {child_plan, plan_ids, refs, counter} =
       maybe_register_join_child_plan_ids(child_plan, col_expr, plan_ids, refs, counter)
 
     {col_expr, plan_ids, refs, counter} = rewrite_expr(col_expr, plan_ids, refs, counter)
@@ -2890,29 +2892,33 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_expr(value, plan_ids, refs, counter), do: {value, plan_ids, refs, counter}
 
   defp maybe_register_join_child_plan_ids(
-         {:join, left_plan, right_plan, _join_condition, _join_type, _using_columns},
+         {:join, left_plan, right_plan, condition, type, using},
          exprs,
          plan_ids,
          refs,
          counter
        ) do
     if contains_referenced_plan?(exprs) do
-      register_join_child_plan_ids(left_plan, right_plan, plan_ids, refs, counter)
+      {left_plan, right_plan, plan_ids, refs, counter} =
+        register_join_child_plan_ids(left_plan, right_plan, plan_ids, refs, counter)
+
+      {{:join, left_plan, right_plan, condition, type, using}, plan_ids, refs, counter}
     else
-      {plan_ids, refs, counter}
+      {{:join, left_plan, right_plan, condition, type, using}, plan_ids, refs, counter}
     end
   end
 
-  defp maybe_register_join_child_plan_ids(_plan, _exprs, plan_ids, refs, counter),
-    do: {plan_ids, refs, counter}
+  defp maybe_register_join_child_plan_ids(plan, _exprs, plan_ids, refs, counter),
+    do: {plan, plan_ids, refs, counter}
 
   defp register_join_child_plan_ids(left_plan, right_plan, plan_ids, refs, counter) do
-    {plan_ids, refs, _left_plan_id, counter} = ensure_plan_id(left_plan, plan_ids, refs, counter)
+    {left_plan, plan_ids, refs, counter} =
+      register_inline_plan_id(left_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, _right_plan_id, counter} =
-      ensure_plan_id(right_plan, plan_ids, refs, counter)
+    {right_plan, plan_ids, refs, counter} =
+      register_inline_plan_id(right_plan, plan_ids, refs, counter)
 
-    {plan_ids, refs, counter}
+    {left_plan, right_plan, plan_ids, refs, counter}
   end
 
   defp contains_referenced_plan?(%Column{expr: expr}), do: contains_referenced_plan?(expr)
@@ -2958,17 +2964,48 @@ defmodule SparkEx.Connect.PlanEncoder do
       :error ->
         normalized_plan = normalize_referenced_plan(referenced_plan)
 
-        case find_existing_plan_id(refs, normalized_plan) do
-          {:ok, existing_plan_id} ->
-            {plan_ids, refs, existing_plan_id, counter}
+        case Map.fetch(plan_ids, {:inline, normalized_plan}) do
+          {:ok, inline_plan_id} ->
+            {plan_ids, refs, inline_plan_id, counter}
 
           :error ->
-            {plan_id, counter} = next_id(counter)
-            plan_ref = {:plan_id, plan_id, normalized_plan}
-            ensure_referenced_plan_id(plan_id, plan_ref, plan_ids, refs, counter)
+            case find_existing_plan_id(refs, normalized_plan) do
+              {:ok, existing_plan_id} ->
+                {plan_ids, refs, existing_plan_id, counter}
+
+              :error ->
+                {plan_id, counter} = next_id(counter)
+                plan_ref = {:plan_id, plan_id, normalized_plan}
+                ensure_referenced_plan_id(plan_id, plan_ref, plan_ids, refs, counter)
+            end
         end
     end
   end
+
+  # Allocates a synthetic plan_id for `plan` and wraps it with `{:plan_id, id, plan}`
+  # so that `encode_relation/2` will set the inline encoded relation's plan_id to
+  # exactly that synthetic id. The mapping is recorded in `plan_ids` under the
+  # `{:inline, normalized_plan}` key so that subsequent `ensure_plan_id` calls
+  # for the same plan term (e.g. from column expressions referencing a join
+  # child) resolve to the same synthetic id WITHOUT adding a `with_relations`
+  # reference. The net effect is that columns referencing the wrapped plan
+  # bind directly to the inline encoded relation, with no remap needed.
+  defp register_inline_plan_id(plan, plan_ids, refs, counter) do
+    normalized = normalize_referenced_plan(plan)
+
+    case Map.fetch(plan_ids, {:inline, normalized}) do
+      {:ok, existing_id} ->
+        {wrap_inline_plan_id(plan, existing_id), plan_ids, refs, counter}
+
+      :error ->
+        {synth_id, counter} = next_id(counter)
+        plan_ids = Map.put(plan_ids, {:inline, normalized}, synth_id)
+        {wrap_inline_plan_id(plan, synth_id), plan_ids, refs, counter}
+    end
+  end
+
+  defp wrap_inline_plan_id({:plan_id, _existing, inner}, id), do: {:plan_id, id, inner}
+  defp wrap_inline_plan_id(plan, id), do: {:plan_id, id, plan}
 
   defp ensure_referenced_plan_id(plan_id, referenced_plan, plan_ids, refs, counter) do
     case Map.fetch(plan_ids, plan_id) do
@@ -3182,8 +3219,17 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   # Remap multiple expression lists against the same child input using a single
   # shared state so that foreign plan_id → candidate assignments are consistent
-  # across all lists (important when the child has multiple candidate plan_ids,
-  # e.g. aggregate over a join). Returns remapped lists in the same order.
+  # across all lists.
+  #
+  # For relations whose child can be a `:join` (multiple candidate plan_ids),
+  # `register_join_child_plan_ids/5` is called during the rewrite pass to wrap
+  # the join's left/right with `{:plan_id, synth, plan}` so the encoded
+  # `common.plan_id` of each side equals the synth id that column expressions
+  # already carry. After that, foreign_plan_ids in `initial_remap_state` is
+  # empty and the sort+zip seeding is a no-op — `do_remap_expr_plan_ids` simply
+  # observes that each plan_id is already a member of the candidate set and
+  # leaves it unchanged. The sort+zip path remains as a defensive fallback for
+  # multi-candidate inputs where pre-registration was not possible.
   defp remap_multiple_expr_lists_plan_ids_to_input(expr_lists, %Relation{} = input_relation) do
     candidate_plan_ids = source_relation_plan_ids(input_relation)
     known_plan_ids = MapSet.new(candidate_plan_ids)

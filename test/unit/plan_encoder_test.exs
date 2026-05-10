@@ -1194,6 +1194,61 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert left_attr.plan_id == left_plan_id
     end
 
+    test "filter over join binds correctly when only right side is referenced" do
+      # Single-side reference: prior sort+zip approach silently bound the lone
+      # foreign id to candidates[0] (left), which is wrong.
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+      condition = {:fn, ">", [{:col, "x", right}, {:lit, 0}], false}
+
+      {plan, _} = PlanEncoder.encode({:filter, join, condition}, 0)
+
+      assert %Relation{rel_type: {:filter, filter}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = filter.input
+      right_plan_id = join.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, gt}} = filter.condition
+      [right_arg, _] = gt.arguments
+      assert {:unresolved_attribute, right_attr} = right_arg.expr_type
+      assert right_attr.plan_id == right_plan_id
+    end
+
+    test "with_columns over join binds correctly when only right side is referenced" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+      aliases = [{:alias, {:col, "x", right}, "c"}]
+
+      {plan, _} = PlanEncoder.encode({:with_columns, join, aliases}, 0)
+
+      assert %Relation{rel_type: {:with_columns, wc}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = wc.input
+      right_plan_id = join.right.common.plan_id
+
+      [alias_proto] = wc.aliases
+      assert {:unresolved_attribute, attr} = alias_proto.expr.expr_type
+      assert attr.plan_id == right_plan_id
+    end
+
+    test "aggregate over join binds correctly when grouping references only right side" do
+      left = {:sql, "SELECT 1 AS y", nil}
+      right = {:sql, "SELECT 2 AS x", nil}
+      join = {:join, left, right, nil, :inner, []}
+      grouping = [{:col, "x", right}]
+      agg = [{:fn, "count", [], false}]
+
+      {plan, _} = PlanEncoder.encode({:aggregate, join, :groupby, grouping, agg}, 0)
+
+      assert %Relation{rel_type: {:aggregate, aggregate}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, join}} = aggregate.input
+      right_plan_id = join.right.common.plan_id
+
+      [grouping_expr] = aggregate.grouping_expressions
+      assert {:unresolved_attribute, grouping_attr} = grouping_expr.expr_type
+      assert grouping_attr.plan_id == right_plan_id
+    end
+
     test "drop over join preserves side assignment when col_exprs reference right first" do
       left = {:sql, "SELECT 1 AS y", nil}
       right = {:sql, "SELECT 2 AS x", nil}
