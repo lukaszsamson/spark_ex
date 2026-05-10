@@ -2946,12 +2946,27 @@ defmodule SparkEx.Connect.PlanEncoder do
       MapSet.disjoint?(MapSet.new(sources), MapSet.new(targets))
   end
 
-  defp remap_expr_plan_ids_to_input(expr, %Relation{} = input_relation) do
+  @doc """
+  Remaps DataFrame-bound `plan_id`s in `expr` to the encoded child input
+  relation's plan_id(s).
+
+  Used by relation encoders (and command encoders, e.g. WriterV2) to mirror
+  the project/filter pattern: expressions captured against a synthetic /
+  foreign plan_id must point at the encoded input the server can resolve.
+  """
+  @spec remap_expr_plan_ids_to_input(term(), Relation.t()) :: term()
+  def remap_expr_plan_ids_to_input(expr, %Relation{} = input_relation) do
     candidate_plan_ids = source_relation_plan_ids(input_relation)
     remap_expr_plan_ids(expr, candidate_plan_ids)
   end
 
-  defp remap_expr_list_plan_ids_to_input(exprs, %Relation{} = input_relation) do
+  @doc """
+  List variant of `remap_expr_plan_ids_to_input/2` that threads a single
+  shared remap state across all expressions so foreign-id assignments stay
+  consistent within the list.
+  """
+  @spec remap_expr_list_plan_ids_to_input([term()], Relation.t()) :: [term()]
+  def remap_expr_list_plan_ids_to_input(exprs, %Relation{} = input_relation) do
     candidate_plan_ids = source_relation_plan_ids(input_relation)
     remap_expr_list_plan_ids(exprs, candidate_plan_ids)
   end

@@ -187,12 +187,13 @@ defmodule SparkEx.BugsPlan2.StreamBTest do
       assert %Column{expr: {:star}} = Functions.col(".*")
     end
 
-    test "\"foo.*\" produces targeted star with target \"foo\"" do
-      assert %Column{expr: {:star, "foo"}} = Functions.col("foo.*")
+    test "\"foo.*\" produces targeted star and preserves the \".*\" suffix" do
+      # PySpark requires UnresolvedStar.unparsed_target to end with ".*".
+      assert %Column{expr: {:star, "foo.*"}} = Functions.col("foo.*")
     end
 
-    test "\"a.b.*\" preserves multi-segment target" do
-      assert %Column{expr: {:star, "a.b"}} = Functions.col("a.b.*")
+    test "\"a.b.*\" preserves multi-segment target with \".*\" suffix" do
+      assert %Column{expr: {:star, "a.b.*"}} = Functions.col("a.b.*")
     end
 
     test "\"foo\" without star suffix stays a col reference" do
@@ -203,10 +204,10 @@ defmodule SparkEx.BugsPlan2.StreamBTest do
       assert %Column{expr: {:col, "foo.bar"}} = Functions.col("foo.bar")
     end
 
-    test "encoder wires {:star, target} into UnresolvedStar.unparsed_target" do
-      expr = PlanEncoder.encode_expression({:star, "foo"})
+    test "encoder wires {:star, target} into UnresolvedStar.unparsed_target verbatim" do
+      expr = PlanEncoder.encode_expression({:star, "foo.*"})
       assert %Expression{expr_type: {:unresolved_star, star}} = expr
-      assert star.unparsed_target == "foo"
+      assert star.unparsed_target == "foo.*"
     end
   end
 
