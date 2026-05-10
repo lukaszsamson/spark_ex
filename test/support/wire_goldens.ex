@@ -109,12 +109,7 @@ defmodule SparkEx.Test.WireGoldens do
     plan
   end
 
-  defp walk(%Plan{op_type: {:root, rel}} = plan, acc) do
-    {rel, acc} = walk(rel, acc)
-    {%{plan | op_type: {:root, rel}}, acc}
-  end
-
-  defp walk(%Plan{} = plan, acc), do: {plan, acc}
+  defp walk(%Plan{} = plan, acc), do: walk_struct(plan, acc)
 
   defp walk(%Relation{} = rel, acc) do
     walk_struct(rel, acc)
