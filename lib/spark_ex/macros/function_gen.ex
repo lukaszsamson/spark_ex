@@ -194,6 +194,55 @@ defmodule SparkEx.Macros.FunctionGen do
     end
   end
 
+  defp generate_function(name, spark_name, {:col_int, 1}, is_distinct, doc) do
+    quote do
+      @doc unquote(doc)
+      @spec unquote(name)(Column.t() | String.t(), Column.t() | String.t() | integer()) ::
+              Column.t()
+      def unquote(name)(col, arg1) do
+        %Column{
+          expr:
+            {:fn, unquote(spark_name), [to_expr(col), to_expr_or_lit_int(arg1)],
+             unquote(is_distinct)}
+        }
+      end
+    end
+  end
+
+  defp generate_function(name, spark_name, {:col_int, 2}, is_distinct, doc) do
+    quote do
+      @doc unquote(doc)
+      @spec unquote(name)(
+              Column.t() | String.t(),
+              Column.t() | String.t() | integer(),
+              Column.t() | String.t() | integer()
+            ) :: Column.t()
+      def unquote(name)(col, arg1, arg2) do
+        %Column{
+          expr:
+            {:fn, unquote(spark_name),
+             [to_expr(col), to_expr_or_lit_int(arg1), to_expr_or_lit_int(arg2)],
+             unquote(is_distinct)}
+        }
+      end
+    end
+  end
+
+  defp generate_function(name, spark_name, {:col_int_lit, 1}, is_distinct, doc) do
+    quote do
+      @doc unquote(doc)
+      @spec unquote(name)(Column.t() | String.t(), Column.t() | String.t() | integer(), term()) ::
+              Column.t()
+      def unquote(name)(col, arg1, arg2) do
+        %Column{
+          expr:
+            {:fn, unquote(spark_name), [to_expr(col), to_expr_or_lit_int(arg1), lit_expr(arg2)],
+             unquote(is_distinct)}
+        }
+      end
+    end
+  end
+
   defp generate_function(name, spark_name, {:lit_then_cols, 1}, is_distinct, doc) do
     quote do
       @doc unquote(doc)
@@ -397,6 +446,39 @@ defmodule SparkEx.Macros.FunctionGen do
       @doc "Alias for `#{unquote(primary_name)}/4`."
       @spec unquote(alias_name)(Column.t() | String.t(), term(), term(), term()) :: Column.t()
       def unquote(alias_name)(col, a, b, c), do: unquote(primary_name)(col, a, b, c)
+    end
+  end
+
+  defp generate_alias(alias_name, primary_name, {:col_int, 1}) do
+    quote do
+      @doc "Alias for `#{unquote(primary_name)}/2`."
+      @spec unquote(alias_name)(Column.t() | String.t(), Column.t() | String.t() | integer()) ::
+              Column.t()
+      def unquote(alias_name)(col, a), do: unquote(primary_name)(col, a)
+    end
+  end
+
+  defp generate_alias(alias_name, primary_name, {:col_int, 2}) do
+    quote do
+      @doc "Alias for `#{unquote(primary_name)}/3`."
+      @spec unquote(alias_name)(
+              Column.t() | String.t(),
+              Column.t() | String.t() | integer(),
+              Column.t() | String.t() | integer()
+            ) :: Column.t()
+      def unquote(alias_name)(col, a, b), do: unquote(primary_name)(col, a, b)
+    end
+  end
+
+  defp generate_alias(alias_name, primary_name, {:col_int_lit, 1}) do
+    quote do
+      @doc "Alias for `#{unquote(primary_name)}/3`."
+      @spec unquote(alias_name)(
+              Column.t() | String.t(),
+              Column.t() | String.t() | integer(),
+              term()
+            ) :: Column.t()
+      def unquote(alias_name)(col, a, b), do: unquote(primary_name)(col, a, b)
     end
   end
 
