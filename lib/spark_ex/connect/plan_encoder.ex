@@ -2994,6 +2994,14 @@ defmodule SparkEx.Connect.PlanEncoder do
   # shared state so that foreign plan_id → candidate assignments are consistent
   # across all lists (important when the child has multiple candidate plan_ids,
   # e.g. aggregate over a join). Returns remapped lists in the same order.
+  #
+  # Known limitation (GPT-09, deferred): the mapping from a foreign synthetic id
+  # to a candidate plan_id is resolved by first-encounter order, not by the join
+  # side the original DataFrame belonged to. An aggregate where the first
+  # referenced expression comes from the right join child will have that foreign
+  # id assigned to candidates[0] (the left plan_id). Correct side-stable
+  # assignment requires stable plan_ids at DataFrame.col/2 creation time, which
+  # is the scope of GPT-09.
   defp remap_multiple_expr_lists_plan_ids_to_input(expr_lists, %Relation{} = input_relation) do
     candidate_plan_ids = source_relation_plan_ids(input_relation)
     known_plan_ids = MapSet.new(candidate_plan_ids)
