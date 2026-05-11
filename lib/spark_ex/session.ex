@@ -826,6 +826,7 @@ defmodule SparkEx.Session do
 
     with {:ok, connect_opts} <- resolve_connect_opts(url_opt, connect_opts_opt),
          {:ok, session_identity} <- resolve_session_identity(opts, connect_opts),
+         connect_opts <- Map.put(connect_opts, :user_agent, session_identity.client_type),
          {:ok, channel} <- Channel.connect(connect_opts, grpc_opts) do
       # Register a session-scoped plan_id allocator in ETS so DataFrames
       # constructed in caller processes draw plan_ids from the same
@@ -3199,11 +3200,16 @@ defmodule SparkEx.Session do
   # protocol marker plus `os/<system>` so server-side telemetry can
   # distinguish clients without relying on the free-form base.
   defp default_client_type do
-    otp_release = :erlang.system_info(:otp_release) |> List.to_string()
-    os = os_name()
+    "elixir/#{System.version()}/otp#{otp_release()}/spark_ex/#{@spark_ex_version} " <>
+      client_type_suffix()
+  end
 
-    "elixir/#{System.version()}/otp#{otp_release}/spark_ex/#{@spark_ex_version} " <>
-      "spark/connect-1 os/#{os}"
+  defp client_type_suffix do
+    "spark/connect-1 os/#{os_name()}"
+  end
+
+  defp otp_release do
+    :erlang.system_info(:otp_release) |> List.to_string()
   end
 
   defp os_name do
@@ -4587,8 +4593,19 @@ defmodule SparkEx.Session do
       Keyword.get(opts, :user_id) || Map.get(connect_opts, :user_id) || default_user_id()
 
     client_type =
-      Keyword.get(opts, :client_type) || Map.get(connect_opts, :user_agent) ||
-        default_client_type()
+      cond do
+        ct = Keyword.get(opts, :client_type) ->
+          ct
+
+        ua = Map.get(connect_opts, :user_agent) ->
+          # Mirror PySpark: user-supplied base is followed by spark/<v> os/<system>
+          # so server-side telemetry can identify protocol version + OS regardless
+          # of the free-form prefix the user picked.
+          ua <> " " <> client_type_suffix()
+
+        true ->
+          default_client_type()
+      end
 
     session_id =
       Keyword.get(opts, :session_id) || Map.get(connect_opts, :session_id) || UUID.generate_v4()
