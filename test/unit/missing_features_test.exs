@@ -50,7 +50,8 @@ defmodule SparkEx.MissingFeaturesTest do
     test ":time type JSON" do
       schema = Types.struct_type([Types.struct_field("t", :time)])
       json = Types.to_json(schema)
-      assert json =~ "\"type\":\"time\""
+      # PySpark's TimeType defaults precision to 6 and always renders it.
+      assert json =~ "\"type\":\"time(6)\""
     end
 
     test ":day_time_interval type DDL" do
@@ -88,8 +89,11 @@ defmodule SparkEx.MissingFeaturesTest do
         ])
 
       json = Types.to_json(schema)
-      assert json =~ "day-time interval"
-      assert json =~ "year-month interval"
+      # PySpark's jsonValue for ANSI interval types is "interval day to second"
+      # / "interval year to month" (lowercased simpleString), not the prior
+      # invented "day-time interval(0,3)" shape.
+      assert json =~ "interval day to second"
+      assert json =~ "interval year to month"
       assert json =~ "\"type\":\"interval\""
     end
   end
@@ -876,11 +880,14 @@ defmodule SparkEx.MissingFeaturesTest do
   describe "CommandEncoder: sql_command" do
     alias SparkEx.Connect.CommandEncoder
 
-    test "encodes sql_command without args" do
+    test "encodes sql_command without args via input SQL relation" do
       {plan, _counter} = CommandEncoder.encode({:sql_command, "CREATE TABLE t (a INT)", nil}, 0)
       assert %Spark.Connect.Plan{op_type: {:command, command}} = plan
       assert %Spark.Connect.Command{command_type: {:sql_command, sql_cmd}} = command
-      assert sql_cmd.sql == "CREATE TABLE t (a INT)"
+      # Deprecated flat fields stay empty; the SQL relation lives under :input.
+      assert sql_cmd.sql == ""
+      assert %Spark.Connect.Relation{rel_type: {:sql, sql_rel}} = sql_cmd.input
+      assert sql_rel.query == "CREATE TABLE t (a INT)"
     end
   end
 

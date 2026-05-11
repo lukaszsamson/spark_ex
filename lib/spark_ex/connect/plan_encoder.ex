@@ -3516,6 +3516,8 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   @jvm_long_min -9_223_372_036_854_775_808
   @jvm_long_max 9_223_372_036_854_775_807
+  @jvm_int_min -2_147_483_648
+  @jvm_int_max 2_147_483_647
 
   defp encode_frame_boundary(:current_row, _frame_type) do
     %Expression.Window.WindowFrame.FrameBoundary{boundary: {:current_row, true}}
@@ -3531,13 +3533,22 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.Window.WindowFrame.FrameBoundary{boundary: {:unbounded, true}}
   end
 
-  # ROW frames use 32-bit integer, RANGE frames use 64-bit long
-  defp encode_frame_boundary(n, :rows) when is_integer(n) do
+  # ROW frames use a 32-bit integer literal. PySpark raises if the offset
+  # falls outside JVM_INT range; mirror that to fail fast instead of
+  # silently truncating on the wire.
+  defp encode_frame_boundary(n, :rows)
+       when is_integer(n) and n >= @jvm_int_min and n <= @jvm_int_max do
     %Expression.Window.WindowFrame.FrameBoundary{
       boundary:
         {:value,
          %Expression{expr_type: {:literal, %Expression.Literal{literal_type: {:integer, n}}}}}
     }
+  end
+
+  defp encode_frame_boundary(n, :rows) when is_integer(n) do
+    raise ArgumentError,
+          "row-frame offset #{n} is outside JVM int range " <>
+            "(#{@jvm_int_min}..#{@jvm_int_max}); use range_between/3 or :unbounded_preceding/:unbounded_following"
   end
 
   defp encode_frame_boundary(n, :range) when is_integer(n) do

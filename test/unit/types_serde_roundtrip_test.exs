@@ -31,8 +31,10 @@ defmodule SparkEx.TypesSerdeRoundtripTest do
     json = to_json(schema)
     decoded = Jason.decode!(json)
 
+    # PySpark's StringType.jsonValue is "string collate <name>" — a plain
+    # string, not a map. The default UTF8_BINARY collation collapses to
+    # just "string".
     field = hd(decoded["fields"])
-    assert field["type"]["type"] == "string"
-    assert field["type"]["collation"] == "UNICODE_CI"
+    assert field["type"] == "string collate UNICODE_CI"
   end
 end

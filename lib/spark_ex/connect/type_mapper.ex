@@ -155,6 +155,12 @@ defmodule SparkEx.Connect.TypeMapper do
   defp direct_ddl(:long, _), do: "BIGINT"
   defp direct_ddl(:float, _), do: "FLOAT"
   defp direct_ddl(:double, _), do: "DOUBLE"
+
+  defp direct_ddl(:string, %DataType.String{collation: c})
+       when is_binary(c) and c != "" and c != "UTF8_BINARY" do
+    "STRING COLLATE #{c}"
+  end
+
   defp direct_ddl(:string, _), do: "STRING"
 
   defp direct_ddl(:char, %DataType.Char{length: length}) when is_integer(length) and length > 0 do
@@ -178,7 +184,9 @@ defmodule SparkEx.Connect.TypeMapper do
     "TIME(#{precision})"
   end
 
-  defp direct_ddl(:time, _), do: "TIME"
+  # PySpark's TimeType default precision is 6; render that explicitly so DDL
+  # round-trips identically against PySpark's parser.
+  defp direct_ddl(:time, _), do: "TIME(6)"
 
   defp direct_ddl(:decimal, %DataType.Decimal{precision: p, scale: s})
        when not is_nil(p) and not is_nil(s) do
@@ -197,11 +205,27 @@ defmodule SparkEx.Connect.TypeMapper do
          start_field: sf,
          end_field: ef
        })
+       when is_integer(sf) and is_integer(ef) and sf == ef do
+    "INTERVAL #{year_month_interval_field(sf)}"
+  end
+
+  defp direct_ddl(:year_month_interval, %DataType.YearMonthInterval{
+         start_field: sf,
+         end_field: ef
+       })
        when is_integer(sf) and is_integer(ef) do
     "INTERVAL #{year_month_interval_field(sf)} TO #{year_month_interval_field(ef)}"
   end
 
   defp direct_ddl(:year_month_interval, _), do: "INTERVAL YEAR TO MONTH"
+
+  defp direct_ddl(:day_time_interval, %DataType.DayTimeInterval{
+         start_field: sf,
+         end_field: ef
+       })
+       when is_integer(sf) and is_integer(ef) and sf == ef do
+    "INTERVAL #{day_time_interval_field(sf)}"
+  end
 
   defp direct_ddl(:day_time_interval, %DataType.DayTimeInterval{
          start_field: sf,

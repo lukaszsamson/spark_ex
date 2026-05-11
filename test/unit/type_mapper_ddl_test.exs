@@ -67,4 +67,46 @@ defmodule SparkEx.Unit.TypeMapperDDLTest do
       assert ddl == "score DOUBLE, weight FLOAT"
     end
   end
+
+  # ── Stream F2 (BUGS_PLAN_5): direct_ddl parity from proto DataType ──
+
+  describe "data_type_to_ddl/1 (F2 parity)" do
+    alias Spark.Connect.DataType
+
+    test "preserves non-default collation on STRING decode" do
+      dt = %DataType{kind: {:string, %DataType.String{collation: "UNICODE"}}}
+      assert TypeMapper.data_type_to_ddl(dt) == "STRING COLLATE UNICODE"
+    end
+
+    test "UTF8_BINARY collation collapses to STRING" do
+      dt = %DataType{kind: {:string, %DataType.String{collation: "UTF8_BINARY"}}}
+      assert TypeMapper.data_type_to_ddl(dt) == "STRING"
+    end
+
+    test "TIME without precision defaults to TIME(6)" do
+      dt = %DataType{kind: {:time, %DataType.Time{}}}
+      assert TypeMapper.data_type_to_ddl(dt) == "TIME(6)"
+    end
+
+    test "TIME(0) is preserved as a distinct precision" do
+      dt = %DataType{kind: {:time, %DataType.Time{precision: 0}}}
+      assert TypeMapper.data_type_to_ddl(dt) == "TIME(0)"
+    end
+
+    test "single-field day-time interval omits 'TO'" do
+      dt = %DataType{
+        kind: {:day_time_interval, %DataType.DayTimeInterval{start_field: 1, end_field: 1}}
+      }
+
+      assert TypeMapper.data_type_to_ddl(dt) == "INTERVAL HOUR"
+    end
+
+    test "single-field year-month interval omits 'TO'" do
+      dt = %DataType{
+        kind: {:year_month_interval, %DataType.YearMonthInterval{start_field: 0, end_field: 0}}
+      }
+
+      assert TypeMapper.data_type_to_ddl(dt) == "INTERVAL YEAR"
+    end
+  end
 end

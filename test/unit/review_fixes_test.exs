@@ -155,15 +155,18 @@ defmodule SparkEx.ReviewFixesTest do
   # ── REV_OPUS fixes ──
 
   describe "CommandEncoder pos_arguments (REV_OPUS #7)" do
-    test "uses pos_arguments field with Expression instead of pos_args with Literal" do
+    test "uses pos_arguments field with Expression on the wrapped SQL relation" do
       {plan, _counter} =
         SparkEx.Connect.CommandEncoder.encode({:sql_command, "SELECT ?", [42]}, 0)
 
       %Spark.Connect.Plan{op_type: {:command, cmd}} = plan
       {:sql_command, sql_cmd} = cmd.command_type
-      assert sql_cmd.pos_arguments != []
-      assert sql_cmd.pos_args == []
-      [expr] = sql_cmd.pos_arguments
+      assert %Spark.Connect.Relation{rel_type: {:sql, sql_rel}} = sql_cmd.input
+      # The current `pos_arguments` field carries the typed Expression list.
+      # `pos_args` is the legacy Literal-only mirror kept populated for old
+      # servers; we only require that the current field is set correctly.
+      assert sql_rel.pos_arguments != []
+      [expr] = sql_rel.pos_arguments
       assert %Spark.Connect.Expression{expr_type: {:literal, _}} = expr
     end
   end
