@@ -275,38 +275,39 @@ defmodule SparkEx.Unit.CommandEncoderTest do
       assert write_v2.overwrite_condition != nil
     end
 
-    test "GPT-11: partitioned_by with bound column remaps plan_id to encoded input" do
-      child = {:sql, "SELECT 1 AS id, 2 AS date", nil}
+    test "bound-column partitioned_by / overwrite_condition resolve to the encoded input plan_id" do
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1 AS id, 2 AS date", nil})
+
+      # Composite overwrite_condition built via Column.eq exercises the
+      # recursive case: %Column{expr: {:fn, "==", [{:col, _, wrapper}, _], _}}.
+      composite_condition = SparkEx.Column.eq(SparkEx.DataFrame.col(df, "date"), 0)
 
       {%Plan{op_type: {:command, command}}, _} =
         CommandEncoder.encode(
-          {:write_operation_v2, child, "t",
-           [mode: :create, partitioned_by: [{:col, "date", 999}]]},
+          {:write_operation_v2, df.plan, "t",
+           [
+             mode: :overwrite,
+             partitioned_by: [SparkEx.DataFrame.col(df, "date")],
+             overwrite_condition: composite_condition
+           ]},
           0
         )
 
       assert %Command{command_type: {:write_operation_v2, write_v2}} = command
+      input_plan_id = write_v2.input.common.plan_id
+      assert is_integer(input_plan_id)
+
       [part_expr] = write_v2.partitioning_columns
-      assert %Expression{expr_type: {:unresolved_attribute, attr}} = part_expr
-      # plan_id must be the encoded input's plan_id, not the foreign 999
-      refute attr.plan_id == 999
-      assert is_integer(attr.plan_id)
-    end
+      assert %Expression{expr_type: {:unresolved_attribute, part_attr}} = part_expr
+      assert part_attr.plan_id == input_plan_id
 
-    test "GPT-11: overwrite_condition with bound column remaps plan_id to encoded input" do
-      child = {:sql, "SELECT 1 AS id, 2 AS date", nil}
+      assert %Expression{expr_type: {:unresolved_function, eq_fn}} =
+               write_v2.overwrite_condition
 
-      {%Plan{op_type: {:command, command}}, _} =
-        CommandEncoder.encode(
-          {:write_operation_v2, child, "t",
-           [mode: :overwrite, overwrite_condition: {:col, "date", 999}]},
-          0
-        )
-
-      assert %Command{command_type: {:write_operation_v2, write_v2}} = command
-      assert %Expression{expr_type: {:unresolved_attribute, attr}} = write_v2.overwrite_condition
-      refute attr.plan_id == 999
-      assert is_integer(attr.plan_id)
+      assert eq_fn.function_name == "=="
+      [col_arg, _lit_arg] = eq_fn.arguments
+      assert %Expression{expr_type: {:unresolved_attribute, col_attr}} = col_arg
+      assert col_attr.plan_id == input_plan_id
     end
   end
 
