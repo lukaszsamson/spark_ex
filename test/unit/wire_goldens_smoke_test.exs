@@ -21,7 +21,7 @@ defmodule SparkEx.Test.WireGoldensSmokeTest do
     end
 
     test "canonicalizes lambda variable names so HOF plans are stable" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
 
       # Two independent builds use different `unique_integer` suffixes.
       build = fn ->

@@ -48,7 +48,7 @@ defmodule SparkEx.DataFrame.NA do
     end
 
     validate_fill_values!(values)
-    %DataFrame{df | plan: {:na_fill, df.plan, cols, values}}
+    DataFrame.update_plan(df, {:na_fill, df.plan, cols, values})
   end
 
   def fill(%DataFrame{} = df, value, opts)
@@ -76,7 +76,7 @@ defmodule SparkEx.DataFrame.NA do
       end
 
     # PySpark encodes a single literal value regardless of subset size
-    %DataFrame{df | plan: {:na_fill, df.plan, cols, [value]}}
+    DataFrame.update_plan(df, {:na_fill, df.plan, cols, [value]})
   end
 
   def fill(%DataFrame{}, value, _opts) do
@@ -145,7 +145,7 @@ defmodule SparkEx.DataFrame.NA do
           raise ArgumentError, "expected :how to be :any or :all, got: #{inspect(how)}"
       end
 
-    %DataFrame{df | plan: {:na_drop, df.plan, cols, min_non_nulls}}
+    DataFrame.update_plan(df, {:na_drop, df.plan, cols, min_non_nulls})
   end
 
   @doc """
@@ -225,7 +225,7 @@ defmodule SparkEx.DataFrame.NA do
   end
 
   defp build_replace_df(%DataFrame{} = df, cols, replacements) do
-    %DataFrame{df | plan: {:na_replace, df.plan, cols, replacements}}
+    DataFrame.update_plan(df, {:na_replace, df.plan, cols, replacements})
   end
 
   defp promote_numeric_replacements(replacements) do

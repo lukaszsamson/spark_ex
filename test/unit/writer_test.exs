@@ -24,7 +24,7 @@ defmodule SparkEx.Unit.WriterTest do
   end
 
   setup do
-    df = %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+    df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
     writer = %Writer{df: df}
     %{df: df, writer: writer}
   end
@@ -144,7 +144,7 @@ defmodule SparkEx.Unit.WriterTest do
   describe "convenience option handling" do
     test "parquet merges top-level and nested options into sink options" do
       {:ok, session} = FakeSession.start_link(parent: self())
-      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(session, {:sql, "SELECT 1", nil})
 
       assert :ok =
                Writer.parquet(df, "/tmp/out",
@@ -163,7 +163,7 @@ defmodule SparkEx.Unit.WriterTest do
 
     test "csv keeps csv-specific options and includes extra top-level options" do
       {:ok, session} = FakeSession.start_link(parent: self())
-      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(session, {:sql, "SELECT 1", nil})
 
       assert :ok =
                Writer.csv(df, "/tmp/out",
@@ -182,7 +182,7 @@ defmodule SparkEx.Unit.WriterTest do
 
     test "csv accepts :sep alone" do
       {:ok, session} = FakeSession.start_link(parent: self())
-      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(session, {:sql, "SELECT 1", nil})
 
       assert :ok = Writer.csv(df, "/tmp/out", sep: ";")
 
@@ -192,7 +192,7 @@ defmodule SparkEx.Unit.WriterTest do
 
     test "csv treats matching :sep and :separator as equivalent" do
       {:ok, session} = FakeSession.start_link(parent: self())
-      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(session, {:sql, "SELECT 1", nil})
 
       assert :ok = Writer.csv(df, "/tmp/out", sep: "|", separator: "|")
 
@@ -233,7 +233,7 @@ defmodule SparkEx.Unit.WriterTest do
 
     test "insert_into accepts allowed exec opts" do
       {:ok, session} = FakeSession.start_link(parent: self())
-      df = %DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+      df = DataFrame.new(session, {:sql, "SELECT 1", nil})
 
       assert :ok =
                df |> DataFrame.write() |> Writer.insert_into("t", overwrite: true, timeout: 100)

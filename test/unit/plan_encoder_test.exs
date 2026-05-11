@@ -3,6 +3,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
   alias SparkEx.Connect.PlanEncoder
   alias SparkEx.{DataFrame, Column}
+  alias SparkEx.Test.TestSession
   alias Spark.Connect.{Expression, Plan, Relation, RelationCommon, SQL, Range}
 
   describe "encode/2 with SQL" do
@@ -10,7 +11,8 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       {plan, counter} = PlanEncoder.encode({:sql, "SELECT 1", nil}, 0)
 
       assert %Plan{op_type: {:root, %Relation{} = rel}} = plan
-      assert %RelationCommon{plan_id: 0} = rel.common
+      assert %RelationCommon{plan_id: id} = rel.common
+      assert is_integer(id)
       assert {:sql, %SQL{query: "SELECT 1"}} = rel.rel_type
       assert counter == 1
     end
@@ -64,8 +66,8 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
   describe "join encoding with bound columns" do
     test "preserves expression join condition rather than rewriting to USING" do
-      left = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM emp", nil}}
-      right = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM dept", nil}}
+      left = DataFrame.new(self(), {:sql, "SELECT * FROM emp", nil})
+      right = DataFrame.new(self(), {:sql, "SELECT * FROM dept", nil})
 
       join_condition = Column.eq(DataFrame.col(left, "dept_id"), DataFrame.col(right, "dept_id"))
       joined = DataFrame.join(left, right, join_condition, :inner)
@@ -79,8 +81,8 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "maps multi-predicate join conditions to only left/right plan ids" do
-      left = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM emp", nil}}
-      right = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM dept", nil}}
+      left = DataFrame.new(self(), {:sql, "SELECT * FROM emp", nil})
+      right = DataFrame.new(self(), {:sql, "SELECT * FROM dept", nil})
 
       join_condition =
         Column.and_(
@@ -112,7 +114,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "maps bound self-join filter and projection to concrete join sides" do
-      base = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM emp", nil}}
+      base = DataFrame.new(self(), {:sql, "SELECT * FROM emp", nil})
       e1 = DataFrame.alias_(base, "e1")
       e2 = DataFrame.alias_(base, "e2")
 
@@ -146,7 +148,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "maps triple self-join filter and projection to all join inputs" do
-      base = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM nums", nil}}
+      base = DataFrame.new(self(), {:sql, "SELECT * FROM nums", nil})
       a = DataFrame.alias_(base, "a")
       b = DataFrame.alias_(base, "b")
       c = DataFrame.alias_(base, "c")
@@ -219,7 +221,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "maps bound expressions to child relation plan id" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1 AS id, 2 AS name_a", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1 AS id, 2 AS name_a", nil})
       selected = DataFrame.select(df, [DataFrame.col(df, "id"), DataFrame.col_regex(df, "^name")])
       {plan, _counter} = PlanEncoder.encode(selected.plan, 0)
       assert %Relation{rel_type: {:project, project}} = root_relation(plan)
@@ -877,7 +879,259 @@ defmodule SparkEx.Connect.PlanEncoderTest do
         PlanEncoder.encode_expression({:subquery, :in, 1, []})
       end
     end
+
+    test "same DataFrame as join child AND subquery reference resolves with one stable id" do
+      # Regression test for the BUGS_PLAN_5 Stream A "known limitation":
+      # the same DataFrame appears both as a join child (encoded inline)
+      # and as a scalar-subquery body (would otherwise become a
+      # with_relations.references entry). With stable plan_ids and the
+      # inline-binding registration in `rewrite_plan`, the encoder
+      # recognizes the subquery's referenced plan is already inline in
+      # the join tree and skips the duplicate references entry —
+      # producing one Spark Connect plan with no `with_relations`
+      # wrapper at all, where the subquery_expression's plan_id resolves
+      # directly to the join child's plan_id.
+      {:ok, session} = TestSession.start_link()
+      on_exit(fn -> if Process.alive?(session), do: TestSession.stop(session) end)
+
+      shared = SparkEx.DataFrame.new(session, {:sql, "SELECT id, val FROM t", nil})
+      other = SparkEx.DataFrame.new(session, {:sql, "SELECT id FROM other", nil})
+
+      shared_id = SparkEx.Internal.PlanIds.id_of(shared.plan)
+
+      join_plan = {:join, shared.plan, other.plan, nil, :inner, []}
+
+      project_plan =
+        {:project, join_plan,
+         [
+           {:subquery, :scalar, shared.plan, []},
+           {:col, "id", shared.plan}
+         ]}
+
+      encoded = TestSession.encode(session, project_plan)
+
+      # No `with_relations` wrapper — the subquery resolves through the
+      # inline join child, no duplicate reference needed.
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:project, project}}}} = encoded
+      assert %Relation{rel_type: {:join, join}} = project.input
+
+      # The join's left child encodes with the shared DF's stable id.
+      assert join.left.common.plan_id == shared_id
+
+      # Subquery_expression and column reference both resolve to the
+      # same stable id as the inline join child.
+      [subq_expr, col_expr] = project.expressions
+
+      assert %Expression{
+               expr_type:
+                 {:subquery_expression, %Spark.Connect.SubqueryExpression{plan_id: ^shared_id}}
+             } = subq_expr
+
+      assert %Expression{
+               expr_type:
+                 {:unresolved_attribute, %Expression.UnresolvedAttribute{plan_id: ^shared_id}}
+             } = col_expr
+    end
+
+    test "scalar subquery over a project body encodes without re-entrance crash" do
+      # Regression: when the subquery body is itself a project plan (i.e., not
+      # a leaf), encode_relation({:plan_id, _, _}) recursively calls
+      # attach_with_relations on the body. The second pass walks the
+      # already-rewritten outer subquery expression whose third element is
+      # now an integer plan_id; the rewrite must be idempotent.
+      subquery =
+        SparkEx.DataFrame.new(self(), {:range, 0, 1, 1, nil})
+        |> SparkEx.DataFrame.select([SparkEx.Functions.lit(1)])
+
+      df =
+        SparkEx.DataFrame.new(self(), {:range, 0, 1, 1, nil})
+        |> SparkEx.DataFrame.select([
+          SparkEx.Column.alias_(SparkEx.DataFrame.scalar(subquery), "b")
+        ])
+
+      {encoded, _} = PlanEncoder.encode(df.plan, 0)
+
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
+      assert length(wr.references) == 1
+    end
+
+    test ":sql leaf args carrying DataFrame-bound Columns resolve via stable id" do
+      # NOTE: PySpark wraps every sql arg through F.lit/1, so cross-DataFrame
+      # column refs in :sql args is a SparkEx-only shape. With stable plan_ids
+      # the column carries its source's id directly — no register-by-traversal-
+      # order is needed, and the encoder emits a with_relations reference for
+      # the source DataFrame.
+      source = SparkEx.DataFrame.new(self(), {:sql, "SELECT a FROM src", nil})
+      source_id = SparkEx.Internal.PlanIds.id_of(source.plan)
+
+      arg_col = SparkEx.DataFrame.col(source, "a")
+      sql_plan = {:sql, "SELECT ? AS x", [arg_col]}
+
+      {encoded, _} = PlanEncoder.encode(sql_plan, 0)
+
+      # Encoder wraps the plan in with_relations because the leaf :sql args
+      # reference a free plan_id (source's stable id, not bound to :sql itself).
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
+
+      assert Enum.any?(wr.references, fn %Relation{common: %{plan_id: id}} ->
+               id == source_id
+             end),
+             "expected source DataFrame to appear in with_relations.references"
+
+      assert %Relation{rel_type: {:sql, sql_rel}} = wr.root
+      [pos_arg] = sql_rel.pos_arguments
+
+      assert %Expression{
+               expr_type:
+                 {:unresolved_attribute, %Expression.UnresolvedAttribute{plan_id: ^source_id}}
+             } = pos_arg
+    end
+
+    test "cross-process plan_id allocation has no collisions" do
+      # Regression for the cross-process collision finding: DataFrames are
+      # built in a caller process and encoded in a Session GenServer
+      # process; both must draw from one plan_id namespace. The encoder
+      # uses `self()` to look up the session's atomic, so we encode
+      # *inside* a session-like GenServer to mirror production.
+      {:ok, session} = TestSession.start_link()
+      on_exit(fn -> if Process.alive?(session), do: TestSession.stop(session) end)
+
+      source = SparkEx.DataFrame.new(session, {:sql, "SELECT id FROM s", nil})
+      sub = SparkEx.DataFrame.scalar(source)
+
+      base = SparkEx.DataFrame.new(session, {:range, 0, 1, 1, nil})
+      df = SparkEx.DataFrame.select(base, [SparkEx.Column.alias_(sub, "v")])
+
+      encoded = TestSession.encode(session, df.plan)
+
+      ids = collect_relation_plan_ids(encoded)
+      assert ids == Enum.uniq(ids), "duplicate plan_ids in encoded plan: #{inspect(ids)}"
+    end
+
+    test "concurrent DataFrame allocation during encode never returns a duplicate id" do
+      # Regression for the "encoder can move shared counter backwards"
+      # finding: while one process is encoding, other processes can keep
+      # calling `DataFrame.new/2` and bump the session atomic. The encoder
+      # MUST reserve each synthetic id from that same atomic (not from a
+      # peek-then-set window) so under contention no id is ever issued
+      # twice across the lifetime of the session.
+      {:ok, session} = TestSession.start_link()
+      on_exit(fn -> if Process.alive?(session), do: TestSession.stop(session) end)
+
+      caller_count = 32
+      per_caller = 250
+      encoder_iterations = 200
+
+      caller_task =
+        Task.async_stream(
+          1..caller_count,
+          fn _i ->
+            for _ <- 1..per_caller, do: SparkEx.Internal.PlanIds.next(session)
+          end,
+          max_concurrency: caller_count,
+          ordered: false
+        )
+
+      encoder_task =
+        Task.async(fn ->
+          for _ <- 1..encoder_iterations do
+            base = SparkEx.DataFrame.new(session, {:sql, "SELECT 1", nil})
+            other = SparkEx.DataFrame.new(session, {:sql, "SELECT 2", nil})
+            sub = SparkEx.DataFrame.scalar(base)
+            plan = SparkEx.DataFrame.select(other, [SparkEx.Column.alias_(sub, "v")])
+            encoded = TestSession.encode(session, plan.plan)
+            collect_relation_plan_ids(encoded)
+          end
+        end)
+
+      caller_ids =
+        caller_task
+        |> Enum.to_list()
+        |> Enum.flat_map(fn {:ok, ids} -> ids end)
+
+      encoder_id_lists = Task.await(encoder_task, 30_000)
+      encoder_ids = Enum.flat_map(encoder_id_lists, & &1)
+
+      # Strong invariant: across the entire session lifetime, every id
+      # ever issued — by caller-side `PlanIds.next/1` allocations AND by
+      # encoder-emitted `RelationCommon.plan_id` values — must be
+      # pairwise unique. Anything weaker leaves room for caller and
+      # encoder to overlap on the same atomic.
+      caller_set = MapSet.new(caller_ids)
+      encoder_set = MapSet.new(encoder_ids)
+      overlap = MapSet.intersection(caller_set, encoder_set)
+
+      assert MapSet.size(overlap) == 0,
+             "caller-side allocations and encoder-emitted plan_ids overlap: " <>
+               inspect(MapSet.to_list(overlap) |> Enum.take(10))
+
+      # Caller ids are unique among themselves (no caller→caller race).
+      assert length(caller_ids) == MapSet.size(caller_set),
+             "duplicate ids across concurrent DataFrame.new callers"
+
+      # Each encoded plan tree has unique relation plan_ids (no
+      # encoder-side race within a single plan).
+      Enum.each(encoder_id_lists, fn ids ->
+        assert ids == Enum.uniq(ids),
+               "duplicate plan_ids inside a single encoded plan: #{inspect(ids)}"
+      end)
+
+      # Final atomic counter has advanced past every observed id.
+      final_counter = SparkEx.Internal.PlanIds.peek(session)
+      observed_max = Enum.max(caller_ids ++ encoder_ids)
+      assert final_counter > observed_max
+    end
+
+    test "session A's allocator survives session B termination" do
+      # Regression for the ETS ownership finding: previously the session
+      # that first called `PlanIds.register_session/1` also created the
+      # ETS table, so its exit tore the table down and orphaned every
+      # other session's allocator. The table is now owned by
+      # `SparkEx.EtsTableOwner`, so session B's exit must not affect
+      # session A's allocator.
+      {:ok, session_a} = TestSession.start_link()
+      {:ok, session_b} = TestSession.start_link()
+
+      id_a_before = SparkEx.Internal.PlanIds.next(session_a)
+      id_b = SparkEx.Internal.PlanIds.next(session_b)
+      assert is_integer(id_a_before) and is_integer(id_b)
+
+      ref = Process.monitor(session_b)
+      TestSession.stop(session_b)
+      assert_receive {:DOWN, ^ref, :process, ^session_b, _}, 1_000
+
+      # session_a's allocator must still work and continue monotonically.
+      id_a_after = SparkEx.Internal.PlanIds.next(session_a)
+      assert id_a_after > id_a_before
+
+      TestSession.stop(session_a)
+    end
   end
+
+  defp collect_relation_plan_ids(%Plan{op_type: {:root, relation}}),
+    do: collect_relation_plan_ids(relation, [])
+
+  defp collect_relation_plan_ids(_, acc \\ [])
+
+  defp collect_relation_plan_ids(%Relation{} = relation, acc) do
+    acc = if relation.common, do: [relation.common.plan_id | acc], else: acc
+    collect_relation_plan_ids(relation.rel_type, acc)
+  end
+
+  defp collect_relation_plan_ids(%_{} = struct, acc) do
+    struct |> Map.from_struct() |> Map.values() |> Enum.reduce(acc, &collect_relation_plan_ids/2)
+  end
+
+  defp collect_relation_plan_ids(list, acc) when is_list(list),
+    do: Enum.reduce(list, acc, &collect_relation_plan_ids/2)
+
+  defp collect_relation_plan_ids(tuple, acc) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.reduce(acc, &collect_relation_plan_ids/2)
+
+  defp collect_relation_plan_ids(map, acc) when is_map(map),
+    do: map |> Map.values() |> Enum.reduce(acc, &collect_relation_plan_ids/2)
+
+  defp collect_relation_plan_ids(_, acc), do: acc
 
   describe "collect_metrics encoding" do
     test "encodes collect_metrics plan" do
@@ -1271,7 +1525,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
     test "filter over nested join encodes without crashing and binds outer ref correctly" do
       # Nested join with referenced_plans at multiple levels — would crash
-      # before the {:plan_id, _, _} rewrite_plan clause was added (the inline
+      # before the _ rewrite_plan clause was added (the inline
       # wrapping introduced inner wrappers that re-entered rewrite_plan via
       # encode_relation({:plan_id, …}) → attach_with_relations).
       a = {:sql, "SELECT 1 AS x", nil}
@@ -1295,7 +1549,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
 
       # Inner condition was rewritten in the first pass and re-walked
       # idempotently via attach_with_relations inside encode_relation
-      # for the {:plan_id, _, _} wrapper. Verify A and B still bind to
+      # for the _ wrapper. Verify A and B still bind to
       # the inner join's left/right respectively.
       assert %Relation{rel_type: {:join, inner}} = outer.left
       a_plan_id = inner.left.common.plan_id
@@ -1450,7 +1704,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     # against the encoded left plan id.
 
     test "GPT-03: stat_sample_by col_expr with embedded plan resolves to encoded input" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT 1 AS dept", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT 1 AS dept", nil})
       bound_col = {:col, "dept", df.plan}
 
       {plan, _} =
@@ -1467,7 +1721,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "GPT-02: table_valued_function args with embedded plan get assigned plan_ids" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT array(1,2,3) AS arr", nil})
       bound_arg = {:col, "arr", df.plan}
       tvf = {:table_valued_function, "explode", [bound_arg]}
 
@@ -1486,7 +1740,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "GPT-24: lateral_join with TVF right side remaps args to encoded left plan_id (leaf left)" do
-      left_df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      left_df = DataFrame.new(self(), {:sql, "SELECT array(1,2,3) AS arr", nil})
       bound_arg = {:col, "arr", left_df.plan}
       tvf = {:table_valued_function, "explode", [bound_arg]}
 
@@ -1505,7 +1759,7 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     test "GPT-24: lateral_join remaps TVF args to non-leaf left plan_id (not its inputs)" do
       # left is a project (non-leaf) — args must point at the project's plan_id,
       # not the underlying SQL child's plan_id.
-      left_df = %DataFrame{session: self(), plan: {:sql, "SELECT array(1,2,3) AS arr", nil}}
+      left_df = DataFrame.new(self(), {:sql, "SELECT array(1,2,3) AS arr", nil})
       project_plan = {:project, left_df.plan, [{:col, "arr"}]}
       bound_arg = {:col, "arr", project_plan}
       tvf = {:table_valued_function, "explode", [bound_arg]}

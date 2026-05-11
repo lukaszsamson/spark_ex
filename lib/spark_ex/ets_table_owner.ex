@@ -9,7 +9,13 @@ defmodule SparkEx.EtsTableOwner do
     {:spark_ex_observations, :set},
     {:spark_ex_udt_deserializers, :set},
     {:spark_ex_progress_handlers, :bag},
-    {:spark_ex_streaming_listener_buses, :bag}
+    {:spark_ex_streaming_listener_buses, :bag},
+    # Session-pid -> :atomics ref for SparkEx.Internal.PlanIds. The owner
+    # process must create this so its lifetime spans every Session; if
+    # the first registering session were the creator, that session's
+    # exit would tear down the table and orphan other live sessions'
+    # allocator refs.
+    {:spark_ex_plan_id_counters, :set}
   ]
 
   @spec start_link(keyword()) :: GenServer.on_start()

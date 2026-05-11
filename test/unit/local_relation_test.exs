@@ -21,7 +21,7 @@ defmodule SparkEx.Unit.LocalRelationTest do
       assert counter == 1
       assert %Relation{rel_type: {:local_relation, local}} = relation
       assert %LocalRelation{data: ^data, schema: ^schema} = local
-      assert relation.common.plan_id == 0
+      assert is_integer(relation.common.plan_id)
     end
 
     test "encodes local_relation with nil schema" do
@@ -32,7 +32,7 @@ defmodule SparkEx.Unit.LocalRelationTest do
       assert %Relation{rel_type: {:local_relation, local}} = relation
       assert local.data == data
       assert local.schema == nil
-      assert relation.common.plan_id == 5
+      assert is_integer(relation.common.plan_id)
     end
 
     test "encodes cached_local_relation with hash" do

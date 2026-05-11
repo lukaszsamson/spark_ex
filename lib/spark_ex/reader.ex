@@ -164,10 +164,7 @@ defmodule SparkEx.Reader do
   """
   @spec table(t(), String.t()) :: DataFrame.t()
   def table(%__MODULE__{} = reader, table_name) when is_binary(table_name) do
-    %DataFrame{
-      session: reader.session,
-      plan: {:read_named_table, table_name, reader.options}
-    }
+    DataFrame.new(reader.session, {:read_named_table, table_name, reader.options})
   end
 
   @doc """
@@ -184,7 +181,7 @@ defmodule SparkEx.Reader do
   @spec table(GenServer.server(), String.t(), keyword()) :: DataFrame.t()
   def table(session, table_name, opts \\ []) when is_binary(table_name) do
     options = merge_source_options(opts, [])
-    %DataFrame{session: session, plan: {:read_named_table, table_name, options}}
+    DataFrame.new(session, {:read_named_table, table_name, options})
   end
 
   @doc """
@@ -428,10 +425,10 @@ defmodule SparkEx.Reader do
     call_time_options = merge_source_options(opts, [:format, :schema, :predicates])
     merged_options = Map.merge(reader.options, call_time_options)
 
-    %DataFrame{
-      session: reader.session,
-      plan: {:read_data_source, format, List.wrap(paths), schema, merged_options}
-    }
+    DataFrame.new(
+      reader.session,
+      {:read_data_source, format, List.wrap(paths), schema, merged_options}
+    )
   end
 
   defp data_source(session, format, paths, opts) do
@@ -446,7 +443,7 @@ defmodule SparkEx.Reader do
         _ -> {:read_data_source, format, paths, schema, options, predicates}
       end
 
-    %DataFrame{session: session, plan: plan}
+    DataFrame.new(session, plan)
   end
 
   defp merge_source_options(opts, reserved_keys) do

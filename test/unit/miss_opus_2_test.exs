@@ -382,9 +382,9 @@ defmodule SparkEx.MissOpus2Test do
 
   describe "14.16 broadcast function" do
     test "broadcast/1 applies broadcast hint" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
       result = Functions.broadcast(df)
-      assert %DataFrame{plan: {:hint, _, "broadcast", []}} = result
+      assert {:hint, _, "broadcast", []} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -456,9 +456,9 @@ defmodule SparkEx.MissOpus2Test do
 
   describe "13.9 melt alias" do
     test "melt/5 is an alias for unpivot/5" do
-      df = %DataFrame{session: self(), plan: {:sql, "SELECT * FROM t", nil}}
+      df = DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
       result = DataFrame.melt(df, ["id"], ["val1", "val2"], "variable", "value")
-      assert %DataFrame{plan: {:unpivot, _, _, _, _, _}} = result
+      assert {:unpivot, _, _, _, _, _} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -646,13 +646,13 @@ defmodule SparkEx.MissOpus2Test do
     test "fill with single string subset" do
       df = make_df()
       result = DataFrame.NA.fill(df, 0, subset: "age")
-      assert %DataFrame{plan: {:na_fill, _, ["age"], [0]}} = result
+      assert {:na_fill, _, ["age"], [0]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "drop with single string subset" do
       df = make_df()
       result = DataFrame.NA.drop(df, subset: "age")
-      assert %DataFrame{plan: {:na_drop, _, ["age"], _}} = result
+      assert {:na_drop, _, ["age"], _} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -800,14 +800,17 @@ defmodule SparkEx.MissOpus2Test do
     test "sample generates random seed when none given" do
       df = make_df()
       result = DataFrame.sample(df, 0.5)
-      assert %DataFrame{plan: {:sample, _, _, 0.5, false, seed, false}} = result
+
+      assert {:sample, _, _, 0.5, false, seed, false} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
+
       assert is_integer(seed)
     end
 
     test "sample respects explicit seed" do
       df = make_df()
       result = DataFrame.sample(df, 0.5, seed: 42)
-      assert %DataFrame{plan: {:sample, _, _, 0.5, false, 42, false}} = result
+      assert {:sample, _, _, 0.5, false, 42, false} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -988,14 +991,14 @@ defmodule SparkEx.MissOpus2Test do
     test "sample_by generates seed when none given" do
       df = make_df()
       result = DataFrame.Stat.sample_by(df, "label", %{0 => 0.1})
-      assert %DataFrame{plan: {:stat_sample_by, _, _, _, seed}} = result
+      assert {:stat_sample_by, _, _, _, seed} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
       assert is_integer(seed) and seed >= -0x8000000000000000 and seed <= 0x7FFFFFFFFFFFFFFF
     end
 
     test "sample_by uses provided seed" do
       df = make_df()
       result = DataFrame.Stat.sample_by(df, "label", %{0 => 0.1}, 42)
-      assert %DataFrame{plan: {:stat_sample_by, _, _, _, 42}} = result
+      assert {:stat_sample_by, _, _, _, 42} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -1294,7 +1297,9 @@ defmodule SparkEx.MissOpus2Test do
       }
 
       result = SparkEx.GroupedData.agg(gd, %{"age" => "max", "salary" => "avg"})
-      assert %DataFrame{plan: {:aggregate, _, :groupby, _, agg_exprs}} = result
+
+      assert {:aggregate, _, :groupby, _, agg_exprs} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
 
       aliases =
         Enum.map(agg_exprs, fn {:alias, {:fn, func, [{:col, col}], false}, _name} ->
@@ -1326,7 +1331,7 @@ defmodule SparkEx.MissOpus2Test do
     test "ascending: true sorts all columns ascending" do
       df = make_df()
       result = DataFrame.order_by(df, ["a", "b"], ascending: true)
-      assert %DataFrame{plan: {:sort, _, exprs}} = result
+      assert {:sort, _, exprs} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
 
       assert [
                {:sort_order, {:col, "a"}, :asc, :nulls_first},
@@ -1337,7 +1342,7 @@ defmodule SparkEx.MissOpus2Test do
     test "ascending: false sorts all columns descending" do
       df = make_df()
       result = DataFrame.order_by(df, ["a", "b"], ascending: false)
-      assert %DataFrame{plan: {:sort, _, exprs}} = result
+      assert {:sort, _, exprs} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
 
       assert [
                {:sort_order, {:col, "a"}, :desc, :nulls_last},
@@ -1348,7 +1353,7 @@ defmodule SparkEx.MissOpus2Test do
     test "ascending list applies per-column" do
       df = make_df()
       result = DataFrame.order_by(df, ["a", "b"], ascending: [true, false])
-      assert %DataFrame{plan: {:sort, _, exprs}} = result
+      assert {:sort, _, exprs} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
 
       assert [
                {:sort_order, {:col, "a"}, :asc, :nulls_first},
@@ -1437,13 +1442,13 @@ defmodule SparkEx.MissOpus2Test do
     test "allows same-type replacements" do
       df = make_df()
       result = DataFrame.NA.replace(df, %{1 => 2, 3 => 4})
-      assert %DataFrame{plan: {:na_replace, _, _, _}} = result
+      assert {:na_replace, _, _, _} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "allows nil as replacement value" do
       df = make_df()
       result = DataFrame.NA.replace(df, "N/A", nil)
-      assert %DataFrame{plan: {:na_replace, _, _, [{_, nil}]}} = result
+      assert {:na_replace, _, _, [{_, nil}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -1663,14 +1668,14 @@ defmodule SparkEx.MissOpus2Test do
       # A non-simple Column expression (not just {:col, name})
       complex_col = Column.plus(Functions.col("a"), Functions.col("b"))
       result = DataFrame.drop(df, [complex_col, "c"])
-      assert %DataFrame{plan: {:drop, _, ["c"], [expr]}} = result
+      assert {:drop, _, ["c"], [expr]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
       assert {:fn, "+", [{:col, "a"}, {:col, "b"}], false} = expr
     end
 
     test "simple col references stay as names" do
       df = make_df()
       result = DataFrame.drop(df, [Functions.col("x"), "y"])
-      assert %DataFrame{plan: {:drop, _, ["x", "y"], []}} = result
+      assert {:drop, _, ["x", "y"], []} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -1744,9 +1749,8 @@ defmodule SparkEx.MissOpus2Test do
       df = make_df()
       result = DataFrame.repartition_by_id(df, 10, "col1")
 
-      assert %DataFrame{
-               plan: {:repartition_by_expression, _, [{:direct_shuffle_partition_id, _}], 10}
-             } = result
+      assert {:repartition_by_expression, _, [{:direct_shuffle_partition_id, _}], 10} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "13.4 repartition_by_id rejects non-positive numPartitions" do
@@ -1877,6 +1881,6 @@ defmodule SparkEx.MissOpus2Test do
   # ── Helper ──
 
   defp make_df do
-    %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+    DataFrame.new(self(), {:sql, "SELECT 1", nil})
   end
 end

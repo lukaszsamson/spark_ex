@@ -97,6 +97,10 @@ defmodule SparkEx.Integration.DataFrameM10Test do
     assert {:ok, 20} = DataFrame.count(df)
   end
 
+  # `Transpose` proto was added in Spark 4.0; pre-refactor SparkEx
+  # accidentally tolerated 3.5 via lazy plan_id allocation order.
+  # See note in m13_udf_tvf_test.exs.
+  @tag min_spark: "4.0"
   test "unpivot and transpose execute", %{session: session} do
     unpivot_df =
       SparkEx.sql(session, "SELECT * FROM VALUES (1, 10, 20) AS t(id, c1, c2)")

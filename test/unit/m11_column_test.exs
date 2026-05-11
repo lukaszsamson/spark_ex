@@ -1,6 +1,8 @@
 defmodule SparkEx.M11.ColumnTest do
   use ExUnit.Case, async: true
 
+  import SparkEx.Test.PlanHelpers
+
   alias SparkEx.Column
   alias SparkEx.DataFrame
   alias SparkEx.Functions
@@ -181,24 +183,23 @@ defmodule SparkEx.M11.ColumnTest do
     end
 
     test "creates in subquery expression with DataFrame" do
-      subquery = %DataFrame{session: self(), plan: {:sql, "SELECT id FROM t", nil}}
+      subquery = DataFrame.new(self(), {:sql, "SELECT id FROM t", nil})
       result = Column.isin(Functions.col("id"), subquery)
 
-      assert %Column{
-               expr:
-                 {:subquery, :in, {:sql, "SELECT id FROM t", nil}, [in_values: [{:col, "id"}]]}
-             } = result
+      assert %Column{} = result
+
+      assert {:subquery, :in, {:plan_id, _, {:sql, "SELECT id FROM t", nil}},
+              [in_values: [{:col, "id"}]]} = result.expr
     end
 
     test "expands struct lhs into in_subquery_values" do
-      subquery = %DataFrame{session: self(), plan: {:sql, "SELECT a, b FROM t", nil}}
+      subquery = DataFrame.new(self(), {:sql, "SELECT a, b FROM t", nil})
       result = Column.isin(Functions.struct([Functions.col("a"), Functions.col("b")]), subquery)
 
-      assert %Column{
-               expr:
-                 {:subquery, :in, {:sql, "SELECT a, b FROM t", nil},
-                  [in_values: [{:col, "a"}, {:col, "b"}]]}
-             } = result
+      assert %Column{} = result
+
+      assert {:subquery, :in, {:plan_id, _, {:sql, "SELECT a, b FROM t", nil}},
+              [in_values: [{:col, "a"}, {:col, "b"}]]} = result.expr
     end
   end
 

@@ -1,6 +1,8 @@
 defmodule SparkEx.M14.StreamingTest do
   use ExUnit.Case, async: true
 
+  import SparkEx.Test.PlanHelpers
+
   alias SparkEx.Connect.CommandEncoder
   alias SparkEx.Connect.PlanEncoder
 
@@ -688,7 +690,7 @@ defmodule SparkEx.M14.StreamingTest do
         |> SparkEx.StreamReader.load()
 
       assert %SparkEx.DataFrame{} = df
-      assert {:read_data_source_streaming, "rate", [], nil, _opts} = df.plan
+      assert {:read_data_source_streaming, "rate", [], nil, _opts} = unwrap_plan(df)
     end
 
     test "load with path creates streaming DataFrame" do
@@ -697,17 +699,17 @@ defmodule SparkEx.M14.StreamingTest do
         |> SparkEx.StreamReader.format("json")
         |> SparkEx.StreamReader.load("/data/stream")
 
-      assert {:read_data_source_streaming, "json", ["/data/stream"], nil, _opts} = df.plan
+      assert {:read_data_source_streaming, "json", ["/data/stream"], nil, _opts} = unwrap_plan(df)
     end
 
     test "table creates streaming DataFrame" do
       df = SparkEx.StreamReader.new(:s) |> SparkEx.StreamReader.table("my_table")
-      assert {:read_named_table_streaming, "my_table", _opts} = df.plan
+      assert {:read_named_table_streaming, "my_table", _opts} = unwrap_plan(df)
     end
 
     test "rate convenience creates DataFrame" do
       df = SparkEx.StreamReader.rate(:s, rows_per_second: 10)
-      assert {:read_data_source_streaming, "rate", [], nil, opts} = df.plan
+      assert {:read_data_source_streaming, "rate", [], nil, opts} = unwrap_plan(df)
       assert opts["rowsPerSecond"] == "10"
     end
 
@@ -718,7 +720,7 @@ defmodule SparkEx.M14.StreamingTest do
           options: %{"mode" => "PERMISSIVE"}
         )
 
-      assert {:read_data_source_streaming, "json", ["/data/stream"], nil, opts} = df.plan
+      assert {:read_data_source_streaming, "json", ["/data/stream"], nil, opts} = unwrap_plan(df)
       assert opts["multi_line"] == "true"
       assert opts["mode"] == "PERMISSIVE"
     end
@@ -733,7 +735,9 @@ defmodule SparkEx.M14.StreamingTest do
         ])
 
       df = SparkEx.StreamReader.csv(:s, "/data/stream", schema: schema)
-      assert {:read_data_source_streaming, "csv", ["/data/stream"], encoded_schema, _} = df.plan
+
+      assert {:read_data_source_streaming, "csv", ["/data/stream"], encoded_schema, _} =
+               unwrap_plan(df)
 
       decoded = Jason.decode!(encoded_schema)
       assert decoded["type"] == "struct"
@@ -904,7 +908,7 @@ defmodule SparkEx.M14.StreamingTest do
     end
 
     test "xml sets format and path" do
-      df = %SparkEx.DataFrame{session: :s, plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(:s, {:sql, "SELECT 1", nil})
 
       writer =
         %SparkEx.StreamWriter{df: df}
@@ -917,7 +921,7 @@ defmodule SparkEx.M14.StreamingTest do
 
     test "start applies call-time writer kwargs and sink options" do
       {:ok, session} = FakeSession.start_link(parent: self())
-      df = %SparkEx.DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(session, {:sql, "SELECT 1", nil})
 
       writer =
         %SparkEx.StreamWriter{df: df}
@@ -949,7 +953,7 @@ defmodule SparkEx.M14.StreamingTest do
 
     test "to_table applies call-time sink options and preserves table destination" do
       {:ok, session} = FakeSession.start_link(parent: self())
-      df = %SparkEx.DataFrame{session: session, plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(session, {:sql, "SELECT 1", nil})
 
       writer = %SparkEx.StreamWriter{df: df, path: "/tmp/old_path"}
 
@@ -1021,7 +1025,7 @@ defmodule SparkEx.M14.StreamingTest do
 
   describe "DataFrame.write_stream/1" do
     test "returns a StreamWriter" do
-      df = %SparkEx.DataFrame{session: :s, plan: {:sql, "SELECT 1", nil}}
+      df = SparkEx.DataFrame.new(:s, {:sql, "SELECT 1", nil})
       writer = SparkEx.DataFrame.write_stream(df)
       assert %SparkEx.StreamWriter{} = writer
       assert writer.df == df

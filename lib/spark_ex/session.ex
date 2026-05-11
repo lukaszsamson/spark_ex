@@ -827,6 +827,12 @@ defmodule SparkEx.Session do
     with {:ok, connect_opts} <- resolve_connect_opts(url_opt, connect_opts_opt),
          {:ok, session_identity} <- resolve_session_identity(opts, connect_opts),
          {:ok, channel} <- Channel.connect(connect_opts, grpc_opts) do
+      # Register a session-scoped plan_id allocator in ETS so DataFrames
+      # constructed in caller processes draw plan_ids from the same
+      # namespace as encoder-allocated synthetic ids; prevents
+      # cross-process collisions (see SparkEx.Internal.PlanIds).
+      SparkEx.Internal.PlanIds.register_session(self())
+
       state = %__MODULE__{
         channel: channel,
         connect_opts: connect_opts,
@@ -926,7 +932,13 @@ defmodule SparkEx.Session do
   end
 
   def handle_call(:next_plan_id, _from, state) do
-    id = state.plan_id_counter
+    # The authoritative allocator is the session-scoped `:atomics` ref
+    # registered in `SparkEx.Internal.PlanIds`. `DataFrame.new/2` from
+    # caller processes and `PlanEncoder.next_id/1` in this process both
+    # draw from it, so `state.plan_id_counter` would lag and could
+    # return duplicate ids. Pull from the atomic instead and keep
+    # `state.plan_id_counter` in sync only for legacy reads.
+    id = SparkEx.Internal.PlanIds.next(self())
     {:reply, id, %{state | plan_id_counter: id + 1}}
   end
 
@@ -1479,7 +1491,7 @@ defmodule SparkEx.Session do
 
           byte_size(arrow_ipc) <= cache_threshold ->
             plan = {:local_relation, arrow_ipc, schema_ddl}
-            df = %SparkEx.DataFrame{session: self(), plan: plan}
+            df = SparkEx.DataFrame.new(self(), plan)
             {:reply, {:ok, df}, state}
 
           true ->
@@ -1501,7 +1513,7 @@ defmodule SparkEx.Session do
         end
 
       {:ok, {:sql_relation, query, args}} ->
-        df = %SparkEx.DataFrame{session: self(), plan: {:sql, query, args}}
+        df = SparkEx.DataFrame.new(self(), {:sql, query, args})
         {:reply, {:ok, df}, state}
 
       {:error, _} = error ->
@@ -1540,7 +1552,7 @@ defmodule SparkEx.Session do
         case upload_missing_cache_artifacts(state, artifacts) do
           {:ok, state} ->
             plan = {:chunked_cached_local_relation, data_hashes, schema_hash}
-            df = %SparkEx.DataFrame{session: self(), plan: plan}
+            df = SparkEx.DataFrame.new(self(), plan)
             {:reply, {:ok, df}, state}
 
           {:error, _reason} = error ->
@@ -1742,14 +1754,22 @@ defmodule SparkEx.Session do
   end
 
   @impl true
-  def terminate(_reason, %{released: true}), do: :ok
-  def terminate(_reason, %{channel: nil}), do: :ok
+  def terminate(_reason, %{released: true}) do
+    SparkEx.Internal.PlanIds.unregister_session(self())
+    :ok
+  end
+
+  def terminate(_reason, %{channel: nil}) do
+    SparkEx.Internal.PlanIds.unregister_session(self())
+    :ok
+  end
 
   def terminate(_reason, %{channel: channel} = state) do
     # Best-effort release before disconnect with timeout to prevent blocking
     task = Task.async(fn -> Client.release_session(state) end)
     Task.yield(task, 5_000) || Task.shutdown(task)
     safe_disconnect(channel)
+    SparkEx.Internal.PlanIds.unregister_session(self())
     :ok
   end
 
@@ -3091,6 +3111,13 @@ defmodule SparkEx.Session do
   end
 
   defp safe_encode_with(encode_fn, plan, counter) do
+    # Synthetic ids are reserved from the shared session-scoped atomic
+    # inside the encoder (`PlanEncoder.next_id/1` calls
+    # `SparkEx.Internal.PlanIds.next(self())`), so caller-side
+    # `DataFrame.new/2` calls and encoder allocations race-safely on
+    # the same counter. The threaded `counter` is vestigial as far as
+    # uniqueness is concerned; pass it through for backward
+    # compatibility.
     {encode_fn.(plan, counter), nil}
   rescue
     e ->

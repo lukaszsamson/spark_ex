@@ -74,7 +74,7 @@ defmodule SparkEx do
   def sql(session, query, opts) when is_binary(query) do
     args = Keyword.get(opts, :args, nil)
     validate_sql_args!(args)
-    %SparkEx.DataFrame{session: session, plan: {:sql, query, args}}
+    SparkEx.DataFrame.new(session, {:sql, query, args})
   end
 
   def sql(_session, query, _opts) do
@@ -551,7 +551,7 @@ defmodule SparkEx do
 
   defp build_range_df(session, start, stop, step, opts) do
     num_partitions = Keyword.get(opts, :num_partitions, nil)
-    %SparkEx.DataFrame{session: session, plan: {:range, start, stop, step, num_partitions}}
+    SparkEx.DataFrame.new(session, {:range, start, stop, step, num_partitions})
   end
 
   defp validate_sql_args!(nil), do: :ok

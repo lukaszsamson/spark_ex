@@ -32,7 +32,7 @@ defmodule SparkEx.Test.ParitySmokeTest do
   end
 
   defp build_chain("select_filter") do
-    df = %DataFrame{session: self(), plan: {:sql, "SELECT id, name FROM tbl", nil}}
+    df = DataFrame.new(self(), {:sql, "SELECT id, name FROM tbl", nil})
 
     df
     |> DataFrame.filter(Column.gt(Functions.col("id"), Functions.lit(10)))
@@ -44,8 +44,8 @@ defmodule SparkEx.Test.ParitySmokeTest do
   end
 
   defp build_chain("join_on_columns") do
-    left = %DataFrame{session: self(), plan: {:sql, "SELECT id, dept_id FROM emp", nil}}
-    right = %DataFrame{session: self(), plan: {:sql, "SELECT dept_id, name FROM dept", nil}}
+    left = DataFrame.new(self(), {:sql, "SELECT id, dept_id FROM emp", nil})
+    right = DataFrame.new(self(), {:sql, "SELECT dept_id, name FROM dept", nil})
 
     join_cond = Column.eq(DataFrame.col(left, "dept_id"), DataFrame.col(right, "dept_id"))
 

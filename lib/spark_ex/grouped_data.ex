@@ -99,15 +99,13 @@ defmodule SparkEx.GroupedData do
               {:aggregate, gd.plan, group_type, gd.grouping_exprs, agg_exprs}
           end
 
-        %DataFrame{session: gd.session, plan: plan}
+        DataFrame.new(gd.session, plan)
 
       pivot_col ->
-        %DataFrame{
-          session: gd.session,
-          plan:
-            {:aggregate, gd.plan, :pivot, gd.grouping_exprs, agg_exprs, pivot_col,
-             gd.pivot_values}
-        }
+        DataFrame.new(
+          gd.session,
+          {:aggregate, gd.plan, :pivot, gd.grouping_exprs, agg_exprs, pivot_col, gd.pivot_values}
+        )
     end
   end
 

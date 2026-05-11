@@ -4,6 +4,8 @@ defmodule SparkEx.MissCodex2Test do
   """
   use ExUnit.Case, async: true
 
+  import SparkEx.Test.PlanHelpers, only: [unwrap: 1, unwrap_plan: 1]
+
   alias SparkEx.DataFrame
   alias SparkEx.Column
   alias SparkEx.Functions
@@ -36,7 +38,9 @@ defmodule SparkEx.MissCodex2Test do
 
     test "accepts non-empty columns" do
       result = DataFrame.repartition_by_range(make_df(), ["col1"])
-      assert %DataFrame{plan: {:repartition_by_expression, _, _, nil}} = result
+
+      assert {:repartition_by_expression, _, _, nil} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -113,12 +117,12 @@ defmodule SparkEx.MissCodex2Test do
   describe "#12 NA.fill/drop single string subset" do
     test "fill accepts single string subset" do
       result = DataFrame.NA.fill(make_df(), 0, subset: "age")
-      assert %DataFrame{plan: {:na_fill, _, ["age"], [0]}} = result
+      assert {:na_fill, _, ["age"], [0]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "drop accepts single string subset" do
       result = DataFrame.NA.drop(make_df(), subset: "age")
-      assert %DataFrame{plan: {:na_drop, _, ["age"], _}} = result
+      assert {:na_drop, _, ["age"], _} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -127,18 +131,19 @@ defmodule SparkEx.MissCodex2Test do
   describe "#13 NA.replace string subset normalization" do
     test "replace normalizes string subset to list" do
       result = DataFrame.NA.replace(make_df(), %{0 => 1}, nil, subset: "col1")
-      assert %DataFrame{plan: {:na_replace, _, ["col1"], [{0, 1}]}} = result
+      assert {:na_replace, _, ["col1"], [{0, 1}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "replace with list subset still works" do
       result = DataFrame.NA.replace(make_df(), %{0 => 1}, nil, subset: ["col1", "col2"])
 
-      assert %DataFrame{plan: {:na_replace, _, ["col1", "col2"], [{0, 1}]}} = result
+      assert {:na_replace, _, ["col1", "col2"], [{0, 1}]} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "replace with nil subset uses empty list" do
       result = DataFrame.NA.replace(make_df(), %{0 => 1})
-      assert %DataFrame{plan: {:na_replace, _, [], _}} = result
+      assert {:na_replace, _, [], _} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -153,7 +158,7 @@ defmodule SparkEx.MissCodex2Test do
 
     test "accepts non-empty columns" do
       result = DataFrame.order_by(make_df(), ["name"])
-      assert %DataFrame{plan: {:sort, _, _}} = result
+      assert {:sort, _, _} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -168,7 +173,7 @@ defmodule SparkEx.MissCodex2Test do
 
     test "accepts all string column names" do
       result = DataFrame.to_df(make_df(), ["a", "b"])
-      assert %DataFrame{plan: {:to_df, _, ["a", "b"]}} = result
+      assert {:to_df, _, ["a", "b"]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -205,7 +210,9 @@ defmodule SparkEx.MissCodex2Test do
 
     test "accepts valid parameters" do
       result = DataFrame.with_watermark(make_df(), "event_time", "10 minutes")
-      assert %DataFrame{plan: {:with_watermark, _, "event_time", "10 minutes"}} = result
+
+      assert {:with_watermark, _, "event_time", "10 minutes"} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -214,19 +221,23 @@ defmodule SparkEx.MissCodex2Test do
   describe "#34 unpivot scalar ids/values" do
     test "accepts scalar string id" do
       result = DataFrame.unpivot(make_df(), "id", ["v1", "v2"], "key", "value")
-      assert %DataFrame{plan: {:unpivot, _, [{:col, "id"}], _, "key", "value"}} = result
+
+      assert {:unpivot, _, [{:col, "id"}], _, "key", "value"} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "accepts scalar Column id" do
       result = DataFrame.unpivot(make_df(), Functions.col("id"), ["v1"], "key", "value")
-      assert %DataFrame{plan: {:unpivot, _, [{:col, "id"}], _, "key", "value"}} = result
+
+      assert {:unpivot, _, [{:col, "id"}], _, "key", "value"} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "still accepts list ids" do
       result = DataFrame.unpivot(make_df(), ["id1", "id2"], ["v1"], "key", "value")
 
-      assert %DataFrame{plan: {:unpivot, _, [{:col, "id1"}, {:col, "id2"}], _, "key", "value"}} =
-               result
+      assert {:unpivot, _, [{:col, "id1"}, {:col, "id2"}], _, "key", "value"} =
+               unwrap_plan(result)
     end
   end
 
@@ -267,7 +278,7 @@ defmodule SparkEx.MissCodex2Test do
   describe "#62 melt alias" do
     test "melt delegates to unpivot" do
       result = DataFrame.melt(make_df(), ["id"], ["v1"], "key", "value")
-      assert %DataFrame{plan: {:unpivot, _, _, _, "key", "value"}} = result
+      assert {:unpivot, _, _, _, "key", "value"} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -282,7 +293,7 @@ defmodule SparkEx.MissCodex2Test do
 
     test "accepts string subset elements" do
       result = DataFrame.NA.drop(make_df(), subset: ["a", "b"])
-      assert %DataFrame{plan: {:na_drop, _, ["a", "b"], _}} = result
+      assert {:na_drop, _, ["a", "b"], _} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -294,11 +305,10 @@ defmodule SparkEx.MissCodex2Test do
       right = make_df()
       result = DataFrame.as_of_join(left, right, "t1", Functions.col("t2"))
 
-      left_plan = left.plan
+      left_plan = unwrap(left.plan)
 
-      assert %DataFrame{
-               plan: {:as_of_join, _, _, {:col, "t1", ^left_plan}, {:col, "t2"}, _, _, _, _, _, _}
-             } = result
+      assert {:as_of_join, _, _, {:col, "t1", ^left_plan}, {:col, "t2"}, _, _, _, _, _, _} =
+               unwrap_plan(result)
     end
 
     test "accepts string right_as_of (binds to right plan)" do
@@ -306,12 +316,10 @@ defmodule SparkEx.MissCodex2Test do
       right = make_df()
       result = DataFrame.as_of_join(left, right, Functions.col("t1"), "t2")
 
-      right_plan = right.plan
+      right_plan = unwrap(right.plan)
 
-      assert %DataFrame{
-               plan:
-                 {:as_of_join, _, _, {:col, "t1"}, {:col, "t2", ^right_plan}, _, _, _, _, _, _}
-             } = result
+      assert {:as_of_join, _, _, {:col, "t1"}, {:col, "t2", ^right_plan}, _, _, _, _, _, _} =
+               unwrap_plan(result)
     end
 
     test "accepts both strings (binds each to its own plan)" do
@@ -319,14 +327,11 @@ defmodule SparkEx.MissCodex2Test do
       right = make_df()
       result = DataFrame.as_of_join(left, right, "t1", "t2")
 
-      left_plan = left.plan
-      right_plan = right.plan
+      left_plan = unwrap(left.plan)
+      right_plan = unwrap(right.plan)
 
-      assert %DataFrame{
-               plan:
-                 {:as_of_join, _, _, {:col, "t1", ^left_plan}, {:col, "t2", ^right_plan}, _, _, _,
-                  _, _, _}
-             } = result
+      assert {:as_of_join, _, _, {:col, "t1", ^left_plan}, {:col, "t2", ^right_plan}, _, _, _, _,
+              _, _} = unwrap_plan(result)
     end
   end
 
@@ -335,17 +340,17 @@ defmodule SparkEx.MissCodex2Test do
   describe "#17 drop Column support" do
     test "accepts Column in list" do
       result = DataFrame.drop(make_df(), [Functions.col("x")])
-      assert %DataFrame{plan: {:drop, _, ["x"], []}} = result
+      assert {:drop, _, ["x"], []} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "accepts scalar string" do
       result = DataFrame.drop(make_df(), "x")
-      assert %DataFrame{plan: {:drop, _, ["x"], []}} = result
+      assert {:drop, _, ["x"], []} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "accepts scalar Column" do
       result = DataFrame.drop(make_df(), Functions.col("x"))
-      assert %DataFrame{plan: {:drop, _, ["x"], []}} = result
+      assert {:drop, _, ["x"], []} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -397,7 +402,7 @@ defmodule SparkEx.MissCodex2Test do
 
     test "accepts non-empty columns" do
       result = DataFrame.sort_within_partitions(make_df(), ["x"])
-      assert %DataFrame{plan: {:sort, _, _, false}} = result
+      assert {:sort, _, _, false} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -406,17 +411,19 @@ defmodule SparkEx.MissCodex2Test do
   describe "#41 select scalar support" do
     test "accepts scalar string" do
       result = DataFrame.select(make_df(), "x")
-      assert %DataFrame{plan: {:project, _, [{:col, "x"}]}} = result
+      assert {:project, _, [{:col, "x"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "accepts scalar Column" do
       result = DataFrame.select(make_df(), Functions.col("x"))
-      assert %DataFrame{plan: {:project, _, [{:col, "x"}]}} = result
+      assert {:project, _, [{:col, "x"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "still accepts list" do
       result = DataFrame.select(make_df(), ["a", "b"])
-      assert %DataFrame{plan: {:project, _, [{:col, "a"}, {:col, "b"}]}} = result
+
+      assert {:project, _, [{:col, "a"}, {:col, "b"}]} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -425,12 +432,14 @@ defmodule SparkEx.MissCodex2Test do
   describe "#42 select_expr scalar support" do
     test "accepts scalar string" do
       result = DataFrame.select_expr(make_df(), "x + 1")
-      assert %DataFrame{plan: {:project, _, [{:expr, "x + 1"}]}} = result
+      assert {:project, _, [{:expr, "x + 1"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "still accepts list" do
       result = DataFrame.select_expr(make_df(), ["a", "b + 1"])
-      assert %DataFrame{plan: {:project, _, [{:expr, "a"}, {:expr, "b + 1"}]}} = result
+
+      assert {:project, _, [{:expr, "a"}, {:expr, "b + 1"}]} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -439,12 +448,12 @@ defmodule SparkEx.MissCodex2Test do
   describe "#50 describe/summary scalar support" do
     test "describe accepts scalar string" do
       result = DataFrame.describe(make_df(), "age")
-      assert %DataFrame{plan: {:stat_describe, _, ["age"]}} = result
+      assert {:stat_describe, _, ["age"]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "summary accepts scalar string" do
       result = DataFrame.summary(make_df(), "count")
-      assert %DataFrame{plan: {:stat_summary, _, ["count"]}} = result
+      assert {:stat_summary, _, ["count"]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -506,22 +515,22 @@ defmodule SparkEx.MissCodex2Test do
   describe "#60 transpose scalar index_column" do
     test "accepts scalar string" do
       result = DataFrame.transpose(make_df(), "id")
-      assert %DataFrame{plan: {:transpose, _, [{:col, "id"}]}} = result
+      assert {:transpose, _, [{:col, "id"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "accepts Column" do
       result = DataFrame.transpose(make_df(), Functions.col("id"))
-      assert %DataFrame{plan: {:transpose, _, [{:col, "id"}]}} = result
+      assert {:transpose, _, [{:col, "id"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "accepts Column via keyword" do
       result = DataFrame.transpose(make_df(), index_column: Functions.col("id"))
-      assert %DataFrame{plan: {:transpose, _, [{:col, "id"}]}} = result
+      assert {:transpose, _, [{:col, "id"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "still accepts keyword opts" do
       result = DataFrame.transpose(make_df(), index_column: "id")
-      assert %DataFrame{plan: {:transpose, _, [{:col, "id"}]}} = result
+      assert {:transpose, _, [{:col, "id"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -530,12 +539,14 @@ defmodule SparkEx.MissCodex2Test do
   describe "#11 join nil condition" do
     test "accepts nil on condition" do
       result = DataFrame.join(make_df(), make_df(), nil, :cross)
-      assert %DataFrame{plan: {:join, _, _, nil, :cross, []}} = result
+      assert {:join, _, _, nil, :cross, []} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "still accepts Column condition" do
       result = DataFrame.join(make_df(), make_df(), Functions.col("id"), :inner)
-      assert %DataFrame{plan: {:join, _, _, {:col, "id"}, :inner, []}} = result
+
+      assert {:join, _, _, {:col, "id"}, :inner, []} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -544,12 +555,12 @@ defmodule SparkEx.MissCodex2Test do
   describe "#16 lateral_join optional condition" do
     test "accepts nil condition" do
       result = DataFrame.lateral_join(make_df(), make_df(), nil, :inner)
-      assert %DataFrame{plan: {:lateral_join, _, _, nil, :inner}} = result
+      assert {:lateral_join, _, _, nil, :inner} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "accepts no condition (default nil)" do
       result = DataFrame.lateral_join(make_df(), make_df())
-      assert %DataFrame{plan: {:lateral_join, _, _, nil, :inner}} = result
+      assert {:lateral_join, _, _, nil, :inner} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -559,7 +570,7 @@ defmodule SparkEx.MissCodex2Test do
     test "reader csv builds with :sep option" do
       # Verify :sep option is passed through to the data source plan options
       df = SparkEx.Reader.csv(nil, "/tmp/test.csv", sep: "|")
-      {:read_data_source, "csv", ["/tmp/test.csv"], _schema, options} = df.plan
+      {:read_data_source, "csv", ["/tmp/test.csv"], _schema, options} = unwrap(df.plan)
       assert options["sep"] == "|"
     end
   end
@@ -579,12 +590,12 @@ defmodule SparkEx.MissCodex2Test do
   describe "#23 tail_df(0)" do
     test "builds lazy tail relation for 0" do
       result = DataFrame.tail_df(make_df(), 0)
-      assert %DataFrame{plan: {:tail, _, 0}} = result
+      assert {:tail, _, 0} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "still builds lazy relation for positive" do
       result = DataFrame.tail_df(make_df(), 5)
-      assert %DataFrame{plan: {:tail, _, 5}} = result
+      assert {:tail, _, 5} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -615,12 +626,16 @@ defmodule SparkEx.MissCodex2Test do
   describe "#31 sample overload" do
     test "accepts (with_replacement, fraction, seed) form" do
       result = DataFrame.sample(make_df(), true, 0.5, 42)
-      assert %DataFrame{plan: {:sample, _, +0.0, 0.5, true, 42, false}} = result
+
+      assert {:sample, _, +0.0, 0.5, true, 42, false} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "still accepts (fraction, opts) form" do
       result = DataFrame.sample(make_df(), 0.1, seed: 42)
-      assert %DataFrame{plan: {:sample, _, +0.0, 0.1, false, 42, false}} = result
+
+      assert {:sample, _, +0.0, 0.1, false, 42, false} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -649,12 +664,12 @@ defmodule SparkEx.MissCodex2Test do
   describe "#51/#52 col_regex and metadata_column return Column" do
     test "col_regex returns Column" do
       result = DataFrame.col_regex(make_df(), "^x.*")
-      assert %Column{expr: {:col_regex, "^x.*", {:sql, "SELECT 1", nil}}} = result
+      assert {:col_regex, "^x.*", {:sql, "SELECT 1", nil}} = unwrap(result.expr)
     end
 
     test "metadata_column returns Column" do
       result = DataFrame.metadata_column(make_df(), "_metadata")
-      assert %Column{expr: {:metadata_col, "_metadata", {:sql, "SELECT 1", nil}}} = result
+      assert {:metadata_col, "_metadata", {:sql, "SELECT 1", nil}} = unwrap(result.expr)
     end
   end
 
@@ -669,7 +684,9 @@ defmodule SparkEx.MissCodex2Test do
 
     test "accepts DDL string" do
       result = DataFrame.to(make_df(), "id LONG, name STRING")
-      assert %DataFrame{plan: {:to_schema, _, "id LONG, name STRING"}} = result
+
+      assert {:to_schema, _, "id LONG, name STRING"} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -678,13 +695,15 @@ defmodule SparkEx.MissCodex2Test do
   describe "#22 DataFrame.agg map shorthand" do
     test "accepts map of column => function" do
       result = DataFrame.agg(make_df(), %{"age" => "max"})
-      assert %DataFrame{plan: {:aggregate, _, :groupby, [], _}} = result
+      assert {:aggregate, _, :groupby, [], _} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "GroupedData.agg also accepts map" do
       gd = DataFrame.group_by(make_df(), ["dept"])
       result = SparkEx.GroupedData.agg(gd, %{"salary" => "sum"})
-      assert %DataFrame{plan: {:aggregate, _, :groupby, [{:col, "dept"}], _}} = result
+
+      assert {:aggregate, _, :groupby, [{:col, "dept"}], _} =
+               SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -693,22 +712,22 @@ defmodule SparkEx.MissCodex2Test do
   describe "#28 drop_duplicates nil vs empty list semantics" do
     test "nil subset sets all_columns_as_keys=true" do
       result = DataFrame.drop_duplicates(make_df(), nil)
-      assert %DataFrame{plan: {:deduplicate, _, [], true}} = result
+      assert {:deduplicate, _, [], true} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "default (no subset) sets all_columns_as_keys=true" do
       result = DataFrame.drop_duplicates(make_df())
-      assert %DataFrame{plan: {:deduplicate, _, [], true}} = result
+      assert {:deduplicate, _, [], true} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "explicit empty list sets all_columns_as_keys=false" do
       result = DataFrame.drop_duplicates(make_df(), [])
-      assert %DataFrame{plan: {:deduplicate, _, [], false}} = result
+      assert {:deduplicate, _, [], false} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "non-empty subset sets all_columns_as_keys=false" do
       result = DataFrame.drop_duplicates(make_df(), ["a", "b"])
-      assert %DataFrame{plan: {:deduplicate, _, ["a", "b"], false}} = result
+      assert {:deduplicate, _, ["a", "b"], false} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
@@ -729,7 +748,7 @@ defmodule SparkEx.MissCodex2Test do
 
     test "ascending: false reverses all columns" do
       result = DataFrame.sort_within_partitions(make_df(), ["a", "b"], ascending: false)
-      assert %DataFrame{plan: {:sort, _, sort_exprs, false}} = result
+      assert {:sort, _, sort_exprs, false} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
 
       Enum.each(sort_exprs, fn {:sort_order, _, dir, _} ->
         assert dir == :desc
@@ -740,7 +759,7 @@ defmodule SparkEx.MissCodex2Test do
       result =
         DataFrame.sort_within_partitions(make_df(), ["a", "b"], ascending: [true, false])
 
-      assert %DataFrame{plan: {:sort, _, [order_a, order_b], false}} = result
+      assert {:sort, _, [order_a, order_b], false} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
       assert {:sort_order, _, :asc, _} = order_a
       assert {:sort_order, _, :desc, _} = order_b
     end
@@ -792,23 +811,23 @@ defmodule SparkEx.MissCodex2Test do
   describe "#61 transpose single index column only" do
     test "accepts single index via keyword" do
       result = DataFrame.transpose(make_df(), index_column: "id")
-      assert %DataFrame{plan: {:transpose, _, [{:col, "id"}]}} = result
+      assert {:transpose, _, [{:col, "id"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "no index column produces empty list" do
       result = DataFrame.transpose(make_df())
-      assert %DataFrame{plan: {:transpose, _, []}} = result
+      assert {:transpose, _, []} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "accepts Column via keyword" do
       result = DataFrame.transpose(make_df(), index_column: Functions.col("id"))
-      assert %DataFrame{plan: {:transpose, _, [{:col, "id"}]}} = result
+      assert {:transpose, _, [{:col, "id"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 
   # ── Helper ──
 
   defp make_df do
-    %DataFrame{session: self(), plan: {:sql, "SELECT 1", nil}}
+    DataFrame.new(self(), {:sql, "SELECT 1", nil})
   end
 end

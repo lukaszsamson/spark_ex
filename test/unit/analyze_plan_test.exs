@@ -25,7 +25,7 @@ defmodule SparkEx.Unit.AnalyzePlanTest do
 
     test "TreeString request has plan and optional level" do
       msg = %AnalyzePlanRequest.TreeString{plan: %Plan{}, level: 3}
-      assert msg.plan == %Plan{}
+      assert SparkEx.Test.PlanHelpers.unwrap(msg.plan) == %Plan{}
       assert msg.level == 3
 
       msg_no_level = %AnalyzePlanRequest.TreeString{plan: %Plan{}}
@@ -53,7 +53,7 @@ defmodule SparkEx.Unit.AnalyzePlanTest do
 
     test "SemanticHash request has plan" do
       msg = %AnalyzePlanRequest.SemanticHash{plan: %Plan{}}
-      assert msg.plan == %Plan{}
+      assert SparkEx.Test.PlanHelpers.unwrap(msg.plan) == %Plan{}
     end
 
     test "Persist request has relation and optional storage_level" do
