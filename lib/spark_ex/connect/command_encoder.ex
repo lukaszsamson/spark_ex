@@ -537,7 +537,11 @@ defmodule SparkEx.Connect.CommandEncoder do
   end
 
   defp apply_trigger(proto, :available_now), do: %{proto | trigger: {:available_now, true}}
-  defp apply_trigger(proto, :once), do: %{proto | trigger: {:once, true}}
+
+  defp apply_trigger(_proto, :once) do
+    raise ArgumentError,
+          "Trigger.Once was removed in Spark 4. Use `:available_now` to drain all available data in a single batch."
+  end
 
   defp apply_trigger(proto, {:continuous, interval}) do
     validate_trigger_interval!(:continuous, interval)

@@ -210,7 +210,7 @@ defmodule SparkEx.M14.StreamingTest do
       assert proto.trigger == {:available_now, true}
     end
 
-    test "encodes with once trigger" do
+    test "rejects deprecated :once trigger (CLAUDE-40)" do
       df_plan = {:sql, "SELECT 1", nil}
 
       write_opts = [
@@ -225,11 +225,9 @@ defmodule SparkEx.M14.StreamingTest do
         cluster_by: []
       ]
 
-      {command, _counter} =
+      assert_raise ArgumentError, ~r/Trigger\.Once was removed/, fn ->
         CommandEncoder.encode_command({:write_stream_operation_start, df_plan, write_opts}, 0)
-
-      assert {:write_stream_operation_start, proto} = command.command_type
-      assert proto.trigger == {:once, true}
+      end
     end
 
     test "encodes with continuous trigger" do

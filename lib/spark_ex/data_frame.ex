@@ -2335,7 +2335,10 @@ defmodule SparkEx.DataFrame do
   end
 
   defp storage_level_active?(%Spark.Connect.StorageLevel{} = level) do
-    level.use_disk or level.use_memory or level.use_off_heap or level.replication > 0
+    # Matches PySpark's `is_cached == storageLevel != StorageLevel.NONE`.
+    # NONE has `replication = 1` by default, so replication alone never
+    # signals cached status — only the use_* flags do.
+    level.use_disk or level.use_memory or level.use_off_heap
   end
 
   # ── NA / Stat / Merge sub-APIs ──
