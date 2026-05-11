@@ -1798,22 +1798,36 @@ defmodule SparkEx.Connect.Client do
     else
       :counters.add(counter, 1, 1)
 
-      Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
-        task =
-          Task.async(fn ->
-            try do
-              release_execute_fun.(until_response_id: response_id)
-            catch
-              _, _ -> :ok
-            end
-          end)
+      case Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
+             task =
+               Task.async(fn ->
+                 try do
+                   release_execute_fun.(until_response_id: response_id)
+                 catch
+                   _, _ -> :ok
+                 end
+               end)
 
-        _ = Task.yield(task, timeout_ms) || Task.shutdown(task, @shutdown_grace_ms)
-        :counters.sub(counter, 1, 1)
-        :ok
-      end)
+             _ = Task.yield(task, timeout_ms) || Task.shutdown(task, @shutdown_grace_ms)
+             :counters.sub(counter, 1, 1)
+             :ok
+           end) do
+        {:ok, _} ->
+          :ok
 
-      :ok
+        {:error, reason} ->
+          # start_child failed — the task will never run so the counter
+          # must be decremented manually to avoid wedging future checkpoints.
+          :counters.sub(counter, 1, 1)
+
+          :telemetry.execute(
+            [:spark_ex, :release_execute, :checkpoint, :coalesced],
+            %{inflight: :counters.get(counter, 1)},
+            %{response_id: response_id, reason: {:start_child_failed, reason}}
+          )
+
+          :ok
+      end
     end
   end
 

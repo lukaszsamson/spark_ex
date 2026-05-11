@@ -307,9 +307,10 @@ defmodule SparkEx.Connect.Errors do
     }
 
     # Run on a supervised task so a slow/hanging server can't block the
-    # caller's GenServer handle_call beyond `timeout_ms`. On timeout the
-    # task is given a short graceful-shutdown grace period before being
-    # killed, then we fall back to the base error.
+    # caller's GenServer handle_call beyond `timeout_ms`. If the yield
+    # times out we fire-and-forget a graceful shutdown in a separate task
+    # (to avoid adding an extra 1 s to the caller's wall-clock wait) and
+    # fall back to the base error immediately.
     task =
       Task.Supervisor.async_nolink(SparkEx.TaskSupervisor, fn ->
         try do
@@ -323,21 +324,30 @@ defmodule SparkEx.Connect.Errors do
         end
       end)
 
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, 1_000) do
-      {:ok, {:ok, %FetchErrorDetailsResponse{} = resp}} ->
-        {:ok, resp}
-
-      {:ok, {:error, reason}} ->
-        {:error, reason}
-
-      {:ok, other} ->
-        {:error, {:unexpected_response, other}}
-
-      {:exit, reason} ->
-        {:error, {:task_exit, reason}}
-
+    case Task.yield(task, timeout_ms) do
       nil ->
+        # Yield timed out — shut the task down asynchronously so the
+        # caller is not blocked for an additional grace period.
+        Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
+          _ = Task.shutdown(task, 1_000)
+        end)
+
         {:error, :timeout}
+
+      result ->
+        case result do
+          {:ok, {:ok, %FetchErrorDetailsResponse{} = resp}} ->
+            {:ok, resp}
+
+          {:ok, {:error, reason}} ->
+            {:error, reason}
+
+          {:ok, other} ->
+            {:error, {:unexpected_response, other}}
+
+          {:exit, reason} ->
+            {:error, {:task_exit, reason}}
+        end
     end
   end
 
