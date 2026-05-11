@@ -15,18 +15,22 @@ defmodule SparkEx.Internal.PlanIds do
   #
   # Architecture:
   #
-  #   * Each `SparkEx.Session` GenServer creates an `:atomics` counter ref
-  #     in its `init/1` and registers `{pid, ref}` in the
-  #     `:spark_ex_plan_id_counters` ETS table.
+  #   * The `:spark_ex_plan_id_counters` ETS table is owned by
+  #     `SparkEx.EtsTableOwner` (declared statically in its `@tables`),
+  #     so the table lifetime spans every Session and outlives any
+  #     individual session's termination.
+  #   * Each `SparkEx.Session` GenServer creates an `:atomics` counter
+  #     ref in its `init/1` via `register_session/1` and inserts
+  #     `{pid, ref}` into the ETS table. `terminate/1` removes it.
   #   * `DataFrame.new(session, plan)` (running in the caller's process)
-  #     looks up the session's counter ref and increments it directly via
-  #     `:atomics.add_get/3` — one ETS read, no GenServer roundtrip.
+  #     looks up the session's counter ref and reserves the next id via
+  #     `:atomics.add_get/3` directly — one ETS read, no GenServer
+  #     round-trip.
   #   * `PlanEncoder.next_id/1` (running in the session's process during
-  #     encode) continues to use the threaded session-state counter
-  #     int. The session keeps `state.plan_id_counter` synced with the
-  #     atomic before each encode so the encoder draws from the same
-  #     namespace, and writes the encoder's returned counter back into
-  #     both the atomic and the state field afterwards.
+  #     encode) reserves each synthetic id from the *same* atomic via
+  #     `next(self())`. The threaded `counter` parameter is preserved
+  #     for API compatibility but no longer participates in uniqueness,
+  #     so encode-vs-caller races on the shared counter are atomic.
   #   * If `session` is not a registered SparkEx session (test fixtures
   #     using `self()`, plan_encoder_test plans built standalone), the
   #     allocator falls back to a per-process `:counters` ref stashed in

@@ -10,13 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Stable plan_ids assigned at DataFrame construction.** Every `SparkEx.DataFrame`
-  now allocates a stable `plan_id` (per-process `:counters` ref, 0-based,
-  matching PySpark's `_fresh_plan_id`) when the plan tuple is wrapped via
-  `SparkEx.Internal.PlanIds.wrap/1`. `DataFrame.col/2`, `col_regex/2`, and
-  `metadata_column/2` capture the wrapped plan so column references carry
-  their source DataFrame's id end-to-end. This resolves the BUGS_PLAN_5
-  Stream A "known limitation" (same DataFrame as join child + subquery
-  reference) — both sites resolve through the same id, no synthetic remap.
+  now allocates a stable `plan_id` (0-based, matching PySpark's
+  `_fresh_plan_id`) when the plan tuple is wrapped via
+  `SparkEx.Internal.PlanIds.wrap/2`. The allocator is session-scoped: each
+  `SparkEx.Session` registers an `:atomics` counter ref in the
+  `:spark_ex_plan_id_counters` ETS table (owned by `SparkEx.EtsTableOwner`),
+  and `DataFrame.new/2` + `PlanEncoder.next_id/1` both reserve ids from
+  that atomic, so caller-side construction and encoder-side allocation
+  share one namespace and cannot collide. Non-session pseudo-sessions
+  (test fixtures using `self()`) fall back to a per-process `:counters`
+  ref. `DataFrame.col/2`, `col_regex/2`, and `metadata_column/2` capture
+  the wrapped plan so column references carry their source DataFrame's id
+  end-to-end. This resolves the BUGS_PLAN_5 Stream A "known limitation"
+  (same DataFrame as join child + subquery reference) — both sites
+  resolve through the same id, no synthetic remap.
 - **Self-join wire format.** `df.join(df, …)` now produces
   `join.left.common.plan_id == join.right.common.plan_id` (matches PySpark's
   per-LogicalPlan-instance plan_id). Previously each side received a

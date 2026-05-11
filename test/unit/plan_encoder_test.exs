@@ -881,22 +881,26 @@ defmodule SparkEx.Connect.PlanEncoderTest do
     end
 
     test "same DataFrame as join child AND subquery reference resolves with one stable id" do
-      # Regression test for the BUGS_PLAN_5 Stream A "known limitation": when
-      # the same DataFrame appears both as a join child and as a true subquery
-      # reference elsewhere in the plan, the heuristic inline marker used to
-      # suppress the with_relations entry. With stable plan_ids assigned at
-      # DataFrame construction, the carrier id flows to both binding sites,
-      # so the column resolves against the join child AND the subquery
-      # references the same plan via with_relations.
-      shared = SparkEx.DataFrame.new(self(), {:sql, "SELECT id, val FROM t", nil})
-      other = SparkEx.DataFrame.new(self(), {:sql, "SELECT id FROM other", nil})
+      # Regression test for the BUGS_PLAN_5 Stream A "known limitation":
+      # the same DataFrame appears both as a join child (encoded inline)
+      # and as a scalar-subquery body (would otherwise become a
+      # with_relations.references entry). With stable plan_ids and the
+      # inline-binding registration in `rewrite_plan`, the encoder
+      # recognizes the subquery's referenced plan is already inline in
+      # the join tree and skips the duplicate references entry —
+      # producing one Spark Connect plan with no `with_relations`
+      # wrapper at all, where the subquery_expression's plan_id resolves
+      # directly to the join child's plan_id.
+      {:ok, session} = TestSession.start_link()
+      on_exit(fn -> if Process.alive?(session), do: TestSession.stop(session) end)
+
+      shared = SparkEx.DataFrame.new(session, {:sql, "SELECT id, val FROM t", nil})
+      other = SparkEx.DataFrame.new(session, {:sql, "SELECT id FROM other", nil})
 
       shared_id = SparkEx.Internal.PlanIds.id_of(shared.plan)
 
-      # The shared DF appears as a join child …
       join_plan = {:join, shared.plan, other.plan, nil, :inner, []}
 
-      # … and the same shared.plan is used as a scalar subquery body elsewhere.
       project_plan =
         {:project, join_plan,
          [
@@ -904,22 +908,24 @@ defmodule SparkEx.Connect.PlanEncoderTest do
            {:col, "id", shared.plan}
          ]}
 
-      {encoded, _} = PlanEncoder.encode(project_plan, 0)
+      encoded = TestSession.encode(session, project_plan)
 
-      assert %Plan{op_type: {:root, %Relation{rel_type: {:with_relations, wr}}}} = encoded
-
-      # The subquery references the shared DF — its plan_id matches the
-      # shared DF's stable id (no synthetic remap, no duplicate references).
-      assert [%Relation{common: %{plan_id: ref_id}}] = wr.references
-      assert ref_id == shared_id
-
-      # The join's left child also encodes with the same stable id.
-      assert %Relation{rel_type: {:project, project}} = wr.root
+      # No `with_relations` wrapper — the subquery resolves through the
+      # inline join child, no duplicate reference needed.
+      assert %Plan{op_type: {:root, %Relation{rel_type: {:project, project}}}} = encoded
       assert %Relation{rel_type: {:join, join}} = project.input
+
+      # The join's left child encodes with the shared DF's stable id.
       assert join.left.common.plan_id == shared_id
 
-      # Column reference inside the project resolves to the same id.
-      [_subq_expr, col_expr] = project.expressions
+      # Subquery_expression and column reference both resolve to the
+      # same stable id as the inline join child.
+      [subq_expr, col_expr] = project.expressions
+
+      assert %Expression{
+               expr_type:
+                 {:subquery_expression, %Spark.Connect.SubqueryExpression{plan_id: ^shared_id}}
+             } = subq_expr
 
       assert %Expression{
                expr_type:

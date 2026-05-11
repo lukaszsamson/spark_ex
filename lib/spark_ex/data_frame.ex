@@ -2524,6 +2524,10 @@ defmodule SparkEx.DataFrame do
     %Column{expr: {:col, name, plan}}
   end
 
+  defp normalize_as_of_column(name, %__MODULE__{plan: plan}) when is_binary(name) do
+    raise_unstamped_plan!(:as_of_join, plan)
+  end
+
   defp normalize_column_expr(%Column{} = col), do: col.expr
   defp normalize_column_expr(name) when is_binary(name), do: {:col, name}
   defp normalize_column_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}

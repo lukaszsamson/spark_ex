@@ -2060,6 +2060,15 @@ defmodule SparkEx.Connect.PlanEncoder do
   # because column expressions whose plan_ids are already integers are
   # left untouched by `rewrite_expr/4`.
   defp rewrite_plan({:plan_id, plan_id, inner}, plan_ids, refs, counter) do
+    # Record the stable id as an inline-bound plan so a subsequent
+    # `rewrite_expr/4` over a column referencing this same DataFrame
+    # short-circuits in `ensure_referenced_plan_id/5` instead of adding a
+    # duplicate `with_relations.references` entry. Without this, a plain
+    # `df |> DataFrame.select([DataFrame.col(df, "x")])` would encode the
+    # same plan twice — once as the project's inline input and once as a
+    # references entry — both with `common.plan_id == plan_id`, producing
+    # an ambiguous plan that Spark Connect 3.5+ rejects.
+    plan_ids = Map.put_new(plan_ids, plan_id, plan_id)
     {inner, plan_ids, refs, counter} = rewrite_plan(inner, plan_ids, refs, counter)
     {{:plan_id, plan_id, inner}, plan_ids, refs, counter}
   end
@@ -3050,8 +3059,18 @@ defmodule SparkEx.Connect.PlanEncoder do
       # already-resolved (matching the synthetic-id branch below) and does
       # not add the join child to `with_relations.references` as a free ref.
       {:ok, existing_id, _inner} ->
+        # Record BOTH the legacy `{:inline, normalized_plan}` cache key
+        # (so the heuristic branch below can find this binding) and the
+        # raw integer plan_id key (so `ensure_referenced_plan_id/5`
+        # recognizes a column reference against this child as inline-
+        # bound and skips the with_relations.references entry).
         normalized = normalize_referenced_plan(plan)
-        plan_ids = Map.put_new(plan_ids, {:inline, normalized}, existing_id)
+
+        plan_ids =
+          plan_ids
+          |> Map.put_new({:inline, normalized}, existing_id)
+          |> Map.put_new(existing_id, existing_id)
+
         {plan, plan_ids, refs, counter}
 
       :error ->
@@ -3093,10 +3112,11 @@ defmodule SparkEx.Connect.PlanEncoder do
     end
   end
 
-  # Only `{:plan_id, id, plan}` has a producer (`PlanIds.wrap/1` via every
-  # DataFrame) — the map and 2-tuple forms accepted earlier had no callers
-  # in lib/. Tightened to the 3-tuple shape in PR #40 review; if a future
-  # caller needs an alternate shape, normalize to this form first.
+  # Only `{:plan_id, id, plan}` has a producer (`PlanIds.wrap/2` via every
+  # DataFrame constructor) — the map and 2-tuple forms accepted earlier
+  # had no callers in lib/. Tightened to the 3-tuple shape in PR #40
+  # review; if a future caller needs an alternate shape, normalize to
+  # this form first.
   defp extract_explicit_referenced_plan_id({:plan_id, plan_id, plan}) when is_integer(plan_id),
     do: {:ok, plan_id, plan}
 
