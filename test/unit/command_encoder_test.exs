@@ -278,13 +278,17 @@ defmodule SparkEx.Unit.CommandEncoderTest do
     test "bound-column partitioned_by / overwrite_condition resolve to the encoded input plan_id" do
       df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1 AS id, 2 AS date", nil})
 
+      # Composite overwrite_condition built via Column.eq exercises the
+      # recursive case: %Column{expr: {:fn, "==", [{:col, _, wrapper}, _], _}}.
+      composite_condition = SparkEx.Column.eq(SparkEx.DataFrame.col(df, "date"), 0)
+
       {%Plan{op_type: {:command, command}}, _} =
         CommandEncoder.encode(
           {:write_operation_v2, df.plan, "t",
            [
              mode: :overwrite,
              partitioned_by: [SparkEx.DataFrame.col(df, "date")],
-             overwrite_condition: SparkEx.DataFrame.col(df, "date")
+             overwrite_condition: composite_condition
            ]},
           0
         )
@@ -297,10 +301,13 @@ defmodule SparkEx.Unit.CommandEncoderTest do
       assert %Expression{expr_type: {:unresolved_attribute, part_attr}} = part_expr
       assert part_attr.plan_id == input_plan_id
 
-      assert %Expression{expr_type: {:unresolved_attribute, ow_attr}} =
+      assert %Expression{expr_type: {:unresolved_function, eq_fn}} =
                write_v2.overwrite_condition
 
-      assert ow_attr.plan_id == input_plan_id
+      assert eq_fn.function_name == "=="
+      [col_arg, _lit_arg] = eq_fn.arguments
+      assert %Expression{expr_type: {:unresolved_attribute, col_attr}} = col_arg
+      assert col_attr.plan_id == input_plan_id
     end
   end
 

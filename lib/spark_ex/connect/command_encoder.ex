@@ -104,6 +104,15 @@ defmodule SparkEx.Connect.CommandEncoder do
     table_properties = v2_opts |> Keyword.get(:table_properties, %{}) |> stringify_options()
     clustering_columns = Keyword.get(v2_opts, :cluster_by, [])
 
+    # Command-level expressions are NOT routed through `rewrite_plan/4` —
+    # they don't belong to the plan tree. With stable plan_ids assigned at
+    # DataFrame construction, expressions captured via `DataFrame.col/2`
+    # carry `{:col, name, {:plan_id, id, _}}` (the same id the encoded input
+    # relation receives), and `encode_expression/1` handles those wrappers
+    # plus the integer / unbound / `%Column{}` forms directly. Raw integer
+    # plan_ids (e.g. `{:col, name, 999}`) are passed through verbatim — there
+    # is no remap pass here; if a caller constructs one manually it must
+    # already match the input's stable id.
     partitioning_columns =
       v2_opts
       |> Keyword.get(:partitioned_by, [])
