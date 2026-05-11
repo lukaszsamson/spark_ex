@@ -104,16 +104,10 @@ defmodule SparkEx.Connect.CommandEncoder do
     table_properties = v2_opts |> Keyword.get(:table_properties, %{}) |> stringify_options()
     clustering_columns = Keyword.get(v2_opts, :cluster_by, [])
 
-    # Remap DataFrame-bound plan_ids in partitioning_columns and
-    # overwrite_condition to the encoded input relation, mirroring the
-    # project/filter pattern. Otherwise Column-form partition exprs and
-    # overwrite predicates carry synthetic ids the server can't resolve.
-    partition_exprs =
+    partitioning_columns =
       v2_opts
       |> Keyword.get(:partitioned_by, [])
-      |> PlanEncoder.remap_expr_list_plan_ids_to_input(relation)
-
-    partitioning_columns = Enum.map(partition_exprs, &PlanEncoder.encode_expression/1)
+      |> Enum.map(&PlanEncoder.encode_expression/1)
 
     overwrite_condition =
       case {Keyword.get(v2_opts, :mode, :create), Keyword.get(v2_opts, :overwrite_condition, nil)} do
@@ -121,9 +115,7 @@ defmodule SparkEx.Connect.CommandEncoder do
           nil
 
         {:overwrite, expr} ->
-          expr
-          |> PlanEncoder.remap_expr_plan_ids_to_input(relation)
-          |> PlanEncoder.encode_expression()
+          PlanEncoder.encode_expression(expr)
 
         {_other_mode, _} ->
           nil
