@@ -2411,6 +2411,18 @@ defmodule SparkEx.Connect.Client do
         )
 
         reraise e, __STACKTRACE__
+    catch
+      kind, reason when kind in [:exit, :throw] ->
+        duration = System.monotonic_time() - start_time
+        stacktrace = __STACKTRACE__
+
+        :telemetry.execute(
+          [:spark_ex, :rpc, :exception],
+          %{duration: duration},
+          Map.merge(metadata, %{kind: kind, reason: reason, stacktrace: stacktrace})
+        )
+
+        :erlang.raise(kind, reason, stacktrace)
     end
   end
 

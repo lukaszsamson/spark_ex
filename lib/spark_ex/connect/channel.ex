@@ -16,10 +16,11 @@ defmodule SparkEx.Connect.Channel do
           auth_transport: :auto | :metadata,
           extra_params: %{String.t() => String.t()},
           max_message_size: pos_integer(),
-          keepalive: %{optional(atom()) => term()}
+          keepalive: %{optional(atom()) => term()},
+          tls: %{optional(atom()) => term()}
         }
 
-  @reserved_metadata_keys ~w(token use_ssl user_id user_agent session_id grpc_max_message_size grpc_keepalive_time_ms grpc_keepalive_timeout_ms grpc_keepalive_permit_without_calls)
+  @reserved_metadata_keys ~w(token use_ssl user_id user_agent session_id grpc_max_message_size grpc_keepalive_time_ms grpc_keepalive_timeout_ms grpc_keepalive_permit_without_calls ssl_cacert ssl_servername ssl_verify)
 
   @doc """
   Default max gRPC message size (bytes).
@@ -60,7 +61,8 @@ defmodule SparkEx.Connect.Channel do
          :ok <- validate_token(params),
          :ok <- validate_session_id(params),
          {:ok, max_message_size, params} <- pop_max_message_size(params),
-         {:ok, keepalive, params} <- pop_keepalive(params) do
+         {:ok, keepalive, params} <- pop_keepalive(params),
+         {:ok, tls, params} <- pop_tls(params) do
       {parsed_token, rest} = Map.pop(params, "token")
       {use_ssl_str, rest} = Map.pop(rest, "use_ssl", "false")
       {user_id, rest} = Map.pop(rest, "user_id")
@@ -80,7 +82,8 @@ defmodule SparkEx.Connect.Channel do
          auth_transport: auth_transport,
          extra_params: rest,
          max_message_size: max_message_size,
-         keepalive: keepalive
+         keepalive: keepalive,
+         tls: tls
        }}
     end
   end
@@ -107,7 +110,7 @@ defmodule SparkEx.Connect.Channel do
 
     cred =
       if secure? do
-        GRPC.Credential.new(ssl: [])
+        GRPC.Credential.new(ssl: build_ssl_opts(opts))
       end
 
     grpc_opts =
@@ -142,25 +145,64 @@ defmodule SparkEx.Connect.Channel do
         end
       end)
 
+    user_agent_md = user_agent_metadata(opts)
+
+    base_metadata =
+      case token do
+        nil -> %{}
+        resolved_token when is_binary(resolved_token) -> auth_metadata_fallback(opts, resolved_token)
+      end
+
+    merged_metadata =
+      extra_metadata
+      |> Map.merge(user_agent_md)
+      |> Map.merge(base_metadata)
+
     grpc_opts =
-      case {token, map_size(extra_metadata)} do
-        {nil, 0} ->
-          grpc_opts
-
-        {resolved_token, 0} when is_binary(resolved_token) ->
-          auth_metadata = auth_metadata_fallback(opts, resolved_token)
-          Keyword.put(grpc_opts, :metadata, auth_metadata)
-
-        {nil, _} ->
-          Keyword.put(grpc_opts, :metadata, extra_metadata)
-
-        {resolved_token, _} ->
-          md = Map.merge(extra_metadata, auth_metadata_fallback(opts, resolved_token))
-          Keyword.put(grpc_opts, :metadata, md)
+      if map_size(merged_metadata) == 0 do
+        grpc_opts
+      else
+        Keyword.put(grpc_opts, :metadata, merged_metadata)
       end
 
     grpc_opts
     |> Keyword.put(:adapter_opts, build_adapter_opts(opts))
+  end
+
+  defp user_agent_metadata(opts) do
+    case Map.get(opts, :user_agent) do
+      ua when is_binary(ua) and ua != "" -> %{"user-agent" => ua}
+      _ -> %{}
+    end
+  end
+
+  defp build_ssl_opts(opts) do
+    tls = Map.get(opts, :tls) || %{}
+
+    base = []
+
+    base =
+      case Map.get(tls, :cacertfile) do
+        path when is_binary(path) and path != "" ->
+          [{:cacertfile, String.to_charlist(path)}, {:verify, :verify_peer} | base]
+
+        _ ->
+          base
+      end
+
+    base =
+      case Map.get(tls, :verify) do
+        nil -> base
+        verify -> Keyword.put(base, :verify, verify)
+      end
+
+    case Map.get(tls, :servername) do
+      sni when is_binary(sni) and sni != "" ->
+        Keyword.put(base, :server_name_indication, String.to_charlist(sni))
+
+      _ ->
+        base
+    end
   end
 
   @doc """
@@ -195,14 +237,21 @@ defmodule SparkEx.Connect.Channel do
     # don't stall on default 64 KiB windows.
     window_size = max(max_size, 65_535)
 
-    http2_opts = %{
-      max_frame_size_received: frame_size,
-      initial_connection_window_size: window_size,
-      initial_stream_window_size: window_size
-    }
+    keepalive = Map.get(opts, :keepalive) || %{}
+
+    http2_opts =
+      %{
+        max_frame_size_received: frame_size,
+        initial_connection_window_size: window_size,
+        initial_stream_window_size: window_size
+      }
+      |> maybe_put_map(:keepalive, Map.get(keepalive, :time_ms))
 
     [http2_opts: http2_opts]
   end
+
+  defp maybe_put_map(map, _key, nil), do: map
+  defp maybe_put_map(map, key, value), do: Map.put(map, key, value)
 
   defp split_uri(uri_string) do
     authority =
@@ -321,6 +370,34 @@ defmodule SparkEx.Connect.Channel do
     end
   end
 
+  defp pop_tls(params) do
+    {cacert, params} = Map.pop(params, "ssl_cacert")
+    {servername, params} = Map.pop(params, "ssl_servername")
+    {verify_raw, params} = Map.pop(params, "ssl_verify")
+
+    with {:ok, verify} <- parse_ssl_verify(verify_raw) do
+      tls =
+        %{}
+        |> maybe_put(:cacertfile, cacert)
+        |> maybe_put(:servername, servername)
+        |> maybe_put(:verify, verify)
+
+      {:ok, tls, params}
+    end
+  end
+
+  defp parse_ssl_verify(nil), do: {:ok, nil}
+
+  defp parse_ssl_verify(value) when is_binary(value) do
+    case String.downcase(value) do
+      "peer" -> {:ok, :verify_peer}
+      "verify_peer" -> {:ok, :verify_peer}
+      "none" -> {:ok, :verify_none}
+      "verify_none" -> {:ok, :verify_none}
+      _ -> {:error, {:invalid_param, "ssl_verify=#{value}"}}
+    end
+  end
+
   defp pop_pos_int(params, key) do
     case Map.pop(params, key) do
       {nil, rest} ->
@@ -421,10 +498,14 @@ defmodule SparkEx.Connect.Channel do
   defp localhost?(host) when is_binary(host) do
     case :inet.parse_strict_address(String.to_charlist(host)) do
       {:ok, {127, _, _, _}} -> true
+      {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
+      {:ok, {0, 0, 0, 0, 0, 0xFFFF, ab, cd}} -> ip4_mapped_loopback?(ab, cd)
       {:ok, _addr} -> false
       {:error, _reason} -> false
     end
   end
+
+  defp ip4_mapped_loopback?(ab, _cd), do: Bitwise.bsr(ab, 8) == 127
 
   defp malformed_port?(authority, nil) do
     # For bracketed IPv6 hosts like [::1], strip the bracket prefix

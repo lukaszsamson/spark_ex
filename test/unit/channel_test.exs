@@ -165,6 +165,24 @@ defmodule SparkEx.Connect.ChannelTest do
       assert opts.host == "::1"
       assert opts.port == 15_002
     end
+
+    test "parses TLS params" do
+      assert {:ok, opts} =
+               Channel.parse_uri(
+                 "sc://host/;use_ssl=true;ssl_cacert=%2Fetc%2Fca.pem;ssl_servername=spark.example.com;ssl_verify=peer"
+               )
+
+      assert opts.tls == %{
+               cacertfile: "/etc/ca.pem",
+               servername: "spark.example.com",
+               verify: :verify_peer
+             }
+    end
+
+    test "rejects invalid ssl_verify" do
+      assert {:error, {:invalid_param, "ssl_verify=bogus"}} =
+               Channel.parse_uri("sc://host/;ssl_verify=bogus")
+    end
   end
 
   describe "build_grpc_opts/1" do
@@ -345,6 +363,57 @@ defmodule SparkEx.Connect.ChannelTest do
         end)
 
       assert log =~ "bad key!"
+    end
+
+    test "wires keepalive time_ms into http2_opts" do
+      opts = %{
+        host: "host",
+        port: 15_002,
+        use_ssl: false,
+        token: nil,
+        auth_transport: :auto,
+        extra_params: %{},
+        keepalive: %{time_ms: 30_000}
+      }
+
+      grpc_opts = Channel.build_grpc_opts(opts)
+      adapter_opts = Keyword.fetch!(grpc_opts, :adapter_opts)
+      http2_opts = Keyword.fetch!(adapter_opts, :http2_opts)
+      assert http2_opts.keepalive == 30_000
+    end
+
+    test "wires user_agent into HTTP/2 user-agent header" do
+      opts = %{
+        host: "host",
+        port: 15_002,
+        use_ssl: false,
+        token: nil,
+        auth_transport: :auto,
+        extra_params: %{},
+        user_agent: "MyApp spark/connect-1 os/linux"
+      }
+
+      grpc_opts = Channel.build_grpc_opts(opts)
+      assert %{metadata: md} = Enum.into(grpc_opts, %{})
+      assert md["user-agent"] == "MyApp spark/connect-1 os/linux"
+    end
+
+    test "wires TLS opts into credential ssl" do
+      opts = %{
+        host: "remote",
+        port: 15_002,
+        use_ssl: true,
+        token: nil,
+        auth_transport: :auto,
+        extra_params: %{},
+        tls: %{cacertfile: "/etc/ca.pem", servername: "spark.example.com", verify: :verify_peer}
+      }
+
+      grpc_opts = Channel.build_grpc_opts(opts)
+      %GRPC.Credential{ssl: ssl} = Keyword.fetch!(grpc_opts, :cred)
+      assert Keyword.fetch!(ssl, :cacertfile) == ~c"/etc/ca.pem"
+      assert Keyword.fetch!(ssl, :server_name_indication) == ~c"spark.example.com"
+      assert Keyword.fetch!(ssl, :verify) == :verify_peer
     end
 
     test "token authorization overrides custom authorization header" do
