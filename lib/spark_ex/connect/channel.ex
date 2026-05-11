@@ -149,8 +149,11 @@ defmodule SparkEx.Connect.Channel do
 
     base_metadata =
       case token do
-        nil -> %{}
-        resolved_token when is_binary(resolved_token) -> auth_metadata_fallback(opts, resolved_token)
+        nil ->
+          %{}
+
+        resolved_token when is_binary(resolved_token) ->
+          auth_metadata_fallback(opts, resolved_token)
       end
 
     merged_metadata =
@@ -162,7 +165,7 @@ defmodule SparkEx.Connect.Channel do
       if map_size(merged_metadata) == 0 do
         grpc_opts
       else
-        Keyword.put(grpc_opts, :metadata, merged_metadata)
+        Keyword.put(grpc_opts, :headers, merged_metadata)
       end
 
     grpc_opts

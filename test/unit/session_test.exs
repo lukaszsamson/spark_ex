@@ -71,7 +71,7 @@ defmodule SparkEx.SessionTest do
 
       state = SparkEx.Session.get_state(session)
       assert state.user_id == "uri-user"
-      assert state.client_type == "uri-agent"
+      assert state.client_type =~ ~r/^uri-agent spark\/connect-1 os\//
       assert state.session_id == session_id
 
       SparkEx.Session.stop(session)

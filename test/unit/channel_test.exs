@@ -197,7 +197,7 @@ defmodule SparkEx.Connect.ChannelTest do
       }
 
       grpc_opts = Channel.build_grpc_opts(opts)
-      assert %{metadata: md} = Enum.into(grpc_opts, %{})
+      assert %{headers: md} = Enum.into(grpc_opts, %{})
       assert md["authorization"] == "Bearer abc"
       assert md["x-my-header"] == "v1"
       assert md["custom"] == "v2"
@@ -221,7 +221,7 @@ defmodule SparkEx.Connect.ChannelTest do
       }
 
       grpc_opts = Channel.build_grpc_opts(opts)
-      assert %{metadata: md} = Enum.into(grpc_opts, %{})
+      assert %{headers: md} = Enum.into(grpc_opts, %{})
       assert md["x-keep"] == "ok"
       refute Map.has_key?(md, "session_id")
       refute Map.has_key?(md, "user_agent")
@@ -256,7 +256,7 @@ defmodule SparkEx.Connect.ChannelTest do
 
       grpc_opts = Channel.build_grpc_opts(opts)
       refute Keyword.has_key?(grpc_opts, :cred)
-      assert %{metadata: %{"authorization" => "Bearer abc"}} = Enum.into(grpc_opts, %{})
+      assert %{headers: %{"authorization" => "Bearer abc"}} = Enum.into(grpc_opts, %{})
     end
 
     test "env token is used for auth metadata and tls selection" do
@@ -285,13 +285,13 @@ defmodule SparkEx.Connect.ChannelTest do
       remote_grpc_opts = Channel.build_grpc_opts(remote_opts)
       assert %GRPC.Credential{} = Keyword.fetch!(remote_grpc_opts, :cred)
 
-      assert %{metadata: %{"authorization" => "Bearer env-token"}} =
+      assert %{headers: %{"authorization" => "Bearer env-token"}} =
                Enum.into(remote_grpc_opts, %{})
 
       local_grpc_opts = Channel.build_grpc_opts(local_opts)
       refute Keyword.has_key?(local_grpc_opts, :cred)
 
-      assert %{metadata: %{"authorization" => "Bearer env-token"}} =
+      assert %{headers: %{"authorization" => "Bearer env-token"}} =
                Enum.into(local_grpc_opts, %{})
     end
 
@@ -337,7 +337,7 @@ defmodule SparkEx.Connect.ChannelTest do
       }
 
       grpc_opts = Channel.build_grpc_opts(opts)
-      assert %{metadata: md} = Enum.into(grpc_opts, %{})
+      assert %{headers: md} = Enum.into(grpc_opts, %{})
       assert md["x-my-header"] == "v1"
       assert md["trace-id"] == "t1"
       refute Map.has_key?(md, "X-My-Header")
@@ -357,7 +357,7 @@ defmodule SparkEx.Connect.ChannelTest do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           grpc_opts = Channel.build_grpc_opts(opts)
-          assert %{metadata: md} = Enum.into(grpc_opts, %{})
+          assert %{headers: md} = Enum.into(grpc_opts, %{})
           assert md["x-good"] == "v2"
           refute Map.has_key?(md, "bad key!")
         end)
@@ -394,7 +394,7 @@ defmodule SparkEx.Connect.ChannelTest do
       }
 
       grpc_opts = Channel.build_grpc_opts(opts)
-      assert %{metadata: md} = Enum.into(grpc_opts, %{})
+      assert %{headers: md} = Enum.into(grpc_opts, %{})
       assert md["user-agent"] == "MyApp spark/connect-1 os/linux"
     end
 
@@ -427,7 +427,7 @@ defmodule SparkEx.Connect.ChannelTest do
       }
 
       grpc_opts = Channel.build_grpc_opts(opts)
-      assert %{metadata: md} = Enum.into(grpc_opts, %{})
+      assert %{headers: md} = Enum.into(grpc_opts, %{})
       assert md["authorization"] == "Bearer abc"
     end
   end
