@@ -190,8 +190,20 @@ defmodule SparkEx.Connect.CommandEncoder do
 
   def encode_command({:sql_command, query, args}, counter) do
     {relation, counter} = PlanEncoder.encode_relation({:sql, query, args}, counter)
+    {:sql, sql} = relation.rel_type
 
-    sql_cmd = %Spark.Connect.SqlCommand{input: relation}
+    # Populate both `input` (current) and the legacy flat fields so that
+    # Spark 3.5 servers, which do not yet understand field 6 (`input`),
+    # can still execute the command via the deprecated fields.
+    sql_cmd = %Spark.Connect.SqlCommand{
+      input: relation,
+      sql: sql.query,
+      args: sql.args,
+      pos_args: sql.pos_args,
+      named_arguments: sql.named_arguments,
+      pos_arguments: sql.pos_arguments
+    }
+
     command = %Command{command_type: {:sql_command, sql_cmd}}
     {command, counter}
   end

@@ -884,10 +884,11 @@ defmodule SparkEx.MissingFeaturesTest do
       {plan, _counter} = CommandEncoder.encode({:sql_command, "CREATE TABLE t (a INT)", nil}, 0)
       assert %Spark.Connect.Plan{op_type: {:command, command}} = plan
       assert %Spark.Connect.Command{command_type: {:sql_command, sql_cmd}} = command
-      # Deprecated flat fields stay empty; the SQL relation lives under :input.
-      assert sql_cmd.sql == ""
+      # `input` carries the SQL relation (current protocol).
       assert %Spark.Connect.Relation{rel_type: {:sql, sql_rel}} = sql_cmd.input
       assert sql_rel.query == "CREATE TABLE t (a INT)"
+      # Legacy `sql` field is also populated for Spark 3.5 compat.
+      assert sql_cmd.sql == "CREATE TABLE t (a INT)"
     end
   end
 

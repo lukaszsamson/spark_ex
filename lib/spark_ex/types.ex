@@ -412,6 +412,8 @@ defmodule SparkEx.Types do
   defp type_to_json(:day_time_interval), do: "interval day to second"
 
   defp type_to_json({:day_time_interval, start_field, end_field}) do
+    validate_day_time_interval_fields!(start_field, end_field)
+
     if start_field == end_field do
       "interval #{day_time_interval_json_field(start_field)}"
     else
@@ -422,6 +424,8 @@ defmodule SparkEx.Types do
   defp type_to_json(:year_month_interval), do: "interval year to month"
 
   defp type_to_json({:year_month_interval, start_field, end_field}) do
+    validate_year_month_interval_fields!(start_field, end_field)
+
     if start_field == end_field do
       "interval #{year_month_interval_json_field(start_field)}"
     else
@@ -552,14 +556,14 @@ defmodule SparkEx.Types do
          start_field: sf,
          end_field: ef
        })
-       when is_integer(sf) and is_integer(ef) and sf == ef,
+       when is_integer(sf) and sf in 0..3 and is_integer(ef) and ef in 0..3 and sf == ef,
        do: "interval #{day_time_interval_json_field(sf)}"
 
   defp day_time_interval_proto_to_json(%Spark.Connect.DataType.DayTimeInterval{
          start_field: sf,
          end_field: ef
        })
-       when is_integer(sf) and is_integer(ef),
+       when is_integer(sf) and sf in 0..3 and is_integer(ef) and ef in 0..3 and sf <= ef,
        do: "interval #{day_time_interval_json_field(sf)} to #{day_time_interval_json_field(ef)}"
 
   defp day_time_interval_proto_to_json(_), do: "interval day to second"
@@ -568,14 +572,14 @@ defmodule SparkEx.Types do
          start_field: sf,
          end_field: ef
        })
-       when is_integer(sf) and is_integer(ef) and sf == ef,
+       when is_integer(sf) and sf in 0..1 and is_integer(ef) and ef in 0..1 and sf == ef,
        do: "interval #{year_month_interval_json_field(sf)}"
 
   defp year_month_interval_proto_to_json(%Spark.Connect.DataType.YearMonthInterval{
          start_field: sf,
          end_field: ef
        })
-       when is_integer(sf) and is_integer(ef),
+       when is_integer(sf) and sf in 0..1 and is_integer(ef) and ef in 0..1 and sf <= ef,
        do:
          "interval #{year_month_interval_json_field(sf)} to #{year_month_interval_json_field(ef)}"
 
