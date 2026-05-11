@@ -215,6 +215,64 @@ defmodule SparkEx.TelemetryTest do
       assert %RuntimeError{} = metadata.reason
       assert is_list(metadata.stacktrace)
     end
+
+    test "emits rpc exception and rethrows for thrown values" do
+      ref = make_ref()
+      pid = self()
+      handler_id = "test-rpc-throw-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:spark_ex, :rpc, :exception],
+        fn event, measurements, metadata, _ ->
+          send(pid, {:telemetry, ref, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert catch_throw(
+               Client.rpc_telemetry_span(%{rpc: :execute_plan, session_id: "s-throw"}, fn ->
+                 throw(:boom_throw)
+               end)
+             ) == :boom_throw
+
+      assert_receive {:telemetry, ^ref, [:spark_ex, :rpc, :exception], measurements, metadata}
+      assert is_integer(measurements.duration)
+      assert metadata.kind == :throw
+      assert metadata.reason == :boom_throw
+      assert is_list(metadata.stacktrace)
+    end
+
+    test "emits rpc exception and re-exits for :exit values" do
+      ref = make_ref()
+      pid = self()
+      handler_id = "test-rpc-exit-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:spark_ex, :rpc, :exception],
+        fn event, measurements, metadata, _ ->
+          send(pid, {:telemetry, ref, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert catch_exit(
+               Client.rpc_telemetry_span(%{rpc: :execute_plan, session_id: "s-exit"}, fn ->
+                 exit(:boom_exit)
+               end)
+             ) == :boom_exit
+
+      assert_receive {:telemetry, ^ref, [:spark_ex, :rpc, :exception], measurements, metadata}
+      assert is_integer(measurements.duration)
+      assert metadata.kind == :exit
+      assert metadata.reason == :boom_exit
+      assert is_list(metadata.stacktrace)
+    end
   end
 
   describe "retry telemetry" do

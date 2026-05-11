@@ -259,6 +259,54 @@ defmodule SparkEx.Connect.ChannelTest do
       assert %{headers: %{"authorization" => "Bearer abc"}} = Enum.into(grpc_opts, %{})
     end
 
+    test "expanded IPv6 loopback hosts do not force tls when use_ssl is false" do
+      for host <- ["0:0:0:0:0:0:0:1", "::ffff:127.0.0.1", "::ffff:127.0.0.55"] do
+        opts = %{
+          host: host,
+          port: 15_002,
+          use_ssl: false,
+          token: "abc",
+          auth_transport: :auto,
+          extra_params: %{}
+        }
+
+        grpc_opts = Channel.build_grpc_opts(opts)
+        refute Keyword.has_key?(grpc_opts, :cred), "expected #{host} to be treated as loopback"
+        assert %{headers: %{"authorization" => "Bearer abc"}} = Enum.into(grpc_opts, %{})
+      end
+    end
+
+    test "non-loopback IPv4-mapped address forces tls for remote tokens" do
+      opts = %{
+        host: "::ffff:8.8.8.8",
+        port: 15_002,
+        use_ssl: false,
+        token: "abc",
+        auth_transport: :auto,
+        extra_params: %{}
+      }
+
+      grpc_opts = Channel.build_grpc_opts(opts)
+      assert %GRPC.Credential{} = Keyword.fetch!(grpc_opts, :cred)
+    end
+
+    test "ssl_cacert without explicit ssl_verify defaults to verify_peer" do
+      opts = %{
+        host: "remote",
+        port: 15_002,
+        use_ssl: true,
+        token: nil,
+        auth_transport: :auto,
+        extra_params: %{},
+        tls: %{cacertfile: "/etc/ca.pem"}
+      }
+
+      grpc_opts = Channel.build_grpc_opts(opts)
+      %GRPC.Credential{ssl: ssl} = Keyword.fetch!(grpc_opts, :cred)
+      assert Keyword.fetch!(ssl, :cacertfile) == ~c"/etc/ca.pem"
+      assert Keyword.fetch!(ssl, :verify) == :verify_peer
+    end
+
     test "env token is used for auth metadata and tls selection" do
       previous = System.get_env("SPARK_CONNECT_AUTHENTICATE_TOKEN")
       System.put_env("SPARK_CONNECT_AUTHENTICATE_TOKEN", "env-token")
