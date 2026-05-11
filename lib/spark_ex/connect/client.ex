@@ -44,6 +44,29 @@ defmodule SparkEx.Connect.Client do
   @artifact_chunk_size 32 * 1024
   @release_execute_timeout 5_000
 
+  # Grace period for fire-and-forget release tasks after the primary
+  # `release_execute_timeout` elapses. We previously used `:brutal_kill`,
+  # which can leave an in-flight gRPC call half-open. Switching to a short
+  # graceful shutdown gives the gRPC client a chance to cancel/unwind the
+  # call cleanly before the local task is killed.
+  @shutdown_grace_ms 1_000
+
+  # Max concurrent in-flight `release_until(response_id)` checkpoint tasks
+  # per reattachable stream. PySpark's reattach iterator fires one
+  # checkpoint per consumed response; under bursty consumption this can
+  # pile supervised tasks up faster than the server processes them. We cap
+  # the inflight count and coalesce intermediate ids — `until_response_id`
+  # is monotonic, so the newest checkpoint subsumes any older ones we
+  # dropped.
+  @max_inflight_release_checkpoints 1
+
+  # Retry budget for non-idempotent release RPCs (`ReleaseExecute`,
+  # `ReleaseSession`). The default unary policy (15 retries × 60s max
+  # backoff) can keep a release call alive for ~10 minutes; server-side
+  # state is GC'd eventually so we don't need to be that persistent — a
+  # handful of retries covers transient blips without masking outages.
+  @release_max_retries 3
+
   # --- AnalyzePlan RPCs ---
 
   @doc """
@@ -965,24 +988,59 @@ defmodule SparkEx.Connect.Client do
 
   @doc """
   Calls `ReleaseSession` to release the server-side session.
+
+  ## Options
+
+    * `:allow_reconnect` — when `true`, signals that the server should
+      keep the session reachable for a brief reconnect window after
+      release. Mirrors the `allow_reconnect` field on the proto request.
+      Defaults to `false`.
+
+  A successful release whose response was lost mid-flight, followed by a
+  retry, will hit `INVALID_HANDLE.SESSION_NOT_FOUND` on the second attempt
+  because the server already disposed of the session. We treat that
+  variant as a successful release (the desired terminal state is reached)
+  so callers don't surface a spurious error.
   """
-  @spec release_session(SparkEx.Session.t()) ::
+  @spec release_session(SparkEx.Session.t(), keyword()) ::
           {:ok, String.t() | nil} | {:error, term()}
-  def release_session(session) do
+  def release_session(session, opts \\ []) do
+    allow_reconnect = Keyword.get(opts, :allow_reconnect, false)
+
     request = %ReleaseSessionRequest{
       session_id: session.session_id,
       user_context: UserContextExtensions.build_user_context(session.user_id),
-      client_type: session.client_type
+      client_type: session.client_type,
+      allow_reconnect: allow_reconnect
     }
 
     case dispatch_unary_rpc(:release_session, session, request) do
       {:ok, %ReleaseSessionResponse{} = resp} ->
         {:ok, resp.server_side_session_id}
 
+      {:error, %SparkEx.Error.Remote{} = remote} = error ->
+        if benign_release_session_error?(remote) do
+          {:ok, session.server_side_session_id}
+        else
+          error
+        end
+
       {:error, _} = error ->
         error
     end
   end
+
+  defp benign_release_session_error?(%SparkEx.Error.Remote{error_class: error_class})
+       when error_class in [
+              "INVALID_HANDLE.SESSION_NOT_FOUND",
+              "INVALID_HANDLE.SESSION_CLOSED"
+            ],
+       do: true
+
+  defp benign_release_session_error?(%SparkEx.Error.Remote{grpc_status: @status_not_found}),
+    do: true
+
+  defp benign_release_session_error?(_), do: false
 
   # --- Interrupt RPC ---
 
@@ -1378,7 +1436,13 @@ defmodule SparkEx.Connect.Client do
           operation_id: operation_id,
           timeout: timeout,
           policy: policy,
-          release_execute_timeout: release_execute_timeout
+          release_execute_timeout: release_execute_timeout,
+          # Per-stream atomic counter that bounds the number of concurrent
+          # `release_until(...)` checkpoint tasks. Checkpoints are monotonic
+          # — dropping intermediate ids is safe because a later checkpoint
+          # subsumes earlier ones, and terminal release_all on completion
+          # covers anything missed.
+          release_checkpoint_counter: :counters.new(1, [:atomics])
         }
 
         response_stream = build_reattachable_response_stream(ctx, initial_stream)
@@ -1474,7 +1538,8 @@ defmodule SparkEx.Connect.Client do
             fire_release_checkpoint(
               new_state.ctx.release_execute_fun,
               new_id,
-              new_state.ctx.release_execute_timeout
+              new_state.ctx.release_execute_timeout,
+              new_state.ctx.release_checkpoint_counter
             )
 
             new_state
@@ -1543,7 +1608,7 @@ defmodule SparkEx.Connect.Client do
           end
         end)
 
-      _ = Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill)
+      _ = Task.yield(task, timeout_ms) || Task.shutdown(task, @shutdown_grace_ms)
       :ok
     end)
 
@@ -1711,24 +1776,45 @@ defmodule SparkEx.Connect.Client do
 
   defp pull_iter(_), do: :done
 
-  defp fire_release_checkpoint(_release_execute_fun, nil, _timeout_ms), do: :ok
+  defp fire_release_checkpoint(_release_execute_fun, nil, _timeout_ms, _counter), do: :ok
 
-  defp fire_release_checkpoint(release_execute_fun, response_id, timeout_ms) do
-    Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
-      task =
-        Task.async(fn ->
-          try do
-            release_execute_fun.(until_response_id: response_id)
-          catch
-            _, _ -> :ok
-          end
-        end)
+  defp fire_release_checkpoint(release_execute_fun, response_id, timeout_ms, counter) do
+    # Cap concurrent in-flight checkpoint tasks. `release_until(...)` is
+    # monotonic on the server side, so dropping an intermediate id is safe:
+    # the next response's checkpoint subsumes it, and terminal completion
+    # always fires `release_all` which subsumes everything. Without this
+    # cap, a fast producer can outpace the server and pile up supervised
+    # tasks (CLAUDE-29).
+    current = :counters.get(counter, 1)
 
-      _ = Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill)
+    if current >= @max_inflight_release_checkpoints do
+      :telemetry.execute(
+        [:spark_ex, :release_execute, :checkpoint, :coalesced],
+        %{inflight: current},
+        %{response_id: response_id, cap: @max_inflight_release_checkpoints}
+      )
+
       :ok
-    end)
+    else
+      :counters.add(counter, 1, 1)
 
-    :ok
+      Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
+        task =
+          Task.async(fn ->
+            try do
+              release_execute_fun.(until_response_id: response_id)
+            catch
+              _, _ -> :ok
+            end
+          end)
+
+        _ = Task.yield(task, timeout_ms) || Task.shutdown(task, @shutdown_grace_ms)
+        :counters.sub(counter, 1, 1)
+        :ok
+      end)
+
+      :ok
+    end
   end
 
   @doc false
@@ -1998,7 +2084,7 @@ defmodule SparkEx.Connect.Client do
       Task.Supervisor.async_nolink(SparkEx.TaskSupervisor, fn -> release_execute_fun.(opts) end)
 
     outcome =
-      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      case Task.yield(task, timeout_ms) || Task.shutdown(task, @shutdown_grace_ms) do
         {:ok, {:ok, _}} ->
           :ok
 
@@ -2148,10 +2234,25 @@ defmodule SparkEx.Connect.Client do
     # safe-to-retry under transient failure: CloneSession (returns the
     # same new id), ReleaseSession / ReleaseExecute / Interrupt (the
     # server treats a missing handle as success).
+    # Non-idempotent release RPCs get a much smaller retry budget than the
+    # default (PySpark DefaultPolicy: 15 retries × up to 60s = ~10 minutes).
+    # Server-side state for both ReleaseExecute and ReleaseSession is GC'd
+    # by the server, so persisting that long after a transient failure adds
+    # no value — a handful of retries with the same backoff curve covers
+    # blips. The caller still bounds wall-clock via `release_execute_timeout`
+    # / GenServer call timeouts, but capping retries avoids the inner loop
+    # spinning until something else kills the task (CLAUDE-25).
+    retry_opts =
+      case rpc do
+        :release_execute -> [session: session, max_retries: @release_max_retries]
+        :release_session -> [session: session, max_retries: @release_max_retries]
+        _ -> [session: session]
+      end
+
     rpc_telemetry_span(metadata, fn ->
       retry_with_backoff(
         fn -> do_unary_rpc_call(rpc, session, request, grpc_opts) end,
-        session: session
+        retry_opts
       )
     end)
   end
