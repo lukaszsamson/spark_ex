@@ -25,11 +25,12 @@ defmodule SparkEx.Integration.M13.UDFTVFTest do
     # `UnresolvedTableValuedFunction` (relations.proto field 43) was added in
     # Spark 4.0. Spark 3.5.4's proto stops at field 38. Pre-refactor SparkEx
     # tests passed on 3.5 because the lazy-during-rewrite plan_id allocator
-    # happened to assign the subquery body plan_id=0 before any other
-    # relation, and 3.5's analyzer fallback for unknown rel_types tolerates
-    # that specific pattern. The stable-id refactor allocates plan_ids in
-    # construction order (outer-last), which exposes the absent proto
-    # field and causes 3.5's strict-decode path to raise
+    # happened to produce an encoded plan whose root/unsupported relation
+    # carried plan_id=0, and 3.5's analyzer fallback for unknown rel_types
+    # tolerates that specific pattern. The stable-id refactor allocates
+    # plan_ids in construction order (outer-last), so the unsupported
+    # relation gets a non-zero plan_id, exposing the absent proto field
+    # and causing 3.5's strict-decode path to raise
     # IndexOutOfBoundsException. PySpark does not expose this API to 3.5
     # sessions, so user impact is zero — gate the tests to 4.0+ here.
     @describetag min_spark: "4.0"

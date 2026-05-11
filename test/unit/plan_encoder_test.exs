@@ -1050,14 +1050,36 @@ defmodule SparkEx.Connect.PlanEncoderTest do
         |> Enum.flat_map(fn {:ok, ids} -> ids end)
 
       encoder_id_lists = Task.await(encoder_task, 30_000)
+      encoder_ids = Enum.flat_map(encoder_id_lists, & &1)
 
-      assert length(caller_ids) == length(Enum.uniq(caller_ids)),
+      # Strong invariant: across the entire session lifetime, every id
+      # ever issued — by caller-side `PlanIds.next/1` allocations AND by
+      # encoder-emitted `RelationCommon.plan_id` values — must be
+      # pairwise unique. Anything weaker leaves room for caller and
+      # encoder to overlap on the same atomic.
+      caller_set = MapSet.new(caller_ids)
+      encoder_set = MapSet.new(encoder_ids)
+      overlap = MapSet.intersection(caller_set, encoder_set)
+
+      assert MapSet.size(overlap) == 0,
+             "caller-side allocations and encoder-emitted plan_ids overlap: " <>
+               inspect(MapSet.to_list(overlap) |> Enum.take(10))
+
+      # Caller ids are unique among themselves (no caller→caller race).
+      assert length(caller_ids) == MapSet.size(caller_set),
              "duplicate ids across concurrent DataFrame.new callers"
 
+      # Each encoded plan tree has unique relation plan_ids (no
+      # encoder-side race within a single plan).
       Enum.each(encoder_id_lists, fn ids ->
         assert ids == Enum.uniq(ids),
                "duplicate plan_ids inside a single encoded plan: #{inspect(ids)}"
       end)
+
+      # Final atomic counter has advanced past every observed id.
+      final_counter = SparkEx.Internal.PlanIds.peek(session)
+      observed_max = Enum.max(caller_ids ++ encoder_ids)
+      assert final_counter > observed_max
     end
 
     test "session A's allocator survives session B termination" do
