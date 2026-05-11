@@ -274,6 +274,34 @@ defmodule SparkEx.Unit.CommandEncoderTest do
       assert %Command{command_type: {:write_operation_v2, write_v2}} = command
       assert write_v2.overwrite_condition != nil
     end
+
+    test "bound-column partitioned_by / overwrite_condition resolve to the encoded input plan_id" do
+      df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1 AS id, 2 AS date", nil})
+
+      {%Plan{op_type: {:command, command}}, _} =
+        CommandEncoder.encode(
+          {:write_operation_v2, df.plan, "t",
+           [
+             mode: :overwrite,
+             partitioned_by: [SparkEx.DataFrame.col(df, "date")],
+             overwrite_condition: SparkEx.DataFrame.col(df, "date")
+           ]},
+          0
+        )
+
+      assert %Command{command_type: {:write_operation_v2, write_v2}} = command
+      input_plan_id = write_v2.input.common.plan_id
+      assert is_integer(input_plan_id)
+
+      [part_expr] = write_v2.partitioning_columns
+      assert %Expression{expr_type: {:unresolved_attribute, part_attr}} = part_expr
+      assert part_attr.plan_id == input_plan_id
+
+      assert %Expression{expr_type: {:unresolved_attribute, ow_attr}} =
+               write_v2.overwrite_condition
+
+      assert ow_attr.plan_id == input_plan_id
+    end
   end
 
   describe "encode/2 for register_data_source" do

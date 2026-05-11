@@ -201,6 +201,79 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert Enum.uniq(filter_plan_ids) |> length() == 3
       assert Enum.all?(filter_plan_ids, &is_integer/1)
     end
+
+    test "self-join over the same DataFrame encodes with identical plan_ids on both sides" do
+      df = DataFrame.new(self(), {:sql, "SELECT 1 AS x", nil})
+
+      joined =
+        DataFrame.join(
+          df,
+          df,
+          Column.eq(DataFrame.col(df, "x"), DataFrame.col(df, "x")),
+          :inner
+        )
+
+      {plan, _} = PlanEncoder.encode(joined.plan, 0)
+
+      assert %Relation{rel_type: {:join, join}} = root_relation(plan)
+      assert join.left.common.plan_id == join.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, eq}} = join.join_condition
+
+      [
+        %Expression{expr_type: {:unresolved_attribute, left_attr}},
+        %Expression{expr_type: {:unresolved_attribute, right_attr}}
+      ] = eq.arguments
+
+      assert left_attr.plan_id == right_attr.plan_id
+      assert left_attr.plan_id == join.left.common.plan_id
+    end
+
+    test "join condition binds to the right side when only the right side is referenced first" do
+      left = DataFrame.new(self(), {:sql, "SELECT * FROM emp", nil})
+      right = DataFrame.new(self(), {:sql, "SELECT * FROM dept", nil})
+
+      # Reference right BEFORE left; under the legacy heuristic this used to
+      # be mis-assigned because the side-aware remap walked the condition in
+      # order. With stable plan_ids each col carries its source DataFrame's id.
+      condition = Column.eq(DataFrame.col(right, "id"), DataFrame.col(left, "dept_id"))
+      joined = DataFrame.join(left, right, condition, :inner)
+
+      {plan, _} = PlanEncoder.encode(joined.plan, 0)
+      assert %Relation{rel_type: {:join, join}} = root_relation(plan)
+
+      assert %Expression{expr_type: {:unresolved_function, eq}} = join.join_condition
+
+      [
+        %Expression{expr_type: {:unresolved_attribute, right_attr}},
+        %Expression{expr_type: {:unresolved_attribute, left_attr}}
+      ] = eq.arguments
+
+      assert right_attr.plan_id == join.right.common.plan_id
+      assert left_attr.plan_id == join.left.common.plan_id
+    end
+
+    test "filter over nested join binds outer column to the correct join input" do
+      a = DataFrame.new(self(), {:sql, "SELECT 1 AS x", nil})
+      b = DataFrame.new(self(), {:sql, "SELECT 2 AS y", nil})
+      c = DataFrame.new(self(), {:sql, "SELECT 3 AS z", nil})
+
+      inner =
+        DataFrame.join(a, b, Column.eq(DataFrame.col(a, "x"), DataFrame.col(b, "y")), :inner)
+
+      outer = DataFrame.join(inner, c, ["x"], :inner)
+      filtered = DataFrame.filter(outer, Column.gt(DataFrame.col(c, "z"), 0))
+
+      {plan, _} = PlanEncoder.encode(filtered.plan, 0)
+
+      assert %Relation{rel_type: {:filter, filter}} = root_relation(plan)
+      assert %Relation{rel_type: {:join, outer_join}} = filter.input
+      c_plan_id = outer_join.right.common.plan_id
+
+      assert %Expression{expr_type: {:unresolved_function, gt}} = filter.condition
+      [%Expression{expr_type: {:unresolved_attribute, c_attr}}, _] = gt.arguments
+      assert c_attr.plan_id == c_plan_id
+    end
   end
 
   describe "col_regex encoding" do

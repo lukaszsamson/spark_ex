@@ -1414,12 +1414,21 @@ defmodule SparkEx.Connect.PlanEncoder do
   @doc """
   Encodes an internal expression representation into a `Spark.Connect.Expression` proto.
   """
+  def encode_expression(%Column{expr: expr}), do: encode_expression(expr)
+
   def encode_expression({:col, name, plan_id}) when is_integer(plan_id) do
     %Expression{
       expr_type:
         {:unresolved_attribute,
          %Expression.UnresolvedAttribute{unparsed_identifier: name, plan_id: plan_id}}
     }
+  end
+
+  # Stable-id wrapper from `DataFrame.col/2`: extract the integer plan_id.
+  # Reached when an expression is encoded outside the `rewrite_plan/4` pipeline
+  # (e.g. WriterV2 `partitioned_by` / `overwrite_condition`).
+  def encode_expression({:col, name, {:plan_id, plan_id, _plan}}) when is_integer(plan_id) do
+    encode_expression({:col, name, plan_id})
   end
 
   @spec encode_expression(term()) :: Expression.t()
@@ -1440,6 +1449,11 @@ defmodule SparkEx.Connect.PlanEncoder do
            is_metadata_column: true
          }}
     }
+  end
+
+  def encode_expression({:metadata_col, name, {:plan_id, plan_id, _plan}})
+      when is_integer(plan_id) do
+    encode_expression({:metadata_col, name, plan_id})
   end
 
   def encode_expression({:metadata_col, name}) do
@@ -1473,6 +1487,11 @@ defmodule SparkEx.Connect.PlanEncoder do
       expr_type:
         {:unresolved_regex, %Expression.UnresolvedRegex{col_name: name, plan_id: plan_id}}
     }
+  end
+
+  def encode_expression({:col_regex, name, {:plan_id, plan_id, _plan}})
+      when is_integer(plan_id) do
+    encode_expression({:col_regex, name, plan_id})
   end
 
   def encode_expression({:col_regex, name}) do
@@ -1678,6 +1697,11 @@ defmodule SparkEx.Connect.PlanEncoder do
       expr_type:
         {:unresolved_star, %Expression.UnresolvedStar{unparsed_target: target, plan_id: plan_id}}
     }
+  end
+
+  def encode_expression({:star, target, {:plan_id, plan_id, _plan}})
+      when (is_binary(target) or is_nil(target)) and is_integer(plan_id) do
+    encode_expression({:star, target, plan_id})
   end
 
   def encode_expression({:star}) do
@@ -2780,6 +2804,12 @@ defmodule SparkEx.Connect.PlanEncoder do
     end
   end
 
+  # Linear scan over refs comparing normalized plan terms. Only reachable for
+  # the raw-tuple branch of `ensure_plan_id` (no stable id wrapper); every
+  # DataFrame-constructed plan short-circuits via
+  # `extract_explicit_referenced_plan_id` and never touches this path. If a
+  # future change makes raw-tuple references common, swap to an indexed lookup
+  # — current usage is O(refs) per dedup but refs lists stay small in practice.
   defp find_existing_plan_id(refs, normalized_plan) do
     case Enum.find(refs, fn %{plan: plan} ->
            normalize_referenced_plan(plan) == normalized_plan
