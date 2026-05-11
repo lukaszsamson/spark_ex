@@ -182,29 +182,27 @@ defmodule SparkEx.Connect.CommandEncoder do
   end
 
   # --- SqlCommand ---
+  #
+  # PySpark mirror: `cmd.sql_command.input.CopyFrom(SQL_relation)`.
+  # The flat `sql/args/pos_args/named_arguments/pos_arguments` fields on
+  # SqlCommand are all deprecated in proto; only `input` (a SQL Relation)
+  # is current.
 
   def encode_command({:sql_command, query, args}, counter) do
-    sql_cmd =
-      case args do
-        args when is_map(args) and map_size(args) > 0 ->
-          named =
-            Map.new(args, fn {k, v} ->
-              {to_string(k), PlanEncoder.encode_expression({:lit, v})}
-            end)
+    {relation, counter} = PlanEncoder.encode_relation({:sql, query, args}, counter)
+    {:sql, sql} = relation.rel_type
 
-          %Spark.Connect.SqlCommand{sql: query, named_arguments: named}
-
-        args when is_list(args) and args != [] ->
-          pos =
-            Enum.map(args, fn v ->
-              PlanEncoder.encode_expression({:lit, v})
-            end)
-
-          %Spark.Connect.SqlCommand{sql: query, pos_arguments: pos}
-
-        _ ->
-          %Spark.Connect.SqlCommand{sql: query}
-      end
+    # Populate both `input` (current) and the legacy flat fields so that
+    # Spark 3.5 servers, which do not yet understand field 6 (`input`),
+    # can still execute the command via the deprecated fields.
+    sql_cmd = %Spark.Connect.SqlCommand{
+      input: relation,
+      sql: sql.query,
+      args: sql.args,
+      pos_args: sql.pos_args,
+      named_arguments: sql.named_arguments,
+      pos_arguments: sql.pos_arguments
+    }
 
     command = %Command{command_type: {:sql_command, sql_cmd}}
     {command, counter}

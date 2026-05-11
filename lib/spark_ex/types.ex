@@ -272,7 +272,12 @@ defmodule SparkEx.Types do
 
   defp type_to_ddl({:day_time_interval, start_field, end_field}) do
     validate_day_time_interval_fields!(start_field, end_field)
-    "INTERVAL #{day_time_interval_field(start_field)} TO #{day_time_interval_field(end_field)}"
+
+    if start_field == end_field do
+      "INTERVAL #{day_time_interval_field(start_field)}"
+    else
+      "INTERVAL #{day_time_interval_field(start_field)} TO #{day_time_interval_field(end_field)}"
+    end
   end
 
   defp type_to_ddl(:year_month_interval), do: "INTERVAL YEAR TO MONTH"
@@ -280,7 +285,11 @@ defmodule SparkEx.Types do
   defp type_to_ddl({:year_month_interval, start_field, end_field}) do
     validate_year_month_interval_fields!(start_field, end_field)
 
-    "INTERVAL #{year_month_interval_field(start_field)} TO #{year_month_interval_field(end_field)}"
+    if start_field == end_field do
+      "INTERVAL #{year_month_interval_field(start_field)}"
+    else
+      "INTERVAL #{year_month_interval_field(start_field)} TO #{year_month_interval_field(end_field)}"
+    end
   end
 
   defp type_to_ddl(:calendar_interval), do: "INTERVAL"
@@ -318,6 +327,15 @@ defmodule SparkEx.Types do
   # 0=YEAR, 1=MONTH.
   defp year_month_interval_field(0), do: "YEAR"
   defp year_month_interval_field(1), do: "MONTH"
+
+  # Lowercase forms used in PySpark's jsonValue / simpleString output.
+  defp day_time_interval_json_field(0), do: "day"
+  defp day_time_interval_json_field(1), do: "hour"
+  defp day_time_interval_json_field(2), do: "minute"
+  defp day_time_interval_json_field(3), do: "second"
+
+  defp year_month_interval_json_field(0), do: "year"
+  defp year_month_interval_json_field(1), do: "month"
 
   defp validate_day_time_interval_fields!(start_field, end_field) do
     unless is_integer(start_field) and start_field in 0..3 do
@@ -375,28 +393,44 @@ defmodule SparkEx.Types do
   defp type_to_json(:double), do: "double"
   defp type_to_json(:string), do: "string"
 
-  defp type_to_json({:string, collation}) do
-    %{"type" => "string", "collation" => collation}
-  end
+  # PySpark's StringType.jsonValue emits "string" for the UTF8_BINARY default
+  # collation and "string collate <name>" otherwise; the value is always a
+  # plain string, never a map.
+  defp type_to_json({:string, ""}), do: "string"
+  defp type_to_json({:string, "UTF8_BINARY"}), do: "string"
+  defp type_to_json({:string, collation}), do: "string collate #{collation}"
 
   defp type_to_json({:char, length}), do: "char(#{length})"
   defp type_to_json({:varchar, length}), do: "varchar(#{length})"
   defp type_to_json(:binary), do: "binary"
   defp type_to_json(:date), do: "date"
-  defp type_to_json(:time), do: "time"
+  # TimeType default precision is 6.
+  defp type_to_json(:time), do: "time(6)"
   defp type_to_json({:time, precision}) when is_integer(precision), do: "time(#{precision})"
   defp type_to_json(:timestamp), do: "timestamp"
   defp type_to_json(:timestamp_ntz), do: "timestamp_ntz"
-  defp type_to_json(:day_time_interval), do: "day-time interval"
+  defp type_to_json(:day_time_interval), do: "interval day to second"
 
   defp type_to_json({:day_time_interval, start_field, end_field}) do
-    "day-time interval(#{start_field},#{end_field})"
+    validate_day_time_interval_fields!(start_field, end_field)
+
+    if start_field == end_field do
+      "interval #{day_time_interval_json_field(start_field)}"
+    else
+      "interval #{day_time_interval_json_field(start_field)} to #{day_time_interval_json_field(end_field)}"
+    end
   end
 
-  defp type_to_json(:year_month_interval), do: "year-month interval"
+  defp type_to_json(:year_month_interval), do: "interval year to month"
 
   defp type_to_json({:year_month_interval, start_field, end_field}) do
-    "year-month interval(#{start_field},#{end_field})"
+    validate_year_month_interval_fields!(start_field, end_field)
+
+    if start_field == end_field do
+      "interval #{year_month_interval_json_field(start_field)}"
+    else
+      "interval #{year_month_interval_json_field(start_field)} to #{year_month_interval_json_field(end_field)}"
+    end
   end
 
   defp type_to_json(:calendar_interval), do: "interval"
@@ -514,26 +548,47 @@ defmodule SparkEx.Types do
        when is_integer(precision),
        do: "time(#{precision})"
 
-  defp time_proto_to_json(_), do: "time"
+  # PySpark's TimeType always carries a precision (default 6). Mirror that on
+  # decode so the JSON value round-trips through PySpark's parser unchanged.
+  defp time_proto_to_json(_), do: "time(6)"
 
   defp day_time_interval_proto_to_json(%Spark.Connect.DataType.DayTimeInterval{
          start_field: sf,
          end_field: ef
        })
-       when is_integer(sf) and is_integer(ef),
-       do: "day-time interval(#{sf},#{ef})"
+       when is_integer(sf) and sf in 0..3 and is_integer(ef) and ef in 0..3 and sf == ef,
+       do: "interval #{day_time_interval_json_field(sf)}"
 
-  defp day_time_interval_proto_to_json(_), do: "day-time interval"
+  defp day_time_interval_proto_to_json(%Spark.Connect.DataType.DayTimeInterval{
+         start_field: sf,
+         end_field: ef
+       })
+       when is_integer(sf) and sf in 0..3 and is_integer(ef) and ef in 0..3 and sf <= ef,
+       do: "interval #{day_time_interval_json_field(sf)} to #{day_time_interval_json_field(ef)}"
+
+  defp day_time_interval_proto_to_json(_), do: "interval day to second"
 
   defp year_month_interval_proto_to_json(%Spark.Connect.DataType.YearMonthInterval{
          start_field: sf,
          end_field: ef
        })
-       when is_integer(sf) and is_integer(ef),
-       do: "year-month interval(#{sf},#{ef})"
+       when is_integer(sf) and sf in 0..1 and is_integer(ef) and ef in 0..1 and sf == ef,
+       do: "interval #{year_month_interval_json_field(sf)}"
 
-  defp year_month_interval_proto_to_json(_), do: "year-month interval"
+  defp year_month_interval_proto_to_json(%Spark.Connect.DataType.YearMonthInterval{
+         start_field: sf,
+         end_field: ef
+       })
+       when is_integer(sf) and sf in 0..1 and is_integer(ef) and ef in 0..1 and sf <= ef,
+       do:
+         "interval #{year_month_interval_json_field(sf)} to #{year_month_interval_json_field(ef)}"
 
+  defp year_month_interval_proto_to_json(_), do: "interval year to month"
+
+  # PySpark's jsonValue for spatial types uses the CRS string ("geometry({crs})"),
+  # but the wire proto only carries an int32 SRID. We don't ship a SRID↔CRS
+  # mapper, so emit the simpleString form ("geometry(<srid>)" / "geometry(any)")
+  # which round-trips through Spark's DDL parser.
   defp geometry_proto_to_json(%Spark.Connect.DataType.Geometry{srid: srid})
        when is_integer(srid) and srid != 0,
        do: "geometry(#{srid})"
@@ -546,11 +601,12 @@ defmodule SparkEx.Types do
 
   defp geography_proto_to_json(_), do: "geography"
 
-  defp string_proto_to_json(%Spark.Connect.DataType.String{collation: ""}), do: "string"
+  defp string_proto_to_json(%Spark.Connect.DataType.String{collation: c})
+       when c in ["", "UTF8_BINARY"],
+       do: "string"
 
-  defp string_proto_to_json(%Spark.Connect.DataType.String{collation: collation}) do
-    %{"type" => "string", "collation" => collation}
-  end
+  defp string_proto_to_json(%Spark.Connect.DataType.String{collation: collation}),
+    do: "string collate #{collation}"
 
   defp array_proto_to_json(%Spark.Connect.DataType.Array{} = array) do
     %{

@@ -223,6 +223,36 @@ defmodule SparkEx.MissOpus2Test do
       lower = window.frame_spec.lower
       assert {:value, %{expr_type: {:literal, %{literal_type: {:long, 5}}}}} = lower.boundary
     end
+
+    # F2/GPT-26: row-frame finite offsets must fit in JVM int range; PySpark
+    # raises VALUE_NOT_BETWEEN, so mirror with a clear ArgumentError instead of
+    # silently truncating on the wire.
+    test "ROW frame raises when finite offset exceeds JVM_INT range" do
+      frame = {:rows, 2_147_483_648, 0}
+
+      window_expr =
+        {:window, {:col, "x"}, [], [{:sort_order, {:col, "y"}, :asc, :nulls_first}], frame}
+
+      assert_raise ArgumentError, ~r/row-frame offset .* outside JVM int range/, fn ->
+        PlanEncoder.encode_expression(window_expr)
+      end
+    end
+
+    test "ROW frame accepts JVM_INT boundary values" do
+      frame = {:rows, -2_147_483_648, 2_147_483_647}
+
+      window_expr =
+        {:window, {:col, "x"}, [], [{:sort_order, {:col, "y"}, :asc, :nulls_first}], frame}
+
+      encoded = PlanEncoder.encode_expression(window_expr)
+      window = encoded.expr_type |> elem(1)
+
+      assert {:value, %{expr_type: {:literal, %{literal_type: {:integer, -2_147_483_648}}}}} =
+               window.frame_spec.lower.boundary
+
+      assert {:value, %{expr_type: {:literal, %{literal_type: {:integer, 2_147_483_647}}}}} =
+               window.frame_spec.upper.boundary
+    end
   end
 
   # ── 15.11 LateralJoin nil join_condition ──
