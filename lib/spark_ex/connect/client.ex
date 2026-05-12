@@ -899,9 +899,11 @@ defmodule SparkEx.Connect.Client do
     end)
   end
 
-  defp parse_is_modifiable_value(_key, nil), do: nil
+  @doc false
+  def parse_is_modifiable_value(_key, nil), do: nil
 
-  defp parse_is_modifiable_value(key, value) when is_binary(value) do
+  @doc false
+  def parse_is_modifiable_value(key, value) when is_binary(value) do
     case value do
       "" ->
         nil
@@ -2040,12 +2042,11 @@ defmodule SparkEx.Connect.Client do
     [begin_request | chunk_requests]
   end
 
-  # Only called when `total_bytes > @artifact_chunk_size` (see
-  # `producer_stream/2`). Empty and small-but-non-empty artifacts are
-  # routed to the batch path, matching PySpark's `_add_artifacts`
-  # (artifact.py: `if size > CHUNK_SIZE` → chunked, else → batched).
-  # We do not need (and previously had a dead) `total_bytes == 0`
-  # branch here.
+  # Only called when `total_bytes > chunk_size` (see `producer_stream/2`).
+  # Empty and small-but-non-empty artifacts are routed to the batch path,
+  # matching PySpark's `_add_artifacts` (artifact.py: `if size > CHUNK_SIZE`
+  # → chunked, else → batched). We do not need (and previously had a dead)
+  # `total_bytes == 0` branch here.
   defp file_chunk_request_stream(session, name, path, total_bytes, chunk_size)
        when total_bytes > 0 do
     num_chunks = div(total_bytes + chunk_size - 1, chunk_size)

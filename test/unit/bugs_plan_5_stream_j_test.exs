@@ -43,33 +43,66 @@ defmodule SparkEx.BugsPlan5.StreamJTest do
   end
 
   describe "is_cached? StorageLevel.NONE (GPT-19)" do
-    test "use_* flags determine cached status, not replication" do
-      none = %StorageLevel{
-        use_disk: false,
-        use_memory: false,
-        use_off_heap: false,
-        deserialized: false,
-        replication: 1
-      }
+    defmodule StorageLevelNoneSession do
+      use GenServer
 
-      refute none.use_disk or none.use_memory or none.use_off_heap
+      def start_link(storage_level), do: GenServer.start_link(__MODULE__, storage_level, [])
+
+      @impl true
+      def init(storage_level), do: {:ok, storage_level}
+
+      @impl true
+      def handle_call({:analyze_get_storage_level, _plan}, _from, level) do
+        {:reply, {:ok, level}, level}
+      end
+    end
+
+    test "replication=1 with all use_* false → is_cached returns false" do
+      # StorageLevel.NONE has replication=1 by default; only use_* flags matter.
+      {:ok, session} =
+        StorageLevelNoneSession.start_link(%StorageLevel{
+          use_disk: false,
+          use_memory: false,
+          use_off_heap: false,
+          deserialized: false,
+          replication: 1
+        })
+
+      df = SparkEx.DataFrame.new(session, {:sql, "SELECT 1", nil})
+      assert {:ok, false} = SparkEx.DataFrame.is_cached(df)
     end
   end
 
   describe "config coercion (CLAUDE-57/81)" do
-    test "client source carries the nil-rejecting coercer clause" do
-      # The private coerce_config_string/1 is only reachable via the public
-      # RPC entry points, which would need a real session. Assert structurally
-      # that the nil-rejecting clause is present in the source.
-      src = File.read!("lib/spark_ex/connect/client.ex")
-      assert src =~ "config key/value cannot be nil"
+    test "Client.config_set/2 raises ArgumentError when a value is nil" do
+      # coerce_config_string(nil) raises before any RPC is issued, so a fake
+      # session struct (channel=nil) is sufficient.
+      fake_session = %SparkEx.Session{
+        session_id: "00000000-0000-0000-0000-000000000000",
+        user_id: "u",
+        client_type: "test",
+        server_side_session_id: nil,
+        channel: nil
+      }
+
+      assert_raise ArgumentError, ~r/config key\/value cannot be nil/, fn ->
+        SparkEx.Connect.Client.config_set(fake_session, [{"spark.some.key", nil}])
+      end
     end
   end
 
   describe "is_modifiable parser strict (CLAUDE-41)" do
-    test "module source no longer downcases/trims is_modifiable values" do
-      src = File.read!("lib/spark_ex/connect/client.ex")
-      refute src =~ "String.trim() |> String.downcase"
+    test "exact 'true'/'false' map to booleans; whitespace/mixed-case do not" do
+      alias SparkEx.Connect.Client
+
+      assert Client.parse_is_modifiable_value("k", "true") == true
+      assert Client.parse_is_modifiable_value("k", "false") == false
+      assert Client.parse_is_modifiable_value("k", "") == nil
+      assert Client.parse_is_modifiable_value("k", nil) == nil
+      # Strict — no trim/downcase; these return nil with a Logger.warning
+      assert Client.parse_is_modifiable_value("k", " true ") == nil
+      assert Client.parse_is_modifiable_value("k", "True") == nil
+      assert Client.parse_is_modifiable_value("k", "TRUE") == nil
     end
   end
 
@@ -162,7 +195,7 @@ defmodule SparkEx.BugsPlan5.StreamJTest do
     test "chunked path only triggers when total_bytes > chunk_size",
          %{session: session} do
       path = Path.join(System.tmp_dir!(), "spark_ex_big_#{System.unique_integer([:positive])}")
-      # 3.5 chunks of @ 1024 KiB → spans BeginChunked + 3 follow-up chunks.
+      # 3.5 chunks of 1024 bytes (1 KiB) → spans BeginChunked + 3 follow-up chunks.
       data = :crypto.strong_rand_bytes(3_500)
       File.write!(path, data)
 

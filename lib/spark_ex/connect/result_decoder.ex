@@ -451,8 +451,7 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp dispatch_arrow_response({:sql_command_result, result}, state, _session) do
-    relation = Map.get(result || %{}, :relation)
-    {:cont, {:ok, push_command_result(state, {:sql_command, relation})}}
+    {:cont, {:ok, push_command_result(state, {:sql_command, result})}}
   end
 
   defp dispatch_arrow_response({:write_stream_operation_start_result, result}, state, _),

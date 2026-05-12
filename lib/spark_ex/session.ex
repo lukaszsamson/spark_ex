@@ -357,10 +357,10 @@ defmodule SparkEx.Session do
   @doc """
   Gets Spark configuration values with fallback defaults.
   """
-  @spec config_get_with_default(GenServer.server(), [{String.t(), String.t()}]) ::
+  @spec config_get_with_default(GenServer.server(), [{String.t(), String.t() | nil}]) ::
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get_with_default(session, pairs) do
-    validate_config_pairs!(pairs, "config_get_with_default/2")
+    validate_config_default_pairs!(pairs)
     GenServer.call(session, {:config_get_with_default, pairs})
   end
 
@@ -408,6 +408,24 @@ defmodule SparkEx.Session do
     end
 
     GenServer.call(session, {:config_is_modifiable, keys})
+  end
+
+  defp validate_config_default_pairs!(pairs) when is_list(pairs) do
+    if Enum.all?(pairs, fn
+         {k, nil} -> coercible_config_key?(k)
+         {k, v} -> coercible_config_key?(k) and coercible_config_value?(v)
+         _ -> false
+       end) do
+      :ok
+    else
+      raise ArgumentError,
+            "config_get_with_default/2 pairs must be {key, value} where key is a string or atom and value is a string, boolean, integer, float, atom, or nil, got: #{inspect(pairs, charlists: :as_lists)}"
+    end
+  end
+
+  defp validate_config_default_pairs!(pairs) do
+    raise ArgumentError,
+          "config_get_with_default/2 expects a list of {key, value} pairs, got: #{inspect(pairs)}"
   end
 
   defp validate_config_pairs!(pairs, _fun_name) when is_list(pairs) do
