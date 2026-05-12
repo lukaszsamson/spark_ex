@@ -306,6 +306,15 @@ defmodule SparkEx.Connect.Errors do
       error_id: error_id
     }
 
+    telemetry_meta = %{rpc: :fetch_error_details, session_id: session.session_id}
+    start_time = System.monotonic_time()
+
+    :telemetry.execute(
+      [:spark_ex, :rpc, :start],
+      %{system_time: System.system_time()},
+      telemetry_meta
+    )
+
     # Run on a supervised task so a slow/hanging server can't block the
     # caller's GenServer handle_call beyond `timeout_ms`. On timeout the
     # task is brutally killed and we fall back to the base error.
@@ -322,22 +331,43 @@ defmodule SparkEx.Connect.Errors do
         end
       end)
 
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+    raw = Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill)
+    duration = System.monotonic_time() - start_time
+
+    case raw do
       {:ok, {:ok, %FetchErrorDetailsResponse{} = resp}} ->
+        :telemetry.execute(
+          [:spark_ex, :rpc, :stop],
+          %{duration: duration},
+          Map.put(telemetry_meta, :result, :ok)
+        )
+
         {:ok, resp}
 
       {:ok, {:error, reason}} ->
+        emit_fetch_exception(telemetry_meta, duration, :error, reason)
         {:error, reason}
 
       {:ok, other} ->
+        emit_fetch_exception(telemetry_meta, duration, :error, {:unexpected_response, other})
         {:error, {:unexpected_response, other}}
 
       {:exit, reason} ->
+        emit_fetch_exception(telemetry_meta, duration, :exit, reason)
         {:error, {:task_exit, reason}}
 
       nil ->
+        emit_fetch_exception(telemetry_meta, duration, :timeout, :timeout)
         {:error, :timeout}
     end
+  end
+
+  defp emit_fetch_exception(meta, duration, kind, reason) do
+    :telemetry.execute(
+      [:spark_ex, :rpc, :exception],
+      %{duration: duration},
+      Map.merge(meta, %{kind: kind, reason: reason})
+    )
   end
 
   defp enrich_from_response(error, %FetchErrorDetailsResponse{} = resp) do

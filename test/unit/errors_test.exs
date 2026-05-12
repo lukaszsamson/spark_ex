@@ -133,6 +133,83 @@ defmodule SparkEx.Connect.ErrorsTest do
     end
   end
 
+  describe "FetchErrorDetails telemetry span (CLAUDE-77)" do
+    # TaskSupervisor is started by SparkEx.Application in the test run.
+
+    test "emits :start and :exception events when fetch task fails (session_id correlated)" do
+      ref = make_ref()
+      test_pid = self()
+
+      :telemetry.attach_many(
+        "test-fetch-telemetry-#{inspect(ref)}",
+        [[:spark_ex, :rpc, :start], [:spark_ex, :rpc, :stop], [:spark_ex, :rpc, :exception]],
+        fn event, measurements, metadata, _ ->
+          send(test_pid, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("test-fetch-telemetry-#{inspect(ref)}") end)
+
+      # channel: nil causes the task to crash immediately → :exception event emitted.
+      error_info = %Google.Rpc.ErrorInfo{
+        metadata: %{"errorId" => "err-123", "errorClass" => "SOME.ERROR"}
+      }
+
+      details = [
+        %Google.Protobuf.Any{
+          type_url: "type.googleapis.com/google.rpc.ErrorInfo",
+          value: Protobuf.encode(error_info)
+        }
+      ]
+
+      grpc_error = %GRPC.RPCError{status: 2, message: "UNKNOWN", details: details}
+      _error = Errors.from_grpc_error(grpc_error, build_fake_session())
+
+      assert_receive {:telemetry, [:spark_ex, :rpc, :start], _measurements,
+                      %{rpc: :fetch_error_details, session_id: "test-session"}},
+                     500
+
+      assert_receive {:telemetry, [:spark_ex, :rpc, :exception], %{duration: duration},
+                      %{rpc: :fetch_error_details, session_id: "test-session"}},
+                     500
+
+      assert is_integer(duration) and duration >= 0
+    end
+
+    test "no FetchErrorDetails telemetry emitted when errorId is absent" do
+      ref = make_ref()
+      test_pid = self()
+
+      :telemetry.attach_many(
+        "test-fetch-telemetry-no-id-#{inspect(ref)}",
+        [[:spark_ex, :rpc, :start]],
+        fn event, _measurements, metadata, _ ->
+          if Map.get(metadata, :rpc) == :fetch_error_details do
+            send(test_pid, {:unexpected_telemetry, event})
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("test-fetch-telemetry-no-id-#{inspect(ref)}") end)
+
+      error_info = %Google.Rpc.ErrorInfo{metadata: %{"errorClass" => "SOME.ERROR"}}
+
+      details = [
+        %Google.Protobuf.Any{
+          type_url: "type.googleapis.com/google.rpc.ErrorInfo",
+          value: Protobuf.encode(error_info)
+        }
+      ]
+
+      grpc_error = %GRPC.RPCError{status: 3, message: "bad", details: details}
+      _error = Errors.from_grpc_error(grpc_error, build_fake_session())
+
+      refute_receive {:unexpected_telemetry, _}, 50
+    end
+  end
+
   describe "ErrorInfo metadata enrichment" do
     test "parses `classes` JSON list and `stackTrace` string from metadata" do
       error_info = %Google.Rpc.ErrorInfo{
