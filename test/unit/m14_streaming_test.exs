@@ -210,7 +210,7 @@ defmodule SparkEx.M14.StreamingTest do
       assert proto.trigger == {:available_now, true}
     end
 
-    test "rejects deprecated :once trigger (CLAUDE-40)" do
+    test "warns on deprecated :once trigger (CLAUDE-40)" do
       df_plan = {:sql, "SELECT 1", nil}
 
       write_opts = [
@@ -225,9 +225,16 @@ defmodule SparkEx.M14.StreamingTest do
         cluster_by: []
       ]
 
-      assert_raise ArgumentError, ~r/Trigger\.Once was removed/, fn ->
-        CommandEncoder.encode_command({:write_stream_operation_start, df_plan, write_opts}, 0)
-      end
+      stderr =
+        ExUnit.CaptureIO.capture_io(:stderr, fn ->
+          {cmd, _} =
+            CommandEncoder.encode_command({:write_stream_operation_start, df_plan, write_opts}, 0)
+
+          assert {:write_stream_operation_start, write_op} = cmd.command_type
+          assert write_op.trigger == {:once, true}
+        end)
+
+      assert stderr =~ "Trigger.Once was removed in Spark 4"
     end
 
     test "encodes with continuous trigger" do

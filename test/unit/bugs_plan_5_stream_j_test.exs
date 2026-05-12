@@ -25,17 +25,20 @@ defmodule SparkEx.BugsPlan5.StreamJTest do
     end
   end
 
-  describe "Trigger.Once rejection (CLAUDE-40)" do
-    test "encode_command rejects :once trigger" do
+  describe "Trigger.Once deprecation warning (CLAUDE-40)" do
+    test "encode_command warns but still encodes :once trigger" do
       df_plan = {:sql, "SELECT 1", nil}
 
-      assert_raise ArgumentError, ~r/Trigger\.Once was removed/, fn ->
-        SparkEx.Connect.CommandEncoder.encode_command(
-          {:write_stream_operation_start, df_plan,
-           [format: "console", output_mode: "append", trigger: :once]},
-          0
-        )
-      end
+      stderr =
+        ExUnit.CaptureIO.capture_io(:stderr, fn ->
+          SparkEx.Connect.CommandEncoder.encode_command(
+            {:write_stream_operation_start, df_plan,
+             [format: "console", output_mode: "append", trigger: :once]},
+            0
+          )
+        end)
+
+      assert stderr =~ "Trigger.Once was removed in Spark 4"
     end
   end
 
