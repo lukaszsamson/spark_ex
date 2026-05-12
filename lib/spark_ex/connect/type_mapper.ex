@@ -345,14 +345,22 @@ defmodule SparkEx.Connect.TypeMapper do
 
   ## Examples
 
-      iex> TypeMapper.explorer_schema_to_ddl(%{"id" => {:s, 64}, "name" => :string})
-      "id LONG, name STRING"
+      iex> TypeMapper.explorer_schema_to_ddl([{"id", {:s, 64}}, {"name", :string}])
+      "id BIGINT, name STRING"
+
+  Map inputs are accepted but discouraged: map iteration order is unspecified,
+  so the resulting DDL preserves the BEAM's traversal order rather than any
+  user-intended column ordering. Pass a list of `{name, dtype}` tuples to
+  guarantee positional schemas.
   """
   @spec explorer_schema_to_ddl(map() | [{String.t(), atom() | {atom(), term()}}]) :: String.t()
   def explorer_schema_to_ddl(dtypes) when is_map(dtypes) do
-    dtypes
-    |> Enum.sort_by(fn {name, _} -> name end)
-    |> explorer_schema_to_ddl()
+    IO.warn(
+      "explorer_schema_to_ddl/1 with a map input has non-deterministic column ordering; " <>
+        "pass a list of {name, dtype} tuples for positional schemas."
+    )
+
+    explorer_schema_to_ddl(Map.to_list(dtypes))
   end
 
   def explorer_schema_to_ddl(dtypes) when is_list(dtypes) do

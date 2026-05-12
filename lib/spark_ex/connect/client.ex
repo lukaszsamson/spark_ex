@@ -751,7 +751,11 @@ defmodule SparkEx.Connect.Client do
   def config_get_with_default(session, pairs) do
     kv_pairs =
       Enum.map(pairs, fn {k, v} ->
-        %KeyValue{key: coerce_config_string(k), value: coerce_config_string(v)}
+        # `value` is `optional string`; leaving it unset (nil) means
+        # "use the server's built-in default" — distinct from the empty
+        # string. PySpark passes None through unchanged.
+        encoded_value = if is_nil(v), do: nil, else: coerce_config_string(v)
+        %KeyValue{key: coerce_config_string(k), value: encoded_value}
       end)
 
     request =
@@ -895,10 +899,12 @@ defmodule SparkEx.Connect.Client do
     end)
   end
 
-  defp parse_is_modifiable_value(_key, nil), do: nil
+  @doc false
+  def parse_is_modifiable_value(_key, nil), do: nil
 
-  defp parse_is_modifiable_value(key, value) when is_binary(value) do
-    case value |> String.trim() |> String.downcase() do
+  @doc false
+  def parse_is_modifiable_value(key, value) when is_binary(value) do
+    case value do
       "" ->
         nil
 
@@ -921,6 +927,12 @@ defmodule SparkEx.Connect.Client do
   defp coerce_config_string(value) when is_boolean(value), do: to_string(value)
   defp coerce_config_string(value) when is_integer(value), do: Integer.to_string(value)
   defp coerce_config_string(value) when is_float(value), do: Float.to_string(value)
+
+  defp coerce_config_string(nil) do
+    raise ArgumentError,
+          "config key/value cannot be nil; use config_unset/2 to remove a configuration key"
+  end
+
   defp coerce_config_string(value) when is_atom(value), do: Atom.to_string(value)
 
   defp coerce_config_string(value) do
@@ -974,12 +986,26 @@ defmodule SparkEx.Connect.Client do
 
     case dispatch_unary_rpc(:clone_session, session, request) do
       {:ok, %CloneSessionResponse{} = resp} ->
-        {:ok,
-         %{
-           new_session_id: resp.new_session_id,
-           new_server_side_session_id: blank_to_nil(resp.new_server_side_session_id),
-           source_server_side_session_id: blank_to_nil(resp.server_side_session_id)
-         }}
+        cond do
+          not is_binary(resp.new_session_id) or resp.new_session_id == "" ->
+            {:error, {:invalid_clone_response, :missing_new_session_id}}
+
+          not SparkEx.Internal.UUID.valid_uuid?(resp.new_session_id) ->
+            {:error, {:invalid_clone_response, {:not_a_uuid, resp.new_session_id}}}
+
+          not is_nil(new_session_id) and resp.new_session_id != new_session_id ->
+            {:error,
+             {:invalid_clone_response,
+              {:new_session_id_mismatch, requested: new_session_id, got: resp.new_session_id}}}
+
+          true ->
+            {:ok,
+             %{
+               new_session_id: resp.new_session_id,
+               new_server_side_session_id: blank_to_nil(resp.new_server_side_session_id),
+               source_server_side_session_id: blank_to_nil(resp.server_side_session_id)
+             }}
+        end
 
       {:error, _} = error ->
         error
@@ -1148,11 +1174,32 @@ defmodule SparkEx.Connect.Client do
   @doc """
   Calls `ArtifactStatus` to check existence of artifacts on the server.
 
-  Returns a map of artifact name to boolean (exists or not).
+  Returns a map of artifact name to boolean (exists or not). Use
+  `artifact_status_full/2` to retrieve the full `ArtifactStatus` struct
+  for forward-compatibility with future proto fields.
   """
   @spec artifact_status(SparkEx.Session.t(), [String.t()]) ::
           {:ok, %{String.t() => boolean()}, String.t() | nil} | {:error, term()}
   def artifact_status(session, names) do
+    case artifact_status_full(session, names) do
+      {:ok, statuses, session_id} ->
+        bool_map = Map.new(statuses, fn {name, status} -> {name, status.exists} end)
+        {:ok, bool_map, session_id}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc """
+  Like `artifact_status/2` but returns the full `ArtifactStatus` proto
+  struct for each artifact, preserving any fields the server might add
+  in future protocol revisions.
+  """
+  @spec artifact_status_full(SparkEx.Session.t(), [String.t()]) ::
+          {:ok, %{String.t() => ArtifactStatusesResponse.ArtifactStatus.t()}, String.t() | nil}
+          | {:error, term()}
+  def artifact_status_full(session, names) do
     request = %ArtifactStatusesRequest{
       session_id: session.session_id,
       client_observed_server_side_session_id: session.server_side_session_id,
@@ -1163,10 +1210,7 @@ defmodule SparkEx.Connect.Client do
 
     case dispatch_unary_rpc(:artifact_status, session, request) do
       {:ok, %ArtifactStatusesResponse{} = resp} ->
-        statuses =
-          Map.new(resp.statuses, fn {name, %{exists: exists}} -> {name, exists} end)
-
-        {:ok, statuses, resp.server_side_session_id}
+        {:ok, resp.statuses || %{}, resp.server_side_session_id}
 
       {:error, _} = error ->
         error
@@ -1360,9 +1404,16 @@ defmodule SparkEx.Connect.Client do
 
   Uses `release_all` by default. Pass `until_response_id: id` to release
   only up to a specific response.
+
+  Returns `{:ok, %{server_side_session_id: id, operation_id: op_id}}` on
+  success. Per `base.proto`, `operation_id` is `""` if the server could
+  not find the operation to release (e.g. it was concurrently released);
+  callers that care about that distinction should branch on the empty
+  string.
   """
   @spec release_execute(SparkEx.Session.t(), String.t(), keyword()) ::
-          {:ok, String.t() | nil} | {:error, term()}
+          {:ok, %{server_side_session_id: String.t() | nil, operation_id: String.t()}}
+          | {:error, term()}
   def release_execute(session, operation_id, opts \\ []) do
     until_response_id = Keyword.get(opts, :until_response_id, nil)
     timeout = Keyword.get(opts, :timeout, @release_execute_timeout)
@@ -1388,7 +1439,11 @@ defmodule SparkEx.Connect.Client do
            extra_metadata: %{operation_id: operation_id}
          ) do
       {:ok, %ReleaseExecuteResponse{} = resp} ->
-        {:ok, resp.server_side_session_id}
+        {:ok,
+         %{
+           server_side_session_id: resp.server_side_session_id,
+           operation_id: resp.operation_id || ""
+         }}
 
       {:error, _} = error ->
         error
@@ -1987,52 +2042,53 @@ defmodule SparkEx.Connect.Client do
     [begin_request | chunk_requests]
   end
 
-  defp file_chunk_request_stream(session, name, path, total_bytes, chunk_size) do
-    num_chunks = max(div(total_bytes + chunk_size - 1, chunk_size), 1)
+  # Only called when `total_bytes > chunk_size` (see `producer_stream/2`).
+  # Empty and small-but-non-empty artifacts are routed to the batch path,
+  # matching PySpark's `_add_artifacts` (artifact.py: `if size > CHUNK_SIZE`
+  # → chunked, else → batched). We do not need (and previously had a dead)
+  # `total_bytes == 0` branch here.
+  defp file_chunk_request_stream(session, name, path, total_bytes, chunk_size)
+       when total_bytes > 0 do
+    num_chunks = div(total_bytes + chunk_size - 1, chunk_size)
 
-    if total_bytes == 0 do
-      [empty_begin_chunk_request(session, name, num_chunks)]
-    else
-      path
-      |> file_byte_stream(chunk_size)
-      |> Stream.transform(:first, fn chunk, acc ->
-        case acc do
-          :first ->
-            begin = %AddArtifactsRequest{
-              session_id: session.session_id,
-              client_observed_server_side_session_id: session.server_side_session_id,
-              user_context: UserContextExtensions.build_user_context(session.user_id),
-              client_type: session.client_type,
-              payload:
-                {:begin_chunk,
-                 %AddArtifactsRequest.BeginChunkedArtifact{
-                   name: name,
-                   total_bytes: total_bytes,
-                   num_chunks: num_chunks,
-                   initial_chunk: %AddArtifactsRequest.ArtifactChunk{
-                     data: chunk,
-                     crc: :erlang.crc32(chunk)
-                   }
-                 }}
-            }
+    path
+    |> file_byte_stream(chunk_size)
+    |> Stream.transform(:first, fn chunk, acc ->
+      case acc do
+        :first ->
+          begin = %AddArtifactsRequest{
+            session_id: session.session_id,
+            client_observed_server_side_session_id: session.server_side_session_id,
+            user_context: UserContextExtensions.build_user_context(session.user_id),
+            client_type: session.client_type,
+            payload:
+              {:begin_chunk,
+               %AddArtifactsRequest.BeginChunkedArtifact{
+                 name: name,
+                 total_bytes: total_bytes,
+                 num_chunks: num_chunks,
+                 initial_chunk: %AddArtifactsRequest.ArtifactChunk{
+                   data: chunk,
+                   crc: :erlang.crc32(chunk)
+                 }
+               }}
+          }
 
-            {[begin], :rest}
+          {[begin], :rest}
 
-          :rest ->
-            req = %AddArtifactsRequest{
-              session_id: session.session_id,
-              client_observed_server_side_session_id: session.server_side_session_id,
-              user_context: UserContextExtensions.build_user_context(session.user_id),
-              client_type: session.client_type,
-              payload:
-                {:chunk,
-                 %AddArtifactsRequest.ArtifactChunk{data: chunk, crc: :erlang.crc32(chunk)}}
-            }
+        :rest ->
+          req = %AddArtifactsRequest{
+            session_id: session.session_id,
+            client_observed_server_side_session_id: session.server_side_session_id,
+            user_context: UserContextExtensions.build_user_context(session.user_id),
+            client_type: session.client_type,
+            payload:
+              {:chunk, %AddArtifactsRequest.ArtifactChunk{data: chunk, crc: :erlang.crc32(chunk)}}
+          }
 
-            {[req], :rest}
-        end
-      end)
-    end
+          {[req], :rest}
+      end
+    end)
   end
 
   # Lazy byte-chunk stream over a file. Avoids `File.stream!/2`/`/3`
@@ -2059,23 +2115,6 @@ defmodule SparkEx.Connect.Client do
       end,
       fn io -> File.close(io) end
     )
-  end
-
-  defp empty_begin_chunk_request(session, name, num_chunks) do
-    %AddArtifactsRequest{
-      session_id: session.session_id,
-      client_observed_server_side_session_id: session.server_side_session_id,
-      user_context: UserContextExtensions.build_user_context(session.user_id),
-      client_type: session.client_type,
-      payload:
-        {:begin_chunk,
-         %AddArtifactsRequest.BeginChunkedArtifact{
-           name: name,
-           total_bytes: 0,
-           num_chunks: num_chunks,
-           initial_chunk: %AddArtifactsRequest.ArtifactChunk{data: <<>>, crc: :erlang.crc32(<<>>)}
-         }}
-    }
   end
 
   defp chunk_binary(data, chunk_size), do: do_chunk_binary(data, chunk_size, [])

@@ -451,8 +451,7 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp dispatch_arrow_response({:sql_command_result, result}, state, _session) do
-    relation = Map.get(result || %{}, :relation)
-    {:cont, {:ok, push_command_result(state, {:sql_command, relation})}}
+    {:cont, {:ok, push_command_result(state, {:sql_command, result})}}
   end
 
   defp dispatch_arrow_response({:write_stream_operation_start_result, result}, state, _),
@@ -465,7 +464,9 @@ defmodule SparkEx.Connect.ResultDecoder do
     do: {:cont, {:ok, push_command_result(state, {:streaming_query_manager, result})}}
 
   defp dispatch_arrow_response({:streaming_query_listener_events_result, result}, state, _),
-    do: {:cont, {:ok, push_command_result(state, {:listener_events, result})}}
+    do:
+      {:cont,
+       {:ok, push_command_result(state, {:listener_events, decode_listener_events(result)})}}
 
   defp dispatch_arrow_response({:checkpoint_command_result, result}, state, _),
     do: {:cont, {:ok, push_command_result(state, {:checkpoint, result})}}
@@ -531,8 +532,7 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp dispatch_response_type({:result_complete, _}, state, _session), do: {:halt, state}
 
   defp dispatch_response_type({:sql_command_result, result}, state, _session) do
-    relation = Map.get(result || %{}, :relation)
-    {:cont, push_command_result(state, {:sql_command, relation})}
+    {:cont, push_command_result(state, {:sql_command, result})}
   end
 
   defp dispatch_response_type({:write_stream_operation_start_result, result}, state, _),
@@ -545,7 +545,7 @@ defmodule SparkEx.Connect.ResultDecoder do
     do: {:cont, push_command_result(state, {:streaming_query_manager, result})}
 
   defp dispatch_response_type({:streaming_query_listener_events_result, result}, state, _),
-    do: {:cont, push_command_result(state, {:listener_events, result})}
+    do: {:cont, push_command_result(state, {:listener_events, decode_listener_events(result)})}
 
   defp dispatch_response_type({:checkpoint_command_result, result}, state, _),
     do: {:cont, push_command_result(state, {:checkpoint, result})}
@@ -573,7 +573,6 @@ defmodule SparkEx.Connect.ResultDecoder do
     {:cont, state}
   end
 
-  defp dispatch_response_type({:metrics, _}, state, _session), do: {:cont, state}
   defp dispatch_response_type(nil, state, _session), do: {:cont, state}
 
   # Forward-compat: unknown / future response_type variants (including
@@ -593,6 +592,39 @@ defmodule SparkEx.Connect.ResultDecoder do
         command_results: [tagged_tuple | state.command_results]
     }
   end
+
+  # StreamingQueryListenerEventsResult carries opaque `event_json` strings
+  # that PySpark parses (see streaming/listener.py `_to_listener_event`).
+  # Surface a parsed map alongside the raw payload so callers can pattern
+  # match without re-parsing themselves.
+  defp decode_listener_events(nil), do: nil
+
+  defp decode_listener_events(%{events: events} = result) when is_list(events) do
+    parsed =
+      Enum.map(events, fn event ->
+        decoded =
+          case event && event.event_json do
+            json when is_binary(json) and json != "" ->
+              case Jason.decode(json) do
+                {:ok, map} -> map
+                _ -> nil
+              end
+
+            _ ->
+              nil
+          end
+
+        %{
+          event_type: event && event.event_type,
+          event_json: event && event.event_json,
+          event: decoded
+        }
+      end)
+
+    Map.put(result, :decoded_events, parsed)
+  end
+
+  defp decode_listener_events(result), do: result
 
   defp emit_progress_telemetry(progress, session) do
     :telemetry.execute(
@@ -1169,11 +1201,23 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp finalize_explorer_result(%{dataframes: dfs} = state) do
-    combined =
-      dfs
-      |> Enum.reverse()
-      |> Explorer.DataFrame.concat_rows()
+    ordered = Enum.reverse(dfs)
+    # Re-project each batch to the first batch's column order before
+    # `concat_rows`. Without this, two batches whose names match but
+    # whose orderings differ would produce a silently permuted frame.
+    # When a wire schema is present, `apply_schema_policy/2` enforces
+    # the authoritative order afterwards.
+    aligned =
+      case ordered do
+        [first | _] ->
+          target_names = Explorer.DataFrame.names(first)
+          Enum.map(ordered, fn df -> Explorer.DataFrame.select(df, target_names) end)
 
+        [] ->
+          []
+      end
+
+    combined = Explorer.DataFrame.concat_rows(aligned)
     dataframe = apply_schema_policy(combined, state.schema)
 
     {:ok,
@@ -1321,12 +1365,14 @@ defmodule SparkEx.Connect.ResultDecoder do
           {"_#{index}", SparkEx.Observation.decode_literal(value)}
         end)
       else
+        # `Enum.zip/2` stops at the shorter list, avoiding both the O(N*M) cost
+        # of `Enum.at/2` per key and the silent `nil` injection a length
+        # mismatch would otherwise produce.
         keys
-        |> Enum.with_index()
-        |> Enum.map(fn {key, index} ->
-          {key, SparkEx.Observation.decode_literal(Enum.at(values, index))}
+        |> Enum.zip(values)
+        |> Map.new(fn {key, value} ->
+          {key, SparkEx.Observation.decode_literal(value)}
         end)
-        |> Map.new()
       end
 
     Map.update(acc, metric.name, entry, fn existing ->
