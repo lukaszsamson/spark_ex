@@ -2040,52 +2040,54 @@ defmodule SparkEx.Connect.Client do
     [begin_request | chunk_requests]
   end
 
-  defp file_chunk_request_stream(session, name, path, total_bytes, chunk_size) do
-    num_chunks = max(div(total_bytes + chunk_size - 1, chunk_size), 1)
+  # Only called when `total_bytes > @artifact_chunk_size` (see
+  # `producer_stream/2`). Empty and small-but-non-empty artifacts are
+  # routed to the batch path, matching PySpark's `_add_artifacts`
+  # (artifact.py: `if size > CHUNK_SIZE` → chunked, else → batched).
+  # We do not need (and previously had a dead) `total_bytes == 0`
+  # branch here.
+  defp file_chunk_request_stream(session, name, path, total_bytes, chunk_size)
+       when total_bytes > 0 do
+    num_chunks = div(total_bytes + chunk_size - 1, chunk_size)
 
-    if total_bytes == 0 do
-      [empty_begin_chunk_request(session, name, num_chunks)]
-    else
-      path
-      |> file_byte_stream(chunk_size)
-      |> Stream.transform(:first, fn chunk, acc ->
-        case acc do
-          :first ->
-            begin = %AddArtifactsRequest{
-              session_id: session.session_id,
-              client_observed_server_side_session_id: session.server_side_session_id,
-              user_context: UserContextExtensions.build_user_context(session.user_id),
-              client_type: session.client_type,
-              payload:
-                {:begin_chunk,
-                 %AddArtifactsRequest.BeginChunkedArtifact{
-                   name: name,
-                   total_bytes: total_bytes,
-                   num_chunks: num_chunks,
-                   initial_chunk: %AddArtifactsRequest.ArtifactChunk{
-                     data: chunk,
-                     crc: :erlang.crc32(chunk)
-                   }
-                 }}
-            }
+    path
+    |> file_byte_stream(chunk_size)
+    |> Stream.transform(:first, fn chunk, acc ->
+      case acc do
+        :first ->
+          begin = %AddArtifactsRequest{
+            session_id: session.session_id,
+            client_observed_server_side_session_id: session.server_side_session_id,
+            user_context: UserContextExtensions.build_user_context(session.user_id),
+            client_type: session.client_type,
+            payload:
+              {:begin_chunk,
+               %AddArtifactsRequest.BeginChunkedArtifact{
+                 name: name,
+                 total_bytes: total_bytes,
+                 num_chunks: num_chunks,
+                 initial_chunk: %AddArtifactsRequest.ArtifactChunk{
+                   data: chunk,
+                   crc: :erlang.crc32(chunk)
+                 }
+               }}
+          }
 
-            {[begin], :rest}
+          {[begin], :rest}
 
-          :rest ->
-            req = %AddArtifactsRequest{
-              session_id: session.session_id,
-              client_observed_server_side_session_id: session.server_side_session_id,
-              user_context: UserContextExtensions.build_user_context(session.user_id),
-              client_type: session.client_type,
-              payload:
-                {:chunk,
-                 %AddArtifactsRequest.ArtifactChunk{data: chunk, crc: :erlang.crc32(chunk)}}
-            }
+        :rest ->
+          req = %AddArtifactsRequest{
+            session_id: session.session_id,
+            client_observed_server_side_session_id: session.server_side_session_id,
+            user_context: UserContextExtensions.build_user_context(session.user_id),
+            client_type: session.client_type,
+            payload:
+              {:chunk, %AddArtifactsRequest.ArtifactChunk{data: chunk, crc: :erlang.crc32(chunk)}}
+          }
 
-            {[req], :rest}
-        end
-      end)
-    end
+          {[req], :rest}
+      end
+    end)
   end
 
   # Lazy byte-chunk stream over a file. Avoids `File.stream!/2`/`/3`
@@ -2112,23 +2114,6 @@ defmodule SparkEx.Connect.Client do
       end,
       fn io -> File.close(io) end
     )
-  end
-
-  defp empty_begin_chunk_request(session, name, num_chunks) do
-    %AddArtifactsRequest{
-      session_id: session.session_id,
-      client_observed_server_side_session_id: session.server_side_session_id,
-      user_context: UserContextExtensions.build_user_context(session.user_id),
-      client_type: session.client_type,
-      payload:
-        {:begin_chunk,
-         %AddArtifactsRequest.BeginChunkedArtifact{
-           name: name,
-           total_bytes: 0,
-           num_chunks: num_chunks,
-           initial_chunk: %AddArtifactsRequest.ArtifactChunk{data: <<>>, crc: :erlang.crc32(<<>>)}
-         }}
-    }
   end
 
   defp chunk_binary(data, chunk_size), do: do_chunk_binary(data, chunk_size, [])

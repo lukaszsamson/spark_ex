@@ -98,4 +98,156 @@ defmodule SparkEx.BugsPlan5.StreamJTest do
       assert function_exported?(SparkEx.Connect.Client, :artifact_status_full, 2)
     end
   end
+
+  # CLAUDE-78 — empty artifacts must take the batch path (BatchedArtifact),
+  # never the chunked path (BeginChunkedArtifact). PySpark's `_add_artifacts`
+  # routes `size > CHUNK_SIZE` to chunked and everything else to batched;
+  # SparkEx's `producer_stream/2` does the same. The previously-dead
+  # `if total_bytes == 0` branch inside `file_chunk_request_stream/5` is
+  # now gone — these tests pin the reachable wire shape.
+  describe "empty artifact wire shape (CLAUDE-78)" do
+    setup do
+      session = %SparkEx.Session{
+        session_id: "00000000-0000-0000-0000-000000000000",
+        user_id: "u",
+        client_type: "test",
+        server_side_session_id: nil,
+        channel: nil
+      }
+
+      {:ok, session: session}
+    end
+
+    test "empty in-memory binary uses BatchedArtifact, not BeginChunkedArtifact",
+         %{session: session} do
+      [request] =
+        SparkEx.Connect.Client.build_add_artifacts_requests(session, [{"empty.jar", ""}])
+
+      assert {:batch, %Spark.Connect.AddArtifactsRequest.Batch{artifacts: [single]}} =
+               request.payload
+
+      assert single.name == "empty.jar"
+      assert single.data.data == ""
+      # `:erlang.crc32(<<>>) == 0`, which is also the int64 proto default;
+      # protobuf does not serialize the field on the wire — PySpark's
+      # `zlib.crc32(b"") == 0` behaves identically.
+      assert single.data.crc == 0
+    end
+
+    test "empty file uses BatchedArtifact, not BeginChunkedArtifact",
+         %{session: session} do
+      path = Path.join(System.tmp_dir!(), "spark_ex_empty_#{System.unique_integer([:positive])}")
+      File.write!(path, "")
+
+      try do
+        [request] =
+          SparkEx.Connect.Client.build_add_artifacts_requests(
+            session,
+            [{"empty.jar", {:file, path, 0}}]
+          )
+
+        assert {:batch, %Spark.Connect.AddArtifactsRequest.Batch{artifacts: [single]}} =
+                 request.payload
+
+        assert single.name == "empty.jar"
+        assert single.data.data == ""
+      after
+        File.rm!(path)
+      end
+    end
+
+    test "chunked path only triggers when total_bytes > chunk_size",
+         %{session: session} do
+      path = Path.join(System.tmp_dir!(), "spark_ex_big_#{System.unique_integer([:positive])}")
+      # 3.5 chunks of @ 1024 KiB → spans BeginChunked + 3 follow-up chunks.
+      data = :crypto.strong_rand_bytes(3_500)
+      File.write!(path, data)
+
+      try do
+        requests =
+          SparkEx.Connect.Client.build_add_artifacts_requests(
+            session,
+            [{"big.jar", {:file, path, byte_size(data)}}],
+            1024
+          )
+
+        # First request is the BeginChunkedArtifact, rest are chunks.
+        [first | rest] = requests
+        assert {:begin_chunk, begin} = first.payload
+        # 3500 bytes / 1024 = ceil(3.418) = 4 chunks.
+        assert begin.num_chunks == 4
+        assert begin.total_bytes == 3500
+        assert byte_size(begin.initial_chunk.data) == 1024
+        assert length(rest) == 3
+        for req <- rest, do: assert({:chunk, _} = req.payload)
+      after
+        File.rm!(path)
+      end
+    end
+  end
+
+  # CLAUDE-67 — Spark Connect's `ResponseSchema` is `DataType` whose
+  # top-level `kind` is *required* to be `:struct`. PySpark asserts this
+  # (`assert isinstance(schema, StructType)` in core.py) and otherwise
+  # derives a struct schema from the Arrow stream itself. SparkEx falls
+  # back to a 0-column empty DataFrame for any non-Struct top-level
+  # schema (including `kind: nil` and `state.schema == nil`), which is
+  # the right shape: a 1-column VOID frame would diverge from PySpark
+  # and would mis-shape downstream callers that count columns.
+  describe "empty-dataframe schema fallback (CLAUDE-67)" do
+    alias Spark.Connect.{DataType, ExecutePlanResponse}
+    alias SparkEx.Connect.ResultDecoder
+
+    test "no schema frame, no arrow batches → 0-column empty DataFrame" do
+      stream = [
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      {:ok, result} = ResultDecoder.decode_stream_explorer(stream, nil)
+      assert Explorer.DataFrame.n_rows(result.dataframe) == 0
+      assert Explorer.DataFrame.names(result.dataframe) == []
+      # `state.schema` was never set, so it is preserved as nil on the result.
+      assert result.schema == nil
+    end
+
+    test "non-Struct top-level schema (server protocol violation) → 0-column frame" do
+      # A wrapper DataType with `kind: nil` (or any non-Struct kind at the
+      # top level) is a server bug. PySpark would assert-fail; SparkEx
+      # falls back to an empty 0-column frame so callers don't crash.
+      bogus_schema = %DataType{kind: nil}
+
+      stream = [
+        {:ok, %ExecutePlanResponse{schema: bogus_schema}},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      {:ok, result} = ResultDecoder.decode_stream_explorer(stream, nil)
+      assert Explorer.DataFrame.n_rows(result.dataframe) == 0
+      assert Explorer.DataFrame.names(result.dataframe) == []
+    end
+
+    test "Struct schema with zero fields → 0-column frame (Spark `STRUCT<>`)" do
+      struct_schema = %DataType{
+        kind: {:struct, %DataType.Struct{fields: []}}
+      }
+
+      stream = [
+        {:ok, %ExecutePlanResponse{schema: struct_schema}},
+        {:ok,
+         %ExecutePlanResponse{
+           response_type: {:result_complete, %ExecutePlanResponse.ResultComplete{}}
+         }}
+      ]
+
+      {:ok, result} = ResultDecoder.decode_stream_explorer(stream, nil)
+      assert Explorer.DataFrame.n_rows(result.dataframe) == 0
+      assert Explorer.DataFrame.names(result.dataframe) == []
+    end
+  end
 end
