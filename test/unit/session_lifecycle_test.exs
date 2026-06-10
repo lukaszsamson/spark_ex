@@ -623,7 +623,11 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
         })
 
       on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
+        try do
+          if Process.alive?(pid), do: GenServer.stop(pid)
+        catch
+          :exit, _ -> :ok
+        end
       end)
 
       log =
