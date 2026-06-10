@@ -199,11 +199,25 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   @doc """
   Stops the listener bus and closes the event stream.
+
+  Tolerates a bus that is already dead or terminating gracefully (e.g. it
+  is linked to an exiting owner), mirroring `SparkEx.Session.stop/1`.
   """
   @spec stop(GenServer.server()) :: :ok
   def stop(bus) do
     GenServer.stop(bus, :normal)
+  catch
+    :exit, reason ->
+      if graceful_stop_exit?(reason), do: :ok, else: exit(reason)
   end
+
+  defp graceful_stop_exit?({reason, {GenServer, :stop, _args}}), do: graceful_stop_exit?(reason)
+  defp graceful_stop_exit?({reason, {:sys, :terminate, _args}}), do: graceful_stop_exit?(reason)
+  defp graceful_stop_exit?(:noproc), do: true
+  defp graceful_stop_exit?(:normal), do: true
+  defp graceful_stop_exit?(:shutdown), do: true
+  defp graceful_stop_exit?({:shutdown, _}), do: true
+  defp graceful_stop_exit?(_), do: false
 
   @doc """
   Dispatches a QueryStarted-like event JSON to listener buses for the given session.

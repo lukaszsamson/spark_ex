@@ -113,7 +113,14 @@ defmodule SparkEx.BugsFableStateTest do
       name = :"plan_ids_named_#{System.unique_integer([:positive])}"
 
       {:ok, pid} = Agent.start_link(fn -> :ok end, name: name)
-      on_exit(fn -> if Process.alive?(pid), do: Agent.stop(pid) end)
+
+      on_exit(fn ->
+        try do
+          if Process.alive?(pid), do: Agent.stop(pid)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
 
       ref = PlanIds.register_session(pid)
       on_exit(fn -> PlanIds.unregister_session(pid) end)
