@@ -4420,10 +4420,6 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp validate_schema_ddl_for_sql_relation(other) do
-    {:error, {:invalid_schema_ddl, "expected DDL string, got: #{inspect(other)}"}}
-  end
-
   defp scan_schema_ddl(<<>>, :outside), do: :ok
   defp scan_schema_ddl(<<>>, :backtick), do: {:error, "unterminated backtick-quoted identifier"}
   defp scan_schema_ddl(<<>>, :single_quote), do: {:error, "unterminated single-quoted string"}
