@@ -457,23 +457,24 @@ defmodule SparkEx.MissOpus2Test do
     end
 
     test "ltrim/2 with bare-string trim resolves as column ref" do
+      # PySpark sends the trim string FIRST: ltrim(trim, col) (FABLE-01).
       result = Functions.ltrim("s", "x")
-      assert %Column{expr: {:fn, "ltrim", [{:col, "s"}, {:col, "x"}], false}} = result
+      assert %Column{expr: {:fn, "ltrim", [{:col, "x"}, {:col, "s"}], false}} = result
     end
 
     test "ltrim/2 with literal trim character" do
       result = Functions.ltrim("s", Functions.lit("x"))
-      assert %Column{expr: {:fn, "ltrim", [{:col, "s"}, {:lit, "x"}], false}} = result
+      assert %Column{expr: {:fn, "ltrim", [{:lit, "x"}, {:col, "s"}], false}} = result
     end
 
     test "rtrim/2 with bare-string trim resolves as column ref" do
       result = Functions.rtrim("s", "x")
-      assert %Column{expr: {:fn, "rtrim", [{:col, "s"}, {:col, "x"}], false}} = result
+      assert %Column{expr: {:fn, "rtrim", [{:col, "x"}, {:col, "s"}], false}} = result
     end
 
     test "trim/2 with bare-string trim resolves as column ref" do
       result = Functions.trim("s", "x")
-      assert %Column{expr: {:fn, "trim", [{:col, "s"}, {:col, "x"}], false}} = result
+      assert %Column{expr: {:fn, "trim", [{:col, "x"}, {:col, "s"}], false}} = result
     end
 
     test "btrim/2 with bare-string trim resolves as column ref" do
@@ -1618,7 +1619,8 @@ defmodule SparkEx.MissOpus2Test do
 
   describe "19.3 time type mapping" do
     test "time type maps to TIME not STRING" do
-      assert SparkEx.Connect.TypeMapper.to_spark_ddl_type({:time, :microsecond}) == "TIME"
+      # Explorer's real time dtype is the bare atom :time (not a precision tuple).
+      assert SparkEx.Connect.TypeMapper.to_spark_ddl_type(:time) == "TIME"
     end
   end
 
@@ -1683,10 +1685,12 @@ defmodule SparkEx.MissOpus2Test do
       end
     end
 
-    test "group_by accepts integer column indices" do
+    test "group_by rejects integer column indices (PySpark ordinals need an RPC)" do
       df = make_df()
-      result = DataFrame.group_by(df, [0])
-      assert %SparkEx.GroupedData{grouping_exprs: [{:col, "_c0"}]} = result
+
+      assert_raise ArgumentError, ~r/integer column ordinals are not supported/, fn ->
+        DataFrame.group_by(df, [0])
+      end
     end
   end
 
@@ -1702,10 +1706,10 @@ defmodule SparkEx.MissOpus2Test do
       assert {:fn, "+", [{:col, "a"}, {:col, "b"}], false} = expr
     end
 
-    test "simple col references stay as names" do
+    test "Column references stay as expressions; bare strings become names (PySpark parity)" do
       df = make_df()
       result = DataFrame.drop(df, [Functions.col("x"), "y"])
-      assert {:drop, _, ["x", "y"], []} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
+      assert {:drop, _, ["y"], [{:col, "x"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 

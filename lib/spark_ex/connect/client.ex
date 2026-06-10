@@ -563,7 +563,7 @@ defmodule SparkEx.Connect.Client do
          opts,
          decode_fn
        ) do
-    timeout = Keyword.get(opts, :timeout, 60_000)
+    timeout = normalize_grpc_timeout(Keyword.get(opts, :timeout, 60_000))
     request = build_execute_request(session, plan, tags, operation_id, reattachable, opts)
 
     metadata = %{
@@ -593,7 +593,7 @@ defmodule SparkEx.Connect.Client do
   @spec execute_plan_raw_stream(SparkEx.Session.t(), Plan.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, term()}
   def execute_plan_raw_stream(session, plan, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, :infinity)
+    timeout = normalize_grpc_timeout(Keyword.get(opts, :timeout, :infinity))
     request = build_raw_stream_request(session, plan, opts)
 
     case Stub.execute_plan(session.channel, request, timeout: timeout) do
@@ -616,7 +616,7 @@ defmodule SparkEx.Connect.Client do
   @spec execute_plan_reattachable_response_stream(SparkEx.Session.t(), Plan.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, term()}
   def execute_plan_reattachable_response_stream(session, plan, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, :infinity)
+    timeout = normalize_grpc_timeout(Keyword.get(opts, :timeout, :infinity))
     tags = Keyword.get(opts, :tags, [])
 
     with :ok <- validate_tags(tags) do
@@ -640,7 +640,7 @@ defmodule SparkEx.Connect.Client do
   @spec execute_plan_managed_stream(SparkEx.Session.t(), Plan.t(), keyword()) ::
           {:ok, SparkEx.ManagedStream.t()} | {:error, term()}
   def execute_plan_managed_stream(session, plan, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, :infinity)
+    timeout = normalize_grpc_timeout(Keyword.get(opts, :timeout, :infinity))
     owner = Keyword.get(opts, :stream_owner, self())
     idle_timeout = Keyword.get(opts, :idle_timeout, nil)
     release_timeout = Keyword.get(opts, :release_execute_timeout, @release_execute_timeout)
@@ -1367,7 +1367,7 @@ defmodule SparkEx.Connect.Client do
   @spec reattach_execute(SparkEx.Session.t(), String.t(), String.t() | nil, keyword()) ::
           {:ok, Enumerable.t()} | {:error, term()}
   def reattach_execute(session, operation_id, last_response_id, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, 60_000)
+    timeout = normalize_grpc_timeout(Keyword.get(opts, :timeout, 60_000))
 
     request = %ReattachExecuteRequest{
       session_id: session.session_id,
@@ -1526,9 +1526,9 @@ defmodule SparkEx.Connect.Client do
           result_complete?: false,
           emitted_count: 0,
           # Tracks consecutive graceful-EOF reattaches that did not yield a
-          # new response. Once it crosses @empty_eof_streak_limit, each
-          # additional empty EOF counts as a real attempt so we can hit the
-          # policy cap rather than spinning forever.
+          # new response. Used purely as an anti-spin backoff signal: it never
+          # consumes the retry budget (PySpark reattaches indefinitely on
+          # graceful EOF, reattach.py:175-188) — see do_perform_reattach.
           empty_eof_streak: 0
         }
       end,
@@ -1537,9 +1537,12 @@ defmodule SparkEx.Connect.Client do
     )
   end
 
-  # Maximum number of consecutive zero-progress graceful-EOFs before each
-  # additional empty EOF counts toward the retry budget.
-  @empty_eof_streak_limit 3
+  # Upper bound on how far the zero-progress graceful-EOF streak escalates the
+  # anti-spin backoff. The streak itself never charges the retry budget
+  # (FABLE-38); this only caps the backoff exponent so a long quiet stream
+  # settles at the policy's max backoff instead of growing the exponent
+  # unboundedly.
+  @empty_eof_streak_backoff_cap 3
 
   defp reattach_stream_step(%{result_complete?: true, iter: iter} = state) do
     case pull_iter(iter) do
@@ -1574,7 +1577,15 @@ defmodule SparkEx.Connect.Client do
             last_response_id: new_id,
             result_complete?: complete?,
             emitted_count: state.emitted_count + 1,
-            empty_eof_streak: 0
+            empty_eof_streak: 0,
+            # PySpark constructs a fresh Retrying per consumed response
+            # (reattach.py:159), so the retry budget applies per fetch, not for
+            # the whole stream lifetime. Reset the attempt counter on progress
+            # so a long-lived stream surviving many *spaced-out* transient blips
+            # never exhausts a lifetime budget, and the next blip's backoff
+            # restarts from initial_backoff_ms rather than the pinned cap
+            # (FABLE-11).
+            attempt: 0
         }
 
         # Per-response release: PySpark's reattach iterator fires
@@ -1670,6 +1681,17 @@ defmodule SparkEx.Connect.Client do
     :ok
   end
 
+  # Graceful EOF (server ended the stream without ResponseComplete) is NOT a
+  # failure: PySpark reattaches immediately and indefinitely until either a new
+  # response or ResponseComplete arrives (reattach.py:175-188) — no sleep, no
+  # budget. We keep a small bounded anti-spin sleep (see do_perform_reattach)
+  # but never charge the retry budget nor surface :reattach_incomplete_result
+  # for graceful EOFs (FABLE-38). The retry budget applies only to transient
+  # errors, which raise the max-retries error as before.
+  defp perform_reattach(state, {:graceful_eof, _} = reason) do
+    do_perform_reattach(state, reason)
+  end
+
   defp perform_reattach(state, reason) do
     %{ctx: ctx, attempt: attempt} = state
     %{policy: policy} = ctx
@@ -1706,29 +1728,25 @@ defmodule SparkEx.Connect.Client do
       telemetry_metadata
     )
 
-    # Backoff escalates with the larger of `attempt` and `empty_eof_streak`.
-    # Without this, repeated graceful-EOF reattaches under the streak limit
-    # would all sleep for `initial_backoff_ms` (since `attempt` stays at 0)
-    # and hammer the server at a constant rate. Folding the streak in lets
-    # the backoff grow exponentially during the EOF spin even before any
-    # streak crossing converts an EOF into a real attempt.
-    backoff_attempt = max(attempt, state.empty_eof_streak)
+    # Backoff escalates with the larger of `attempt` and the (capped)
+    # graceful-EOF streak. Without folding the streak in, repeated graceful-EOF
+    # reattaches would all sleep for `initial_backoff_ms` (since `attempt` stays
+    # at 0 — graceful EOF never charges the budget) and hammer the server at a
+    # constant rate. The streak is capped at @empty_eof_streak_backoff_cap so a
+    # long quiet stream settles at the policy max backoff and reattaches forever
+    # without ever failing (FABLE-38).
+    eof_backoff = min(state.empty_eof_streak, @empty_eof_streak_backoff_cap)
+    backoff_attempt = max(attempt, eof_backoff)
     sleep_ms = backoff_with_retry_info(backoff_attempt, policy, server_retry_delay_ms)
     policy.sleep_fun.(sleep_ms)
 
     {next_attempt, next_streak} =
       case reason do
         {:graceful_eof, _} ->
-          streak = state.empty_eof_streak + 1
-          # Once we've spun through @empty_eof_streak_limit zero-progress
-          # graceful EOFs, start charging each subsequent EOF against the
-          # retry budget so we eventually surface :reattach_incomplete_result
-          # instead of looping forever.
-          if streak > @empty_eof_streak_limit do
-            {attempt + 1, streak}
-          else
-            {attempt, streak}
-          end
+          # PySpark reattaches indefinitely on graceful EOF (reattach.py:175-188):
+          # never charge the retry budget. The growing streak only feeds the
+          # anti-spin backoff above (FABLE-38); attempt stays put.
+          {attempt, state.empty_eof_streak + 1}
 
         _ ->
           {attempt + 1, 0}
@@ -2126,7 +2144,7 @@ defmodule SparkEx.Connect.Client do
   end
 
   defp do_chunk_binary(data, chunk_size, acc) do
-    <<chunk::binary-size(chunk_size), rest::binary>> = data
+    <<chunk::binary-size(^chunk_size), rest::binary>> = data
     do_chunk_binary(rest, chunk_size, [chunk | acc])
   end
 
@@ -2270,6 +2288,15 @@ defmodule SparkEx.Connect.Client do
     {extra_metadata, opts} = Keyword.pop(opts, :extra_metadata, %{})
     {grpc_opts, _} = Keyword.split(opts, [:timeout])
 
+    # Map a `timeout: nil` / `:infinity` opt to gun's infinite timeout so a
+    # literal nil never reaches the Stub call and crashes (FABLE-03). Absent
+    # key keeps the Stub's own default.
+    grpc_opts =
+      case Keyword.fetch(grpc_opts, :timeout) do
+        {:ok, timeout} -> Keyword.put(grpc_opts, :timeout, normalize_grpc_timeout(timeout))
+        :error -> grpc_opts
+      end
+
     # Reserved keys (`:rpc`, `:session_id`) win over `extra_metadata` so
     # callers can't accidentally corrupt telemetry attribution by passing
     # a colliding key.
@@ -2309,6 +2336,19 @@ defmodule SparkEx.Connect.Client do
       )
     end)
   end
+
+  # gRPC/gun interprets `timeout: nil` literally (`receive ... after nil`),
+  # which raises :timeout_value and would crash the calling process. PySpark's
+  # awaitTermination()-style "no timeout" means block indefinitely, so map both
+  # `nil` and `:infinity` to gun's infinite timeout (FABLE-03). Integer values
+  # pass through unchanged. The streaming modules rely on this contract: they
+  # may put `timeout: nil` into opts to signal "no gRPC deadline".
+  @doc false
+  @spec normalize_grpc_timeout(nil | :infinity | non_neg_integer()) ::
+          :infinity | non_neg_integer()
+  def normalize_grpc_timeout(nil), do: :infinity
+  def normalize_grpc_timeout(:infinity), do: :infinity
+  def normalize_grpc_timeout(timeout) when is_integer(timeout), do: timeout
 
   defp do_unary_rpc_call(rpc, session, request, grpc_opts) do
     case do_unary_stub_call(rpc, session.channel, request, grpc_opts) do
@@ -2371,13 +2411,17 @@ defmodule SparkEx.Connect.Client do
   end
 
   defp execute_plan_non_reattachable(session, request, timeout, opts, decode_fn) do
+    # Pass :session so per-session retry policies apply (matches add_artifacts/2
+    # and dispatch_unary_rpc/4). Without it RetryPolicyRegistry.policy_for(nil, ...)
+    # would ignore session.retry_policies (FABLE-37). Caller-supplied :session in
+    # opts wins via Keyword.put_new.
     retry_with_backoff(
       fn ->
         with {:ok, stream} <- stub_execute_plan(session, request, timeout) do
           decode_fn.(stream)
         end
       end,
-      opts
+      Keyword.put_new(opts, :session, session)
     )
   end
 
@@ -2445,12 +2489,17 @@ defmodule SparkEx.Connect.Client do
   # Retries:
   #   * gRPC UNAVAILABLE
   #   * gRPC INTERNAL with INVALID_CURSOR.DISCONNECTED errorClass
-  #   * Any error that carries a server-supplied retry_delay (RetryInfo)
+  #   * Any error whose status details carry a RetryInfo message, even when its
+  #     retry_delay is unset (retries.py:367-369). Presence is tracked via
+  #     has_retry_info; retry_delay_ms may be nil for such errors.
   # Explicitly does NOT retry DEADLINE_EXCEEDED — Spark client treats it as terminal.
   @doc false
   @spec retryable_error?(SparkEx.Error.Remote.t()) :: boolean()
   def retryable_error?(%SparkEx.Error.Remote{} = error) do
     cond do
+      error.has_retry_info == true ->
+        true
+
       is_integer(error.retry_delay_ms) and error.retry_delay_ms >= 0 ->
         true
 
@@ -2523,9 +2572,14 @@ defmodule SparkEx.Connect.Client do
     _ -> :error
   end
 
-  defp backoff_with_retry_info(_attempt, policy, retry_delay_ms)
+  # The server-supplied RetryInfo.retry_delay is a FLOOR on the normal
+  # exponential backoff, never a replacement (pyspark client/retries.py:157-167):
+  #   wait = max(exponential_backoff_with_jitter, min(retry_delay, max_server_retry_delay))
+  # A small server hint (10-100 ms) must not suppress attempt-based backoff.
+  defp backoff_with_retry_info(attempt, policy, retry_delay_ms)
        when is_integer(retry_delay_ms) and retry_delay_ms > 0 do
-    Kernel.min(retry_delay_ms, policy.max_server_retry_delay)
+    server_floor = Kernel.min(retry_delay_ms, policy.max_server_retry_delay)
+    Kernel.max(backoff_ms(attempt, policy), server_floor)
   end
 
   defp backoff_with_retry_info(attempt, policy, _retry_delay_ms) do

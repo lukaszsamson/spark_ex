@@ -2482,6 +2482,51 @@ defmodule SparkEx.Connect.PlanEncoder do
     {{:stat_sample_by, child_plan, col_expr, fractions, seed}, plan_ids, refs, counter}
   end
 
+  # ── MapPartitions / GroupMap / CoGroupMap ──
+  # Mirror the encode_relation/2 shapes (FABLE-34) so these reach the server
+  # instead of raising "unsupported plan tuple". Recurse into child plans and
+  # the grouping / sorting expression lists carried in `opts` so cross-DataFrame
+  # references nested in them get hoisted into with_relations.references.
+
+  defp rewrite_plan({:map_partitions, child_plan, func, opts}, plan_ids, refs, counter)
+       when is_list(opts) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+    {{:map_partitions, child_plan, func, opts}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan({:group_map, child_plan, grouping_exprs, func, opts}, plan_ids, refs, counter)
+       when is_list(grouping_exprs) and is_list(opts) do
+    {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
+
+    {grouping_exprs, plan_ids, refs, counter} =
+      rewrite_expr_list(grouping_exprs, plan_ids, refs, counter)
+
+    {opts, plan_ids, refs, counter} = rewrite_group_map_opts(opts, plan_ids, refs, counter)
+    {{:group_map, child_plan, grouping_exprs, func, opts}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:co_group_map, left_plan, left_grouping, right_plan, right_grouping, func, opts},
+         plan_ids,
+         refs,
+         counter
+       )
+       when is_list(left_grouping) and is_list(right_grouping) and is_list(opts) do
+    {left_plan, plan_ids, refs, counter} = rewrite_plan(left_plan, plan_ids, refs, counter)
+    {right_plan, plan_ids, refs, counter} = rewrite_plan(right_plan, plan_ids, refs, counter)
+
+    {left_grouping, plan_ids, refs, counter} =
+      rewrite_expr_list(left_grouping, plan_ids, refs, counter)
+
+    {right_grouping, plan_ids, refs, counter} =
+      rewrite_expr_list(right_grouping, plan_ids, refs, counter)
+
+    {opts, plan_ids, refs, counter} = rewrite_co_group_map_opts(opts, plan_ids, refs, counter)
+
+    {{:co_group_map, left_plan, left_grouping, right_plan, right_grouping, func, opts}, plan_ids,
+     refs, counter}
+  end
+
   # ── Catalog / TVF / UDTF (leaf nodes — no child plan) ──
 
   defp rewrite_plan({:catalog, _} = plan, plan_ids, refs, counter),
@@ -2492,14 +2537,20 @@ defmodule SparkEx.Connect.PlanEncoder do
     {{:table_valued_function, name, args}, plan_ids, refs, counter}
   end
 
+  # Rewrite args like {:table_valued_function, ...} does (FABLE-34); previously
+  # the args passed through unrewritten, so references in UDTF arguments were
+  # never hoisted.
   defp rewrite_plan(
-         {:inline_udtf, _name, _args, _command, _return_type, _eval_type, _python_ver,
-          _deterministic} = plan,
+         {:inline_udtf, name, args, command, return_type, eval_type, python_ver, deterministic},
          plan_ids,
          refs,
          counter
-       ),
-       do: {plan, plan_ids, refs, counter}
+       ) do
+    {args, plan_ids, refs, counter} = rewrite_expr_list(args, plan_ids, refs, counter)
+
+    {{:inline_udtf, name, args, command, return_type, eval_type, python_ver, deterministic},
+     plan_ids, refs, counter}
+  end
 
   defp rewrite_plan(other, _plan_ids, _refs, _counter) do
     raise ArgumentError, "unsupported plan tuple: #{inspect(other)}"
@@ -2507,18 +2558,12 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp rewrite_args(nil, plan_ids, refs, counter), do: {nil, plan_ids, refs, counter}
 
+  # A list is always positional SQL args (mirrors `encode_sql_relation/2`): treat
+  # each element as a standalone expression. We must not collapse a keyword-looking
+  # list into named args — `[{:lit, 1}]` is a positional expression tuple, not the
+  # named arg "lit" => 1 (FABLE-35).
   defp rewrite_args(args, plan_ids, refs, counter) when is_list(args) do
-    if Keyword.keyword?(args) do
-      {rewritten_args, {plan_ids, refs, counter}} =
-        Enum.map_reduce(args, {plan_ids, refs, counter}, fn {key, value}, {ids, acc, ctr} ->
-          {rewritten_value, ids, acc, ctr} = rewrite_expr(value, ids, acc, ctr)
-          {{key, rewritten_value}, {ids, acc, ctr}}
-        end)
-
-      {rewritten_args, plan_ids, refs, counter}
-    else
-      rewrite_expr_list(args, plan_ids, refs, counter)
-    end
+    rewrite_expr_list(args, plan_ids, refs, counter)
   end
 
   defp rewrite_args(args, plan_ids, refs, counter) when is_map(args) do
@@ -2529,6 +2574,48 @@ defmodule SparkEx.Connect.PlanEncoder do
       end)
 
     {Map.new(new_args), plan_ids, refs, counter}
+  end
+
+  # Rewrite the expression-list and nested-plan options carried by a GroupMap
+  # tuple (see encode_relation/2 for the option keys). Keys not present are left
+  # untouched.
+  defp rewrite_group_map_opts(opts, plan_ids, refs, counter) do
+    {opts, plan_ids, refs, counter} =
+      rewrite_opt_plan(opts, :initial_input, plan_ids, refs, counter)
+
+    {opts, plan_ids, refs, counter} =
+      rewrite_opt_expr_list(opts, :sorting_expressions, plan_ids, refs, counter)
+
+    rewrite_opt_expr_list(opts, :initial_grouping_expressions, plan_ids, refs, counter)
+  end
+
+  defp rewrite_co_group_map_opts(opts, plan_ids, refs, counter) do
+    {opts, plan_ids, refs, counter} =
+      rewrite_opt_expr_list(opts, :input_sorting_expressions, plan_ids, refs, counter)
+
+    rewrite_opt_expr_list(opts, :other_sorting_expressions, plan_ids, refs, counter)
+  end
+
+  defp rewrite_opt_plan(opts, key, plan_ids, refs, counter) do
+    case Keyword.get(opts, key) do
+      nil ->
+        {opts, plan_ids, refs, counter}
+
+      plan ->
+        {plan, plan_ids, refs, counter} = rewrite_plan(plan, plan_ids, refs, counter)
+        {Keyword.put(opts, key, plan), plan_ids, refs, counter}
+    end
+  end
+
+  defp rewrite_opt_expr_list(opts, key, plan_ids, refs, counter) do
+    case Keyword.get(opts, key) do
+      exprs when is_list(exprs) ->
+        {exprs, plan_ids, refs, counter} = rewrite_expr_list(exprs, plan_ids, refs, counter)
+        {Keyword.put(opts, key, exprs), plan_ids, refs, counter}
+
+      _ ->
+        {opts, plan_ids, refs, counter}
+    end
   end
 
   defp rewrite_expr_list(exprs, plan_ids, refs, counter) do
@@ -2661,6 +2748,17 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_expr({:alias, expr, name}, plan_ids, refs, counter) do
     {expr, plan_ids, refs, counter} = rewrite_expr(expr, plan_ids, refs, counter)
     {{:alias, expr, name}, plan_ids, refs, counter}
+  end
+
+  # Column.alias_/3 with `metadata:` produces a 4-tuple. PySpark collects
+  # subquery / cross-DataFrame references through an alias regardless of metadata
+  # (plan.py:162-177; expressions.py:223-225), so we must recurse into the inner
+  # expression here too — otherwise a subquery or cross-DF reference nested under
+  # a metadata alias is never hoisted into with_relations.references and the
+  # server reports "plan not found" (FABLE-08).
+  defp rewrite_expr({:alias, expr, name, metadata}, plan_ids, refs, counter) do
+    {expr, plan_ids, refs, counter} = rewrite_expr(expr, plan_ids, refs, counter)
+    {{:alias, expr, name, metadata}, plan_ids, refs, counter}
   end
 
   defp rewrite_expr({:cast, expr, type_str}, plan_ids, refs, counter) do
@@ -2901,13 +2999,15 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_sql_argument({:subquery, _, _, _} = expr), do: encode_expression(expr)
   defp encode_sql_argument(value), do: encode_literal_expression(value)
 
+  # PySpark keeps positional (`args`) and named (`named_args`) parameter channels
+  # structurally separate (plan.py:1442-1480): a list is always positional, a map
+  # is always named. We must NOT infer "named" from a list that happens to look
+  # like a keyword list — `SparkEx.sql(s, "SELECT ?", args: [{:lit, 1}])` passes a
+  # positional expression tuple, and `Keyword.keyword?/1` would wrongly treat it as
+  # the named arg "lit" => 1.
   defp encode_sql_relation(query, args) do
     cond do
-      is_map(args) and map_size(args) > 0 ->
-        named = encode_sql_named_arguments(args)
-        %SQL{query: query, named_arguments: named, args: extract_legacy_named_args(named)}
-
-      is_list(args) and args != [] and Keyword.keyword?(args) ->
+      is_map(args) and not is_struct(args) and map_size(args) > 0 ->
         named = encode_sql_named_arguments(args)
         %SQL{query: query, named_arguments: named, args: extract_legacy_named_args(named)}
 
@@ -3171,8 +3271,12 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.Literal{literal_type: {:double, v}}
   end
 
+  # Use :normal (plain) formatting, never the default :scientific. Scientific
+  # notation (e.g. "1.5E+10") both breaks the server's string parse and confuses
+  # infer_decimal_precision_scale/1, which would count "5E+10" as fractional digits
+  # and yield a bogus precision/scale that overflows the value (FABLE-33).
   defp encode_literal(%Decimal{} = d) do
-    encode_literal({:decimal, Decimal.to_string(d)})
+    encode_literal({:decimal, Decimal.to_string(d, :normal)})
   end
 
   defp encode_literal({:decimal, value}) when is_binary(value) do
@@ -3523,6 +3627,16 @@ defmodule SparkEx.Connect.PlanEncoder do
     %Expression.Window.WindowFrame.FrameBoundary{boundary: {:current_row, true}}
   end
 
+  # PySpark maps a boundary of 0 to current_row = True for BOTH ROW and RANGE
+  # frames (connect/expressions.py:1151-1153, 1190-1192). Encoding 0 as a value
+  # literal breaks RANGE frames: a long-literal boundary forces Catalyst to
+  # require a single numeric order column, so `range_between(0, :unbounded_following)`
+  # over a timestamp or multi-column ordering fails analysis on the server while
+  # the identical PySpark call works (FABLE-07).
+  defp encode_frame_boundary(0, _frame_type) do
+    %Expression.Window.WindowFrame.FrameBoundary{boundary: {:current_row, true}}
+  end
+
   defp encode_frame_boundary(boundary, _frame_type)
        when boundary in [:unbounded, :unbounded_preceding, :unbounded_following] do
     %Expression.Window.WindowFrame.FrameBoundary{boundary: {:unbounded, true}}
@@ -3586,7 +3700,7 @@ defmodule SparkEx.Connect.PlanEncoder do
     do: %DataType{kind: {:double, %DataType.Double{}}}
 
   defp infer_literal_data_type(%Decimal{} = d) do
-    infer_literal_data_type({:decimal, Decimal.to_string(d)})
+    infer_literal_data_type({:decimal, Decimal.to_string(d, :normal)})
   end
 
   defp infer_literal_data_type({:decimal, value}) when is_binary(value) do

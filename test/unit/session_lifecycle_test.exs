@@ -476,13 +476,18 @@ defmodule SparkEx.Unit.SessionLifecycleTest do
       assert schema =~ "_2"
     end
 
-    test "tuple arity mismatch with schema raises ArgumentError" do
+    test "tuple arity mismatch with schema returns an error without crashing the session" do
+      # FABLE-04: malformed local input must NOT raise inside the Session
+      # GenServer (which would terminate it and disconnect the channel). It is
+      # caught and returned as {:error, {:invalid_local_data, _}} with the
+      # original "tuple arity" message preserved, leaving state untouched.
       rows = [{1, "a"}, {2}]
       request = {:create_dataframe, rows, [schema: "id INT, name STRING"]}
 
-      assert_raise ArgumentError, ~r/tuple arity/, fn ->
-        SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
-      end
+      assert {:reply, {:error, {:invalid_local_data, msg}}, %{}} =
+               SparkEx.Session.handle_call(request, {self(), make_ref()}, %{})
+
+      assert msg =~ "tuple arity"
     end
 
     test "rejects DDL with statement terminator or comment markers" do

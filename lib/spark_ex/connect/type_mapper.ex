@@ -6,6 +6,11 @@ defmodule SparkEx.Connect.TypeMapper do
   @doc """
   Converts a Spark Connect `DataType` to an Explorer dtype atom.
 
+  Returns `{:ok, nil}` for Spark types that have no native Explorer dtype
+  (map, variant, UDT, geometry/geography, year-month/calendar interval). Cells
+  for those columns decode as maps/lists/strings; callers building a frame
+  should omit the dtype and let Explorer infer it from the decoded values.
+
   ## Examples
 
       iex> TypeMapper.to_explorer_dtype(%DataType{kind: {:boolean, %DataType.Boolean{}}})
@@ -15,7 +20,7 @@ defmodule SparkEx.Connect.TypeMapper do
       iex> TypeMapper.to_explorer_dtype(%DataType{kind: {:array, %DataType.Array{element_type: element}}})
       {:ok, {:list, {:s, 32}}}
   """
-  @spec to_explorer_dtype(DataType.t() | nil) :: {:ok, atom() | {atom(), term()}}
+  @spec to_explorer_dtype(DataType.t() | nil) :: {:ok, atom() | {atom(), term()} | nil}
   def to_explorer_dtype(%DataType{kind: {tag, _value}} = dt) do
     {:ok, map_kind(tag, dt)}
   end
@@ -101,20 +106,33 @@ defmodule SparkEx.Connect.TypeMapper do
 
   # Date and time types
   defp map_kind(:date, _dt), do: :date
-  defp map_kind(:timestamp, _dt), do: {:datetime, :microsecond}
+  # TIMESTAMP is tz-aware (UTC instant). Explorer's only tz-aware dtype is the
+  # 3-tuple {:datetime, precision, tz}; the deprecated 2-tuple normalizes to a
+  # naive dtype, collapsing TIMESTAMP into TIMESTAMP_NTZ and warning per use.
+  defp map_kind(:timestamp, _dt), do: {:datetime, :microsecond, "Etc/UTC"}
   defp map_kind(:timestamp_ntz, _dt), do: {:naive_datetime, :microsecond}
-  defp map_kind(:time, _dt), do: {:time, :microsecond}
+  # Explorer 0.11's only time dtype is the bare atom `:time`; {:time, _} is not
+  # a valid dtype and raises in check_dtypes!.
+  defp map_kind(:time, _dt), do: :time
 
-  # Interval types — fall back to string
-  defp map_kind(:calendar_interval, _dt), do: :string
-  defp map_kind(:year_month_interval, _dt), do: :string
-  defp map_kind(:day_time_interval, _dt), do: :string
+  # Interval types. Day-time intervals decode as %Explorer.Duration{}, whose
+  # dtype is {:duration, precision}; mapping them to :string mismatches the
+  # decoded cells and crashes the schema-policy rebuild. Year-month/calendar
+  # intervals have no native Explorer dtype, so leave them unmapped (nil) and
+  # let the rebuild infer from the decoded cells.
+  defp map_kind(:calendar_interval, _dt), do: nil
+  defp map_kind(:year_month_interval, _dt), do: nil
+  defp map_kind(:day_time_interval, _dt), do: {:duration, :microsecond}
 
   # Complex types — preserve native nested structure
   defp map_kind(:array, %DataType{kind: {:array, %DataType.Array{element_type: et}}})
        when not is_nil(et) do
-    {:ok, dtype} = to_explorer_dtype(et)
-    {:list, dtype}
+    case to_explorer_dtype(et) do
+      # An element with no native dtype (e.g. ARRAY<MAP<...>>) can't be expressed
+      # as {:list, dtype}; leave the whole list unmapped so cells are inferred.
+      {:ok, nil} -> nil
+      {:ok, dtype} -> {:list, dtype}
+    end
   end
 
   defp map_kind(:array, _dt), do: {:list, :null}
@@ -126,24 +144,33 @@ defmodule SparkEx.Connect.TypeMapper do
         {name, dtype}
       end)
 
-    {:struct, field_dtypes}
+    # If any field has no native dtype, the {:struct, _} dtype would be invalid;
+    # leave the whole struct unmapped so cells are inferred from decoded values.
+    if Enum.any?(field_dtypes, fn {_name, dtype} -> is_nil(dtype) end) do
+      nil
+    else
+      {:struct, field_dtypes}
+    end
   end
 
   defp map_kind(:struct, _dt), do: {:struct, []}
 
-  # Map: Explorer has no native map dtype; keep as :string. Values still arrive
-  # natively decoded from Arrow when the server emits them.
-  defp map_kind(:map, _dt), do: :string
+  # Map: Explorer has no native map dtype. Cells decode as maps/lists from
+  # Arrow, so we cannot assign a scalar dtype without a mismatch — leave it
+  # unmapped (nil) and let the rebuild path infer the dtype from the values.
+  defp map_kind(:map, _dt), do: nil
 
-  # Other types — fall back to string
-  defp map_kind(:variant, _dt), do: :string
-  defp map_kind(:udt, _dt), do: :string
-  defp map_kind(:geometry, _dt), do: :string
-  defp map_kind(:geography, _dt), do: :string
-  defp map_kind(:unparsed, _dt), do: :string
+  # Other types with no native Explorer dtype. Variant/UDT/geometry/geography
+  # cells decode as maps/lists/binaries; dtyping them :string mismatches the
+  # decoded values and crashes the schema-policy rebuild. Leave unmapped (nil).
+  defp map_kind(:variant, _dt), do: nil
+  defp map_kind(:udt, _dt), do: nil
+  defp map_kind(:geometry, _dt), do: nil
+  defp map_kind(:geography, _dt), do: nil
+  defp map_kind(:unparsed, _dt), do: nil
 
-  # Catch-all for future types
-  defp map_kind(_unknown, _dt), do: :string
+  # Catch-all for future types: leave unmapped so the rebuild infers from cells.
+  defp map_kind(_unknown, _dt), do: nil
 
   # --- Direct DataType → DDL mapping (preserves precision) ---
 
@@ -201,6 +228,16 @@ defmodule SparkEx.Connect.TypeMapper do
 
   defp direct_ddl(:calendar_interval, _), do: "INTERVAL"
 
+  # PySpark sets endField = startField when end_field is absent
+  # (connect/types.py:260-283), so start-only renders the single field.
+  defp direct_ddl(:year_month_interval, %DataType.YearMonthInterval{
+         start_field: sf,
+         end_field: nil
+       })
+       when is_integer(sf) do
+    "INTERVAL #{year_month_interval_field(sf)}"
+  end
+
   defp direct_ddl(:year_month_interval, %DataType.YearMonthInterval{
          start_field: sf,
          end_field: ef
@@ -218,6 +255,16 @@ defmodule SparkEx.Connect.TypeMapper do
   end
 
   defp direct_ddl(:year_month_interval, _), do: "INTERVAL YEAR TO MONTH"
+
+  # PySpark sets endField = startField when end_field is absent
+  # (connect/types.py:260-283), so start-only renders the single field.
+  defp direct_ddl(:day_time_interval, %DataType.DayTimeInterval{
+         start_field: sf,
+         end_field: nil
+       })
+       when is_integer(sf) do
+    "INTERVAL #{day_time_interval_field(sf)}"
+  end
 
   defp direct_ddl(:day_time_interval, %DataType.DayTimeInterval{
          start_field: sf,
@@ -239,15 +286,20 @@ defmodule SparkEx.Connect.TypeMapper do
 
   defp direct_ddl(:variant, _), do: "VARIANT"
 
-  defp direct_ddl(:geometry, %DataType.Geometry{srid: srid})
-       when is_integer(srid) and srid != 0 do
+  # MIXED_SRID (-1) renders as GEOMETRY(ANY) (PySpark GeometryType.simpleString
+  # "geometry(any)"); SRID 0 is a valid Cartesian SRS rendered GEOMETRY(0), not
+  # bare GEOMETRY.
+  defp direct_ddl(:geometry, %DataType.Geometry{srid: -1}), do: "GEOMETRY(ANY)"
+
+  defp direct_ddl(:geometry, %DataType.Geometry{srid: srid}) when is_integer(srid) do
     "GEOMETRY(#{srid})"
   end
 
   defp direct_ddl(:geometry, _), do: "GEOMETRY"
 
-  defp direct_ddl(:geography, %DataType.Geography{srid: srid})
-       when is_integer(srid) and srid != 0 do
+  defp direct_ddl(:geography, %DataType.Geography{srid: -1}), do: "GEOGRAPHY(ANY)"
+
+  defp direct_ddl(:geography, %DataType.Geography{srid: srid}) when is_integer(srid) do
     "GEOGRAPHY(#{srid})"
   end
 
@@ -318,10 +370,16 @@ defmodule SparkEx.Connect.TypeMapper do
   def to_spark_ddl_type(:string), do: "STRING"
   def to_spark_ddl_type(:binary), do: "BINARY"
   def to_spark_ddl_type(:date), do: "DATE"
-  def to_spark_ddl_type({:datetime, _}), do: "TIMESTAMP"
+  # Explorer's real tz-aware datetime dtype is the 3-tuple {:datetime, p, tz};
+  # PySpark's from_arrow_type maps a tz-aware Arrow timestamp to TimestampType.
+  def to_spark_ddl_type({:datetime, _precision, _tz}), do: "TIMESTAMP"
   def to_spark_ddl_type({:naive_datetime, _}), do: "TIMESTAMP_NTZ"
-  def to_spark_ddl_type({:time, _}), do: "TIME"
-  def to_spark_ddl_type({:duration, _}), do: "STRING"
+  # Explorer's real time dtype is the bare atom :time (no precision tuple);
+  # PySpark's from_arrow_type maps an Arrow time to TimeType.
+  def to_spark_ddl_type(:time), do: "TIME"
+  # Explorer durations map to a day-time interval; PySpark's from_arrow_type
+  # yields DayTimeIntervalType for an Arrow duration.
+  def to_spark_ddl_type({:duration, _}), do: "INTERVAL DAY TO SECOND"
   def to_spark_ddl_type(:category), do: "STRING"
   def to_spark_ddl_type({:list, element}), do: "ARRAY<#{to_spark_ddl_type(element)}>"
 

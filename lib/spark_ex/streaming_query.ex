@@ -129,10 +129,19 @@ defmodule SparkEx.StreamingQuery do
 
   @doc """
   Blocks until all available data in the source has been processed.
+
+  Like PySpark's `processAllAvailable` (connect/streaming/query.py:134-139),
+  this blocks indefinitely: the server sends nothing until the drain
+  completes, so we pass an infinite timeout for both the gRPC call and the
+  GenServer call (`timeout: nil`) rather than inheriting the finite 60 s/65 s
+  defaults, which would otherwise abort a long-running drain.
   """
   @spec process_all_available(t()) :: :ok | {:error, term()}
   def process_all_available(%__MODULE__{} = query) do
-    case execute_command(query, {:process_all_available}, reattach_policy: :streaming) do
+    case execute_command(query, {:process_all_available},
+           timeout: nil,
+           reattach_policy: :streaming
+         ) do
       {:ok, _result} -> :ok
       {:error, _} = error -> error
     end

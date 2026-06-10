@@ -669,7 +669,8 @@ defmodule SparkEx.Functions do
   @doc """
   Builds a count-min sketch with the given relative error and confidence.
 
-  `seed` is optional; when omitted, the server picks a random seed (matching PySpark).
+  `seed` is optional; when omitted, a random seed is generated client-side (matching PySpark).
+  The server requires exactly 4 arguments (CountMinSketchAgg.scala:217-229).
 
   ## Examples
 
@@ -682,11 +683,9 @@ defmodule SparkEx.Functions do
           Column.t() | number()
         ) :: Column.t()
   def count_min_sketch(col, eps, confidence) do
-    %Column{
-      expr:
-        {:fn, "count_min_sketch", [to_expr(col), to_expr_or_lit(eps), to_expr_or_lit(confidence)],
-         false}
-    }
+    # PySpark always sends 4 args, generating a random seed client-side when none given.
+    # builtin.py:1211: _seed = lit(py_random.randint(0, sys.maxsize)) if seed is None
+    count_min_sketch(col, eps, confidence, Random.long_seed())
   end
 
   @spec count_min_sketch(
@@ -717,10 +716,13 @@ defmodule SparkEx.Functions do
   """
   @spec ltrim(Column.t() | String.t(), Column.t() | String.t() | nil) :: Column.t()
   def ltrim(col, trim_string \\ nil) do
+    # PySpark sends (trim, src) — trim string FIRST — matching Spark's SQL form
+    # ltrim(trimStr, srcStr) (catalyst StringTrimLeft 2-arg constructor).
+    # builtin.py:2468-2472: _invoke_function_over_columns("ltrim", trim, col)
     args =
       case trim_string do
         nil -> [to_expr(col)]
-        s -> [to_expr(col), to_expr(s)]
+        s -> [to_expr(s), to_expr(col)]
       end
 
     %Column{expr: {:fn, "ltrim", args, false}}
@@ -735,10 +737,12 @@ defmodule SparkEx.Functions do
   """
   @spec rtrim(Column.t() | String.t(), Column.t() | String.t() | nil) :: Column.t()
   def rtrim(col, trim_string \\ nil) do
+    # PySpark sends (trim, src) — trim string FIRST.
+    # builtin.py:2478-2482: _invoke_function_over_columns("rtrim", trim, col)
     args =
       case trim_string do
         nil -> [to_expr(col)]
-        s -> [to_expr(col), to_expr(s)]
+        s -> [to_expr(s), to_expr(col)]
       end
 
     %Column{expr: {:fn, "rtrim", args, false}}
@@ -753,10 +757,12 @@ defmodule SparkEx.Functions do
   """
   @spec trim(Column.t() | String.t(), Column.t() | String.t() | nil) :: Column.t()
   def trim(col, trim_string \\ nil) do
+    # PySpark sends (trim, src) — trim string FIRST.
+    # builtin.py:2488-2492: _invoke_function_over_columns("trim", trim, col)
     args =
       case trim_string do
         nil -> [to_expr(col)]
-        s -> [to_expr(col), to_expr(s)]
+        s -> [to_expr(s), to_expr(col)]
       end
 
     %Column{expr: {:fn, "trim", args, false}}
@@ -778,6 +784,50 @@ defmodule SparkEx.Functions do
       end
 
     %Column{expr: {:fn, "btrim", args, false}}
+  end
+
+  @doc """
+  Masks string characters, replacing uppercase letters, lowercase letters, digits,
+  and other characters with configurable substitution characters.
+
+  PySpark always sends all 5 args, substituting defaults when options are omitted:
+  - `upper_char`: `"X"` (mask uppercase letters)
+  - `lower_char`: `"x"` (mask lowercase letters)
+  - `digit_char`: `"n"` (mask digits)
+  - `other_char`: `nil` (retain other characters as-is, i.e. NULL = keep original)
+
+  ## Examples
+
+      mask(col("email"))
+      mask(col("email"), upper_char: "A")
+      mask(col("email"), digit_char: "0", other_char: "-")
+  """
+  @spec mask(Column.t() | String.t(), keyword()) :: Column.t()
+  def mask(col, opts \\ [])
+
+  def mask(col, opt_value) when not is_list(opt_value) do
+    mask(col, upper_char: opt_value)
+  end
+
+  def mask(col, opts) when is_list(opts) do
+    unless opts == [] or Keyword.keyword?(opts) do
+      raise ArgumentError,
+            "expected mask options to be a keyword list, got: #{inspect(opts)}"
+    end
+
+    # PySpark always sends all 4 optional args (builtin.py:3099-3106).
+    # nil for other_char means "retain original character" (not "omit arg").
+    upper = Keyword.get(opts, :upper_char, "X")
+    lower = Keyword.get(opts, :lower_char, "x")
+    digit = Keyword.get(opts, :digit_char, "n")
+    other = Keyword.get(opts, :other_char, nil)
+
+    %Column{
+      expr:
+        {:fn, "mask",
+         [to_expr(col), lit_expr(upper), lit_expr(lower), lit_expr(digit), lit_expr(other)],
+         false}
+    }
   end
 
   @doc """

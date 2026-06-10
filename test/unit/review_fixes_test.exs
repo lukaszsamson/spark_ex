@@ -417,21 +417,23 @@ defmodule SparkEx.ReviewFixesTest do
     end
   end
 
-  # ── DataFrame.normalize_column_expr negative integer guard (REV_OPUS #47) ──
+  # ── DataFrame.normalize_column_expr integer guard (REV_OPUS #47 / FABLE-18) ──
 
-  describe "DataFrame.normalize_column_expr negative integer (REV_OPUS #47)" do
+  describe "DataFrame.normalize_column_expr integer (REV_OPUS #47 / FABLE-18)" do
     test "rejects negative integer column index" do
       df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
 
-      assert_raise FunctionClauseError, fn ->
+      assert_raise ArgumentError, ~r/integer column ordinals are not supported/, fn ->
         SparkEx.DataFrame.select(df, [-1])
       end
     end
 
-    test "accepts non-negative integer column index" do
+    test "rejects non-negative integer column index (PySpark ordinals need an RPC)" do
       df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
-      result = SparkEx.DataFrame.select(df, [0])
-      assert %SparkEx.DataFrame{} = result
+
+      assert_raise ArgumentError, ~r/integer column ordinals are not supported/, fn ->
+        SparkEx.DataFrame.select(df, [0])
+      end
     end
   end
 

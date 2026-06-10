@@ -199,9 +199,11 @@ defmodule SparkEx.DataFrame do
   def drop(%__MODULE__{} = df, columns) when is_list(columns) do
     {names, col_exprs} =
       Enum.reduce(columns, {[], []}, fn
-        %Column{expr: {:col, name}}, {names, exprs} ->
-          {[name | names], exprs}
-
+        # PySpark keeps Column arguments as expressions in Drop.columns
+        # (connect/dataframe.py:545-559); drop-by-expression has different
+        # ambiguity semantics than drop-by-name (after a self-join,
+        # drop(col("id")) raises AMBIGUOUS_REFERENCE while drop("id") drops
+        # all matching columns). Do not collapse Column{:col} into a name.
         %Column{} = col, {names, exprs} ->
           {names, [col.expr | exprs]}
 
@@ -1747,7 +1749,7 @@ defmodule SparkEx.DataFrame do
           {:error, {:unexpected_result, other}}
 
         {:error, _} = error ->
-          if checkpoint_not_supported?(error), do: df, else: error
+          error
       end
     end
   end
@@ -1787,7 +1789,7 @@ defmodule SparkEx.DataFrame do
           {:error, {:unexpected_result, other}}
 
         {:error, _} = error ->
-          if checkpoint_not_supported?(error), do: df, else: error
+          error
       end
     end
   end
@@ -1847,13 +1849,6 @@ defmodule SparkEx.DataFrame do
     in_values = Enum.map(values, fn %Column{expr: expr} -> expr end)
     %Column{expr: {:subquery, :in, df.plan, [in_values: in_values]}}
   end
-
-  defp checkpoint_not_supported?({:error, %SparkEx.Error.Remote{message: message}})
-       when is_binary(message) do
-    String.contains?(message, "not supported.")
-  end
-
-  defp checkpoint_not_supported?(_), do: false
 
   # ── Actions (execute against Spark) ──
 
@@ -2472,8 +2467,17 @@ defmodule SparkEx.DataFrame do
       when is_binary(function_name) and is_list(args) do
     arg_exprs =
       Enum.map(args, fn
-        %SparkEx.Column{expr: e} -> e
-        value -> {:lit, value}
+        %SparkEx.Column{expr: e} ->
+          e
+
+        # PySpark's tvf._fn applies _to_col(arg) (tvf.py:117-124), converting
+        # bare strings to column references (via the same star handling as
+        # col/1). Non-string scalars remain literals.
+        name when is_binary(name) ->
+          name_to_col_expr(name)
+
+        value ->
+          {:lit, value}
       end)
 
     new(session, {:table_valued_function, function_name, arg_exprs})
@@ -2532,17 +2536,50 @@ defmodule SparkEx.DataFrame do
   end
 
   defp normalize_column_expr(%Column{} = col), do: col.expr
-  defp normalize_column_expr(name) when is_binary(name), do: {:col, name}
-  defp normalize_column_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
-  defp normalize_column_expr({name, _alias}) when is_binary(name), do: {:col, name}
-  defp normalize_column_expr({name, _alias}) when is_atom(name), do: {:col, Atom.to_string(name)}
-  defp normalize_column_expr(idx) when is_integer(idx) and idx >= 0, do: {:col, "_c#{idx}"}
+  # Route raw strings through the same star handling as SparkEx.Functions.col/1
+  # so "*" / "x.*" become UnresolvedStar instead of UnresolvedAttribute (which
+  # the server rejects with UNRESOLVED_COLUMN). Mirrors col/1 exactly.
+  defp normalize_column_expr(name) when is_binary(name), do: name_to_col_expr(name)
+
+  defp normalize_column_expr(name) when is_atom(name),
+    do: name_to_col_expr(Atom.to_string(name))
+
+  # {name, alias} tuple form (documented for unpivot/5 values): produce an
+  # aliased expression instead of silently dropping the alias.
+  defp normalize_column_expr({name, alias}) when is_binary(name) and is_binary(alias),
+    do: {:alias, name_to_col_expr(name), alias}
+
+  defp normalize_column_expr({name, alias}) when is_atom(name) and is_binary(alias),
+    do: {:alias, name_to_col_expr(Atom.to_string(name)), alias}
+
+  # PySpark treats integer args as 1-based schema ordinals (self[c - 1]), which
+  # requires a schema-resolving RPC; resolve locally by raising, consistent with
+  # normalize_sort_expr/1. (Divergence: PySpark ordinals are not supported here.)
+  defp normalize_column_expr(idx) when is_integer(idx) do
+    raise ArgumentError,
+          "integer column ordinals are not supported (PySpark resolves them as 1-based " <>
+            "schema positions via an RPC); use a column name (string/atom) or Column " <>
+            "expression, got: #{inspect(idx)}"
+  end
+
   defp normalize_column_expr({:col, _, _} = expr), do: expr
   defp normalize_column_expr({:star, _, _} = expr), do: expr
   defp normalize_column_expr({:col_regex, _} = expr), do: expr
   defp normalize_column_expr({:col_regex, _, _} = expr), do: expr
   defp normalize_column_expr({:metadata_col, _} = expr), do: expr
   defp normalize_column_expr({:metadata_col, _, _} = expr), do: expr
+
+  # Mirror of SparkEx.Functions.col/1 string handling.
+  defp name_to_col_expr("*"), do: {:star}
+  defp name_to_col_expr(".*"), do: {:star}
+
+  defp name_to_col_expr(name) when is_binary(name) do
+    if String.ends_with?(name, ".*") do
+      {:star, name}
+    else
+      {:col, name}
+    end
+  end
 
   defp normalize_dedup_column(%Column{expr: {:col, name}}), do: name
 
@@ -2600,14 +2637,26 @@ defmodule SparkEx.DataFrame do
     raise ArgumentError, "ascending list values must be booleans, got: #{inspect(value)}"
   end
 
-  # Extracts the inner (non-sort-order) expression from a column/name for use
-  # when a uniform ascending direction is applied externally.
-  defp col_to_inner_expr(%Column{expr: {:sort_order, inner, _, _}}), do: inner
-  defp col_to_inner_expr(%Column{expr: e}), do: e
-  defp col_to_inner_expr(name) when is_binary(name), do: {:col, name}
-  defp col_to_inner_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
+  # Applies an ascending flag to one sort key, mirroring PySpark
+  # (_preapare_cols_for_sort, sql/dataframe.py:3176-3181): a truthy ascending
+  # entry leaves the column untouched (so an explicit .desc() stays descending),
+  # while a falsy entry forces a descending sort order.
+  defp apply_ascending(col, asc) do
+    if asc do
+      # Leave explicit sort orders intact; only plain columns default to asc.
+      normalize_sort_expr(col)
+    else
+      {:sort_order, sort_inner_expr(col), :desc, :nulls_last}
+    end
+  end
 
-  defp col_to_inner_expr(idx) when is_integer(idx) do
+  # Extracts the inner (non-sort-order) expression from a column/name.
+  defp sort_inner_expr(%Column{expr: {:sort_order, inner, _, _}}), do: inner
+  defp sort_inner_expr(%Column{expr: e}), do: e
+  defp sort_inner_expr(name) when is_binary(name), do: name_to_col_expr(name)
+  defp sort_inner_expr(name) when is_atom(name), do: name_to_col_expr(Atom.to_string(name))
+
+  defp sort_inner_expr(idx) when is_integer(idx) do
     raise ArgumentError,
           "integer sort keys are not supported; use a column name (string/atom) or Column expression, got: #{inspect(idx)}"
   end
@@ -2617,12 +2666,7 @@ defmodule SparkEx.DataFrame do
   end
 
   defp build_sort_exprs(columns, asc) when is_boolean(asc) do
-    direction = if asc, do: :asc, else: :desc
-    null_order = if asc, do: :nulls_first, else: :nulls_last
-
-    Enum.map(columns, fn col ->
-      {:sort_order, col_to_inner_expr(col), direction, null_order}
-    end)
+    Enum.map(columns, fn col -> apply_ascending(col, asc) end)
   end
 
   defp build_sort_exprs(columns, asc_list) when is_list(asc_list) do
@@ -2634,9 +2678,7 @@ defmodule SparkEx.DataFrame do
     Enum.zip(columns, asc_list)
     |> Enum.map(fn {col, asc} ->
       asc = normalize_ascending_flag!(asc)
-      direction = if asc, do: :asc, else: :desc
-      null_order = if asc, do: :nulls_first, else: :nulls_last
-      {:sort_order, col_to_inner_expr(col), direction, null_order}
+      apply_ascending(col, asc)
     end)
   end
 
@@ -2659,19 +2701,13 @@ defmodule SparkEx.DataFrame do
           "expected :with_replacement to be a boolean, got: #{inspect(value)}"
   end
 
-  defp validate_sample_fraction!(fraction, true) when fraction >= 0.0, do: :ok
+  # PySpark performs no client-side upper-bound check; Scala Dataset.sample only
+  # requires fraction >= 0 (over-sampling caps at all rows). Reject only negatives.
+  defp validate_sample_fraction!(fraction, _with_replacement) when fraction >= 0.0, do: :ok
 
-  defp validate_sample_fraction!(fraction, false) when fraction >= 0.0 and fraction <= 1.0,
-    do: :ok
-
-  defp validate_sample_fraction!(fraction, true) do
+  defp validate_sample_fraction!(fraction, _with_replacement) do
     raise ArgumentError,
-          "sample fraction must be >= 0 when with_replacement is true, got: #{inspect(fraction)}"
-  end
-
-  defp validate_sample_fraction!(fraction, false) do
-    raise ArgumentError,
-          "sample fraction must be in [0, 1] when with_replacement is false, got: #{inspect(fraction)}"
+          "sample fraction must be >= 0, got: #{inspect(fraction)}"
   end
 
   defp fetch_non_neg_integer_option(opts, key, default) do

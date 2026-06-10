@@ -157,8 +157,15 @@ defmodule SparkEx.Writer do
 
   @doc """
   Sets the partitioning columns for the write.
+
+  Accepts a single column name or a list of column names (matching PySpark's
+  `partitionBy(*cols)` which wraps a lone string).
   """
-  @spec partition_by(t(), [String.t()]) :: t()
+  @spec partition_by(t(), String.t() | [String.t()]) :: t()
+  def partition_by(%__MODULE__{} = writer, column) when is_binary(column) do
+    partition_by(writer, [column])
+  end
+
   def partition_by(%__MODULE__{} = writer, columns) when is_list(columns) do
     if columns == [] do
       raise ArgumentError, "partition_by columns should not be empty"
@@ -306,7 +313,7 @@ defmodule SparkEx.Writer do
       csv_opts
       |> Enum.reduce(%{}, fn
         {:header, v}, acc -> Map.put(acc, "header", to_string(v))
-        {:sep, v}, acc -> Map.put(acc, "sep", v)
+        {:sep, v}, acc -> Map.put(acc, "sep", normalize_option_value(v))
       end)
 
     duplicates =

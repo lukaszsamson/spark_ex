@@ -148,7 +148,7 @@ defmodule SparkEx.Types do
 
       iex> schema = struct_type([struct_field("id", :long), struct_field("name", :string)])
       iex> SparkEx.Types.to_ddl(schema)
-      "id LONG, name STRING"
+      "id BIGINT, name STRING"
   """
   @spec to_ddl(struct_type()) :: String.t()
   def to_ddl({:struct, fields}) do
@@ -303,8 +303,12 @@ defmodule SparkEx.Types do
 
   defp type_to_ddl(:variant), do: "VARIANT"
   defp type_to_ddl(:geometry), do: "GEOMETRY"
+  # MIXED_SRID (-1) renders GEOMETRY(ANY) (PySpark GeometryType.simpleString
+  # "geometry(any)"); SRID 0 is valid and renders GEOMETRY(0).
+  defp type_to_ddl({:geometry, -1}), do: "GEOMETRY(ANY)"
   defp type_to_ddl({:geometry, srid}) when is_integer(srid), do: "GEOMETRY(#{srid})"
   defp type_to_ddl(:geography), do: "GEOGRAPHY"
+  defp type_to_ddl({:geography, -1}), do: "GEOGRAPHY(ANY)"
   defp type_to_ddl({:geography, srid}) when is_integer(srid), do: "GEOGRAPHY(#{srid})"
 
   defp type_to_ddl({:struct, fields}) do
@@ -449,8 +453,12 @@ defmodule SparkEx.Types do
 
   defp type_to_json(:variant), do: "variant"
   defp type_to_json(:geometry), do: "geometry"
+  # MIXED_SRID (-1) -> "geometry(any)" (GeometryType.simpleString); SRID 0 is
+  # valid and renders "geometry(0)".
+  defp type_to_json({:geometry, -1}), do: "geometry(any)"
   defp type_to_json({:geometry, srid}) when is_integer(srid), do: "geometry(#{srid})"
   defp type_to_json(:geography), do: "geography"
+  defp type_to_json({:geography, -1}), do: "geography(any)"
   defp type_to_json({:geography, srid}) when is_integer(srid), do: "geography(#{srid})"
 
   defp type_to_json({:map, key, value}) do
@@ -524,6 +532,7 @@ defmodule SparkEx.Types do
   defp proto_kind_to_json(:struct, value), do: struct_proto_to_json(value)
   defp proto_kind_to_json(:geometry, value), do: geometry_proto_to_json(value)
   defp proto_kind_to_json(:geography, value), do: geography_proto_to_json(value)
+  defp proto_kind_to_json(:udt, value), do: udt_proto_to_json(value)
   defp proto_kind_to_json(:unparsed, value), do: value.data_type_string
 
   defp proto_kind_to_json(kind, _value),
@@ -552,6 +561,15 @@ defmodule SparkEx.Types do
   # decode so the JSON value round-trips through PySpark's parser unchanged.
   defp time_proto_to_json(_), do: "time(6)"
 
+  # PySpark sets endField = startField when end_field is absent
+  # (connect/types.py:260-283), so start-only renders the single field.
+  defp day_time_interval_proto_to_json(%Spark.Connect.DataType.DayTimeInterval{
+         start_field: sf,
+         end_field: nil
+       })
+       when is_integer(sf) and sf in 0..3,
+       do: "interval #{day_time_interval_json_field(sf)}"
+
   defp day_time_interval_proto_to_json(%Spark.Connect.DataType.DayTimeInterval{
          start_field: sf,
          end_field: ef
@@ -567,6 +585,15 @@ defmodule SparkEx.Types do
        do: "interval #{day_time_interval_json_field(sf)} to #{day_time_interval_json_field(ef)}"
 
   defp day_time_interval_proto_to_json(_), do: "interval day to second"
+
+  # PySpark sets endField = startField when end_field is absent
+  # (connect/types.py:260-283), so start-only renders the single field.
+  defp year_month_interval_proto_to_json(%Spark.Connect.DataType.YearMonthInterval{
+         start_field: sf,
+         end_field: nil
+       })
+       when is_integer(sf) and sf in 0..1,
+       do: "interval #{year_month_interval_json_field(sf)}"
 
   defp year_month_interval_proto_to_json(%Spark.Connect.DataType.YearMonthInterval{
          start_field: sf,
@@ -589,17 +616,44 @@ defmodule SparkEx.Types do
   # but the wire proto only carries an int32 SRID. We don't ship a SRID↔CRS
   # mapper, so emit the simpleString form ("geometry(<srid>)" / "geometry(any)")
   # which round-trips through Spark's DDL parser.
+  # MIXED_SRID (-1) -> "geometry(any)" (GeometryType.simpleString); SRID 0 is a
+  # valid Cartesian SRS rendered "geometry(0)", not bare "geometry".
+  defp geometry_proto_to_json(%Spark.Connect.DataType.Geometry{srid: -1}), do: "geometry(any)"
+
   defp geometry_proto_to_json(%Spark.Connect.DataType.Geometry{srid: srid})
-       when is_integer(srid) and srid != 0,
+       when is_integer(srid),
        do: "geometry(#{srid})"
 
   defp geometry_proto_to_json(_), do: "geometry"
 
+  defp geography_proto_to_json(%Spark.Connect.DataType.Geography{srid: -1}), do: "geography(any)"
+
   defp geography_proto_to_json(%Spark.Connect.DataType.Geography{srid: srid})
-       when is_integer(srid) and srid != 0,
+       when is_integer(srid),
        do: "geography(#{srid})"
 
   defp geography_proto_to_json(_), do: "geography"
+
+  # UDT proto -> Spark JSON `{"type":"udt", ...}` (PySpark UserDefinedType
+  # .jsonValue / connect/types.py:324-331). Optional proto fields (proto3) come
+  # through as nil when unset; emit only those present so the JSON round-trips
+  # through PySpark's UserDefinedType.fromJson.
+  defp udt_proto_to_json(%Spark.Connect.DataType.UDT{} = udt) do
+    %{"type" => "udt"}
+    |> put_unless_nil("class", udt.jvm_class)
+    |> put_unless_nil("pyClass", udt.python_class)
+    |> put_unless_nil("serializedClass", udt.serialized_python_class)
+    |> put_sql_type(udt.sql_type)
+  end
+
+  defp put_unless_nil(map, _key, nil), do: map
+  defp put_unless_nil(map, _key, ""), do: map
+  defp put_unless_nil(map, key, value), do: Map.put(map, key, value)
+
+  defp put_sql_type(map, nil), do: map
+
+  defp put_sql_type(map, %Spark.Connect.DataType{} = sql_type),
+    do: Map.put(map, "sqlType", proto_type_to_json(sql_type))
 
   defp string_proto_to_json(%Spark.Connect.DataType.String{collation: c})
        when c in ["", "UTF8_BINARY"],

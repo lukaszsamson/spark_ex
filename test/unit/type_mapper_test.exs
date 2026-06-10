@@ -75,9 +75,9 @@ defmodule SparkEx.Connect.TypeMapperTest do
       assert {:ok, :date} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "maps timestamp to {:datetime, :microsecond}" do
+    test "maps timestamp to tz-aware {:datetime, :microsecond, tz}" do
       dt = %DataType{kind: {:timestamp, %DataType.Timestamp{}}}
-      assert {:ok, {:datetime, :microsecond}} = TypeMapper.to_explorer_dtype(dt)
+      assert {:ok, {:datetime, :microsecond, "Etc/UTC"}} = TypeMapper.to_explorer_dtype(dt)
     end
 
     test "maps timestamp_ntz to {:naive_datetime, :microsecond}" do
@@ -85,9 +85,9 @@ defmodule SparkEx.Connect.TypeMapperTest do
       assert {:ok, {:naive_datetime, :microsecond}} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "maps time to {:time, :microsecond}" do
+    test "maps time to bare :time atom" do
       dt = %DataType{kind: {:time, %DataType.Time{}}}
-      assert {:ok, {:time, :microsecond}} = TypeMapper.to_explorer_dtype(dt)
+      assert {:ok, :time} = TypeMapper.to_explorer_dtype(dt)
     end
 
     test "maps array to native list dtype" do
@@ -129,7 +129,7 @@ defmodule SparkEx.Connect.TypeMapperTest do
       assert {:ok, {:struct, []}} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "maps map to :string (no native Explorer dtype)" do
+    test "maps map to nil (no native Explorer dtype; cells inferred)" do
       key = %DataType{kind: {:string, %DataType.String{}}}
       value = %DataType{kind: {:integer, %DataType.Integer{}}}
 
@@ -139,19 +139,24 @@ defmodule SparkEx.Connect.TypeMapperTest do
             {:map, %DataType.Map{key_type: key, value_type: value, value_contains_null: false}}
         }
 
-      assert {:ok, :string} = TypeMapper.to_explorer_dtype(dt)
+      assert {:ok, nil} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "maps interval types to :string" do
-      for kind <- [:calendar_interval, :year_month_interval, :day_time_interval] do
+    test "maps day-time interval to {:duration, :microsecond}; others to nil" do
+      assert {:ok, {:duration, :microsecond}} =
+               TypeMapper.to_explorer_dtype(%DataType{
+                 kind: {:day_time_interval, struct(interval_module(:day_time_interval))}
+               })
+
+      for kind <- [:calendar_interval, :year_month_interval] do
         dt = %DataType{kind: {kind, struct(interval_module(kind))}}
-        assert {:ok, :string} = TypeMapper.to_explorer_dtype(dt)
+        assert {:ok, nil} = TypeMapper.to_explorer_dtype(dt)
       end
     end
 
-    test "maps variant to :string" do
+    test "maps variant to nil (no native Explorer dtype; cells inferred)" do
       dt = %DataType{kind: {:variant, %DataType.Variant{}}}
-      assert {:ok, :string} = TypeMapper.to_explorer_dtype(dt)
+      assert {:ok, nil} = TypeMapper.to_explorer_dtype(dt)
     end
 
     test "maps nil kind to :null" do

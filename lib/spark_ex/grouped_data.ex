@@ -119,12 +119,28 @@ defmodule SparkEx.GroupedData do
 
   defp pairs_to_columns(pairs) do
     Enum.map(pairs, fn {col_name, func_name} ->
+      name = to_string(col_name)
+
       %Column{
         expr:
-          {:alias, {:fn, to_string(func_name), [{:col, to_string(col_name)}], false},
+          {:alias, {:fn, to_string(func_name), [name_to_col_expr(name)], false},
            "#{func_name}(#{col_name})"}
       }
     end)
+  end
+
+  # Mirror of SparkEx.Functions.col/1 string handling so dict-agg names like
+  # "*" / "x.*" become UnresolvedStar (matching PySpark's F.col routing) instead
+  # of an UnresolvedAttribute the server rejects with UNRESOLVED_COLUMN.
+  defp name_to_col_expr("*"), do: {:star}
+  defp name_to_col_expr(".*"), do: {:star}
+
+  defp name_to_col_expr(name) when is_binary(name) do
+    if String.ends_with?(name, ".*") do
+      {:star, name}
+    else
+      {:col, name}
+    end
   end
 
   # ── Convenience aggregation methods ──
@@ -176,42 +192,37 @@ defmodule SparkEx.GroupedData do
   end
 
   defp numeric_agg(%__MODULE__{} = gd, spark_fn, cols) do
-    {agg_names, numeric_names} =
-      case cols do
-        [] ->
-          case fetch_schema_cached(gd) do
-            {:ok, schema} ->
-              names = numeric_column_names(schema)
-              {names, names}
+    explicit_names = explicit_numeric_names(cols)
 
-            {:error, reason} ->
-              raise ArgumentError, "failed to fetch schema: #{inspect(reason)}"
+    # PySpark's _numeric_agg (connect/group.py:159-176) always fetches the
+    # schema: with explicit columns it validates each is numeric and raises
+    # NOT_NUMERIC_COLUMNS otherwise; without columns it selects all numeric
+    # columns. Mirror both paths through the same (cached) schema lookup.
+    schema =
+      case fetch_schema_cached(gd) do
+        {:ok, schema} ->
+          schema
+
+        {:error, reason} ->
+          raise ArgumentError, "failed to fetch schema: #{inspect(reason)}"
+      end
+
+    numeric_names = numeric_column_names(schema)
+
+    agg_names =
+      case explicit_names do
+        nil ->
+          numeric_names
+
+        names ->
+          invalid = Enum.reject(names, &(&1 in numeric_names))
+
+          if invalid != [] do
+            raise ArgumentError, "expected numeric columns, got: #{inspect(invalid)}"
           end
 
-        col when is_binary(col) ->
-          {[col], nil}
-
-        %Column{expr: {:col, name}} when is_binary(name) ->
-          {[name], nil}
-
-        %Column{} ->
-          raise ArgumentError, "expected column names when aggregating numeric columns"
-
-        cols when is_list(cols) ->
-          {normalize_string_columns(cols), nil}
-
-        other ->
-          raise ArgumentError,
-                "expected columns as string or list of strings, got: #{inspect(other)}"
+          names
       end
-
-    if is_list(numeric_names) do
-      invalid = Enum.reject(agg_names, &(&1 in numeric_names))
-
-      if invalid != [] do
-        raise ArgumentError, "expected numeric columns, got: #{inspect(invalid)}"
-      end
-    end
 
     if agg_names == [] do
       raise ArgumentError, "expected at least one numeric column"
@@ -223,6 +234,22 @@ defmodule SparkEx.GroupedData do
       end)
 
     agg(gd, agg_exprs)
+  end
+
+  defp explicit_numeric_names([]), do: nil
+  defp explicit_numeric_names(col) when is_binary(col), do: [col]
+
+  defp explicit_numeric_names(%Column{expr: {:col, name}}) when is_binary(name), do: [name]
+
+  defp explicit_numeric_names(%Column{}) do
+    raise ArgumentError, "expected column names when aggregating numeric columns"
+  end
+
+  defp explicit_numeric_names(cols) when is_list(cols), do: normalize_string_columns(cols)
+
+  defp explicit_numeric_names(other) do
+    raise ArgumentError,
+          "expected columns as string or list of strings, got: #{inspect(other)}"
   end
 
   defp normalize_string_columns(cols) do

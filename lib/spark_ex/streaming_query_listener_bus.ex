@@ -207,6 +207,13 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   @doc """
   Dispatches a QueryStarted-like event JSON to listener buses for the given session.
+
+  Delivery is synchronous: this returns only after every bus for the session
+  has finished invoking its listeners' `on_query_started` callbacks. PySpark
+  guarantees `onQueryStart` runs on all listeners before
+  `DataStreamWriter.start()` returns (sql/streaming/listener.py:88-95), so
+  `StreamWriter.start/2` must not return while the started event is still
+  queued (FABLE-49).
   """
   @spec post_query_started(GenServer.server(), String.t()) :: :ok
   def post_query_started(session, event_json) when is_binary(event_json) do
@@ -222,7 +229,13 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
     buses_for_session(session)
     |> Enum.each(fn bus ->
-      GenServer.cast(bus, {:dispatch_event, event})
+      # Synchronous call so the callbacks run before we return. Swallow a
+      # dead/stopping bus the same way a cast would have been dropped.
+      try do
+        GenServer.call(bus, {:dispatch_event_sync, event})
+      catch
+        :exit, _ -> :ok
+      end
     end)
 
     :ok
@@ -282,6 +295,14 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   def handle_call(:list_listeners, _from, state) do
     {:reply, state.listeners, state}
+  end
+
+  # Synchronous dispatch: used for QueryStarted events so the caller (e.g.
+  # StreamWriter.start/2) only returns after on_query_started callbacks have
+  # run (FABLE-49).
+  def handle_call({:dispatch_event_sync, event}, _from, state) do
+    dispatch_event(state.listeners, event)
+    {:reply, :ok, state}
   end
 
   @impl true
@@ -350,8 +371,21 @@ defmodule SparkEx.StreamingQueryListenerBus do
     end
   end
 
-  def handle_info({:DOWN, _ref, :process, _pid, :normal}, state) do
+  # A DOWN message from a pid that is not the CURRENT `stream_task` is stale
+  # — e.g. a task we already killed during a remove/re-add race, whose DOWN
+  # arrives after a replacement task2 was started (or after the stream-ended
+  # path already cleared `stream_task`). Acting on it would clobber
+  # `stream_task` back to `nil` and reset `registered?`, leaking task2's gRPC
+  # stream and the server-side listener forever (FABLE-26). PySpark serializes
+  # its single handler thread under a lock; we serialize via this pid check.
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, %{stream_task: task} = state)
+      when pid != task do
     {:noreply, state}
+  end
+
+  # From here on, `pid == state.stream_task`: this DOWN is authoritative.
+  def handle_info({:DOWN, _ref, :process, _pid, :normal}, state) do
+    {:noreply, %{state | stream_task: nil}}
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, :shutdown}, %{closing_stream?: true} = state) do
@@ -552,7 +586,12 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   defp dispatch_event(listeners, %{type: :started} = event) do
     Enum.each(listeners, fn module ->
-      if function_exported?(module, :on_query_started, 1) do
+      # `on_query_started/1` is an optional callback, so we probe with
+      # `function_exported?/3`. That returns false for a not-yet-loaded module
+      # (common in dev/iex), which would silently skip the callback — so force
+      # the module to load first (FABLE-50). The other callbacks are required
+      # and dispatched via `apply/3`, which loads the module on demand.
+      if Code.ensure_loaded?(module) and function_exported?(module, :on_query_started, 1) do
         safe_call(module, :on_query_started, [event])
       end
     end)

@@ -7,8 +7,31 @@ defmodule SparkEx.Observation do
   `SparkEx.DataFrame.observe/3` to attach an observation to a DataFrame plan,
   then access the metrics with `get/1` after an action is executed.
 
-  Two `Observation` structs that happen to share the same `name` will not
-  collide: each carries its own `id` and metrics are stored under that id.
+  ## Same-named observations
+
+  Incoming `observed_metrics` are routed back to an `Observation` by `name`
+  (the only key the server echoes). PySpark Connect matches each batch's
+  metrics only against the observations attached to the *plan being
+  executed* (`client/core.py`), so two distinct `Observation` objects that
+  share a name but live on different plans never cross-talk. SparkEx routes
+  through a single per-`{session_id, name}` ETS slot and cannot tell two
+  same-named live observations apart at metric-arrival time. To avoid
+  silently misrouting metrics, `register_observation/3` **raises** if a
+  second still-unconsumed observation with the same name is attached in the
+  same session — the caller must use distinct names (or consume/discard the
+  first via `get/1`/`clear/1`) before reusing a name. See the audit note for
+  FABLE-28.
+
+  ## Lifecycle / reclamation
+
+  Each attached observation owns a small set of ETS rows (route, attached
+  marker, aliases, a session-membership marker, and — once an action runs —
+  its metrics). These are reclaimed:
+
+    * when its owning session terminates, via `clear_session/1` (called from
+      `SparkEx.Session.terminate/2`), and
+    * explicitly via `clear/2` for callers that want to free a single
+      observation eagerly.
 
   Routing tables (`{:obs_route, session_id, name}` and the legacy
   `{:metric_aliases, session_id, name}`) are namespaced by the originating
@@ -30,8 +53,10 @@ defmodule SparkEx.Observation do
 
   # ETS keys (all session-scoped where applicable):
   #   {:obs, id}                       -> metrics map (id is a per-instance UUID)
+  #   {:obs_attached, id}              -> true (marker: observe/3 attached this id)
   #   {:obs_aliases, id}               -> [alias_name | nil]
-  #   {:obs_route, session_id, name}   -> id (most-recent observe() with this name wins, per session)
+  #   {:obs_session, session_id, id}   -> name (session-membership: reclaimed on terminate)
+  #   {:obs_route, session_id, name}   -> id (the live un-consumed observe() for this name, per session)
   #   {:metric_aliases, session_id, name} -> [alias_name | nil] (legacy: raw-name observe)
   #   {:metric_legacy, session_id, name}  -> metrics map (legacy: raw-name observe)
 
@@ -52,8 +77,11 @@ defmodule SparkEx.Observation do
   @doc """
   Returns the observed metrics map for this observation.
 
-  Raises if the observation was never attached via `DataFrame.observe/3`,
-  or if no action has been executed against the attached plan yet.
+  Matches PySpark Connect (`observation.py`): after the observation has been
+  attached via `DataFrame.observe/3` but before any action has run, returns
+  an empty map `%{}` (PySpark sets `_result = {}` in `_on`). Raises
+  `[NO_OBSERVE_BEFORE_GET]` only when the observation was *never* attached
+  (PySpark raises when `_result is None`).
   """
   @spec get(t()) :: map()
   def get(%__MODULE__{id: id, name: name}) do
@@ -62,9 +90,16 @@ defmodule SparkEx.Observation do
         metrics
 
       [] ->
-        raise ArgumentError,
-              "[NO_OBSERVE_BEFORE_GET] Observation \"#{name}\" was not attached. " <>
-                "Call DataFrame.observe/3 and execute an action first."
+        # Attached but no action yet -> empty map; never attached -> raise.
+        case :ets.lookup(@table, {:obs_attached, id}) do
+          [{{:obs_attached, ^id}, _}] ->
+            %{}
+
+          [] ->
+            raise ArgumentError,
+                  "[NO_OBSERVE_BEFORE_GET] Observation \"#{name}\" was not attached. " <>
+                    "Call DataFrame.observe/3 and execute an action first."
+        end
     end
   end
 
@@ -83,10 +118,46 @@ defmodule SparkEx.Observation do
               "Create a new SparkEx.Observation.new/1 for each observe/3 call."
     end
 
+    # Metrics are routed back from the server by `name` alone through a
+    # single per-(session, name) slot. If a different, still-live (route
+    # not yet replaced and not cleared) observation already owns this
+    # name in this session, a second attach would silently misroute one
+    # of them (FABLE-28). PySpark avoids this by scoping routing to the
+    # executed plan's observations; SparkEx cannot disambiguate two
+    # same-named live observations at metric-arrival time, so it refuses
+    # the collision up front.
+    case :ets.lookup(@table, {:obs_route, session_id, name}) do
+      [{{:obs_route, ^session_id, ^name}, existing_id}]
+      when existing_id != id ->
+        if observation_live?(existing_id) do
+          # Roll back the attached marker we just set so the caller may
+          # retry with a fresh Observation.
+          :ets.delete(@table, {:obs_attached, id})
+
+          raise ArgumentError,
+                "[AMBIGUOUS_OBSERVATION] Another live Observation named \"#{name}\" is " <>
+                  "already attached in this session. Same-named observations cannot be " <>
+                  "routed unambiguously; use a distinct name, or read/clear the existing " <>
+                  "one (Observation.get/1) before reusing the name."
+        end
+
+      _ ->
+        :ok
+    end
+
     aliases = aliases_from_exprs(metric_exprs)
     :ets.insert(@table, {{:obs_aliases, id}, aliases})
     :ets.insert(@table, {{:obs_route, session_id, name}, id})
+    # Session-membership marker so `clear_session/1` can reclaim every row
+    # this observation owns when the session terminates (FABLE-29).
+    :ets.insert(@table, {{:obs_session, session_id, id}, name})
     :ok
+  end
+
+  # An observation is "live" while it is still attached (not cleared). Once
+  # `clear/2` removes its attached marker the route may be safely reused.
+  defp observation_live?(id) do
+    :ets.member(@table, {:obs_attached, id})
   end
 
   @doc false
@@ -99,6 +170,68 @@ defmodule SparkEx.Observation do
     :ets.insert(@table, {{:metric_aliases, session_id, name}, aliases})
     :ok
   end
+
+  @doc """
+  Reclaims all ETS rows owned by a single observation.
+
+  Deletes the metrics, attached marker, aliases, session-membership marker,
+  and (only if it still points at this id) the routing slot. Frees the name
+  for reuse. Idempotent.
+  """
+  @spec clear(t(), String.t() | nil) :: :ok
+  def clear(observation, session_id \\ nil)
+
+  def clear(%__MODULE__{id: id, name: name}, session_id) do
+    if table_exists?() do
+      :ets.delete(@table, {:obs, id})
+      :ets.delete(@table, {:obs_attached, id})
+      :ets.delete(@table, {:obs_aliases, id})
+      :ets.delete(@table, {:obs_session, session_id, id})
+
+      # Only clear the route if it still points at this observation: a later
+      # same-named observation may have legitimately taken it over.
+      case :ets.lookup(@table, {:obs_route, session_id, name}) do
+        [{{:obs_route, ^session_id, ^name}, ^id}] ->
+          :ets.delete(@table, {:obs_route, session_id, name})
+
+        _ ->
+          :ok
+      end
+    end
+
+    :ok
+  end
+
+  @doc """
+  Reclaims every observation row belonging to `session_id`.
+
+  Called from `SparkEx.Session.terminate/2` so a long-running session that
+  creates observations in a loop does not leak ETS rows for the VM's
+  lifetime (FABLE-29). Walks the `{:obs_session, session_id, id}` membership
+  markers and deletes each observation's rows.
+  """
+  @spec clear_session(String.t() | nil) :: :ok
+  def clear_session(session_id) do
+    if table_exists?() do
+      @table
+      |> :ets.match_object({{:obs_session, session_id, :_}, :_})
+      |> Enum.each(fn {{:obs_session, ^session_id, id}, name} ->
+        :ets.delete(@table, {:obs, id})
+        :ets.delete(@table, {:obs_attached, id})
+        :ets.delete(@table, {:obs_aliases, id})
+        :ets.delete(@table, {:obs_session, session_id, id})
+        :ets.delete(@table, {:obs_route, session_id, name})
+      end)
+
+      # Legacy raw-name observe() slots are session-scoped too.
+      :ets.match_delete(@table, {{:metric_aliases, session_id, :_}, :_})
+      :ets.match_delete(@table, {{:metric_legacy, session_id, :_}, :_})
+    end
+
+    :ok
+  end
+
+  defp table_exists?, do: :ets.whereis(@table) != :undefined
 
   @doc false
   @spec store_observed_metrics(map(), String.t() | nil) :: :ok
@@ -116,9 +249,17 @@ defmodule SparkEx.Observation do
     case :ets.lookup(@table, {:obs_route, session_id, name}) do
       [{{:obs_route, ^session_id, ^name}, id}] ->
         normalized = maybe_apply_observation_aliases(id, metrics)
-        # First writer wins: a single Observation captures the metrics from
-        # the first execution of its plan, matching PySpark semantics.
-        :ets.insert_new(@table, {{:obs, id}, normalized})
+        # Last execution wins, with dict.update merge semantics: PySpark
+        # Connect does `observation_result.update(...)` on every observed
+        # metric batch (core.py), so re-executing the plan overwrites the
+        # previously stored values (and adds any new keys).
+        existing =
+          case :ets.lookup(@table, {:obs, id}) do
+            [{{:obs, ^id}, prev}] when is_map(prev) -> prev
+            _ -> %{}
+          end
+
+        :ets.insert(@table, {{:obs, id}, Map.merge(existing, normalized)})
 
       _ ->
         # Legacy: observe() was called with a raw string name (no Observation

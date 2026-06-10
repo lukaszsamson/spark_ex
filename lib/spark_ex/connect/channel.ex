@@ -306,9 +306,12 @@ defmodule SparkEx.Connect.Channel do
       |> Enum.reduce_while(%{}, fn pair, acc ->
         case String.split(pair, "=", parts: 2) do
           [key, value] ->
-            decoded_key = URI.decode_www_form(key)
-            decoded_value = URI.decode_www_form(value)
-            {:cont, Map.put(acc, decoded_key, decoded_value)}
+            # PySpark percent-decodes the value only (urllib.parse.unquote) and
+            # leaves the key untouched (core.py:409). Use URI.decode/1 rather than
+            # URI.decode_www_form/1 so a literal '+' is preserved (the latter
+            # turns '+' into a space, corrupting e.g. token=abc+def).
+            decoded_value = URI.decode(value)
+            {:cont, Map.put(acc, key, decoded_value)}
 
           _ ->
             {:halt, {:error, {:invalid_param, pair}}}
@@ -490,7 +493,6 @@ defmodule SparkEx.Connect.Channel do
   end
 
   defp remote_token_requires_tls?(_opts, nil), do: false
-  defp remote_token_requires_tls?(%{use_ssl: true}, _token), do: true
 
   defp remote_token_requires_tls?(%{host: host}, _token) do
     not localhost?(host)
