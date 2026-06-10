@@ -823,9 +823,21 @@ defmodule SparkEx.Session do
   def stop(session) do
     GenServer.stop(session)
   catch
-    :exit, {:noproc, _} -> :ok
-    :exit, {:normal, _} -> :ok
+    :exit, reason ->
+      # The session may already be terminating: with trap_exit set (init/1),
+      # OTP's parent-exit protocol gracefully stops the session when the
+      # process that started it exits, so stop/1 can race that shutdown.
+      # A graceful concurrent termination means the stop goal is met.
+      if graceful_stop_exit?(reason), do: :ok, else: exit(reason)
   end
+
+  defp graceful_stop_exit?({reason, {GenServer, :stop, _args}}), do: graceful_stop_exit?(reason)
+  defp graceful_stop_exit?({reason, {:sys, :terminate, _args}}), do: graceful_stop_exit?(reason)
+  defp graceful_stop_exit?(:noproc), do: true
+  defp graceful_stop_exit?(:normal), do: true
+  defp graceful_stop_exit?(:shutdown), do: true
+  defp graceful_stop_exit?({:shutdown, _}), do: true
+  defp graceful_stop_exit?(_), do: false
 
   # --- GenServer Callbacks ---
 
@@ -1776,6 +1788,11 @@ defmodule SparkEx.Session do
   # as messages. A graceful exit (:normal/:shutdown) of a linked caller must
   # not tear the session down. An abnormal crash propagates: stop the session
   # so terminate/2 runs the server-side release + PlanIds cleanup.
+  #
+  # Note: exits of the session's PARENT (the process that called start_link)
+  # never reach these clauses — gen_server's parent-exit protocol intercepts
+  # them and terminates the session with the parent's reason (running
+  # terminate/2), even for :normal/:shutdown. stop/1 tolerates racing that.
   def handle_info({:EXIT, _pid, reason}, state) when reason in [:normal, :shutdown] do
     {:noreply, state}
   end

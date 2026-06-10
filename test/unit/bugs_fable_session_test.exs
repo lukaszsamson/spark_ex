@@ -291,4 +291,42 @@ defmodule SparkEx.Unit.BugsFableSessionTest do
       refute_receive {:DOWN, ^ref, :process, ^session, _}, 500
     end
   end
+
+  describe "FABLE-53 follow-up: stop/1 tolerates a concurrently shutting-down session" do
+    # With trap_exit set, OTP's parent-exit protocol gracefully terminates the
+    # session when its starting process exits, so Session.stop/1 can observe a
+    # :shutdown (instead of :normal) exit mid-termination. Synthesize that by
+    # stopping a server whose terminate/2 exits with a shutdown reason.
+    defmodule ShutdownOnStop do
+      use GenServer
+      def init(reason), do: {:ok, reason}
+      def handle_call(:ping, _from, s), do: {:reply, :pong, s}
+      def terminate(_reason, exit_reason), do: exit(exit_reason)
+    end
+
+    test "returns :ok when the process exits :shutdown during stop" do
+      {:ok, pid} = GenServer.start(ShutdownOnStop, :shutdown)
+      assert SparkEx.Session.stop(pid) == :ok
+      refute Process.alive?(pid)
+    end
+
+    test "returns :ok when the process exits {:shutdown, term} during stop" do
+      {:ok, pid} = GenServer.start(ShutdownOnStop, {:shutdown, :server_session_changed})
+      assert SparkEx.Session.stop(pid) == :ok
+      refute Process.alive?(pid)
+    end
+
+    test "returns :ok for an already-dead session" do
+      {:ok, pid} = GenServer.start(ShutdownOnStop, :shutdown)
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
+      assert SparkEx.Session.stop(pid) == :ok
+    end
+
+    test "propagates an abnormal exit reason" do
+      {:ok, pid} = GenServer.start(ShutdownOnStop, :boom)
+      assert catch_exit(SparkEx.Session.stop(pid))
+    end
+  end
 end
