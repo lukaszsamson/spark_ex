@@ -111,7 +111,9 @@ defmodule SparkEx.WindowSpec do
   # 2^63 - 1 (== JVM_LONG_MAX). A lower bound <= -(2^63 - 1) becomes
   # unbounded_preceding; an upper bound >= 2^63 - 1 becomes unbounded_following.
   import Bitwise, only: [bsl: 2]
-  @preceding_threshold -(bsl(1, 63) - 1)
+  # Written as `1 - bsl(...)` because `@attr -(expr)` parses as a binary
+  # subtraction against the undefined attribute on Elixir < 1.20.
+  @preceding_threshold 1 - bsl(1, 63)
   @following_threshold bsl(1, 63) - 1
 
   defp clamp_boundary(:unbounded_following, :lower) do

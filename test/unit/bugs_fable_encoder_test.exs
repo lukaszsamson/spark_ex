@@ -45,7 +45,7 @@ defmodule SparkEx.Connect.BugsFableEncoderTest do
   # ── FABLE-55: window boundary clamp threshold off-by-one vs PySpark ──
   describe "WindowSpec clamp threshold (FABLE-55)" do
     @jvm_long_min -9_223_372_036_854_775_808
-    @preceding_threshold -(9_223_372_036_854_775_808 - 1)
+    @preceding_threshold -9_223_372_036_854_775_807
 
     test "lower bound at -(2^63 - 1) clamps to :unbounded_preceding" do
       spec = WindowSpec.rows_between(%WindowSpec{}, @preceding_threshold, 0)
