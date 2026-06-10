@@ -3348,17 +3348,33 @@ defmodule SparkEx.Session do
 
   defp prepare_local_data(data, opts) when is_struct(data, Explorer.DataFrame) do
     with {:ok, normalized_schema} <- normalize_create_dataframe_schema(opts),
-         {:ok, data, schema_ddl} <- apply_schema_to_explorer(data, normalized_schema) do
-      schema_ddl = schema_ddl || explorer_to_ddl(data)
+         {:ok, data, schema} <- apply_schema_to_explorer(data, normalized_schema) do
+      # Metadata-bearing struct schemas keep their JSON form on the Arrow
+      # path so field metadata/nullability round-trip into the local
+      # relation (mirrors prepare_list_data_with_json_schema); the SQL-JSON
+      # complex-dtype fallback needs the DDL form (metadata not preserved
+      # there, same documented limitation as the list path).
+      {arrow_schema, sql_schema} =
+        case schema do
+          {:json_schema, json, ddl} ->
+            {json, ddl}
+
+          nil ->
+            ddl = explorer_to_ddl(data)
+            {ddl, ddl}
+
+          ddl when is_binary(ddl) ->
+            {ddl, ddl}
+        end
 
       if normalize_local_relation_arrow?(opts) and dataframe_contains_complex_dtype?(data) do
-        prepare_sql_json_relation(data, schema_ddl)
+        prepare_sql_json_relation(data, sql_schema)
       else
         case Explorer.DataFrame.dump_ipc_stream(data) do
           # Pass the source Explorer.DataFrame alongside the IPC bytes so the
           # chunked-cache path can re-slice it natively without a full IPC
           # decode round-trip on multi-hundred-MB payloads.
-          {:ok, ipc_bytes} -> {:ok, {:local_relation, ipc_bytes, schema_ddl, data}}
+          {:ok, ipc_bytes} -> {:ok, {:local_relation, ipc_bytes, arrow_schema, data}}
           {:error, reason} -> {:error, {:arrow_encode_error, reason}}
         end
       end
@@ -3400,6 +3416,11 @@ defmodule SparkEx.Session do
           # frame here so a {:column_names, ...} tuple is resolved into a
           # rename/DDL rather than being re-normalized as a raw :schema opt.
           case apply_schema_to_explorer(explorer_df, normalized_schema) do
+            {:ok, explorer_df, {:json_schema, _json, _ddl}} ->
+              # Keep the original struct schema in opts; the Explorer clause
+              # re-normalizes it to the metadata-preserving JSON form.
+              prepare_local_data(explorer_df, opts)
+
             {:ok, explorer_df, schema_ddl} ->
               effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
               prepare_local_data(explorer_df, Keyword.put(opts, :schema, effective_schema))
@@ -3419,19 +3440,20 @@ defmodule SparkEx.Session do
   end
 
   # Resolves the normalized schema against an Explorer.DataFrame and returns
-  # `{:ok, frame, schema_ddl}` where schema_ddl is a DDL string or nil
-  # (inference / column-name rename). A `{:column_names, names}` schema renames
-  # the frame's columns positionally (PySpark's `df.toDF(*_cols)`), so the
-  # tuple never leaks into the local_relation schema field. Metadata-bearing
-  # `{:json_schema, json, ddl}` schemas pass through their DDL form.
+  # `{:ok, frame, schema}` where schema is a DDL string, nil (inference /
+  # column-name rename), or a `{:json_schema, json, ddl}` tuple (the caller
+  # picks the JSON form on the Arrow path to preserve field metadata and the
+  # DDL form on the SQL-JSON fallback). A `{:column_names, names}` schema
+  # renames the frame's columns positionally (PySpark's `df.toDF(*_cols)`),
+  # so the tuple never leaks into the local_relation schema field.
   defp apply_schema_to_explorer(data, nil), do: {:ok, data, nil}
 
   defp apply_schema_to_explorer(data, schema_ddl) when is_binary(schema_ddl) do
     {:ok, data, schema_ddl}
   end
 
-  defp apply_schema_to_explorer(data, {:json_schema, _json, ddl}) do
-    {:ok, data, ddl}
+  defp apply_schema_to_explorer(data, {:json_schema, _json, _ddl} = schema) do
+    {:ok, data, schema}
   end
 
   defp apply_schema_to_explorer(data, {:column_names, names}) do

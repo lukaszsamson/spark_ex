@@ -229,10 +229,13 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
     buses_for_session(session)
     |> Enum.each(fn bus ->
-      # Synchronous call so the callbacks run before we return. Swallow a
-      # dead/stopping bus the same way a cast would have been dropped.
+      # Synchronous call so the callbacks run before we return. :infinity
+      # because the synchronous-delivery guarantee must hold however long a
+      # listener's on_query_started takes (the default 5s call timeout would
+      # silently drop the event). Swallow a dead/stopping bus the same way a
+      # cast would have been dropped.
       try do
-        GenServer.call(bus, {:dispatch_event_sync, event})
+        GenServer.call(bus, {:dispatch_event_sync, event}, :infinity)
       catch
         :exit, _ -> :ok
       end

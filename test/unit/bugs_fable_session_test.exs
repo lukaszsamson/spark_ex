@@ -111,6 +111,50 @@ defmodule SparkEx.Unit.BugsFableSessionTest do
       assert {:error, {:invalid_schema, _}} =
                SparkEx.create_dataframe(session, df, schema: ["only_one"])
     end
+
+    test "Explorer.DataFrame with a metadata-bearing struct schema keeps the JSON form" do
+      session = start_fake_session()
+      df = Explorer.DataFrame.new(%{"id" => [1, 2]})
+
+      schema =
+        SparkEx.Types.struct_type([
+          SparkEx.Types.struct_field("id", :long,
+            nullable: false,
+            metadata: %{"comment" => "range_id"}
+          )
+        ])
+
+      assert {:ok, %SparkEx.DataFrame{plan: plan}} =
+               SparkEx.create_dataframe(session, df, schema: schema)
+
+      assert {:local_relation, _ipc, schema_str} = unwrap_plan(plan)
+      # The JSON form (not the DDL form) must reach the local relation so
+      # field metadata and nullability round-trip to the server.
+      assert {:ok, decoded} = Jason.decode(schema_str)
+      assert [field] = decoded["fields"]
+      assert field["metadata"] == %{"comment" => "range_id"}
+      assert field["nullable"] == false
+    end
+
+    test "column-map data with a metadata-bearing struct schema keeps the JSON form" do
+      session = start_fake_session()
+
+      schema =
+        SparkEx.Types.struct_type([
+          SparkEx.Types.struct_field("id", :long,
+            nullable: false,
+            metadata: %{"comment" => "range_id"}
+          )
+        ])
+
+      assert {:ok, %SparkEx.DataFrame{plan: plan}} =
+               SparkEx.create_dataframe(session, %{"id" => [1, 2]}, schema: schema)
+
+      assert {:local_relation, _ipc, schema_str} = unwrap_plan(plan)
+      assert {:ok, decoded} = Jason.decode(schema_str)
+      assert [field] = decoded["fields"]
+      assert field["metadata"] == %{"comment" => "range_id"}
+    end
   end
 
   describe "FABLE-23: Reader builder propagates :predicates" do

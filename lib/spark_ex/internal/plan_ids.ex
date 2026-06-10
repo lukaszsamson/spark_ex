@@ -91,7 +91,7 @@ defmodule SparkEx.Internal.PlanIds do
   test fixtures that never encode cross-process).
   """
   @spec next(GenServer.server()) :: non_neg_integer()
-  def next(session) when is_pid(session) do
+  def next(session) when is_pid(session) and node(session) == node() do
     case :ets.whereis(@ets_table) do
       :undefined ->
         next_fallback()
@@ -111,11 +111,26 @@ defmodule SparkEx.Internal.PlanIds do
   # (session atomic, also 0-based) can collide on the same plan. See the
   # module header. A nil/unresolvable ref falls back to the per-process
   # counter (test fixtures, dead names).
+  #
+  # Remote refs ({name, node} tuples and remote pids from :global/via
+  # registries) cannot use this node's ETS/atomics: allocate through the
+  # session's own :next_plan_id call so the id comes from its counter.
   def next(session) do
     case GenServer.whereis(session) do
-      pid when is_pid(pid) -> next(pid)
+      pid when is_pid(pid) and node(pid) == node() -> next(pid)
+      pid when is_pid(pid) -> next_remote(pid)
+      {_name, _node} = remote -> next_remote(remote)
       _ -> next_fallback()
     end
+  end
+
+  defp next_remote(server) do
+    case GenServer.call(server, :next_plan_id) do
+      id when is_integer(id) -> id
+      _ -> next_fallback()
+    end
+  catch
+    :exit, _ -> next_fallback()
   end
 
   @doc """
