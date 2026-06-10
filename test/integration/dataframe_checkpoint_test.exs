@@ -27,10 +27,19 @@ defmodule SparkEx.Integration.DataFrameCheckpointTest do
         assert Enum.map(rows, & &1["id"]) == [0, 1, 2]
 
       {:error, %SparkEx.Error.Remote{} = error} ->
-        if error.error_class in ["_LEGACY_ERROR_TEMP_3016", "CANNOT_MODIFY_CONFIG"] do
-          assert is_binary(error.message)
-        else
-          flunk("unexpected checkpoint error: #{inspect(error)}")
+        cond do
+          error.error_class in ["_LEGACY_ERROR_TEMP_3016", "CANNOT_MODIFY_CONFIG"] ->
+            assert is_binary(error.message)
+
+          # Spark 3.5's Connect planner does not implement the Checkpoint
+          # command (added in Spark 4.0) and raises
+          # UnsupportedOperationException. The error now surfaces to the
+          # caller instead of silently returning the un-checkpointed frame.
+          "java.lang.UnsupportedOperationException" in (error.classes || []) ->
+            assert error.message =~ "not supported"
+
+          true ->
+            flunk("unexpected checkpoint error: #{inspect(error)}")
         end
     end
   end
