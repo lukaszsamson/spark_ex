@@ -69,7 +69,9 @@ defmodule SparkEx.GroupedData do
         agg(gd, pairs_to_columns(agg_columns))
 
       true ->
-        raise ArgumentError, "expected all aggregate expressions to be SparkEx.Column"
+        raise ArgumentError,
+              "expected all aggregate expressions to be SparkEx.Column structs " <>
+                "or {column, function} name pairs"
     end
   end
 
@@ -81,7 +83,8 @@ defmodule SparkEx.GroupedData do
     sorted = Enum.sort_by(agg_map, fn {col_name, _} -> to_string(col_name) end)
 
     unless Enum.all?(sorted, &agg_pair?/1) do
-      raise ArgumentError, "expected all aggregate expressions to be SparkEx.Column"
+      raise ArgumentError,
+            "expected all aggregate expressions to be {column, function} name pairs"
     end
 
     agg(gd, pairs_to_columns(sorted))
