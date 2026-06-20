@@ -1146,12 +1146,12 @@ defmodule SparkEx.DataFrameTest do
       end
     end
 
-    test "checkpoint/1 returns original dataframe when checkpoint command is unsupported" do
+    test "checkpoint/1 surfaces server error when checkpoint command is unsupported" do
       {:ok, session} = UnsupportedCheckpointSession.start_link(self())
       df = DataFrame.new(session, {:sql, "SELECT * FROM t", nil})
 
-      assert {:sql, "SELECT * FROM t", nil} =
-               SparkEx.Test.PlanHelpers.unwrap_plan(DataFrame.checkpoint(df))
+      assert {:error, %SparkEx.Error.Remote{message: "checkpoint command not supported."}} =
+               DataFrame.checkpoint(df)
     end
   end
 
@@ -1217,12 +1217,12 @@ defmodule SparkEx.DataFrameTest do
       assert_receive {:local_checkpoint_args, true, true, nil}
     end
 
-    test "local_checkpoint/1 returns original dataframe when checkpoint command is unsupported" do
+    test "local_checkpoint/1 surfaces server error when checkpoint command is unsupported" do
       {:ok, session} = __MODULE__.UnsupportedCheckpointSession.start_link(self())
       df = DataFrame.new(session, {:sql, "SELECT * FROM t", nil})
 
-      assert {:sql, "SELECT * FROM t", nil} =
-               SparkEx.Test.PlanHelpers.unwrap_plan(DataFrame.local_checkpoint(df))
+      assert {:error, %SparkEx.Error.Remote{message: "checkpoint command not supported."}} =
+               DataFrame.local_checkpoint(df)
     end
   end
 

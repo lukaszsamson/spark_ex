@@ -1,0 +1,607 @@
+BUGS_FABLE.txt — spark_ex audit vs PySpark Spark Connect reference (../spark)
+Date: 2026-06-10
+Scope: lib/ (all non-proto modules), compared against
+/Users/lukaszsamson/claude_fun/spark/python/pyspark/sql/connect/.
+Only confident, code-verified issues are listed. Severity reflects user impact.
+IDs: FABLE-NN.
+
+================================================================================
+HIGH
+================================================================================
+
+FABLE-01  ltrim/rtrim/trim send trim-string args in the wrong order
+  File: lib/spark_ex/functions.ex:719, 737, 755 (ltrim/rtrim/trim with trim_string)
+  When a trim character set is given, spark_ex builds
+  {:fn, "ltrim", [to_expr(col), to_expr(trim_string)]} i.e. (src, trim).
+  PySpark sends the trim string FIRST: _invoke_function_over_columns("ltrim",
+  trim, col) (connect/functions/builtin.py:2468-2492), because Spark's SQL
+  form is ltrim(trimStr, srcStr) (catalyst StringTrimLeft 2-arg constructor,
+  stringExpressions.scala:1561). Result: silently wrong output — characters of
+  `col` are trimmed from `trim_string` instead of the other way around.
+  btrim/2 (functions.ex:773) is correct; only ltrim/rtrim/trim are swapped.
+
+FABLE-02  mask/2 with partial options sends NULL for omitted chars, leaving
+          text unmasked (privacy-sensitive)
+  File: lib/spark_ex/macros/function_registry.ex:216-218 (mask entry) with
+        lib/spark_ex/macros/function_gen.ex:283-315 ({:col_opt} codegen)
+  PySpark always sends 5 args, substituting defaults lit("X"), lit("x"),
+  lit("n"), lit(None) for omitted upper/lower/digit/other chars
+  (builtin.py:3092-3106). The {:col_opt, [upper_char: nil, ...]} generator
+  drops only TRAILING nils and encodes interior nils as lit(nil). So
+  mask(col, digit_char: "0") sends mask(col, NULL, NULL, '0'); in Spark's
+  mask a NULL char means "retain the original character", so upper/lowercase
+  letters pass through unmasked instead of becoming X/x. The registry defaults
+  should be "X"/"x"/"n"/nil like PySpark.
+
+FABLE-03  await_termination with no timeout crashes the Session GenServer
+  File: lib/spark_ex/internal/streaming_timeout.ex:21-23, with
+        lib/spark_ex/streaming_query.ex:112 and
+        lib/spark_ex/streaming_query_manager.ex:77, via
+        lib/spark_ex/connect/client.ex:566 and :2203
+  StreamingTimeout.resolve/1 writes Keyword.put(opts, :timeout, nil); in
+  run_execute_plan, Keyword.get(opts, :timeout, 60_000) then returns the
+  literal nil (key present), and Stub.execute_plan(channel, request,
+  timeout: nil) reaches gun's `receive ... after nil`, which raises
+  :timeout_value — inside the Session GenServer handle_call, killing the
+  session. PySpark's awaitTermination() with no timeout blocks indefinitely
+  and returns None (connect/streaming/query.py:94-98). nil must be mapped to
+  :infinity at the gRPC layer (Session.call_timeout already handles the
+  GenServer side). Note: even when fixed, the blocking call occupies the
+  session process, so StreamingQuery.stop/1 on the same session cannot
+  unblock it — unlike PySpark where only the calling thread blocks.
+
+FABLE-04  createDataFrame input validation raises inside Session handle_call,
+          destroying the whole session
+  File: lib/spark_ex/session.ex:3563-3566 (tuple_to_named_map) and
+        :4195-4200 (merge_inferred_types), reached from
+        handle_call({:create_dataframe, ...}) at session.ex:1502 with no rescue
+  create_dataframe(s, [{1,2}, {3}]) (tuple arity mismatch) or
+  create_dataframe(s, [%{"a" => 1}, %{"a" => "x"}]) (heterogeneous inferred
+  types) raises ArgumentError in the GenServer, which runs terminate/2 —
+  releasing the server-side session and disconnecting the channel. One
+  malformed local input destroys the session and all of its state. PySpark
+  raises a plain client-side error (session.py:753-760 AXIS_LENGTH_MISMATCH,
+  types._merge_type) without harming the session. Other validation paths in
+  this file correctly return {:error, ...} (cf. safe_encode rescue at
+  session.ex:3132-3148); these two should too.
+
+FABLE-05  Explorer collect path crashes on interval / variant / UDT / map /
+          tz-timestamp columns (schema-policy rebuild dtype mismatch)
+  File: lib/spark_ex/connect/result_decoder.ex:1245-1291 (apply_schema_policy)
+        with lib/spark_ex/connect/type_mapper.ex:109-143
+  The rebuild path re-creates columns via Explorer.DataFrame.new(columns,
+  dtypes: TypeMapper.schema_to_dtypes(struct)), but mapped dtypes don't match
+  the decoded cell values: day-time intervals decode as %Explorer.Duration{}
+  but are dtyped :string (type_mapper.ex:111); maps/variants/UDTs decode as
+  lists/maps but are dtyped :string; tz timestamps decode as DateTime but the
+  dtype normalizes to naive. Interval/variant/UDT columns install a
+  raw_passthrough transform (result_decoder.ex:1322-1332), so merely selecting
+  such a column triggers the rebuild and an uncaught raise ("cannot create
+  series ...: argument error") in the Session GenServer. PySpark's Arrow→rows
+  conversion passes these types through with correct converters
+  (python/pyspark/sql/conversion.py:524+).
+
+FABLE-06  {:time, :microsecond} is not a valid Explorer dtype — TIME columns
+          crash the Explorer path
+  File: lib/spark_ex/connect/type_mapper.ex:106
+  Explorer 0.11's only time dtype is the bare atom :time
+  (explorer/lib/explorer/shared.ex:35); check_dtypes! raises ArgumentError on
+  {:time, :microsecond}. Any TIME(p) column reaching
+  build_empty_dataframe_from_schema (result_decoder.ex:1236-1241) or the
+  apply_schema_policy rebuild crashes. PySpark maps proto time to TimeType
+  cleanly (connect/types.py:254-255).
+
+================================================================================
+MEDIUM
+================================================================================
+
+-- Plan/expression encoding ----------------------------------------------------
+
+FABLE-07  Window frame boundary 0 not normalized to CURRENT ROW — RANGE
+          frames diverge
+  File: lib/spark_ex/connect/plan_encoder.ex:3539-3560 (and window_spec.ex
+        never converts 0)
+  PySpark maps boundary 0 to current_row = True for both ROW and RANGE frames
+  (connect/expressions.py:1151-1153, 1190-1192). spark_ex encodes 0 as a value
+  literal (long for range). For RANGE frames a long-literal boundary requires
+  a single numeric order column in Catalyst, so range_between(0,
+  :unbounded_following) over a timestamp or multi-column ordering fails
+  analysis on the server while the identical PySpark call works.
+
+FABLE-08  rewrite_expr/4 misses the 4-tuple {:alias, expr, name, metadata} —
+          subquery/cross-DF references under a metadata alias are not hoisted
+  File: lib/spark_ex/connect/plan_encoder.ex:2661-2664 (only the 3-tuple alias
+        is matched; 4-tuple falls into the catch-all at :2746)
+  Column.alias_/3 with metadata: produces {:alias, expr, name, metadata_json}
+  (column.ex:434). Because rewrite_expr returns the 4-tuple unchanged, a
+  subquery expression (exists/scalar) or cross-DataFrame column reference
+  nested under a metadata alias is never collected into
+  with_relations.references — the plan's subquery_expression.plan_id points at
+  a relation missing from the proto tree (server-side "plan not found"). The
+  same expression without metadata works; with_columns' rewrite_alias/4
+  (plan_encoder.ex:2559) handles the 4-tuple correctly. PySpark collects
+  references through aliases regardless of metadata (plan.py:162-177, 601-607;
+  expressions.py:223-225).
+
+FABLE-09  select(df, ["*"]) and dict-agg %{"*" => "count"} fail: raw-string
+          paths bypass the star special case
+  Files: lib/spark_ex/data_frame.ex:2535 (normalize_column_expr/1),
+         lib/spark_ex/grouped_data.ex:120-128 (pairs_to_columns/1)
+  PySpark converts string columns through F.col(), which maps "*" to
+  UnresolvedStar (connect/functions/builtin.py:250-258); df.select("*") and
+  df.agg({"*": "count"}) work. SparkEx.Functions.col/1 has the same special
+  case, but normalize_column_expr(name) and pairs_to_columns build {:col, "*"}
+  directly, which the encoder emits as UnresolvedAttribute{unparsed_identifier:
+  "*"} (plan_encoder.ex:1438) — the server raises UNRESOLVED_COLUMN. Route raw
+  strings through the same star/"x.*" handling as col/1.
+
+-- gRPC client -----------------------------------------------------------------
+
+FABLE-10  Server RetryInfo.retry_delay REPLACES exponential backoff instead of
+          flooring it
+  File: lib/spark_ex/connect/client.ex:2526-2529 (backoff_with_retry_info/3)
+  The helper returns min(retry_delay_ms, max_server_retry_delay) as the entire
+  sleep, discarding attempt-based exponential backoff and jitter. PySpark
+  computes wait = max(exponential_wait, min(retry_delay, max_server_retry_delay))
+  plus jitter (client/retries.py:157-167) — the server hint is a lower bound,
+  never a reduction. A server attaching a small retry_delay (10-100 ms) to a
+  persistent error makes this client hammer it 15 times at a fixed short
+  interval where PySpark backs off 50ms → ... → 60s. Also affects the reattach
+  path (client.ex:1716).
+
+FABLE-11  Reattach retry budget never resets on progress
+  File: lib/spark_ex/connect/client.ex:1565-1578 (with :1673-1694)
+  On a successfully received response only empty_eof_streak is reset;
+  state.attempt persists for the stream's lifetime. PySpark constructs a fresh
+  Retrying per consumed response (reattach.py:159, core.py:789-790), so the
+  15-retry budget applies per fetch. A long-lived reattachable stream (e.g.
+  the listener-bus event stream) that survives >15 transient blips in total
+  over hours fails with :reattach_incomplete_result, and each new blip's
+  backoff starts from the lifetime counter (pinned at 60 s) instead of 50 ms.
+
+FABLE-12  URI.decode_www_form corrupts '+' in connection-string parameters
+  File: lib/spark_ex/connect/channel.ex:309-310 (parse_params)
+  Both key and value are decoded with URI.decode_www_form/1, which turns '+'
+  into a space. PySpark uses urllib.parse.unquote on the value only
+  (client/core.py:409), leaving '+' intact. sc://...;token=abc+def yields
+  token "abc def" here (auth failure) vs "abc+def" in PySpark; any param value
+  with a literal '+' diverges. Use percent-decoding without plus-to-space.
+
+-- Type mapping / decoding -----------------------------------------------------
+
+FABLE-13  TIMESTAMP mapped to deprecated {:datetime, :microsecond}, collapsing
+          into TIMESTAMP_NTZ
+  File: lib/spark_ex/connect/type_mapper.ex:104
+  Explorer 0.11 hard-deprecates the 2-tuple and normalizes it to
+  {:naive_datetime, :microsecond} with a Logger.warning per use
+  (explorer/lib/explorer/shared.ex:93-100). TIMESTAMP and TIMESTAMP_NTZ
+  produce identical naive dtypes (tz-awareness lost, e.g. for empty results),
+  and rebuilding actual DateTime values under the naive dtype raises. PySpark
+  keeps TimestampType distinct and tz-aware (conversion.py:699-706). Use
+  {:datetime, :microsecond, tz}.
+
+FABLE-14  to_spark_ddl_type/1 never matches Explorer's real time/tz-datetime/
+          duration dtypes — silently typed STRING server-side
+  File: lib/spark_ex/connect/type_mapper.ex:321-324, :341 (catch-all)
+  Clauses {:datetime, _} and {:time, _} match shapes Explorer never produces;
+  real dtypes are {:datetime, precision, tz} (3-tuple) and the atom :time,
+  both falling to the "STRING" catch-all; {:duration, _} is explicitly mapped
+  to "STRING". Via explorer_to_ddl (session.ex:4258-4266, the
+  createDataFrame-from-Explorer path), tz-aware datetime, time, and duration
+  columns become STRING on the server, where PySpark's Arrow inference yields
+  TimestampType/TimeType/DayTimeIntervalType (connect/types.py from_arrow_type).
+
+FABLE-15  UDT deserializers and CHAR trimming apply only to the Explorer path;
+          collect/2 and to_local_iterator/2 skip them
+  File: lib/spark_ex/connect/result_decoder.ex:1310-1320
+        (column_value_transform/1 invoked only from apply_schema_policy)
+  A deserializer registered in SparkEx.Connect.UDTRegistry is silently ignored
+  for collect and to_local_iterator (decode_stream/rows_stream return raw
+  to_rows output; cf. session.ex:1720-1724), while PySpark applies
+  udt.deserialize on all collection paths (conversion.py:721-742). Also the
+  CHAR trailing-space strip (result_decoder.ex:1310-1311) has no PySpark
+  counterpart (PySpark returns server-padded values unchanged), so the same
+  query returns trimmed strings via to_explorer and padded strings via collect.
+
+FABLE-16  Geometry/geography SRID special values inverted vs PySpark
+  Files: lib/spark_ex/connect/type_mapper.ex:242-254;
+         lib/spark_ex/types.ex:306-308, :452-454, :592-602
+  The srid != 0 guard renders the mixed-SRID sentinel (-1) as "GEOMETRY(-1)",
+  which Spark's parser won't round-trip — PySpark renders geometry(any)
+  (sql/types.py:539, :703-709 GeometryType.simpleString). Conversely SRID 0 is
+  a valid Cartesian SRS that PySpark renders as geometry(0), but spark_ex
+  collapses it to bare GEOMETRY.
+
+FABLE-17  data_type_to_json/1 raises on UDT schemas
+  File: lib/spark_ex/types.ex:527-530 (proto_kind_to_json/2 has no :udt clause)
+  Feeding back a schema proto containing a UDT column (e.g. ML VectorUDT from
+  df.schema) raises ArgumentError instead of serializing. PySpark handles the
+  udt proto variant (connect/types.py:324-331). Affects Reader.schema/2
+  (reader.ex:70, 465) and Functions.from_json (functions.ex:1603).
+
+-- DataFrame / GroupedData -----------------------------------------------------
+
+FABLE-18  Integer column args map to a literal "_cN" name instead of 1-based
+          ordinals
+  File: lib/spark_ex/data_frame.ex:2540 (normalize_column_expr(idx))
+  PySpark treats integer args to groupBy/rollup/cube/sort as 1-based ordinals
+  resolved against the schema (self[c - 1], connect/dataframe.py:591-597).
+  "_cN" is only the headerless-CSV naming convention (and 0- vs 1-based
+  inconsistent with it anyway); on any other DataFrame group_by(df, [1])
+  silently targets a nonexistent column. Inconsistent with
+  normalize_sort_expr/1 (data_frame.ex:2570), which deliberately raises for
+  integers.
+
+FABLE-19  order_by(..., ascending: true) silently overrides explicit .desc()
+  File: lib/spark_ex/data_frame.ex:2619-2641 (build_sort_exprs/2)
+  PySpark leaves columns untouched when the corresponding ascending entry is
+  truthy and only calls .desc() for falsy entries (sql/dataframe.py:3176-3181);
+  col("x").desc() with ascending=True stays descending. spark_ex strips any
+  existing {:sort_order, ...} via col_to_inner_expr/1 and forces
+  :asc/:nulls_first, silently inverting the requested order.
+
+FABLE-20  GroupedData numeric shortcuts skip PySpark's numeric-column
+          validation for explicit columns
+  File: lib/spark_ex/grouped_data.ex:178-226
+  PySpark's _numeric_agg always fetches the schema and raises
+  NOT_NUMERIC_COLUMNS for non-numeric explicit columns (connect/group.py:
+  159-176). spark_ex validates only the no-columns case, so
+  GroupedData.min(gd, "name") on a string column returns a lexicographic min
+  (and sum/avg return implicitly-cast results) instead of raising.
+
+FABLE-21  drop/2 converts unbound Columns to names, changing ambiguity
+          semantics after self-joins
+  File: lib/spark_ex/data_frame.ex:202-203
+  PySpark keeps Column arguments as expressions in Drop.columns
+  (connect/dataframe.py:545-559; plan.py:878-882): drop-by-expression raises
+  AMBIGUOUS_REFERENCE or drops exactly one attribute
+  (ResolveDataFrameDropColumns.scala:38-49), while drop-by-name drops ALL
+  columns with that name. spark_ex rewrites %Column{expr: {:col, name}} into
+  the column_names list, so after a self-join drop(df, [col("id")]) silently
+  drops both id columns where PySpark raises.
+
+-- Session / reader / misc -----------------------------------------------------
+
+FABLE-22  createDataFrame schema-as-column-names (and metadata structs) dead-
+          ends for Explorer/column-map data
+  File: lib/spark_ex/session.ex:3288-3304 (and :3327-3344)
+  normalize_create_dataframe_schema/1 can return {:column_names, names} or
+  {:json_schema, json, ddl}, but the Explorer.DataFrame clause of
+  prepare_local_data/2 uses the result as if it were a DDL string and embeds
+  the tuple into {:local_relation, ipc, {:column_names, [...]}} — a proto
+  `optional string` field — failing at plan encoding with an opaque
+  :plan_encode_error. PySpark supports list-of-names schemas for all data
+  inputs by renaming via df.toDF(*_cols) (session.py:506-509, 790-792); here
+  they only work for list-of-maps/list-of-tuples data.
+
+FABLE-23  Reader builder path silently drops :predicates
+  File: lib/spark_ex/reader.ex:421-432 (load_from_builder/3)
+  :predicates is listed as a reserved key and stripped from options, but the
+  builder always emits the 5-tuple {:read_data_source, format, paths, schema,
+  options} without predicates (the session-form data_source/4 at :434-447
+  correctly emits the 6-tuple). Reader.new(s) |> format("jdbc") |> load(nil,
+  predicates: ["id < 100"]) silently reads the whole table. PySpark routes
+  predicates into DataSource(predicates=...) (readwriter.py:468-475). Encode
+  them or reject them; swallowing yields wrong results.
+
+FABLE-24  count_min_sketch/3 without seed sends 3 args; server requires 4
+  File: lib/spark_ex/functions.ex:684-690
+  The doc claims the server picks a random seed, but PySpark generates the
+  seed client-side and always sends 4 args (builtin.py:1205-1212), and
+  CountMinSketchAggExpressionBuilder asserts exactly 4 expressions
+  (CountMinSketchAgg.scala:217-229) — the 3-arg form raises an analysis error,
+  making the 3-arity function unusable. Auto-generate a seed like
+  rand/shuffle/uniform already do in this file.
+
+-- Streaming -------------------------------------------------------------------
+
+FABLE-25  process_all_available/1 has a ~65 s effective deadline; PySpark
+          blocks indefinitely
+  File: lib/spark_ex/streaming_query.ex:134-139
+  No :timeout is passed, so the command runs with the 60 s default gRPC
+  timeout (client.ex:566) and a 65 s GenServer call timeout
+  (session.ex:3262-3270). The server sends nothing until the drain completes,
+  so any processAllAvailable taking longer makes the caller exit with a raw
+  GenServer :timeout (DEADLINE_EXCEEDED is terminal, client.ex:2444-2449, so
+  reattach can't save it). PySpark blocks with no client deadline
+  (connect/streaming/query.py:134-139) and Spark documents the call as
+  potentially blocking for extended periods.
+
+FABLE-26  Listener-bus DOWN handler races stream restart → leaked server-side
+          listener and reader process
+  File: lib/spark_ex/streaming_query_listener_bus.ex:357-359
+  The {:DOWN, ..., :shutdown} clause for closing_stream?: true doesn't check
+  the dead pid is the CURRENT stream_task. Sequence: remove last listener
+  (kills task1, sets stream_task: nil, closing_stream?: true) → add_listener
+  processed before task1's DOWN → task2 started → late DOWN for task1 clobbers
+  stream_task back to nil. A later remove_listener of the last listener sees
+  stream_task == nil (line 276) and skips stop_event_stream — the server-side
+  listener and task2's gRPC stream leak forever. PySpark joins the single
+  handler thread under a lock (connect/streaming/query.py:312-345).
+
+FABLE-27  ManagedStream controller processes are never stopped — one leaked
+          process per closed stream
+  File: lib/spark_ex/managed_stream.ex:135-143 (do_close/2)
+  do_close marks closed?, cancels the timer, fires the release task, but the
+  module has no {:stop, ...}/terminate anywhere; each finished managed stream
+  leaves an inert controller GenServer alive forever (the link doesn't reap it
+  when the owner exits :normal; owner-DOWN also just calls do_close). Every
+  listener-bus (re)connect and managed response stream in a long-lived process
+  accumulates one leaked process.
+
+-- Observation / TVF / plan ids ------------------------------------------------
+
+FABLE-28  Observation name collisions misroute metrics, contradicting the
+          module's own contract
+  File: lib/spark_ex/observation.ex:88, 115-133
+  Routing is one per-(session_id, name) ETS slot, last observe/3 wins. With
+  obs1 = Observation.new("m") on df1 and obs2 = Observation.new("m") on df2,
+  executing df1 delivers df1's metrics to obs2's id (get(obs2) returns df1's
+  metrics; get(obs1) raises). PySpark routes per executed plan — CollectMetrics
+  holds the Observation object (plan.py:1607-1631) and incoming metrics match
+  only the executed plan's observations (client/core.py:1529-1538). The
+  moduledoc (lines 10-12) claims same-named observations don't collide; false
+  for this interleaving.
+
+FABLE-29  Observation ETS entries are never deleted — unbounded growth
+  File: lib/spark_ex/observation.ex (whole module; table :spark_ex_observations)
+  Every observe/3 permanently inserts route/attached/alias keys and every
+  execution inserts the metrics map; no code path in lib/ deletes any of them
+  (not get/1, not Session.terminate/2). PySpark stores _result on the
+  Observation object itself (observation.py:53,70), reclaimed by GC. A
+  long-running node creating observations in a loop leaks memory for the VM's
+  lifetime.
+
+FABLE-30  TVF string arguments encoded as string literals, not column refs
+  File: lib/spark_ex/table_valued_function.ex:20-49 via
+        lib/spark_ex/data_frame.ex:2473-2477 (table_function/3)
+  Non-Column terms are wrapped as {:lit, value}, so
+  TableValuedFunction.explode(tvf, "arr") sends explode('arr') (a string
+  literal). PySpark's tvf.py:117-124 applies _to_col(arg), converting bare
+  strings to column references. The same call that explodes column arr in
+  PySpark fails (or silently misbehaves) here.
+
+FABLE-31  Named sessions bypass the shared plan-id allocator, reintroducing
+          the collision it exists to prevent
+  File: lib/spark_ex/internal/plan_ids.ex:101 (next/1 pid-only ETS lookup)
+  Session.start_link/1 supports :name registration (session.ex:74-77) and APIs
+  accept GenServer.server(), but PlanIds.next/1 only consults the session's
+  shared :atomics counter for a raw pid; an atom/via name falls to the
+  per-process fallback counter (0-based) while the encoder inside the Session
+  process allocates from the session atomic (also 0-based) — caller-stamped
+  and encoder ids can collide, producing the ambiguous duplicate-plan_id plans
+  described in the module's own header (lines 8-14). Resolve non-pid refs via
+  GenServer.whereis/1.
+
+FABLE-32  SPARK_REMOTE env var silently overrides the explicitly passed :url,
+          inverting PySpark precedence (deliberate, but a footgun)
+  File: lib/spark_ex.ex:38-50
+  connect/1 rewrites any structurally valid :url to the SPARK_REMOTE value
+  whenever the env var is set (dropping the original URL's token/use_ssl;
+  only identity params carry over). PySpark treats the env var as a FALLBACK
+  (session.py:475: opts.get("spark.remote", os.environ.get("SPARK_REMOTE"))).
+  The code comment shows this is intentional for local checklist scripts, but
+  for library users an explicit connect(url: "sc://prod:15002") can be
+  silently redirected to a different cluster with different credentials.
+
+================================================================================
+LOW
+================================================================================
+
+FABLE-33  Decimal literals with positive exponent encode in scientific
+          notation and precision/scale inference miscounts
+  File: lib/spark_ex/connect/plan_encoder.ex:3174-3176, :3767-3781
+  Decimal.to_string/1 defaults to :scientific, so Decimal.new("1.5e10")
+  becomes "1.5E+10"; infer_decimal_precision_scale/1 splits on "." and counts
+  "5E+10" as 5 fraction digits → {precision: 6, scale: 5}. The server takes
+  max(actual, declared) scale (LiteralValueProtoConverter.scala:515-530),
+  yielding DecimalType(11,5), which can't hold 1.5e10 → overflow/NULL.
+  PySpark sends str(decimal) with default (10,0) (expressions.py:357-358,
+  :499-502). Fix: Decimal.to_string(d, :normal) or exponent-aware inference.
+
+FABLE-34  encode_relation supports map_partitions/group_map/co_group_map but
+          rewrite_plan rejects them — unreachable support, latent crash
+  File: lib/spark_ex/connect/plan_encoder.ex:1252-1334 vs :2504-2506
+  All public encode paths go through attach_with_relations → rewrite_plan,
+  which has no clauses for these tuples and raises "unsupported plan tuple".
+  Nothing in lib/ currently produces them, so this is dead code + a latent
+  crash for future/user-constructed plans (PySpark encodes these relations,
+  plan.py:2486-2579). Related: the {:inline_udtf, ...} rewrite clause
+  (:2495-2502) passes args through unrewritten while {:table_valued_function,
+  ...} (:2490) rewrites its args.
+
+FABLE-35  SQL positional args misclassified as named when every element is an
+          {atom, term} 2-tuple
+  File: lib/spark_ex/connect/plan_encoder.ex:2904-2921 (Keyword.keyword?
+        test; same pattern in rewrite_args/4 at :2510)
+  SparkEx.sql(s, "SELECT ?", args: [{:lit, 1}]) passes validate_sql_args!
+  (spark_ex.ex:602) but Keyword.keyword?([{:lit, 1}]) is true, so it is
+  encoded as named argument "lit" => 1 instead of positional. PySpark keeps
+  args/named_args structurally separate (plan.py:1442-1480). Only affects
+  callers passing raw expression tuples rather than %Column{} structs.
+
+FABLE-36  Error with RetryInfo but no retry_delay is not retried
+  File: lib/spark_ex/connect/errors.ex:246 + lib/spark_ex/connect/client.ex:2452-2466
+  retry_delay_ms presence is used as a proxy for RetryInfo presence; a
+  RetryInfo with unset retry_delay yields nil and falls through to the
+  UNAVAILABLE/INVALID_CURSOR checks. PySpark retries ANY error whose status
+  details contain RetryInfo (retries.py:367-369).
+
+FABLE-37  Non-reattachable execute path drops per-session retry policy
+  File: lib/spark_ex/connect/client.ex:2373-2382
+  execute_plan_non_reattachable/5 forwards caller execute opts to
+  retry_with_backoff/2; without :session in opts,
+  RetryPolicyRegistry.policy_for(nil, :retry) ignores session.retry_policies —
+  unlike add_artifacts/2 and dispatch_unary_rpc/4 which pass session:
+  session. A session configured with retry: %{max_retries: 0} still gets the
+  global 15-retry policy on execute_plan(..., reattachable: false).
+
+FABLE-38  Graceful-EOF reattach is slept on and budget-capped, unlike PySpark
+  File: lib/spark_ex/connect/client.ex:1542, :1709-1735
+  PySpark reattaches immediately and indefinitely on graceful EOF
+  (reattach.py:175-188; no sleep, no budget). spark_ex sleeps before every
+  graceful-EOF reattach and after 3 zero-progress EOFs charges each further
+  EOF against the 15-attempt budget, surfacing :reattach_incomplete_result
+  after ~19 silent cycles. Deliberate anti-spin guard per comments, but a real
+  divergence: a legitimate long-running query producing no responses for an
+  extended period fails here and completes in PySpark.
+
+FABLE-39  checkpoint/local_checkpoint silently return the un-checkpointed
+          DataFrame on "not supported." errors
+  File: lib/spark_ex/data_frame.ex:1750, :1790, :1851-1856
+  checkpoint_not_supported?/1 substring-matches "not supported." in any remote
+  error message and returns the original lazy DataFrame as if checkpointing
+  succeeded. PySpark surfaces the server error. Callers can't distinguish a
+  real checkpoint from a no-op, and the substring can match unrelated errors.
+
+FABLE-40  NA.drop/2 skips :how validation when :thresh is provided
+  File: lib/spark_ex/data_frame/na.ex:129-146
+  PySpark validates how ∈ {any, all} before applying thresh
+  (connect/dataframe.py:1321-1335), so dropna(how="bogus", thresh=2) raises;
+  here the thresh branch short-circuits the cond and :how is silently ignored.
+
+FABLE-41  sample/4 rejects fraction > 1.0 without replacement; PySpark accepts
+  File: lib/spark_ex/data_frame.ex:2662-2675 (validate_sample_fraction!/2)
+  PySpark performs no client-side range check and Scala Dataset.sample only
+  requires fraction >= 0; df.sample(1.5) is valid (over-sampling caps at all
+  rows). Extra validation rejecting input the reference accepts.
+
+FABLE-42  {name, alias} tuple form accepted but the alias silently discarded
+  File: lib/spark_ex/data_frame.ex:2537-2538 (normalize_column_expr)
+  unpivot/5's typespec (data_frame.ex:1266) documents a {column, alias} form
+  for values, but normalize_column_expr({name, _alias}) returns plain
+  {:col, name}, dropping the alias with no error. Either alias or reject.
+
+FABLE-43  Writer partition_by call-time option rejects a bare string
+  File: lib/spark_ex/writer.ex:162-168 (with maybe_set_partition_by :509-514)
+  partition_by/2 only accepts a list, so the documented call-time option
+  partition_by: "year" in save/parquet/etc. raises FunctionClauseError.
+  PySpark accepts Optional[Union[str, List[str]]] (readwriter.py:665-675,
+  :744-750) and partitionBy(*cols) wraps a lone string.
+
+FABLE-44  CSV :sep/:separator value not coerced to string like sibling options
+  Files: lib/spark_ex/reader.ex:230-231; lib/spark_ex/writer.ex:310
+  The sep value is Map.put raw while sibling options go through
+  to_string/normalize_option_value; a non-binary separator (atom/charlist)
+  fails later at protobuf encoding instead of being coerced. PySpark routes
+  all option values through to_str (readwriter.py:96-105, :519-530).
+
+FABLE-45  is_stopped/1 and progress-handler APIs crash on named sessions
+  File: lib/spark_ex/session.ex:180-188, :4657-4664
+  Branching on is_pid(session) with a %__MODULE__{} fallback means a
+  registered name or via-tuple (supported by start_link :name, specs accept
+  GenServer.server()) raises MatchError in is_stopped/1,
+  register_progress_handler/2, remove_progress_handler/2,
+  clear_progress_handlers/1.
+
+FABLE-46  clone_session bypasses the closed-session guard
+  File: lib/spark_ex/session.ex:910-947 vs :988-998
+  The {:clone_session, id} clause precedes the closed: true guard, so cloning
+  a session closed due to a server-side session change issues a CloneSession
+  RPC with the stale id (server INVALID_HANDLE) instead of the intended fast
+  {:error, :session_closed}.
+
+FABLE-47  Cloned sessions don't inherit :retry_policies (or grpc_opts)
+  File: lib/spark_ex/session.ex:916-924
+  clone_opts forwards connect_opts/identity/Arrow-chunking but omits
+  :retry_policies, so a clone silently reverts to global RetryPolicyRegistry
+  policies. PySpark's cloneSession reuses the client wholesale
+  (session.py:1260-1292).
+
+FABLE-48  remove_tag/2 skips tag validation
+  File: lib/spark_ex/session.ex:128-130
+  PySpark validates in both add_tag and remove_tag (client/core.py:1884-1894);
+  spark_ex validates only add_tag, so remove_tag(session, "a,b") or "" silently
+  succeeds.
+
+FABLE-49  QueryStarted listener events dispatched async after start/2 returns
+  Files: lib/spark_ex/stream_writer.ex:412-420;
+         lib/spark_ex/streaming_query_listener_bus.ex:211-229
+  PySpark guarantees onQueryStart is called on all listeners BEFORE
+  DataStreamWriter.start() returns (connect/streaming/readwriter.py:639-645;
+  sql/streaming/listener.py:88-95). Here events are GenServer.cast — code that
+  starts and immediately stops a query can miss the started callback.
+
+FABLE-50  on_query_started gated on function_exported?/3 without
+          Code.ensure_loaded — silently skipped for lazily-loaded modules
+  File: lib/spark_ex/streaming_query_listener_bus.ex:555
+  function_exported?/3 returns false for not-yet-loaded modules (dev/iex);
+  the other callbacks use apply/3, which triggers code loading. Precede with
+  Code.ensure_loaded?/1.
+
+FABLE-51  Observation.get/1 pre-action and re-execution semantics diverge from
+          PySpark Connect
+  File: lib/spark_ex/observation.ex:59-69, :121
+  (a) After observe/3 but before any action, PySpark Connect returns {} from
+  get (observation.py:70 sets _result = {} in _on; get raises only when never
+  attached); spark_ex raises NO_OBSERVE_BEFORE_GET for both states. (b) On
+  re-execution PySpark updates the result (core.py:1530-1538 dict.update, last
+  wins); :ets.insert_new keeps the first. The code comment claims PySpark
+  parity; it matches classic JVM Observation instead.
+
+FABLE-52  Per-process user-context extension entries leak when the owner dies
+  File: lib/spark_ex/user_context_extensions.ex:12, :86
+  {{:pid, pid}, type_url} keys live in an app-lifetime ETS table with no
+  monitor/cleanup; short-lived processes that call
+  add_threadlocal_user_context_extension/1 leave rows behind permanently.
+  PySpark's equivalent lives on threading.local and dies with the thread.
+
+FABLE-53  Session terminate/2 cleanup skipped on abnormal exit (no trap_exit)
+  Files: lib/spark_ex/session.ex (init); lib/spark_ex/internal/plan_ids.ex:71-78
+  Session never sets Process.flag(:trap_exit, true); when a linked caller
+  crashes, the GenServer dies without terminate/2 — the {pid, atomics_ref} row
+  in :spark_ex_plan_id_counters is never removed (keeping the atomics ref
+  alive) and the best-effort server-side release_session (session.ex:1786-1793)
+  never fires. EtsTableOwner doesn't monitor registrants either.
+
+FABLE-54  Interval qualifier with only start_field set falls back to the full
+          default range
+  Files: lib/spark_ex/connect/type_mapper.ex:222-238; lib/spark_ex/types.ex:555-586
+  With start_field set and end_field nil (proto3 optional), both renderers
+  emit "INTERVAL DAY TO SECOND"/"... YEAR TO MONTH". PySpark sets
+  endField = startField when absent (connect/types.py:260-283), e.g.
+  start=HOUR alone renders "interval hour". Low: servers set both in practice.
+
+FABLE-55  Window boundary clamping threshold off by one vs PySpark
+  File: lib/spark_ex/window_spec.ex:130-134
+  Clamps to :unbounded_preceding only when value <= -(1<<63); PySpark clamps
+  at <= -(2^63 - 1) (_PRECEDING_THRESHOLD = max(-sys.maxsize, JVM_LONG_MIN),
+  pyspark/sql/window.py:60). For exactly -(2^63 - 1), PySpark emits
+  unboundedPreceding while spark_ex sends a literal offset (fails analysis for
+  a rows frame, exceeds Int32). Upper threshold matches.
+
+FABLE-56  to_ddl/1 doctest documents wrong output
+  File: lib/spark_ex/types.ex:149-151
+  Doctest claims "id LONG, name STRING" but type_to_ddl(:long) emits "BIGINT"
+  (types.ex:258). Never fails CI because only doctest SparkEx is enabled
+  (test/spark_ex_test.exs:3). Doc-only fix.
+
+FABLE-57  StreamWriter.xml/2 doc claims it starts the query; it only sets
+          format/path
+  File: lib/spark_ex/stream_writer.ex:227-235
+  The doc says "Starts the streaming query writing XML to the given path" but
+  the function returns the builder without starting. PySpark's
+  DataStreamWriter has no xml sink method at all. Misleading documentation.
+
+================================================================================
+Notes
+================================================================================
+- Cross-cutting theme 1: validation/decoding errors raised inside the Session
+  GenServer (FABLE-03, -04, -05, -06) take down the whole session including
+  the server-side release; client-side input errors should return
+  {:error, ...} like the existing safe_encode path.
+- Cross-cutting theme 2: app-lifetime ETS tables without cleanup
+  (FABLE-29, -52, -53) and process leaks (FABLE-26, -27) make the client
+  unsuitable for long-lived nodes without periodic restarts.
+- Cross-cutting theme 3: GenServer.server() is accepted by specs but only raw
+  pids work in several places (FABLE-31, -45).
+- Areas explicitly checked and found correct by this audit (not exhaustive):
+  artifact chunking protocol (32 KiB, crc32, batching), retry policy constants
+  and retryable-code set, ReleaseExecute ordering, sc:// parse defaults,
+  join/on handling incl. on=[], as_of_join sentinels, NAFill/NAReplace
+  coercions, random_split bounds math, trigger mutual exclusion and proto
+  encoding, awaitTermination seconds→ms conversion, listener event decoding,
+  config get/set proto mapping, writer mode/bucketBy/sortBy/clusterBy,
+  WriterV2 and MergeIntoWriter proto construction, catalog plan mapping,
+  chunked Arrow batch reassembly, decimal/char/varchar/collation DDL forms,
+  TableArg state machine, Tag validation (add side), UUID v4 bit layout.

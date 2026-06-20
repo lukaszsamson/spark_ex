@@ -678,14 +678,12 @@ defmodule SparkEx.Connect.ResultDecoderTest do
   end
 
   describe "column_value_transform/1" do
-    test "char(n) strips trailing spaces" do
+    test "char(n) is not transformed (PySpark returns server-padded values)" do
       dt = %Spark.Connect.DataType{
         kind: {:char, %Spark.Connect.DataType.Char{length: 3}}
       }
 
-      fun = ResultDecoder.column_value_transform(dt)
-      assert is_function(fun, 1)
-      assert fun.("c  ") == "c"
+      assert ResultDecoder.column_value_transform(dt) == nil
     end
 
     test "varchar(n) preserves trailing spaces" do

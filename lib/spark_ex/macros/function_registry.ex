@@ -213,9 +213,9 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:url_decode, "url_decode", :one_col, group: :string, doc: "URL-decodes string."},
       {:try_url_decode, "try_url_decode", :one_col,
        group: :string, doc: "Try URL-decode, returns null on failure."},
-      {:mask, "mask",
-       {:col_opt, [upper_char: nil, lower_char: nil, digit_char: nil, other_char: nil]},
-       group: :string, doc: "Masks string characters."},
+      # mask hand-written in functions.ex: PySpark always sends all 5 args with defaults
+      # "X"/"x"/"n"/nil — nil for other_char is semantic (retain original), not omit.
+      # {:mask, ...} — see Functions.mask/1,2
       {:encode, "encode", {:col_lit, 1}, group: :string, doc: "Encodes string with charset."},
       {:decode, "decode", {:col_lit, 1}, group: :string, doc: "Decodes binary with charset."},
       {:collate, "collate", {:col_lit, 1}, group: :string, doc: "Applies collation to string."},

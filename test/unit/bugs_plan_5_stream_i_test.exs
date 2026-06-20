@@ -9,6 +9,10 @@ defmodule SparkEx.BugsPlan5.StreamITest do
       # release_session/2 accepts opts (incl. `:allow_reconnect`) while
       # remaining backwards-compatible with the prior /1 signature via a
       # default argument.
+      # function_exported?/3 reports false for a module that has not been
+      # loaded into the VM yet, so force the load first (same idiom as
+      # bugs_plan_5_stream_j_test.exs).
+      Code.ensure_loaded!(Client)
       assert function_exported?(Client, :release_session, 1)
       assert function_exported?(Client, :release_session, 2)
     end

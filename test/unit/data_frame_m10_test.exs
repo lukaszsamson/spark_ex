@@ -370,11 +370,12 @@ defmodule SparkEx.Unit.DataFrameM10Test do
       assert {:unpivot, @base_plan, [{:col, "id"}], nil, "var", "val"} = unwrap_plan(result)
     end
 
-    test "accepts tuple values and normalizes to source columns" do
+    test "accepts tuple values and aliases the source columns" do
       result = DataFrame.unpivot(df(), ["id"], [{"col1", "c1"}, {"col2", "c2"}], "var", "val")
 
-      assert {:unpivot, @base_plan, [{:col, "id"}], [{:col, "col1"}, {:col, "col2"}], "var",
-              "val"} = unwrap_plan(result)
+      assert {:unpivot, @base_plan, [{:col, "id"}],
+              [{:alias, {:col, "col1"}, "c1"}, {:alias, {:col, "col2"}, "c2"}], "var", "val"} =
+               unwrap_plan(result)
     end
 
     test "raises when variable_column_name is not a string" do

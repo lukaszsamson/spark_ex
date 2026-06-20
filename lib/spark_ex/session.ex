@@ -126,6 +126,7 @@ defmodule SparkEx.Session do
   """
   @spec remove_tag(GenServer.server(), String.t()) :: :ok
   def remove_tag(session, tag) when is_binary(tag) do
+    Tag.validate!(tag)
     GenServer.cast(session, {:remove_tag, tag})
   end
 
@@ -178,13 +179,10 @@ defmodule SparkEx.Session do
   Returns whether the session has been released/stopped.
   """
   @spec is_stopped(GenServer.server() | t()) :: boolean()
+  def is_stopped(%__MODULE__{released: released}), do: released
+
   def is_stopped(session) do
-    if is_pid(session) do
-      GenServer.call(session, :is_stopped)
-    else
-      %__MODULE__{released: released} = session
-      released
-    end
+    GenServer.call(resolve_server!(session), :is_stopped)
   end
 
   @doc """
@@ -825,14 +823,31 @@ defmodule SparkEx.Session do
   def stop(session) do
     GenServer.stop(session)
   catch
-    :exit, {:noproc, _} -> :ok
-    :exit, {:normal, _} -> :ok
+    :exit, reason ->
+      # The session may already be terminating: with trap_exit set (init/1),
+      # OTP's parent-exit protocol gracefully stops the session when the
+      # process that started it exits, so stop/1 can race that shutdown.
+      # A graceful concurrent termination means the stop goal is met.
+      if graceful_stop_exit?(reason), do: :ok, else: exit(reason)
   end
+
+  defp graceful_stop_exit?({reason, {GenServer, :stop, _args}}), do: graceful_stop_exit?(reason)
+  defp graceful_stop_exit?({reason, {:sys, :terminate, _args}}), do: graceful_stop_exit?(reason)
+  defp graceful_stop_exit?(:noproc), do: true
+  defp graceful_stop_exit?(:normal), do: true
+  defp graceful_stop_exit?(:shutdown), do: true
+  defp graceful_stop_exit?({:shutdown, _}), do: true
+  defp graceful_stop_exit?(_), do: false
 
   # --- GenServer Callbacks ---
 
   @impl true
   def init(opts) do
+    # Trap exits so terminate/2 runs (server-side release_session + PlanIds
+    # cleanup) even when a linked caller crashes, rather than the GenServer
+    # dying silently and leaking the server-side session and atomics ref.
+    Process.flag(:trap_exit, true)
+
     connect_opts_opt = Keyword.get(opts, :connect_opts)
     url_opt = Keyword.get(opts, :url)
     observed_server_session_id = Keyword.get(opts, :server_side_session_id, nil)
@@ -907,6 +922,12 @@ defmodule SparkEx.Session do
     {:reply, {:error, :session_released}, state}
   end
 
+  # A closed session holds a stale server-side handle; cloning with it would
+  # hit the server with an INVALID_HANDLE. Fail fast like the closed guard.
+  def handle_call({:clone_session, _new_session_id}, _from, %{closed: true} = state) do
+    {:reply, {:error, :session_closed}, state}
+  end
+
   def handle_call({:clone_session, new_session_id}, _from, state) do
     case Client.clone_session(state, new_session_id) do
       {:ok, clone_info} ->
@@ -920,7 +941,8 @@ defmodule SparkEx.Session do
           session_id: clone_info.new_session_id,
           server_side_session_id: clone_info.new_server_side_session_id,
           allow_arrow_batch_chunking: state.allow_arrow_batch_chunking,
-          preferred_arrow_chunk_size: state.preferred_arrow_chunk_size
+          preferred_arrow_chunk_size: state.preferred_arrow_chunk_size,
+          retry_policies: state.retry_policies
         ]
 
         case __MODULE__.start_link(clone_opts) do
@@ -1500,7 +1522,7 @@ defmodule SparkEx.Session do
   end
 
   def handle_call({:create_dataframe, data, opts}, from, state) do
-    case prepare_local_data(data, opts) do
+    case safe_prepare_local_data(data, opts) do
       {:ok, {:local_relation, arrow_ipc, schema_ddl, source_df}} ->
         cache_threshold = Keyword.get(opts, :cache_threshold, 4 * 1024 * 1024)
 
@@ -1762,6 +1784,27 @@ defmodule SparkEx.Session do
   def handle_info({:gun_error, _, _, _}, state), do: {:noreply, state}
   def handle_info({:gun_down, _, _, _, _}, state), do: {:noreply, state}
 
+  # With trap_exit set (see init/1), exit signals from linked processes arrive
+  # as messages. A graceful exit (:normal/:shutdown) of a linked caller must
+  # not tear the session down. An abnormal crash propagates: stop the session
+  # so terminate/2 runs the server-side release + PlanIds cleanup.
+  #
+  # Note: exits of the session's PARENT (the process that called start_link)
+  # never reach these clauses — gen_server's parent-exit protocol intercepts
+  # them and terminates the session with the parent's reason (running
+  # terminate/2), even for :normal/:shutdown. stop/1 tolerates racing that.
+  def handle_info({:EXIT, _pid, reason}, state) when reason in [:normal, :shutdown] do
+    {:noreply, state}
+  end
+
+  def handle_info({:EXIT, _pid, {:shutdown, _}}, state) do
+    {:noreply, state}
+  end
+
+  def handle_info({:EXIT, _pid, reason}, state) do
+    {:stop, reason, state}
+  end
+
   def handle_info(msg, state) do
     require Logger
 
@@ -1773,13 +1816,13 @@ defmodule SparkEx.Session do
   end
 
   @impl true
-  def terminate(_reason, %{released: true}) do
-    SparkEx.Internal.PlanIds.unregister_session(self())
+  def terminate(_reason, %{released: true} = state) do
+    cleanup_session_resources(state)
     :ok
   end
 
-  def terminate(_reason, %{channel: nil}) do
-    SparkEx.Internal.PlanIds.unregister_session(self())
+  def terminate(_reason, %{channel: nil} = state) do
+    cleanup_session_resources(state)
     :ok
   end
 
@@ -1788,7 +1831,16 @@ defmodule SparkEx.Session do
     task = Task.async(fn -> Client.release_session(state) end)
     Task.yield(task, 5_000) || Task.shutdown(task)
     safe_disconnect(channel)
+    cleanup_session_resources(state)
+    :ok
+  end
+
+  # Reclaim process/session-scoped resources on shutdown: the plan-id
+  # allocator row (EtsTableOwner monitors as a backstop for abnormal exits)
+  # and any observation rows this session accumulated (FABLE-29).
+  defp cleanup_session_resources(state) do
     SparkEx.Internal.PlanIds.unregister_session(self())
+    SparkEx.Observation.clear_session(Map.get(state, :session_id))
     :ok
   end
 
@@ -2437,8 +2489,6 @@ defmodule SparkEx.Session do
   end
 
   defp parse_schema_field_names(_state, _schema), do: :error
-
-  defp build_parse_expression(_format, _source_column, nil, _options), do: :error
 
   defp build_parse_expression(format, source_column, schema, options) do
     function_name =
@@ -3285,18 +3335,46 @@ defmodule SparkEx.Session do
 
   # --- Local data preparation ---
 
+  # Wraps prepare_local_data so malformed local input (e.g. mismatched tuple
+  # arities or heterogeneous inferred column types) returns {:error, ...}
+  # rather than raising inside the GenServer and tearing the session down.
+  # Mirrors the safe_encode/2 rescue convention used elsewhere in this module.
+  defp safe_prepare_local_data(data, opts) do
+    prepare_local_data(data, opts)
+  rescue
+    e in [ArgumentError, FunctionClauseError, ArithmeticError] ->
+      {:error, {:invalid_local_data, Exception.message(e)}}
+  end
+
   defp prepare_local_data(data, opts) when is_struct(data, Explorer.DataFrame) do
-    with {:ok, schema_ddl} <- normalize_create_dataframe_schema(opts) do
-      schema_ddl = schema_ddl || explorer_to_ddl(data)
+    with {:ok, normalized_schema} <- normalize_create_dataframe_schema(opts),
+         {:ok, data, schema} <- apply_schema_to_explorer(data, normalized_schema) do
+      # Metadata-bearing struct schemas keep their JSON form on the Arrow
+      # path so field metadata/nullability round-trip into the local
+      # relation (mirrors prepare_list_data_with_json_schema); the SQL-JSON
+      # complex-dtype fallback needs the DDL form (metadata not preserved
+      # there, same documented limitation as the list path).
+      {arrow_schema, sql_schema} =
+        case schema do
+          {:json_schema, json, ddl} ->
+            {json, ddl}
+
+          nil ->
+            ddl = explorer_to_ddl(data)
+            {ddl, ddl}
+
+          ddl when is_binary(ddl) ->
+            {ddl, ddl}
+        end
 
       if normalize_local_relation_arrow?(opts) and dataframe_contains_complex_dtype?(data) do
-        prepare_sql_json_relation(data, schema_ddl)
+        prepare_sql_json_relation(data, sql_schema)
       else
         case Explorer.DataFrame.dump_ipc_stream(data) do
           # Pass the source Explorer.DataFrame alongside the IPC bytes so the
           # chunked-cache path can re-slice it natively without a full IPC
           # decode round-trip on multi-hundred-MB payloads.
-          {:ok, ipc_bytes} -> {:ok, {:local_relation, ipc_bytes, schema_ddl, data}}
+          {:ok, ipc_bytes} -> {:ok, {:local_relation, ipc_bytes, arrow_schema, data}}
           {:error, reason} -> {:error, {:arrow_encode_error, reason}}
         end
       end
@@ -3325,7 +3403,7 @@ defmodule SparkEx.Session do
   end
 
   defp prepare_local_data(data, opts) when is_map(data) and not is_struct(data) do
-    with {:ok, schema_ddl} <- normalize_create_dataframe_schema(opts),
+    with {:ok, normalized_schema} <- normalize_create_dataframe_schema(opts),
          {:ok, ordered} <- order_column_map(data) do
       # Column-oriented data: %{"col1" => [1,2,3], "col2" => ["a","b","c"]}
       # Map iteration order is undefined for maps with >32 keys; sort by
@@ -3334,8 +3412,22 @@ defmodule SparkEx.Session do
       # pass a list of `{name, values}` pairs instead.
       case safe_explorer_new(ordered) do
         {:ok, explorer_df} ->
-          effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
-          prepare_local_data(explorer_df, Keyword.put(opts, :schema, effective_schema))
+          # Apply the (possibly column-name / json) schema against the built
+          # frame here so a {:column_names, ...} tuple is resolved into a
+          # rename/DDL rather than being re-normalized as a raw :schema opt.
+          case apply_schema_to_explorer(explorer_df, normalized_schema) do
+            {:ok, explorer_df, {:json_schema, _json, _ddl}} ->
+              # Keep the original struct schema in opts; the Explorer clause
+              # re-normalizes it to the metadata-preserving JSON form.
+              prepare_local_data(explorer_df, opts)
+
+            {:ok, explorer_df, schema_ddl} ->
+              effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
+              prepare_local_data(explorer_df, Keyword.put(opts, :schema, effective_schema))
+
+            {:error, _} = error ->
+              error
+          end
 
         {:error, reason} ->
           {:error, {:data_conversion_error, reason}}
@@ -3345,6 +3437,37 @@ defmodule SparkEx.Session do
 
   defp prepare_local_data(_data, _opts) do
     {:error, {:invalid_data, "expected Explorer.DataFrame, list of maps, or column map"}}
+  end
+
+  # Resolves the normalized schema against an Explorer.DataFrame and returns
+  # `{:ok, frame, schema}` where schema is a DDL string, nil (inference /
+  # column-name rename), or a `{:json_schema, json, ddl}` tuple (the caller
+  # picks the JSON form on the Arrow path to preserve field metadata and the
+  # DDL form on the SQL-JSON fallback). A `{:column_names, names}` schema
+  # renames the frame's columns positionally (PySpark's `df.toDF(*_cols)`),
+  # so the tuple never leaks into the local_relation schema field.
+  defp apply_schema_to_explorer(data, nil), do: {:ok, data, nil}
+
+  defp apply_schema_to_explorer(data, schema_ddl) when is_binary(schema_ddl) do
+    {:ok, data, schema_ddl}
+  end
+
+  defp apply_schema_to_explorer(data, {:json_schema, _json, _ddl} = schema) do
+    {:ok, data, schema}
+  end
+
+  defp apply_schema_to_explorer(data, {:column_names, names}) do
+    existing = Explorer.DataFrame.names(data)
+
+    if length(existing) == length(names) do
+      renamed = Explorer.DataFrame.rename(data, Enum.zip(existing, names))
+      # Names changed; let the column inference re-derive the DDL.
+      {:ok, renamed, nil}
+    else
+      {:error,
+       {:invalid_schema,
+        "column-name list of length #{length(names)} does not match data with #{length(existing)} columns"}}
+    end
   end
 
   defp struct_has_field_metadata?(fields) when is_list(fields) do
@@ -4297,10 +4420,6 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp validate_schema_ddl_for_sql_relation(other) do
-    {:error, {:invalid_schema_ddl, "expected DDL string, got: #{inspect(other)}"}}
-  end
-
   defp scan_schema_ddl(<<>>, :outside), do: :ok
   defp scan_schema_ddl(<<>>, :backtick), do: {:error, "unterminated backtick-quoted identifier"}
   defp scan_schema_ddl(<<>>, :single_quote), do: {:error, "unterminated single-quoted string"}
@@ -4654,12 +4773,23 @@ defmodule SparkEx.Session do
   defp nonempty(value) when is_binary(value) and value != "", do: {:ok, value}
   defp nonempty(_), do: :empty
 
+  defp session_id_for(%__MODULE__{session_id: session_id}), do: session_id
+
   defp session_id_for(session) do
-    if is_pid(session) do
-      GenServer.call(session, :get_session_id)
-    else
-      %__MODULE__{session_id: session_id} = session
-      session_id
+    GenServer.call(resolve_server!(session), :get_session_id)
+  end
+
+  # Resolves any GenServer.server() reference (pid, registered name, or
+  # via-tuple) to a pid so name/via-tuple sessions work like raw pids.
+  # Raises if the name does not resolve to a live process (consistent with
+  # GenServer.call's behavior on a dead pid).
+  defp resolve_server!(session) when is_pid(session), do: session
+
+  defp resolve_server!(session) do
+    case GenServer.whereis(session) do
+      pid when is_pid(pid) -> pid
+      {name, node} -> {name, node}
+      nil -> raise ArgumentError, "no process associated with #{inspect(session)}"
     end
   end
 

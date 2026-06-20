@@ -88,6 +88,7 @@ defmodule SparkEx.Error do
       :server_message,
       :grpc_status,
       :retry_delay_ms,
+      :has_retry_info,
       :classes,
       :error_type_hierarchy,
       :stack_trace_inline,
@@ -124,6 +125,7 @@ defmodule SparkEx.Error do
             server_message: String.t() | nil,
             grpc_status: non_neg_integer() | nil,
             retry_delay_ms: non_neg_integer() | nil,
+            has_retry_info: boolean() | nil,
             classes: [String.t()] | nil,
             error_type_hierarchy: [String.t()] | nil,
             stack_trace_inline: String.t() | nil,
@@ -186,17 +188,25 @@ defmodule SparkEx.Connect.Errors do
   @spec from_grpc_error(GRPC.RPCError.t(), SparkEx.Session.t()) :: SparkEx.Error.Remote.t()
   def from_grpc_error(%GRPC.RPCError{} = error, session) do
     retry_delay_ms = extract_retry_delay_ms(error)
+    # Track RetryInfo *presence* separately from its retry_delay: PySpark retries
+    # any error whose status details carry a RetryInfo, even when retry_delay is
+    # unset (retries.py:367-369). retry_delay_ms can be nil in that case.
+    has_retry_info = has_retry_info?(error)
 
     case extract_error_info(error) do
       {:ok, error_info} ->
         enriched = fetch_error_details(error_info, error, session)
-        maybe_add_retry_delay(enriched, retry_delay_ms)
+
+        enriched
+        |> maybe_add_retry_delay(retry_delay_ms)
+        |> Map.put(:has_retry_info, has_retry_info)
 
       :no_error_info ->
         %SparkEx.Error.Remote{
           message: error.message,
           grpc_status: error.status,
-          retry_delay_ms: retry_delay_ms
+          retry_delay_ms: retry_delay_ms,
+          has_retry_info: has_retry_info
         }
     end
   end
@@ -233,6 +243,20 @@ defmodule SparkEx.Connect.Errors do
   end
 
   defp extract_retry_delay_ms(_), do: nil
+
+  # True when the gRPC error status details contain a (decodable) RetryInfo,
+  # regardless of whether retry_delay is set.
+  defp has_retry_info?(%GRPC.RPCError{details: details}) when is_list(details) do
+    Enum.any?(details, fn
+      %Google.Protobuf.Any{type_url: @retry_info_type_url, value: value} ->
+        match?({:ok, _}, safe_decode(value, Google.Rpc.RetryInfo))
+
+      _ ->
+        false
+    end)
+  end
+
+  defp has_retry_info?(_), do: false
 
   defp safe_decode(value, module) do
     {:ok, Protobuf.decode(value, module)}

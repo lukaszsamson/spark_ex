@@ -61,6 +61,12 @@ defmodule SparkEx.Internal.PlanIds do
   def register_session(session_pid) when is_pid(session_pid) do
     ref = :atomics.new(1, [])
     :ets.insert(@ets_table, {session_pid, ref})
+    # `Session.terminate/2` calls `unregister_session/1` on graceful stop,
+    # but a brutally-killed session (or one whose `terminate/2` never runs)
+    # would otherwise leak its `{pid, atomics_ref}` row — keeping the
+    # atomics ref alive for the VM's lifetime. Have the table owner sweep
+    # the row on the session's `:DOWN` as a backstop.
+    SparkEx.EtsTableOwner.monitor(session_pid, {:delete_key, @ets_table, session_pid})
     ref
   end
 
@@ -85,7 +91,7 @@ defmodule SparkEx.Internal.PlanIds do
   test fixtures that never encode cross-process).
   """
   @spec next(GenServer.server()) :: non_neg_integer()
-  def next(session) when is_pid(session) do
+  def next(session) when is_pid(session) and node(session) == node() do
     case :ets.whereis(@ets_table) do
       :undefined ->
         next_fallback()
@@ -98,7 +104,34 @@ defmodule SparkEx.Internal.PlanIds do
     end
   end
 
-  def next(_session), do: next_fallback()
+  # Atom/via-tuple session refs (named sessions) must resolve to the
+  # registered session pid so they draw from the session's shared atomic
+  # counter instead of the caller's per-process fallback. Otherwise a
+  # caller-stamped id (fallback, 0-based) and an encoder-allocated id
+  # (session atomic, also 0-based) can collide on the same plan. See the
+  # module header. A nil/unresolvable ref falls back to the per-process
+  # counter (test fixtures, dead names).
+  #
+  # Remote refs ({name, node} tuples and remote pids from :global/via
+  # registries) cannot use this node's ETS/atomics: allocate through the
+  # session's own :next_plan_id call so the id comes from its counter.
+  def next(session) do
+    case GenServer.whereis(session) do
+      pid when is_pid(pid) and node(pid) == node() -> next(pid)
+      pid when is_pid(pid) -> next_remote(pid)
+      {_name, _node} = remote -> next_remote(remote)
+      _ -> next_fallback()
+    end
+  end
+
+  defp next_remote(server) do
+    case GenServer.call(server, :next_plan_id) do
+      id when is_integer(id) -> id
+      _ -> next_fallback()
+    end
+  catch
+    :exit, _ -> next_fallback()
+  end
 
   @doc """
   Reads the current counter value (next id that *would* be allocated).
@@ -107,7 +140,7 @@ defmodule SparkEx.Internal.PlanIds do
   session's atomic before encoding so the encoder's synthetic-id
   allocations live in the same namespace as stamped DataFrame ids.
   """
-  @spec peek(pid()) :: non_neg_integer()
+  @spec peek(GenServer.server()) :: non_neg_integer()
   def peek(session) when is_pid(session) do
     case :ets.whereis(@ets_table) do
       :undefined ->
@@ -118,6 +151,13 @@ defmodule SparkEx.Internal.PlanIds do
           [{_pid, ref}] -> :atomics.get(ref, 1)
           [] -> peek_process_fallback()
         end
+    end
+  end
+
+  def peek(session) do
+    case GenServer.whereis(session) do
+      pid when is_pid(pid) -> peek(pid)
+      _ -> peek_process_fallback()
     end
   end
 

@@ -10,6 +10,16 @@ defmodule SparkEx.UserContextExtensions do
   def add_threadlocal_user_context_extension(%Any{} = extension) do
     SparkEx.EtsTableOwner.ensure_table!(@table, :set)
     :ets.insert(@table, {{thread_scope(self()), extension.type_url}, extension})
+    # Per-process rows live in an app-lifetime table; without cleanup a
+    # short-lived process that registers an extension leaks its row
+    # forever. PySpark's equivalent lives on threading.local and dies
+    # with the thread. Have the table owner sweep this process's rows on
+    # its `:DOWN` so the lifetime matches the registering process.
+    SparkEx.EtsTableOwner.monitor(
+      self(),
+      {:match_delete, @table, {{thread_scope(self()), :_}, :_}}
+    )
+
     :ok
   end
 

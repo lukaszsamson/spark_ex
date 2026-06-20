@@ -33,14 +33,17 @@ defmodule SparkEx.Connect.PlanEncoderTest do
       assert counter == 1
     end
 
-    test "encodes SQL with keyword list arguments as named arguments" do
-      args = [id: 42, name: "test"]
-      {plan, _counter} = PlanEncoder.encode({:sql, "SELECT :id, :name", args}, 0)
+    test "encodes a list of args as positional, never named (FABLE-35)" do
+      # A list is the positional channel even when it looks like a keyword list.
+      # PySpark keeps positional/named structurally separate (plan.py:1442-1480);
+      # named args must be passed as a map. The {atom, term} 2-tuple shape of a
+      # keyword list must not be reinterpreted as named "lit"/"expr" args.
+      args = [{:lit, 42}, {:expr, "name"}]
+      {plan, _counter} = PlanEncoder.encode({:sql, "SELECT ?, ?", args}, 0)
 
       assert %Plan{op_type: {:root, %Relation{rel_type: {:sql, sql}}}} = plan
-      assert map_size(sql.named_arguments) == 2
-      assert map_size(sql.args) == 2
-      assert sql.pos_arguments == []
+      assert map_size(sql.named_arguments) == 0
+      assert length(sql.pos_arguments) == 2
     end
 
     test "encodes SQL with positional arguments" do

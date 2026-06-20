@@ -227,8 +227,8 @@ defmodule SparkEx.Reader do
       |> Enum.reduce(extra_options, fn
         {:header, v}, acc -> Map.put(acc, "header", to_string(v))
         {:infer_schema, v}, acc -> Map.put(acc, "inferSchema", to_string(v))
-        {:separator, v}, acc -> Map.put(acc, "sep", v)
-        {:sep, v}, acc -> Map.put(acc, "sep", v)
+        {:separator, v}, acc -> Map.put(acc, "sep", normalize_option_value(v))
+        {:sep, v}, acc -> Map.put(acc, "sep", normalize_option_value(v))
       end)
 
     data_source(session, "csv", paths, Keyword.put(rest, :options, options))
@@ -424,11 +424,15 @@ defmodule SparkEx.Reader do
 
     call_time_options = merge_source_options(opts, [:format, :schema, :predicates])
     merged_options = Map.merge(reader.options, call_time_options)
+    predicates = opts |> Keyword.get(:predicates) |> normalize_predicates()
 
-    DataFrame.new(
-      reader.session,
-      {:read_data_source, format, List.wrap(paths), schema, merged_options}
-    )
+    plan =
+      case predicates do
+        [] -> {:read_data_source, format, List.wrap(paths), schema, merged_options}
+        _ -> {:read_data_source, format, List.wrap(paths), schema, merged_options, predicates}
+      end
+
+    DataFrame.new(reader.session, plan)
   end
 
   defp data_source(session, format, paths, opts) do

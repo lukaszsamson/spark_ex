@@ -129,33 +129,51 @@ defmodule SparkEx.ObservationTest do
   end
 
   describe "per-instance ETS keying" do
-    test "two observations with the same name retrieve their own metrics independently" do
+    test "rejects a second live observation that shares a name in the same session (FABLE-28)" do
       a = Observation.new("dup")
       b = Observation.new("dup")
 
       Observation.register_observation(a, [{:alias, :_, "total"}])
-      # b's registration replaces the routing for the name "dup": this models
-      # the case where two observations declared with the same server name are
-      # then driven sequentially. Each instance still has its own id, so once
-      # routing is in place at the moment of metric arrival, there's no
-      # cross-talk between instances.
-      Observation.register_observation(b, [{:alias, :_, "total"}])
 
+      # The single per-(session, name) routing slot cannot disambiguate two
+      # live same-named observations at metric-arrival time, so a second
+      # attach is refused rather than silently misrouting metrics.
+      assert_raise ArgumentError, ~r/AMBIGUOUS_OBSERVATION/, fn ->
+        Observation.register_observation(b, [{:alias, :_, "total"}])
+      end
+
+      # The first observation still owns the route.
       Observation.store_observed_metrics(%{"dup" => %{"total" => 99}})
-
-      # The most recently registered route wins.
-      assert Observation.get(b) == %{"total" => 99}
-      assert_raise ArgumentError, fn -> Observation.get(a) end
+      assert Observation.get(a) == %{"total" => 99}
     end
 
-    test "first writer wins for a given Observation id (single-result on reuse)" do
+    test "a name may be reused after the prior observation is cleared" do
+      a = Observation.new("dup2")
+      Observation.register_observation(a, [{:alias, :_, "total"}])
+      Observation.clear(a)
+
+      b = Observation.new("dup2")
+      assert :ok = Observation.register_observation(b, [{:alias, :_, "total"}])
+
+      Observation.store_observed_metrics(%{"dup2" => %{"total" => 7}})
+      assert Observation.get(b) == %{"total" => 7}
+    end
+
+    test "last execution wins for a given Observation id (dict.update semantics, FABLE-51)" do
       obs = Observation.new("reuse")
       Observation.register_observation(obs, [{:alias, :_, "total"}])
 
       Observation.store_observed_metrics(%{"reuse" => %{"total" => 1}})
       Observation.store_observed_metrics(%{"reuse" => %{"total" => 2}})
 
-      assert Observation.get(obs) == %{"total" => 1}
+      assert Observation.get(obs) == %{"total" => 2}
+    end
+
+    test "get/1 returns an empty map after attach but before any action (FABLE-51)" do
+      obs = Observation.new("pending")
+      Observation.register_observation(obs, [{:alias, :_, "total"}])
+
+      assert Observation.get(obs) == %{}
     end
 
     test "raises when reading an observation that was never attached" do

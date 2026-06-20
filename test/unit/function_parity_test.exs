@@ -247,7 +247,9 @@ defmodule SparkEx.Unit.FunctionParityTest do
         "position",
         "repeat",
         "slice",
-        "width_bucket"
+        "width_bucket",
+        # Hand-written: always sends all 5 args with PySpark defaults (FABLE-02)
+        "mask"
       ])
 
     all_names = MapSet.union(registry_names, hand_written)

@@ -32,17 +32,24 @@ defmodule SparkEx.Unit.TypeMapperDDLTest do
     end
 
     test "maps datetime types" do
-      assert TypeMapper.to_spark_ddl_type({:datetime, :microsecond}) == "TIMESTAMP"
+      # Explorer's real tz-aware datetime dtype is the 3-tuple {:datetime, p, tz}.
+      assert TypeMapper.to_spark_ddl_type({:datetime, :microsecond, "Etc/UTC"}) == "TIMESTAMP"
       assert TypeMapper.to_spark_ddl_type({:naive_datetime, :microsecond}) == "TIMESTAMP_NTZ"
     end
 
     test "maps unknown types to STRING" do
       assert TypeMapper.to_spark_ddl_type(:category) == "STRING"
-      assert TypeMapper.to_spark_ddl_type({:duration, :microsecond}) == "STRING"
+    end
+
+    test "maps duration to day-time INTERVAL" do
+      # Explorer durations correspond to Spark day-time intervals (PySpark's
+      # from_arrow_type yields DayTimeIntervalType for an Arrow duration).
+      assert TypeMapper.to_spark_ddl_type({:duration, :microsecond}) == "INTERVAL DAY TO SECOND"
     end
 
     test "maps time type to TIME" do
-      assert TypeMapper.to_spark_ddl_type({:time, :microsecond}) == "TIME"
+      # Explorer's real time dtype is the bare atom :time.
+      assert TypeMapper.to_spark_ddl_type(:time) == "TIME"
     end
   end
 

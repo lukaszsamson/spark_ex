@@ -20,7 +20,10 @@ defmodule SparkEx do
 
   ## Options
 
-  - `:url` — Spark Connect URI (required), e.g. `"sc://localhost:15002"`
+  - `:url` — Spark Connect URI, e.g. `"sc://localhost:15002"`. Optional only
+    when the `SPARK_REMOTE` environment variable is set, which is used as a
+    fallback (matching PySpark's `spark.remote` precedence). An explicitly
+    passed `:url` always takes priority over `SPARK_REMOTE`.
   - `:user_id` — user identifier (default: `"spark_ex"`)
   - `:client_type` — client type string (default: auto-generated)
   - `:session_id` — custom session UUID (default: auto-generated)
@@ -33,7 +36,26 @@ defmodule SparkEx do
   """
   @spec connect(keyword()) :: {:ok, pid()} | {:error, term()}
   def connect(opts) do
-    url = Keyword.fetch!(opts, :url)
+    # An explicitly passed :url always wins; SPARK_REMOTE is only a fallback
+    # when no :url is given. This matches PySpark's precedence
+    # (session.py:475: opts.get("spark.remote", os.environ.get("SPARK_REMOTE"))).
+    url =
+      case Keyword.fetch(opts, :url) do
+        {:ok, raw_url} ->
+          raw_url
+
+        :error ->
+          case System.get_env("SPARK_REMOTE") do
+            remote when is_binary(remote) ->
+              remote
+
+            _ ->
+              raise ArgumentError,
+                    "connect/1 requires the :url option (or the SPARK_REMOTE environment variable)"
+          end
+      end
+
+    opts = Keyword.put(opts, :url, url)
     validate_connect_identity_opts!(opts)
 
     with {:ok, _connect_opts} <- Channel.parse_uri(url) do

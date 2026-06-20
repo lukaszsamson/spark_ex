@@ -113,21 +113,27 @@ defmodule SparkEx.ManagedStream.Controller do
 
   def handle_cast(:touch, state), do: {:noreply, state}
 
+  # Once the stream is closed and the release task has been fired, the
+  # controller has no further work to do. Stop it so we don't leak one
+  # inert GenServer per finished/closed managed stream (FABLE-27). The
+  # already-closed branch of `do_close` returns the unchanged state without
+  # re-firing release; a redundant close on a stopped controller is harmless
+  # because `Controller.close/2` swallows the `:exit`.
   @impl true
   def handle_call({:close, reason}, _from, state) do
     {:ok, next_state} = do_close(reason, state)
-    {:reply, :ok, next_state}
+    {:stop, :normal, :ok, next_state}
   end
 
   @impl true
   def handle_info(:idle_timeout, state) do
     {:ok, next_state} = do_close(:idle_timeout, state)
-    {:noreply, next_state}
+    {:stop, :normal, next_state}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state) do
     {:ok, next_state} = do_close(:owner_down, state)
-    {:noreply, next_state}
+    {:stop, :normal, next_state}
   end
 
   def handle_info(_, state), do: {:noreply, state}

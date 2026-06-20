@@ -20,7 +20,13 @@ defmodule SparkEx.Test.TestSession do
   end
 
   @spec stop(GenServer.server()) :: :ok
-  def stop(server), do: GenServer.stop(server)
+  def stop(server) do
+    # Tolerate the server dying concurrently: the test process's exit kills
+    # the linked TestSession, racing on_exit's alive?-then-stop check.
+    GenServer.stop(server)
+  catch
+    :exit, _ -> :ok
+  end
 
   @spec encode(GenServer.server(), term()) :: Spark.Connect.Plan.t()
   def encode(server, plan_term) do

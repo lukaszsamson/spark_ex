@@ -338,9 +338,9 @@ defmodule SparkEx.MissCodex2Test do
   # ── #17 drop supports Column operands ──
 
   describe "#17 drop Column support" do
-    test "accepts Column in list" do
+    test "accepts Column in list (kept as an expression, PySpark parity)" do
       result = DataFrame.drop(make_df(), [Functions.col("x")])
-      assert {:drop, _, ["x"], []} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
+      assert {:drop, _, [], [{:col, "x"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "accepts scalar string" do
@@ -348,9 +348,9 @@ defmodule SparkEx.MissCodex2Test do
       assert {:drop, _, ["x"], []} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
-    test "accepts scalar Column" do
+    test "accepts scalar Column (kept as an expression, PySpark parity)" do
       result = DataFrame.drop(make_df(), Functions.col("x"))
-      assert {:drop, _, ["x"], []} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
+      assert {:drop, _, [], [{:col, "x"}]} = SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
 

@@ -126,23 +126,25 @@ defmodule SparkEx.DataFrame.NA do
                 "expected subset to be a column name string or list of column name strings, got: #{inspect(other)}"
       end
 
+    # PySpark validates `how` before applying `thresh` (connect/dataframe.py:
+    # 1321-1345); `thresh` only overrides the resulting min_non_nulls afterward,
+    # so a bogus `how` still raises even when `thresh` is provided.
+    how_min_non_nulls =
+      case how do
+        :all -> 1
+        :any -> nil
+        _ -> raise ArgumentError, "expected :how to be :any or :all, got: #{inspect(how)}"
+      end
+
     min_non_nulls =
-      cond do
-        thresh != nil ->
-          unless is_integer(thresh) do
-            raise ArgumentError, "expected :thresh to be an integer"
-          end
+      if thresh != nil do
+        unless is_integer(thresh) do
+          raise ArgumentError, "expected :thresh to be an integer"
+        end
 
-          thresh
-
-        how == :all ->
-          1
-
-        how == :any ->
-          nil
-
-        true ->
-          raise ArgumentError, "expected :how to be :any or :all, got: #{inspect(how)}"
+        thresh
+      else
+        how_min_non_nulls
       end
 
     DataFrame.update_plan(df, {:na_drop, df.plan, cols, min_non_nulls})

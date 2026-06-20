@@ -225,7 +225,12 @@ defmodule SparkEx.StreamWriter do
   end
 
   @doc """
-  Starts the streaming query writing XML to the given path.
+  Configures the writer to output XML to the given path.
+
+  This is a builder convenience equivalent to `format("xml") |> path(path)`:
+  it sets the sink `format` and `path` on the builder and returns the updated
+  writer. It does **not** start the query — call `start/2` afterwards. (Note:
+  PySpark's `DataStreamWriter` has no `xml` sink method.)
   """
   @spec xml(t(), String.t()) :: t()
   def xml(%__MODULE__{} = writer, path) when is_binary(path) do

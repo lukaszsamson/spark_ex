@@ -103,9 +103,14 @@ defmodule SparkEx.Connect.ResultDecoder do
       {:ok, state} ->
         case state.current_chunked_batch do
           nil ->
+            # Apply UDT deserializers (FABLE-15) so the collect path matches the
+            # Explorer path and PySpark's `udt.deserialize` on all collection
+            # paths. No-op when the schema declares no transformable column.
+            rows = apply_row_transforms(Enum.reverse(state.rows), state.schema)
+
             {:ok,
              %{
-               rows: Enum.reverse(state.rows),
+               rows: rows,
                schema: state.schema,
                server_side_session_id: state.server_side_session_id,
                command_result: state.command_result,
@@ -164,6 +169,7 @@ defmodule SparkEx.Connect.ResultDecoder do
           num_records: 0,
           server_side_session_id: nil,
           errored: false,
+          schema: nil,
           observed_metrics: %{},
           execution_metrics: %{}
         }
@@ -176,6 +182,9 @@ defmodule SparkEx.Connect.ResultDecoder do
           case check_response_integrity(resp, session, state) do
             {:ok, state} ->
               state = merge_metrics_from_response(state, resp)
+              # Track the wire schema so UDT deserializers (FABLE-15) can be
+              # applied to each batch's rows on the to_local_iterator path.
+              state = if resp.schema, do: %{state | schema: resp.schema}, else: state
               handle_rows_stream_response(resp, state)
 
             {:error, reason} ->
@@ -753,6 +762,10 @@ defmodule SparkEx.Connect.ResultDecoder do
         %{batch_index: state.num_records}
       )
 
+      # Apply UDT deserializers (FABLE-15) per batch using the schema tracked so
+      # far. No-op when no schema has arrived or it declares no UDT column.
+      rows = apply_row_transforms(rows, state.schema)
+
       {:ok, rows, %{state | num_records: state.num_records + num_rows}}
     end
   end
@@ -1237,7 +1250,11 @@ defmodule SparkEx.Connect.ResultDecoder do
     {:ok, dtypes} = TypeMapper.schema_to_dtypes(struct)
     # Ordered list (not map) so column order survives wide schemas.
     columns = Enum.map(dtypes, fn {name, _dtype} -> {name, []} end)
-    Explorer.DataFrame.new(columns, dtypes: dtypes)
+    # Columns whose Spark type has no native Explorer dtype (map/variant/UDT/
+    # geometry/year-month interval) come back with a nil dtype; drop those so
+    # Explorer infers from the (empty) cells instead of being handed an invalid
+    # dtype that would raise in check_dtypes!.
+    Explorer.DataFrame.new(columns, dtypes: drop_nil_dtypes(dtypes))
   end
 
   defp build_empty_dataframe_from_schema(_), do: Explorer.DataFrame.new([])
@@ -1278,9 +1295,15 @@ defmodule SparkEx.Connect.ResultDecoder do
 
       {:ok, mapped_dtypes} = TypeMapper.schema_to_dtypes(struct)
 
+      # Keep only dtypes for columns still present, and drop those with no
+      # native Explorer dtype (nil) — e.g. map/variant/UDT/geometry/year-month
+      # interval columns decode as maps/lists/strings, so handing Explorer the
+      # mapped dtype would mismatch the cells and raise. Let Explorer infer
+      # those from the decoded values instead.
       dtypes =
         mapped_dtypes
         |> Enum.filter(fn {name, _} -> name in names end)
+        |> drop_nil_dtypes()
 
       if columns == [] and row_count == 0 do
         build_empty_dataframe_from_schema(%Spark.Connect.DataType{kind: {:struct, struct}})
@@ -1292,52 +1315,74 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   defp apply_schema_policy(df, _), do: df
 
+  # Drops `{name, nil}` pairs: a nil dtype means the Spark type has no native
+  # Explorer dtype (map/variant/UDT/geometry/year-month or calendar interval),
+  # so the column must be inferred from its decoded cells rather than dtyped.
+  defp drop_nil_dtypes(dtypes) do
+    Enum.reject(dtypes, fn {_name, dtype} -> is_nil(dtype) end)
+  end
+
   # Per-column post-decode transformation. Returns nil for columns that need no
   # rewriting, or a 1-arity function applied to each value otherwise.
   #
-  # - char(n): strip read-side space padding (matches CharVarcharCodegenUtils).
-  # - varchar(n): pass through unchanged. Unlike CHAR, VARCHAR preserves
-  #   trailing spaces; trimming would silently corrupt user data.
   # - udt: look up a deserializer in `SparkEx.Connect.UDTRegistry`. If a
-  #   callback is registered for the UDT class, it is invoked per cell;
-  #   otherwise the raw decoded value passes through unchanged.
-  # - variant / geometry / geography / interval / unparsed: pass the raw
-  #   decoded value through unchanged. Earlier code Jason-encoded list/map
-  #   values, which lost native structure for callers who can handle it.
+  #   callback is registered for the UDT class, it is invoked per cell
+  #   (matching PySpark's `udt.deserialize` on all collection paths,
+  #   conversion.py:721-742); otherwise the column needs no rewrite (nil).
+  #
+  # CHAR columns are intentionally NOT trimmed: PySpark returns server-padded
+  # CHAR values unchanged, and trimming here would diverge between the Explorer
+  # and collect/to_local_iterator paths. VARCHAR / variant / geometry /
+  # geography / interval / unparsed all pass through as decoded, so they need
+  # no transform either.
   @doc false
   @spec column_value_transform(Spark.Connect.DataType.t() | term()) ::
           (term() -> term()) | nil
-  def column_value_transform(%Spark.Connect.DataType{kind: {:char, _}}),
-    do: &strip_trailing_spaces/1
-
   def column_value_transform(%Spark.Connect.DataType{
         kind: {:udt, %Spark.Connect.DataType.UDT{} = udt}
       }) do
     case SparkEx.Connect.UDTRegistry.lookup_deserializer(udt) do
-      nil -> &raw_passthrough/1
+      nil -> nil
       fun when is_function(fun, 1) -> fun
     end
   end
 
-  def column_value_transform(%Spark.Connect.DataType{kind: {tag, _}})
-      when tag in [
-             :calendar_interval,
-             :year_month_interval,
-             :day_time_interval,
-             :variant,
-             :geometry,
-             :geography,
-             :unparsed
-           ],
-      do: &raw_passthrough/1
-
   def column_value_transform(_), do: nil
 
-  defp strip_trailing_spaces(nil), do: nil
-  defp strip_trailing_spaces(value) when is_binary(value), do: String.trim_trailing(value, " ")
-  defp strip_trailing_spaces(other), do: other
+  # Applies the per-column UDT deserializers (FABLE-15) to a list of row maps
+  # decoded via `to_rows`. Used by the rows-mode collect path so UDT columns are
+  # deserialized consistently with the Explorer path. When the schema carries no
+  # column needing a transform, rows pass through untouched.
+  @doc false
+  @spec apply_row_transforms([map()], Spark.Connect.DataType.t() | term()) :: [map()]
+  def apply_row_transforms(rows, %Spark.Connect.DataType{kind: {:struct, struct}}) do
+    transforms =
+      struct.fields
+      |> Enum.flat_map(fn %Spark.Connect.DataType.StructField{name: name, data_type: dt} ->
+        case column_value_transform(dt) do
+          nil -> []
+          fun -> [{name, fun}]
+        end
+      end)
+      |> Map.new()
 
-  defp raw_passthrough(value), do: value
+    if map_size(transforms) == 0 do
+      rows
+    else
+      Enum.map(rows, &apply_transforms_to_row(&1, transforms))
+    end
+  end
+
+  def apply_row_transforms(rows, _), do: rows
+
+  defp apply_transforms_to_row(row, transforms) do
+    Enum.reduce(transforms, row, fn {name, fun}, acc ->
+      case Map.fetch(acc, name) do
+        {:ok, value} -> Map.put(acc, name, fun.(value))
+        :error -> acc
+      end
+    end)
+  end
 
   defp merge_observed_metrics(acc, nil), do: acc
 
