@@ -18,14 +18,14 @@ defmodule SparkEx.Types do
       reader |> SparkEx.Reader.schema(schema) |> SparkEx.Reader.load("/data")
   """
 
-  @typedoc "A Spark Connect DataType protobuf struct."
-  @type data_type_proto :: Spark.Connect.DataType.t()
+  @typedoc "A Spark Connect `DataType` protobuf struct (opaque to callers)."
+  @type data_type_proto :: struct()
 
-  @typedoc "A Spark Connect StorageLevel protobuf struct."
-  @type storage_level :: Spark.Connect.StorageLevel.t()
+  @typedoc "A Spark Connect `StorageLevel` protobuf struct (opaque to callers)."
+  @type storage_level :: struct()
 
-  @typedoc "A Spark Connect StreamingForeachFunction protobuf struct."
-  @type foreach_function :: Spark.Connect.StreamingForeachFunction.t()
+  @typedoc "A Spark Connect `StreamingForeachFunction` protobuf struct (opaque to callers)."
+  @type foreach_function :: struct()
 
   @type spark_type ::
           :null

@@ -887,12 +887,42 @@ defmodule SparkEx.M14.StreamingTest do
       assert writer.partition_by == ["a", "b"]
     end
 
+    test "partition_by accepts atom column names" do
+      writer =
+        %SparkEx.StreamWriter{df: nil}
+        |> SparkEx.StreamWriter.partition_by([:year, :month])
+
+      assert writer.partition_by == ["year", "month"]
+    end
+
+    test "partition_by raises on empty list" do
+      assert_raise ArgumentError, "partition_by columns should not be empty", fn ->
+        %SparkEx.StreamWriter{df: nil}
+        |> SparkEx.StreamWriter.partition_by([])
+      end
+    end
+
     test "cluster_by sets columns" do
       writer =
         %SparkEx.StreamWriter{df: nil}
         |> SparkEx.StreamWriter.cluster_by(["c"])
 
       assert writer.cluster_by == ["c"]
+    end
+
+    test "cluster_by accepts atom column names" do
+      writer =
+        %SparkEx.StreamWriter{df: nil}
+        |> SparkEx.StreamWriter.cluster_by([:region])
+
+      assert writer.cluster_by == ["region"]
+    end
+
+    test "cluster_by raises on empty list" do
+      assert_raise ArgumentError, "cluster_by columns should not be empty", fn ->
+        %SparkEx.StreamWriter{df: nil}
+        |> SparkEx.StreamWriter.cluster_by([])
+      end
     end
 
     test "option with nil value is skipped" do

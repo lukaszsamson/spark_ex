@@ -7,15 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-20
+
+This release is a large correctness and parity pass over the v0.1.x client,
+driven by several rounds of PySpark-parity audits. Highlights: a reattachable
+execution lifecycle, TLS/keepalive channel hardening, richer remote errors,
+and ~100 individual bug fixes across the DataFrame, function, writer, and
+streaming surfaces.
+
+### Added
+
+- **Reattachable execution lifecycle.** Lazy response streaming with
+  halt-on-complete, EOF backoff escalation, a reattach retry budget that resets
+  on progress, and forward-compatible skipping of unknown response variants.
+- **`allow_reconnect` session option** and bounded, best-effort resource
+  release on shutdown (release tasks are time-boxed and never block termination
+  indefinitely).
+- **TLS channel controls.** New `ssl_cacert`, `ssl_servername`, and `ssl_verify`
+  URI parameters (and corresponding connect options) for CA pinning, SNI, and
+  peer verification. Supplying `ssl_cacert` enables `verify_peer` automatically.
+- **gRPC channel hardening.** `grpc_keepalive_time_ms` keepalive interval,
+  configurable user-agent, IPv6 loopback support, and telemetry hardening.
+- **Richer remote errors.** `SparkEx.Error.Remote` now surfaces the server
+  error cause chain, error classes, inline stack traces, and
+  `breaking_change_info`.
+- **Local-data inference & encoding parity** with PySpark for
+  `create_dataframe`, including chunked cached local relations and UDT registry
+  scoping.
+- Expanded built-in function registry and Column API to close PySpark parity
+  gaps; hardened `SparkEx.DataFrame.Stat` (e.g. `approx_quantile`).
+- `tools/check.sh` local CI gate mirroring the GitHub Actions workflow.
+
 ### Changed
 
+- Type rendering and `SqlCommand` encoding aligned with PySpark (F2).
+- `config_is_modifiable` now returns a boolean.
+- `order_by` rejects integer (ordinal) sort keys in its ascending branches.
+- The `:once` streaming trigger now warns instead of raising (forward-compat
+  with Spark's deprecation).
+- `to_local_iterator` emission shape updated.
+- gRPC keepalive: `grpc_keepalive_timeout_ms` and
+  `grpc_keepalive_permit_without_calls` URI parameters are now accepted for
+  Spark Connect URI compatibility but ignored — the underlying gun HTTP/2
+  adapter exposes no equivalent (only a ping interval plus a count-based
+  tolerance), so they are stripped rather than silently half-wired.
 - **Stable plan_ids assigned at DataFrame construction.** Every `SparkEx.DataFrame`
   now allocates a stable `plan_id` (0-based, matching PySpark's
-  `_fresh_plan_id`) when the plan tuple is wrapped via
-  `SparkEx.Internal.PlanIds.wrap/2`. The allocator is session-scoped: each
+  `_fresh_plan_id`) when the plan tuple is wrapped by the internal plan-id
+  allocator. The allocator is session-scoped: each
   `SparkEx.Session` registers an `:atomics` counter ref in the
-  `:spark_ex_plan_id_counters` ETS table (owned by `SparkEx.EtsTableOwner`),
-  and `DataFrame.new/2` + `PlanEncoder.next_id/1` both reserve ids from
+  `:spark_ex_plan_id_counters` ETS table (owned by a dedicated owner process),
+  and `DataFrame.new/2` + the plan encoder both reserve ids from
   that atomic, so caller-side construction and encoder-side allocation
   share one namespace and cannot collide. Non-session pseudo-sessions
   (test fixtures using `self()`) fall back to a per-process `:counters`
@@ -34,6 +76,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the public session APIs that wrap it) rather than `%DataFrame{plan: …}`
   struct literals — `col/2`, `col_regex/2`, `metadata_column/2` now raise
   `ArgumentError` on unstamped plans with a message pointing at `new/2`.
+
+### Fixed
+
+- **57 PySpark-parity issues** from the BUGS_FABLE audit, including: swapped
+  `ltrim`/`rtrim` trim-string argument order; `mask/2` NULL defaults leaving
+  text unmasked; Explorer `collect` crashes on interval/UDT/map/timezone and
+  `:time` columns; window-frame boundary `0` mapping to `current_row`;
+  `select("*")` and bare-string TVF arguments mis-treated as literals;
+  `ascending: true` overriding per-column `.desc()`; and unbounded observation
+  ETS growth.
+- **Session crash-hardening.** Validation errors inside the `SparkEx.Session`
+  GenServer (`create_dataframe`, `await_termination` with no timeout) no longer
+  crash the whole session; `trap_exit` ensures cleanup runs on abnormal exit.
+- **Plan-encoder correctness.** Expression rewrite (plan-id rebinding) now
+  covers `sort`, `unpivot`, `collect_metrics`, `call_function`, and
+  `named_argument`; top-level expressions are remapped to the encoded child
+  input id; self-join and subquery references resolve through one id namespace.
+- **Literal vs. column classification.** `raise_error`, `array_insert`,
+  `regexp_instr`, and related functions treat bare-string arguments as
+  literals instead of column names; `reduce/3,4` emits the `reduce` function
+  (was `aggregate`).
+- **`DataFrame.sample/2-4` accepts integer fractions** (e.g. `sample(df, 1)`),
+  coercing to float to match PySpark.
+- **`GroupedData.agg/2` validates aggregate function names** in pair form,
+  raising locally instead of issuing a remote call to a bogus function name
+  (e.g. `"true"`).
+- **`StreamWriter.partition_by/2` and `cluster_by/2`** validation brought to
+  parity with the batch writer (reject empty column lists).
+- Retry backoff treats the server's `RetryInfo.retry_delay` as a floor rather
+  than replacing exponential backoff; reattach budget resets on progress.
+- Crash-hardening: `FunctionClauseError`/`CaseClauseError` paths converted to
+  typed errors; `analyze_*` responses handle unexpected oneof variants and nil
+  nested `DataType` fields without crashing.
+- `VARCHAR` trim handling, `TIME` literal sub-second scaling, and
+  `CHAR`/`VARCHAR` length preservation in DDL; full signed Long sampling seeds.
+- Listener-bus `DOWN` handler no longer races stream restart (no leaked
+  server-side listener); exponential backoff for listener reconnect.
+- Empty `session_id` responses are treated as absent rather than triggering a
+  false session-integrity mismatch.
+- Credo baseline cleaned to zero violations; multiple dialyzer fixes.
 
 ## [0.1.1] - 2026-03-06
 
@@ -72,5 +154,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Function registry for built-in Spark functions
 - Livebook demo notebook
 
+[0.2.0]: https://github.com/lukaszsamson/spark_ex/releases/tag/v0.2.0
 [0.1.1]: https://github.com/lukaszsamson/spark_ex/releases/tag/v0.1.1
 [0.1.0]: https://github.com/lukaszsamson/spark_ex/releases/tag/v0.1.0

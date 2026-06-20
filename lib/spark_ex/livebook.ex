@@ -6,7 +6,8 @@ if Code.ensure_loaded?(Kino) do
     All helpers return Kino terms (not raw strings/lists) and do not call
     `Kino.render/1` internally — the caller controls rendering.
 
-    Requires the `:kino` and `:explorer` optional dependencies.
+    Requires the optional `:kino` dependency (`:explorer` is a required
+    dependency of `spark_ex` and is always available).
     """
 
     alias SparkEx.DataFrame

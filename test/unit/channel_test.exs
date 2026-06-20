@@ -90,21 +90,24 @@ defmodule SparkEx.Connect.ChannelTest do
       assert opts.use_ssl == false
     end
 
-    test "grpc_keepalive_permit_without_calls accepts mixed case booleans" do
+    test "grpc_keepalive_time_ms parses; timeout_ms and permit_without_calls are ignored" do
       assert {:ok, opts} =
-               Channel.parse_uri("sc://localhost:15002/;grpc_keepalive_permit_without_calls=TRUE")
+               Channel.parse_uri("sc://localhost:15002/;grpc_keepalive_time_ms=30000")
 
-      assert opts.keepalive == %{permit_without_calls: true}
+      assert opts.keepalive == %{time_ms: 30_000}
 
+      # The gun HTTP/2 adapter exposes only a ping interval (`keepalive`) plus a
+      # count-based `keepalive_tolerance` — there is no ms ack-timeout or
+      # idle-permit equivalent. These two params are accepted for Spark Connect
+      # URI compatibility but stripped and ignored (never leaked into metadata).
       assert {:ok, opts} =
                Channel.parse_uri(
-                 "sc://localhost:15002/;grpc_keepalive_permit_without_calls=False"
+                 "sc://localhost:15002/;grpc_keepalive_timeout_ms=5000;grpc_keepalive_permit_without_calls=true"
                )
 
-      assert opts.keepalive == %{permit_without_calls: false}
-
-      assert {:error, {:invalid_param, "grpc_keepalive_permit_without_calls=yes"}} =
-               Channel.parse_uri("sc://localhost:15002/;grpc_keepalive_permit_without_calls=yes")
+      assert opts.keepalive == %{}
+      refute Map.has_key?(opts.extra_params, "grpc_keepalive_timeout_ms")
+      refute Map.has_key?(opts.extra_params, "grpc_keepalive_permit_without_calls")
     end
 
     test "decodes percent-encoded params" do

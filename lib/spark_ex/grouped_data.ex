@@ -79,6 +79,11 @@ defmodule SparkEx.GroupedData do
     end
 
     sorted = Enum.sort_by(agg_map, fn {col_name, _} -> to_string(col_name) end)
+
+    unless Enum.all?(sorted, &agg_pair?/1) do
+      raise ArgumentError, "expected all aggregate expressions to be SparkEx.Column"
+    end
+
     agg(gd, pairs_to_columns(sorted))
   end
 
@@ -112,7 +117,8 @@ defmodule SparkEx.GroupedData do
   defp agg_pair?({col_name, func_name})
        when (is_binary(col_name) or is_atom(col_name)) and
               (is_binary(func_name) or is_atom(func_name)) do
-    not is_nil(col_name) and not is_boolean(col_name)
+    not is_nil(col_name) and not is_boolean(col_name) and
+      not is_nil(func_name) and not is_boolean(func_name)
   end
 
   defp agg_pair?(_), do: false
