@@ -910,18 +910,20 @@ defmodule SparkEx.DataFrame do
       df |> DataFrame.sample(0.5, with_replacement: true, seed: 42)
       df |> DataFrame.sample(true, 0.5, 42)
   """
-  @spec sample(t(), boolean() | float(), float() | keyword(), integer() | keyword()) :: t()
+  @spec sample(t(), boolean() | number(), number() | keyword(), integer() | keyword()) :: t()
   def sample(df, with_replacement_or_fraction, fraction_or_opts \\ [], seed_or_opts \\ [])
 
   def sample(%__MODULE__{} = df, with_replacement, fraction, seed)
-      when is_boolean(with_replacement) and is_float(fraction) and is_integer(seed) do
+      when is_boolean(with_replacement) and is_number(fraction) and is_integer(seed) do
+    fraction = fraction * 1.0
     validate_sample_fraction!(fraction, with_replacement)
 
     update_plan(df, {:sample, df.plan, 0.0, fraction, with_replacement, seed, false})
   end
 
   def sample(%__MODULE__{} = df, with_replacement, fraction, opts)
-      when is_boolean(with_replacement) and is_float(fraction) and is_list(opts) do
+      when is_boolean(with_replacement) and is_number(fraction) and is_list(opts) do
+    fraction = fraction * 1.0
     validate_sample_fraction!(fraction, with_replacement)
     seed = normalize_sample_seed!(Keyword.get(opts, :seed, nil))
 
@@ -929,7 +931,8 @@ defmodule SparkEx.DataFrame do
   end
 
   def sample(%__MODULE__{} = df, fraction, opts, _ignored)
-      when is_float(fraction) and is_list(opts) do
+      when is_number(fraction) and is_list(opts) do
+    fraction = fraction * 1.0
     with_replacement = normalize_with_replacement!(Keyword.get(opts, :with_replacement, false))
     validate_sample_fraction!(fraction, with_replacement)
     seed = normalize_sample_seed!(Keyword.get(opts, :seed, nil))
@@ -940,7 +943,8 @@ defmodule SparkEx.DataFrame do
   # Positional `sample(fraction, seed)` form for parity with PySpark's
   # `DataFrame.sample(fraction, seed)`.
   def sample(%__MODULE__{} = df, fraction, seed, _ignored)
-      when is_float(fraction) and is_integer(seed) do
+      when is_number(fraction) and is_integer(seed) do
+    fraction = fraction * 1.0
     validate_sample_fraction!(fraction, false)
 
     update_plan(df, {:sample, df.plan, 0.0, fraction, false, seed, false})

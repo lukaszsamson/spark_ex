@@ -147,13 +147,21 @@ defmodule SparkEx.StreamWriter do
     %{writer | trigger: build_trigger_value(opts)}
   end
 
-  @spec partition_by(t(), [String.t()]) :: t()
+  @spec partition_by(t(), [String.t() | atom()]) :: t()
   def partition_by(%__MODULE__{} = writer, cols) when is_list(cols) do
+    if cols == [] do
+      raise ArgumentError, "partition_by columns should not be empty"
+    end
+
     %{writer | partition_by: Enum.map(cols, &to_string/1)}
   end
 
-  @spec cluster_by(t(), [String.t()]) :: t()
+  @spec cluster_by(t(), [String.t() | atom()]) :: t()
   def cluster_by(%__MODULE__{} = writer, cols) when is_list(cols) do
+    if cols == [] do
+      raise ArgumentError, "cluster_by columns should not be empty"
+    end
+
     %{writer | cluster_by: Enum.map(cols, &to_string/1)}
   end
 

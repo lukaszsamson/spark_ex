@@ -232,6 +232,43 @@ defmodule SparkEx.Unit.DataFrameM10Test do
         DataFrame.sample(df(), 0.5, with_replacement: "oops")
       end
     end
+
+    # PySpark parity: integer fractions must be accepted and coerced to float
+    test "accepts integer fraction 1 (coerced to 1.0)" do
+      result = DataFrame.sample(df(), 1)
+
+      assert {:sample, @base_plan, lower, fraction, false, _seed, false} = unwrap_plan(result)
+      assert lower == +0.0
+      assert fraction == 1.0
+      assert is_float(fraction)
+    end
+
+    test "accepts integer fraction 0 (coerced to 0.0)" do
+      result = DataFrame.sample(df(), 0)
+
+      assert {:sample, @base_plan, lower, fraction, false, _seed, false} = unwrap_plan(result)
+      assert lower == +0.0
+      assert fraction == 0.0
+      assert is_float(fraction)
+    end
+
+    test "accepts positional (with_replacement=true, integer fraction, seed)" do
+      result = DataFrame.sample(df(), true, 1, 42)
+
+      assert {:sample, @base_plan, lower, fraction, true, 42, false} = unwrap_plan(result)
+      assert lower == +0.0
+      assert fraction == 1.0
+      assert is_float(fraction)
+    end
+
+    test "float fraction still works and stays float" do
+      result = DataFrame.sample(df(), 0.3, seed: 7)
+
+      assert {:sample, @base_plan, lower, fraction, false, 7, false} = unwrap_plan(result)
+      assert lower == +0.0
+      assert fraction == 0.3
+      assert is_float(fraction)
+    end
   end
 
   describe "random_split/3" do

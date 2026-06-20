@@ -16,7 +16,7 @@ defmodule SparkEx.Connect.Channel do
           auth_transport: :auto | :metadata,
           extra_params: %{String.t() => String.t()},
           max_message_size: pos_integer(),
-          keepalive: %{optional(atom()) => term()},
+          keepalive: %{optional(:time_ms) => pos_integer()},
           tls: %{optional(atom()) => term()}
         }
 
@@ -40,8 +40,12 @@ defmodule SparkEx.Connect.Channel do
   - `token` — bearer token for auth
   - `auth_transport` — `"auto"` (default) or `"metadata"`
   - `grpc_max_message_size` — max gRPC message size in bytes (default: 128 MiB)
-  - `grpc_keepalive_time_ms`, `grpc_keepalive_timeout_ms`,
-    `grpc_keepalive_permit_without_calls` — keepalive surface for follow-up
+  - `grpc_keepalive_time_ms` — HTTP/2 keepalive ping interval in ms, wired
+    into the gun adapter's `keepalive` option. `grpc_keepalive_timeout_ms`
+    and `grpc_keepalive_permit_without_calls` are accepted for Spark Connect
+    URI compatibility but ignored: the gun HTTP/2 adapter exposes only a ping
+    interval (`keepalive`) plus a count-based `keepalive_tolerance`, with no
+    ms ack-timeout or idle-permit equivalent.
 
   ## Examples
 
@@ -352,27 +356,19 @@ defmodule SparkEx.Connect.Channel do
 
   defp pop_keepalive(params) do
     {time_ms, params} = pop_pos_int(params, "grpc_keepalive_time_ms")
-    {timeout_ms, params} = pop_pos_int(params, "grpc_keepalive_timeout_ms")
-    {permit, params} = pop_bool(params, "grpc_keepalive_permit_without_calls")
 
-    case {time_ms, timeout_ms, permit} do
-      {{:error, _} = err, _, _} ->
-        err
+    # `grpc_keepalive_timeout_ms` and `grpc_keepalive_permit_without_calls` are
+    # accepted in Spark Connect URIs but have no equivalent in the gun HTTP/2
+    # adapter (which exposes only a ping interval, `keepalive`, plus a
+    # count-based `keepalive_tolerance` — neither an ms ack-timeout nor an
+    # idle-permit toggle). Strip them so they never leak into request metadata,
+    # but otherwise ignore them rather than pretending to honor them.
+    {_timeout_ms, params} = Map.pop(params, "grpc_keepalive_timeout_ms")
+    {_permit, params} = Map.pop(params, "grpc_keepalive_permit_without_calls")
 
-      {_, {:error, _} = err, _} ->
-        err
-
-      {_, _, {:error, _} = err} ->
-        err
-
-      {{:ok, t}, {:ok, to}, {:ok, p}} ->
-        keepalive =
-          %{}
-          |> maybe_put(:time_ms, t)
-          |> maybe_put(:timeout_ms, to)
-          |> maybe_put(:permit_without_calls, p)
-
-        {:ok, keepalive, params}
+    case time_ms do
+      {:error, _} = err -> err
+      {:ok, t} -> {:ok, maybe_put(%{}, :time_ms, t), params}
     end
   end
 
@@ -412,20 +408,6 @@ defmodule SparkEx.Connect.Channel do
       {value, rest} ->
         case Integer.parse(value) do
           {n, ""} when n > 0 -> {{:ok, n}, rest}
-          _ -> {{:error, {:invalid_param, "#{key}=#{value}"}}, rest}
-        end
-    end
-  end
-
-  defp pop_bool(params, key) do
-    case Map.pop(params, key) do
-      {nil, rest} ->
-        {{:ok, nil}, rest}
-
-      {value, rest} ->
-        case String.downcase(value) do
-          "true" -> {{:ok, true}, rest}
-          "false" -> {{:ok, false}, rest}
           _ -> {{:error, {:invalid_param, "#{key}=#{value}"}}, rest}
         end
     end

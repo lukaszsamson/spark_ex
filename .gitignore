@@ -28,3 +28,30 @@ spark_ex-*.tar
 # uv / Python virtualenv for spark_server
 /test/spark_server/.venv/
 spark-warehouse
+
+# ElixirLS / editor caches
+/.elixir_ls/
+
+# Claude Code working directory
+/.claude/
+
+# Dialyzer PLT cache
+/priv/plts/
+
+# Local audit / planning / working notes — not part of the published package
+/BUGS_*.txt
+/BUGS_*.md
+/REV_*.md
+/CHECKLIST.md
+/CHECKLIST_PROGRESS.md
+/checklist/
+/CODEGEN_MACRO.md
+/EXPLORATORY_TESTS.md
+/EXPLORER_*.md
+/GRPC_CRASH.md
+/NO_SERIALIZED_RPC.md
+/PLAN_ID_WITH_REL.md
+/README_TODO.md
+/ROW_COLLECTION.md
+/TO_LOCAL_ITERATOR.md
+/ARROW_PANIC.md

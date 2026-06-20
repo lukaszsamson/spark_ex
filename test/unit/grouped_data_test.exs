@@ -90,4 +90,66 @@ defmodule SparkEx.GroupedDataTest do
       end
     end
   end
+
+  describe "agg/2 pair-form" do
+    test "valid pair list {col, func_name} produces remote call with correct function name" do
+      df = DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
+
+      result =
+        df
+        |> DataFrame.group_by(["dept"])
+        |> GroupedData.agg([{"salary", "max"}])
+
+      assert {:aggregate, {:sql, _, _}, :groupby, [{:col, "dept"}],
+              [{:alias, {:fn, "max", [{:col, "salary"}], false}, _}]} = unwrap_plan(result)
+    end
+
+    test "valid map %{col => func_name} produces remote call with correct function name" do
+      df = DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
+
+      result =
+        df
+        |> DataFrame.group_by(["dept"])
+        |> GroupedData.agg(%{"salary" => "avg"})
+
+      assert {:aggregate, {:sql, _, _}, :groupby, [{:col, "dept"}],
+              [{:alias, {:fn, "avg", [{:col, "salary"}], false}, _}]} = unwrap_plan(result)
+    end
+
+    test "raises ArgumentError for boolean func_name true in pair list" do
+      df = DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
+      grouped = DataFrame.group_by(df, ["dept"])
+
+      assert_raise ArgumentError, ~r/expected all aggregate expressions/, fn ->
+        GroupedData.agg(grouped, [{"x", true}])
+      end
+    end
+
+    test "raises ArgumentError for boolean func_name false in pair list" do
+      df = DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
+      grouped = DataFrame.group_by(df, ["dept"])
+
+      assert_raise ArgumentError, ~r/expected all aggregate expressions/, fn ->
+        GroupedData.agg(grouped, [{"x", false}])
+      end
+    end
+
+    test "raises ArgumentError for nil func_name in pair list" do
+      df = DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
+      grouped = DataFrame.group_by(df, ["dept"])
+
+      assert_raise ArgumentError, ~r/expected all aggregate expressions/, fn ->
+        GroupedData.agg(grouped, [{"x", nil}])
+      end
+    end
+
+    test "raises ArgumentError for boolean func_name true in map form" do
+      df = DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
+      grouped = DataFrame.group_by(df, ["dept"])
+
+      assert_raise ArgumentError, ~r/expected all aggregate expressions/, fn ->
+        GroupedData.agg(grouped, %{"x" => true})
+      end
+    end
+  end
 end

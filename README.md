@@ -46,16 +46,16 @@ Add `spark_ex` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:spark_ex, "~> 0.1.0"},
-
-    # Optional — for Arrow decoding and to_explorer/2
-    {:explorer, "~> 0.10"},
+    {:spark_ex, "~> 0.2.0"},
 
     # Optional — for Livebook rendering
     {:kino, "~> 0.14"}
   ]
 end
 ```
+
+`:explorer` (Arrow IPC decoding and `to_explorer/2`) is a required dependency
+and is installed automatically — you do not need to add it yourself.
 
 ## Getting started
 
@@ -297,7 +297,7 @@ attach to for logging, metrics, or tracing:
 | Elixir >= 1.15      |                                                                       |
 | Java 17 or 21       | For running the Spark Connect server                                  |
 | Spark >= 3.5 with spark-connect       | For running the Spark Connect server                |
-| Explorer (optional) | Arrow IPC decoding and `to_explorer/2`                                |
+| Explorer (required) | Arrow IPC decoding and `to_explorer/2` (installed automatically)       |
 | Kino (optional)     | Livebook rendering                                                    |
 
 `protoc` + `protoc-gen-elixir` are only needed if you regenerate the protobuf

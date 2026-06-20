@@ -29,7 +29,7 @@ defmodule SparkEx.Observation do
   its metrics). These are reclaimed:
 
     * when its owning session terminates, via `clear_session/1` (called from
-      `SparkEx.Session.terminate/2`), and
+      the `SparkEx.Session` GenServer's terminate callback), and
     * explicitly via `clear/2` for callers that want to free a single
       observation eagerly.
 
@@ -205,7 +205,8 @@ defmodule SparkEx.Observation do
   @doc """
   Reclaims every observation row belonging to `session_id`.
 
-  Called from `SparkEx.Session.terminate/2` so a long-running session that
+  Called from the `SparkEx.Session` GenServer's terminate callback so a
+  long-running session that
   creates observations in a loop does not leak ETS rows for the VM's
   lifetime (FABLE-29). Walks the `{:obs_session, session_id, id}` membership
   markers and deletes each observation's rows.
