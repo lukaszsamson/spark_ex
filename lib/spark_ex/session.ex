@@ -1987,7 +1987,8 @@ defmodule SparkEx.Session do
   end
 
   defp maybe_execute_collect_with_json_projection_schema_retry(state, plan, schema, opts) do
-    if schema_has_nested_map?(schema) or schema_has_struct_and_map?(schema) do
+    if schema_has_nested_map?(schema) or schema_has_struct_and_map?(schema) or
+         schema_has_unsupported_scalar?(schema) do
       case retry_collect_with_json_projection(state, plan, schema, opts) do
         {:ok, result, state} ->
           :telemetry.execute(
@@ -2008,8 +2009,31 @@ defmodule SparkEx.Session do
   end
 
   defp maybe_preflight_collect_retry?(plan) do
-    maybe_json_relation_plan?(plan) or maybe_sql_plan?(plan)
+    maybe_json_relation_plan?(plan) or maybe_sql_plan?(plan) or maybe_read_plan?(plan)
   end
+
+  # Reads (parquet/orc/datasource, named tables) can surface nested struct/map/
+  # array or interval columns that make the Explorer/polars decoder panic in
+  # native code (e.g. the "maximum length reached" / bigidx panic on a nested
+  # parquet roundtrip — V02_BLOCKERS M2). Allowing these plans through the
+  # preflight schema analysis lets the JSON/string projection fallback apply
+  # before the panicking Arrow decode is attempted.
+  defp maybe_read_plan?({:read_data_source, _format, _paths, _schema, _options}), do: true
+
+  defp maybe_read_plan?({:read_data_source, _format, _paths, _schema, _options, _predicates}),
+    do: true
+
+  defp maybe_read_plan?({:read_named_table, _table, _options}), do: true
+
+  defp maybe_read_plan?(plan) when is_tuple(plan) do
+    plan
+    |> Tuple.to_list()
+    |> Enum.any?(&maybe_read_plan?/1)
+  end
+
+  defp maybe_read_plan?(plan) when is_list(plan), do: Enum.any?(plan, &maybe_read_plan?/1)
+
+  defp maybe_read_plan?(_), do: false
 
   defp maybe_sql_plan?({:sql, query, _args}) when is_binary(query) do
     lowered =
@@ -2906,6 +2930,18 @@ defmodule SparkEx.Session do
   end
 
   defp schema_has_nested_map?(_), do: false
+
+  # True when any top-level result column is an Arrow type the Explorer/polars
+  # decoder cannot build a series for (year-month / day-time / calendar
+  # intervals). Such columns make `Explorer.DataFrame.load_ipc_stream/1` panic in
+  # native code; detecting them up front lets the collect path pre-emptively cast
+  # them to STRING via the JSON/string projection fallback, so the panicking
+  # decode is never attempted (V02_BLOCKERS M1).
+  defp schema_has_unsupported_scalar?(%Spark.Connect.DataType{kind: {:struct, struct}}) do
+    Enum.any?(struct.fields, fn field -> unsupported_arrow_scalar_type?(field.data_type) end)
+  end
+
+  defp schema_has_unsupported_scalar?(_), do: false
 
   defp nested_map_type?(
          %Spark.Connect.DataType{

@@ -202,6 +202,27 @@ defmodule SparkEx.Unit.ArtifactTest do
     end
   end
 
+  describe "add_artifacts/2 input validation (V02_BLOCKERS H1)" do
+    # Invalid input must be returned as an {:error, _} tuple, never raised. The
+    # call runs inside the SparkEx.Session GenServer, so a raise there would
+    # crash the whole session and drop every in-flight query.
+    test "non-tuple element returns an error tuple instead of raising", %{session: session} do
+      assert {:error, {:invalid_artifacts, message}} =
+               Client.add_artifacts(session, ["/tmp/not-a-tuple.txt"])
+
+      assert message =~ "expected artifacts"
+    end
+
+    test "non-list input returns an error tuple instead of raising", %{session: session} do
+      assert {:error, {:invalid_artifacts, _}} =
+               Client.add_artifacts(session, "/tmp/not-a-list.txt")
+    end
+
+    test "empty list short-circuits to ok without touching the channel", %{session: session} do
+      assert {:ok, [], "ss-456"} = Client.add_artifacts(session, [])
+    end
+  end
+
   describe "Artifacts.prepare/2" do
     test "stats local files and prefixes names without reading contents" do
       jar_path = tmp_path("artifact_jar.txt")

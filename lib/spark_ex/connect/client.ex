@@ -1238,8 +1238,20 @@ defmodule SparkEx.Connect.Client do
         ]) ::
           {:ok, [{String.t(), boolean()}], String.t() | nil} | {:error, term()}
   def add_artifacts(session, artifacts) when is_list(artifacts) do
-    artifacts = validate_artifacts!(artifacts)
+    # Validate without raising so malformed input is returned as an error tuple
+    # instead of crashing the calling SparkEx.Session GenServer (V02_BLOCKERS H1).
+    with {:ok, artifacts} <- validate_artifacts(artifacts) do
+      do_add_artifacts(session, artifacts)
+    end
+  end
 
+  def add_artifacts(_session, other) do
+    {:error,
+     {:invalid_artifacts,
+      "expected a list of {name, binary} or {name, {:file, path, size}} tuples, got: #{inspect(other)}"}}
+  end
+
+  defp do_add_artifacts(session, artifacts) do
     metadata = %{rpc: :add_artifacts, session_id: session.session_id}
 
     rpc_telemetry_span(metadata, fn ->
@@ -1980,19 +1992,44 @@ defmodule SparkEx.Connect.Client do
           "expected :preferred_arrow_chunk_size to be a positive integer or nil, got: #{inspect(size)}"
   end
 
+  # Raising variant for the pure request-builder path (runs in the caller, not
+  # the Session GenServer, so raising on programmer error is fine there).
   defp validate_artifacts!(artifacts) do
-    Enum.map(artifacts, fn
-      {name, data} when is_binary(name) and is_binary(data) ->
-        {name, data}
+    case validate_artifacts(artifacts) do
+      {:ok, validated} -> validated
+      {:error, {:invalid_artifacts, message}} -> raise ArgumentError, message
+    end
+  end
 
-      {name, {:file, path, size}}
-      when is_binary(name) and is_binary(path) and is_integer(size) and size >= 0 ->
+  # Non-raising validator: returns {:ok, validated} | {:error, {:invalid_artifacts, msg}}.
+  defp validate_artifacts(artifacts) when is_list(artifacts) do
+    artifacts
+    |> Enum.reduce_while({:ok, []}, fn artifact, {:ok, acc} ->
+      case artifact do
+        {name, data} when is_binary(name) and is_binary(data) ->
+          {:cont, {:ok, [{name, data} | acc]}}
+
         {name, {:file, path, size}}
+        when is_binary(name) and is_binary(path) and is_integer(size) and size >= 0 ->
+          {:cont, {:ok, [{name, {:file, path, size}} | acc]}}
 
-      other ->
-        raise ArgumentError,
-              "expected artifacts as list of {name, binary} or {name, {:file, path, size}} tuples, got: #{inspect(other)}"
+        other ->
+          {:halt,
+           {:error,
+            {:invalid_artifacts,
+             "expected artifacts as list of {name, binary} or {name, {:file, path, size}} tuples, got: #{inspect(other)}"}}}
+      end
     end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp validate_artifacts(other) do
+    {:error,
+     {:invalid_artifacts,
+      "expected a list of {name, binary} or {name, {:file, path, size}} tuples, got: #{inspect(other)}"}}
   end
 
   defp build_batch_request(session, artifacts) do
