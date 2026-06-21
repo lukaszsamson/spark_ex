@@ -203,6 +203,8 @@ jobs:
       - name: Determine versions
         id: versions
         run: |
+          # 3.5 does not bundle the Spark Connect server (resolve via --packages);
+          # 4.x ships it in the distribution. Mirrors the integration job.
           case "${{ matrix.spark }}" in
             3.5) echo "spark_full=3.5.4" >> "$GITHUB_OUTPUT"
                  echo "spark_dist=spark-3.5.4-bin-hadoop3" >> "$GITHUB_OUTPUT"
@@ -238,7 +240,11 @@ jobs:
         uses: actions/cache@v5
         with:
           path: spark-dist
-          key: spark-${{ steps.versions.outputs.spark_full }}
+          # Checklist-specific key: the integration job uses the same Spark
+          # versions but a different (bundled-connect) start path; sharing the
+          # `spark-<ver>` key let this job restore a connect-less dist and the
+          # server failed to start. A distinct key keeps the two independent.
+          key: spark-checklist-${{ steps.versions.outputs.spark_full }}
 
       - name: Download Spark
         if: steps.cache-spark.outputs.cache-hit != 'true'
