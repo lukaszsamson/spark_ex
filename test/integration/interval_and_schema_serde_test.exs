@@ -27,6 +27,29 @@ defmodule SparkEx.Integration.IntervalAndSchemaSerdeTest do
     assert match?(%Spark.Connect.DataType{kind: {:year_month_interval, _}}, field.data_type)
   end
 
+  test "day-time intervals collect as native durations, year-month as strings", %{
+    session: session
+  } do
+    # Regression for the V02_BLOCKERS M1 fix: year-month / calendar intervals
+    # lack a native Explorer dtype and must be cast to STRING to avoid the polars
+    # NIF panic, but day-time intervals ARE natively supported (Explorer maps
+    # them to {:duration, :microsecond}) and must keep their duration value.
+    df =
+      SparkEx.sql(
+        session,
+        "SELECT INTERVAL '2' DAY + INTERVAL '3' HOUR AS dt, INTERVAL '1' YEAR AS ym"
+      )
+
+    assert {:ok, [row]} = DataFrame.collect(df)
+
+    # Day-time interval preserved as an Explorer.Duration, not stringified.
+    assert %Explorer.Duration{} = row["dt"]
+
+    # Year-month interval has no native dtype, so it falls back to a string.
+    assert is_binary(row["ym"])
+    assert row["ym"] =~ "YEAR"
+  end
+
   test "nested schema inference and JSON serde", %{session: session} do
     df =
       SparkEx.sql(

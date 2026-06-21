@@ -3155,8 +3155,15 @@ defmodule SparkEx.Session do
 
   defp complex_field_type?(_), do: false
 
+  # Scalar Arrow types the Explorer/polars decoder cannot build a series for, so
+  # collect must cast them to STRING via the fallback projection. Day-time
+  # intervals are intentionally NOT listed: Explorer maps them to a native
+  # {:duration, :microsecond} series (SparkEx.Connect.TypeMapper.to_explorer_dtype/1),
+  # so casting them to STRING would needlessly turn durations into strings. Only
+  # year-month and calendar (month-day-nano) intervals lack native support and
+  # actually panic the NIF.
   defp unsupported_arrow_scalar_type?(%Spark.Connect.DataType{kind: {tag, _}}),
-    do: tag in [:year_month_interval, :day_time_interval, :calendar_interval]
+    do: tag in [:year_month_interval, :calendar_interval]
 
   defp unsupported_arrow_scalar_type?(_), do: false
 

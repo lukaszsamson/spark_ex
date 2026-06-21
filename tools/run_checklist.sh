@@ -75,8 +75,16 @@ for f in "${FILES[@]}"; do
   if grep -q "CHECKLIST-GATE-FAIL" "$log"; then
     reasons+="assertion-failed "
   fi
-  if [ "$rc" -eq 124 ]; then
-    reasons+="timeout(${TIMEOUT}s) "
+  # Any nonzero exit is a failure: timeout (124), a native segfault/abort
+  # (134/139), an unhandled Elixir exception or session exit (1/2), etc. These
+  # are crashes the gate exists to catch, and some happen before any marker is
+  # printed (e.g. a segfault repro), so rc must gate on its own.
+  if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -eq 124 ]; then
+      reasons+="timeout(${TIMEOUT}s) "
+    else
+      reasons+="nonzero-exit($rc) "
+    fi
   fi
 
   if [ -n "$reasons" ]; then
@@ -102,7 +110,13 @@ if [ "$failed" -gt 0 ]; then
   for item in "${fail_list[@]}"; do
     b="${item%%:*}"
     echo "----- $b -----"
-    grep -nE "panicked at|:nif_panicked|CHECKLIST-GATE-FAIL" "$LOGDIR/$b.log" | head -3
+    # Show marker hits when present; otherwise (e.g. a bare nonzero exit) fall
+    # back to the tail of the log so the failure is still diagnosable.
+    if grep -qE "panicked at|:nif_panicked|CHECKLIST-GATE-FAIL" "$LOGDIR/$b.log"; then
+      grep -nE "panicked at|:nif_panicked|CHECKLIST-GATE-FAIL" "$LOGDIR/$b.log" | head -3
+    else
+      tail -8 "$LOGDIR/$b.log"
+    fi
   done
   exit 1
 fi
