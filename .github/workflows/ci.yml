@@ -196,28 +196,27 @@ jobs:
     env:
       MIX_ENV: dev
       SPARK_HOME: ${{ github.workspace }}/spark-dist
-      SPARK_REMOTE: sc://localhost:15002
+      # NB: SPARK_REMOTE is intentionally NOT set at job level — start-connect-server.sh
+      # would pick it up as spark.remote and refuse to launch the server
+      # ("Remote cannot be specified with master"). It is set only on the gate step below.
     steps:
       - uses: actions/checkout@v4
 
       - name: Determine versions
         id: versions
         run: |
-          # Resolve the Spark Connect server via --packages for every version: a
-          # freshly-downloaded vanilla distribution does not put the connect
-          # server on start-connect-server.sh's classpath. Scala suffix is 2.12
-          # for 3.5 and 2.13 for 4.x; the package version matches the dist so
-          # transitive deps line up with the bundled Spark jars.
+          # 3.5 does not bundle the Spark Connect server (resolve via --packages);
+          # 4.x ships it in the distribution. Mirrors the integration job.
           case "${{ matrix.spark }}" in
             3.5) echo "spark_full=3.5.4" >> "$GITHUB_OUTPUT"
                  echo "spark_dist=spark-3.5.4-bin-hadoop3" >> "$GITHUB_OUTPUT"
                  echo "spark_packages=org.apache.spark:spark-connect_2.12:3.5.4" >> "$GITHUB_OUTPUT" ;;
             4.0) echo "spark_full=4.0.0" >> "$GITHUB_OUTPUT"
                  echo "spark_dist=spark-4.0.0-bin-hadoop3" >> "$GITHUB_OUTPUT"
-                 echo "spark_packages=org.apache.spark:spark-connect_2.13:4.0.0" >> "$GITHUB_OUTPUT" ;;
+                 echo "spark_packages=" >> "$GITHUB_OUTPUT" ;;
             4.1) echo "spark_full=4.1.1" >> "$GITHUB_OUTPUT"
                  echo "spark_dist=spark-4.1.1-bin-hadoop3" >> "$GITHUB_OUTPUT"
-                 echo "spark_packages=org.apache.spark:spark-connect_2.13:4.1.1" >> "$GITHUB_OUTPUT" ;;
+                 echo "spark_packages=" >> "$GITHUB_OUTPUT" ;;
           esac
 
       - uses: erlef/setup-beam@v1
@@ -262,14 +261,7 @@ jobs:
 
       - name: Start Spark Connect server
         run: |
-          # A fresh distribution has no spark-defaults.conf, so set the master
-          # explicitly (a cached dist may carry one; we must not depend on that).
-          # Build args as an array and quote spark.master — the "local[*]" value
-          # contains glob metacharacters that word-splitting would mangle.
-          ARGS=(
-            --conf "spark.master=local[*]"
-            --conf spark.connect.grpc.binding.port=15002
-          )
+          ARGS=(--conf spark.connect.grpc.binding.port=15002)
           PACKAGES="${{ steps.versions.outputs.spark_packages }}"
           if [ -n "$PACKAGES" ]; then
             ARGS+=(--packages "$PACKAGES")
@@ -291,6 +283,8 @@ jobs:
 
       - name: Run checklist gate
         run: tools/run_checklist.sh
+        env:
+          SPARK_REMOTE: sc://localhost:15002
 
       - name: Stop Spark Connect server
         if: always()
