@@ -185,3 +185,107 @@ jobs:
       - name: Stop Spark Connect server
         if: always()
         run: bash "$SPARK_HOME/sbin/stop-connect-server.sh" 2>/dev/null || true
+
+  checklist:
+    name: Checklist gate (Spark ${{ matrix.spark }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        spark: ["3.5", "4.0", "4.1"]
+    env:
+      MIX_ENV: dev
+      SPARK_HOME: ${{ github.workspace }}/spark-dist
+      # NB: SPARK_REMOTE is intentionally NOT set at job level — start-connect-server.sh
+      # would pick it up as spark.remote and refuse to launch the server
+      # ("Remote cannot be specified with master"). It is set only on the gate step below.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine versions
+        id: versions
+        run: |
+          # 3.5 does not bundle the Spark Connect server (resolve via --packages);
+          # 4.x ships it in the distribution. Mirrors the integration job.
+          case "${{ matrix.spark }}" in
+            3.5) echo "spark_full=3.5.4" >> "$GITHUB_OUTPUT"
+                 echo "spark_dist=spark-3.5.4-bin-hadoop3" >> "$GITHUB_OUTPUT"
+                 echo "spark_packages=org.apache.spark:spark-connect_2.12:3.5.4" >> "$GITHUB_OUTPUT" ;;
+            4.0) echo "spark_full=4.0.0" >> "$GITHUB_OUTPUT"
+                 echo "spark_dist=spark-4.0.0-bin-hadoop3" >> "$GITHUB_OUTPUT"
+                 echo "spark_packages=" >> "$GITHUB_OUTPUT" ;;
+            4.1) echo "spark_full=4.1.1" >> "$GITHUB_OUTPUT"
+                 echo "spark_dist=spark-4.1.1-bin-hadoop3" >> "$GITHUB_OUTPUT"
+                 echo "spark_packages=" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20"
+          otp-version: "28"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: mix-1.20-28-${{ hashFiles('mix.lock') }}
+          restore-keys: mix-1.20-28-
+
+      - name: Cache Spark distribution
+        id: cache-spark
+        uses: actions/cache@v5
+        with:
+          path: spark-dist
+          # Checklist-specific key: the integration job uses the same Spark
+          # versions but a different (bundled-connect) start path; sharing the
+          # `spark-<ver>` key let this job restore a connect-less dist and the
+          # server failed to start. A distinct key keeps the two independent.
+          key: spark-checklist-${{ steps.versions.outputs.spark_full }}
+
+      - name: Download Spark
+        if: steps.cache-spark.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p spark-dist
+          curl -fsSL \
+            "https://archive.apache.org/dist/spark/spark-${{ steps.versions.outputs.spark_full }}/${{ steps.versions.outputs.spark_dist }}.tgz" \
+            | tar -xz -C spark-dist --strip-components=1
+
+      - run: mix deps.get
+      - run: mix compile
+
+      - name: Start Spark Connect server
+        run: |
+          ARGS=(--conf spark.connect.grpc.binding.port=15002)
+          PACKAGES="${{ steps.versions.outputs.spark_packages }}"
+          if [ -n "$PACKAGES" ]; then
+            ARGS+=(--packages "$PACKAGES")
+          fi
+          bash "$SPARK_HOME/sbin/start-connect-server.sh" "${ARGS[@]}"
+          echo -n "Waiting for Spark Connect server"
+          for i in $(seq 1 120); do
+            if nc -z localhost 15002 2>/dev/null; then
+              echo " ready (${i}s)"
+              exit 0
+            fi
+            echo -n "."
+            sleep 1
+          done
+          echo ""
+          echo "ERROR: Spark Connect server did not start within 120s"
+          cat "$SPARK_HOME"/logs/*.out 2>/dev/null || true
+          exit 1
+
+      - name: Run checklist gate
+        run: tools/run_checklist.sh
+        env:
+          SPARK_REMOTE: sc://localhost:15002
+
+      - name: Stop Spark Connect server
+        if: always()
+        run: bash "$SPARK_HOME/sbin/stop-connect-server.sh" 2>/dev/null || true

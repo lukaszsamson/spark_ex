@@ -41,10 +41,10 @@ spark-warehouse
 # Local audit / planning / working notes — not part of the published package
 /BUGS_*.txt
 /BUGS_*.md
+/V02_BLOCKERS.txt
 /REV_*.md
 /CHECKLIST.md
 /CHECKLIST_PROGRESS.md
-/checklist/
 /CODEGEN_MACRO.md
 /EXPLORATORY_TESTS.md
 /EXPLORER_*.md
