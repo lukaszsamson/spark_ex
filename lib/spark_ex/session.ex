@@ -182,7 +182,18 @@ defmodule SparkEx.Session do
   def is_stopped(%__MODULE__{released: released}), do: released
 
   def is_stopped(session) do
-    GenServer.call(resolve_server!(session), :is_stopped)
+    case GenServer.whereis(session) do
+      nil ->
+        true
+
+      server ->
+        try do
+          GenServer.call(server, :is_stopped)
+        catch
+          :exit, {:noproc, _} -> true
+          :exit, {{:nodedown, _}, _} -> true
+        end
+    end
   end
 
   @doc """
@@ -300,11 +311,16 @@ defmodule SparkEx.Session do
 
   @doc """
   Executes a plan wrapped in a count(*) aggregate and returns the count.
+
+  ## Options
+
+    * `:timeout` — gRPC call timeout in ms (default: 60_000)
+    * `:tags` — request tags merged with the session tags
   """
-  @spec execute_count(GenServer.server(), term()) ::
+  @spec execute_count(GenServer.server(), term(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def execute_count(session, plan) do
-    GenServer.call(session, {:execute_count, plan}, :timer.seconds(60))
+  def execute_count(session, plan, opts \\ []) do
+    GenServer.call(session, {:execute_count, plan, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -777,11 +793,16 @@ defmodule SparkEx.Session do
 
   @doc """
   Executes a ShowString plan and returns the formatted string.
+
+  ## Options
+
+    * `:timeout` — gRPC call timeout in ms (default: 60_000)
+    * `:tags` — request tags merged with the session tags
   """
-  @spec execute_show(GenServer.server(), term()) ::
+  @spec execute_show(GenServer.server(), term(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def execute_show(session, plan) do
-    GenServer.call(session, {:execute_show, plan}, :timer.seconds(60))
+  def execute_show(session, plan, opts \\ []) do
+    GenServer.call(session, {:execute_show, plan, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -841,6 +862,11 @@ defmodule SparkEx.Session do
             {:ok, interrupted_ids}
 
           {:error, _} = error ->
+            # The snapshot path has no GenServer reply to route through
+            # reply_error/2, so hand the error to the Session: a
+            # session-changed signal closes it and drops the snapshot exactly
+            # like an in-band RPC failure would.
+            GenServer.cast(session, {:observe_rpc_error, error})
             error
         end
 
@@ -852,8 +878,11 @@ defmodule SparkEx.Session do
   defp observe_server_session_id(_session, nil), do: :ok
   defp observe_server_session_id(_session, ""), do: :ok
 
+  # Routed through maybe_update_server_session/2 (not the test-only raw
+  # setter) so the first id learned via an out-of-band interrupt republishes
+  # the ETS snapshot and a rotated id closes the session.
   defp observe_server_session_id(session, id),
-    do: GenServer.cast(session, {:update_server_side_session_id, id})
+    do: GenServer.cast(session, {:observe_server_session_id, id})
 
   @doc """
   Stops the session process. Calls `ReleaseSession` if not already released,
@@ -1218,18 +1247,23 @@ defmodule SparkEx.Session do
     end)
   end
 
-  def handle_call({:execute_count, plan}, _from, state) do
+  def handle_call({:execute_count, plan}, from, state) do
+    handle_call({:execute_count, plan, []}, from, state)
+  end
+
+  def handle_call({:execute_count, plan, opts}, _from, state) do
     operation_telemetry_span(:execute_count, state.session_id, fn ->
       case safe_encode_count(plan, state.plan_id_counter) do
         {{proto_plan, counter}, nil} ->
           state = %{state | plan_id_counter: counter}
+          opts = merge_session_tags(opts, state.tags)
 
-          case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
+          case Client.execute_plan(state, proto_plan, opts) do
             {:ok, result} ->
               reply_execute_count_result(result, state)
 
             {:error, %SparkEx.Error.Remote{} = remote} = error ->
-              reply_count_with_legacy_fallback(state, plan, remote, error)
+              reply_count_with_legacy_fallback(state, plan, opts, remote, error)
 
             {:error, _} = error ->
               reply_error(error, state)
@@ -1724,13 +1758,17 @@ defmodule SparkEx.Session do
     end
   end
 
-  def handle_call({:execute_show, plan}, _from, state) do
+  def handle_call({:execute_show, plan}, from, state) do
+    handle_call({:execute_show, plan, []}, from, state)
+  end
+
+  def handle_call({:execute_show, plan, opts}, _from, state) do
     operation_telemetry_span(:execute_show, state.session_id, fn ->
       case safe_encode(plan, state.plan_id_counter) do
         {{proto_plan, counter}, nil} ->
           state = %{state | plan_id_counter: counter}
 
-          case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
+          case Client.execute_plan(state, proto_plan, merge_session_tags(opts, state.tags)) do
             {:ok, result} ->
               reply_execute_show_result(result, state)
 
@@ -1780,7 +1818,9 @@ defmodule SparkEx.Session do
       {:ok, result, state} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
         {result, state} = maybe_decode_retry_result_rows(state, plan, proto_plan, result)
-        reply_collect_result(result, state, opts, proto_plan)
+        # The retry renamed duplicate columns, so rows are keyed by the
+        # deduped names: convert map columns against the renamed schema.
+        reply_collect_result(result, state, opts, {:unique_columns, proto_plan})
 
       {:error, state} ->
         reply_error(error, state)
@@ -1791,25 +1831,32 @@ defmodule SparkEx.Session do
     case retry_collect_with_legacy_fallbacks(state, plan, opts, remote) do
       {:ok, result, state} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
-        reply_collect_result(result, state, opts)
+        # The original plan is what the server rejected, so analyze the
+        # rewritten plan that actually ran (tagged by execute_retry_plan/3).
+        reply_collect_result(result, state, opts, Map.get(result, :executed_proto_plan))
 
       :error ->
         reply_error(error, state)
     end
   end
 
-  defp reply_collect_result(result, state, opts, proto_plan \\ nil) do
+  # `schema_source` tells the map_format: :map conversion which plan
+  # describes the returned rows: a proto plan to analyze (the original plan
+  # on the primary path; the rewritten plan on the legacy retry path),
+  # `{:unique_columns, proto_plan}` when the retry renamed duplicate columns,
+  # or nil to fall back to the response schema.
+  defp reply_collect_result(result, state, opts, schema_source) do
     state = %{state | last_execution_metrics: result.execution_metrics}
     SparkEx.Observation.store_observed_metrics(result.observed_metrics, state.session_id)
 
     rows =
       case Keyword.get(opts, :map_format, :key_value_pairs) do
         :map ->
-          # Analyze the original plan for the logical schema (only when the
-          # caller opted in): ExecutePlanResponse.schema is optional AND may
+          # Analyze the plan for the logical schema (only when the caller
+          # opted in): ExecutePlanResponse.schema is optional AND may
           # describe a JSON-projection fallback (map columns typed STRING)
           # rather than the logical types.
-          schema = fetch_schema_for_map_format(state, proto_plan) || result.schema
+          schema = schema_for_map_format(state, schema_source) || result.schema
           SparkEx.Connect.ResultDecoder.convert_map_columns(result.rows, schema)
 
         _ ->
@@ -1819,14 +1866,45 @@ defmodule SparkEx.Session do
     {:reply, {:ok, rows}, state}
   end
 
-  defp fetch_schema_for_map_format(_state, nil), do: nil
+  defp schema_for_map_format(_state, nil), do: nil
 
-  defp fetch_schema_for_map_format(state, proto_plan) do
+  defp schema_for_map_format(state, {:unique_columns, proto_plan}) do
+    state
+    |> schema_for_map_format(proto_plan)
+    |> __unique_columns_map_format_schema__()
+  end
+
+  defp schema_for_map_format(state, proto_plan) do
     case Client.analyze_schema(state, proto_plan) do
       {:ok, schema, _server_side_session_id} -> schema
       _ -> nil
     end
   end
+
+  @doc false
+  # Schema used to convert MAP columns after the unique-column-name retry:
+  # converters are keyed by column name and the retried rows carry the
+  # deduped names, so rename the fields positionally. Only the renamed
+  # fields are returned: keeping the originals would bind a converter to a
+  # duplicate name whose row value belongs to a differently-typed sibling.
+  # Exposed for unit tests.
+  @spec __unique_columns_map_format_schema__(term()) :: term()
+  def __unique_columns_map_format_schema__(
+        %Spark.Connect.DataType{kind: {:struct, struct}} = schema
+      ) do
+    case unique_schema_column_names(schema) do
+      unique_names when is_list(unique_names) ->
+        renamed =
+          Enum.zip_with(struct.fields, unique_names, fn field, name -> %{field | name: name} end)
+
+        %{schema | kind: {:struct, %{struct | fields: renamed}}}
+
+      :no_duplicates ->
+        schema
+    end
+  end
+
+  def __unique_columns_map_format_schema__(other), do: other
 
   defp reply_execute_count_result(result, state) do
     state = maybe_update_server_session(state, result.server_side_session_id)
@@ -1842,7 +1920,7 @@ defmodule SparkEx.Session do
   @impl true
   def handle_cast({:add_tag, tag}, state) do
     Tag.validate!(tag)
-    {:noreply, %{state | tags: state.tags ++ [tag]}}
+    {:noreply, %{state | tags: Enum.uniq(state.tags ++ [tag])}}
   end
 
   @impl true
@@ -1858,6 +1936,28 @@ defmodule SparkEx.Session do
   @impl true
   def handle_cast({:update_server_side_session_id, id}, state) do
     {:noreply, %{state | server_side_session_id: id}}
+  end
+
+  # Late casts from an in-flight out-of-band interrupt must not resurrect
+  # the ETS snapshot of a closed/released session (the snapshot was deleted
+  # on close; after release it would carry channel: nil).
+  @impl true
+  def handle_cast({:observe_server_session_id, _id}, %{closed: true} = state),
+    do: {:noreply, state}
+
+  def handle_cast({:observe_server_session_id, _id}, %{released: true} = state),
+    do: {:noreply, state}
+
+  def handle_cast({:observe_server_session_id, id}, state) do
+    {:noreply, maybe_update_server_session(state, id)}
+  end
+
+  @impl true
+  def handle_cast({:observe_rpc_error, _error}, %{released: true} = state),
+    do: {:noreply, state}
+
+  def handle_cast({:observe_rpc_error, error}, state) do
+    {:noreply, maybe_close_on_error(state, error)}
   end
 
   # Silently discard gun messages that arrive after session release
@@ -2287,10 +2387,16 @@ defmodule SparkEx.Session do
 
         case Client.execute_plan(state, retry_proto_plan, opts) do
           {:ok, result} ->
-            {:ok, result, state}
+            {:ok, Map.put(result, :executed_proto_plan, retry_proto_plan), state}
 
           {:error, {:arrow_decode_failed, _reason}} ->
-            retry_collect_with_unique_columns(state, retry_plan, retry_proto_plan, opts)
+            # Outermost rewrite wins: nested fallbacks (unique columns /
+            # JSON projection) may not describe the logical row types.
+            with {:ok, result, state} <-
+                   retry_collect_with_unique_columns(state, retry_plan, retry_proto_plan, opts) do
+              {:ok, Map.put(result, :executed_proto_plan, {:unique_columns, retry_proto_plan}),
+               state}
+            end
 
           {:error, _} ->
             {:error, state}
@@ -2316,8 +2422,8 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp reply_count_with_legacy_fallback(state, plan, remote, error) do
-    case retry_count_with_legacy_parse_rewrite(state, plan, remote) do
+  defp reply_count_with_legacy_fallback(state, plan, opts, remote, error) do
+    case retry_count_with_legacy_parse_rewrite(state, plan, opts, remote) do
       {:ok, result, state} -> reply_execute_count_result(result, state)
       :error -> reply_error(error, state)
     end
@@ -2326,16 +2432,12 @@ defmodule SparkEx.Session do
   # count/1 shares the UNPARSED legacy fallback with collect: Spark 4.x
   # rejects the Unparsed schema on {:parse, ...} plans, so rewrite the parse
   # node into from_csv/from_json projections and retry the count.
-  defp retry_count_with_legacy_parse_rewrite(state, plan, remote) do
+  defp retry_count_with_legacy_parse_rewrite(state, plan, opts, remote) do
     with :legacy_unparsed <- classify_legacy_recovery_strategy(remote),
          {:ok, rewritten} <- rewrite_parse_collect_plan(state, plan),
          {{proto_plan, counter}, nil} <- safe_encode_count(rewritten, state.plan_id_counter),
          {:ok, result} <-
-           Client.execute_plan(
-             %{state | plan_id_counter: counter},
-             proto_plan,
-             merge_session_tags([], state.tags)
-           ) do
+           Client.execute_plan(%{state | plan_id_counter: counter}, proto_plan, opts) do
       {:ok, result, %{state | plan_id_counter: counter}}
     else
       _ -> :error
@@ -3598,13 +3700,31 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp real_session_process?(session) do
-    case :sys.get_state(session) do
-      %__MODULE__{} -> true
-      _ -> false
+  # Non-blocking probe: a real Session publishes a connection snapshot, and
+  # its process dictionary carries `$initial_call` = {__MODULE__, :init, 1}.
+  # Never touches the GenServer mailbox (a `:sys.get_state/1` here would
+  # queue behind a running execute and defeat the out-of-band stream setup).
+  defp real_session_process?(session), do: __real_session_process__?(session)
+
+  @doc false
+  @spec __real_session_process__?(GenServer.server()) :: boolean()
+  def __real_session_process__?(session) do
+    case SparkEx.Internal.SessionSnapshot.fetch(session) do
+      {:ok, _snapshot} ->
+        true
+
+      :error ->
+        case GenServer.whereis(session) do
+          pid when is_pid(pid) and node(pid) == node() ->
+            case Process.info(pid, :dictionary) do
+              {:dictionary, dict} -> Keyword.get(dict, :"$initial_call") == {__MODULE__, :init, 1}
+              nil -> false
+            end
+
+          _ ->
+            false
+        end
     end
-  catch
-    :exit, _ -> false
   end
 
   # --- Local data preparation ---
@@ -5162,7 +5282,7 @@ defmodule SparkEx.Session do
 
   defp merge_session_tags(opts, session_tags) do
     request_tags = Keyword.get(opts, :tags, [])
-    combined = request_tags ++ session_tags
+    combined = Enum.uniq(request_tags ++ session_tags)
 
     if combined == [] do
       opts

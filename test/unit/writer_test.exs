@@ -213,7 +213,7 @@ defmodule SparkEx.Unit.WriterTest do
       assert_receive {:execute_command, {:write_operation, _, write_opts}, _exec_opts}
       assert Keyword.get(write_opts, :options)["header"] == "true"
       assert Keyword.get(write_opts, :options)["sep"] == "|"
-      assert Keyword.get(write_opts, :options)["quote_all"] == "true"
+      assert Keyword.get(write_opts, :options)["quoteAll"] == "true"
       assert Keyword.get(write_opts, :options)["escape"] == "\\"
     end
 

@@ -366,12 +366,14 @@ defmodule SparkEx.ReviewFixesTest do
   # ── Writer partition_by empty list (REV_OPUS #37) ──
 
   describe "Writer.partition_by empty list validation" do
-    test "rejects empty column list" do
+    test "empty column list clears partitioning (T-51)" do
       df = SparkEx.DataFrame.new(self(), {:sql, "SELECT 1", nil})
-      writer = %SparkEx.Writer{df: df}
+      writer = %SparkEx.Writer{df: df, partition_by: ["a"]}
 
-      assert_raise ArgumentError, ~r/partition_by columns should not be empty/, fn ->
-        SparkEx.Writer.partition_by(writer, [])
+      assert SparkEx.Writer.partition_by(writer, []).partition_by == []
+
+      assert_raise ArgumentError, ~r/list of column names/, fn ->
+        SparkEx.Writer.partition_by(writer, 5)
       end
     end
   end

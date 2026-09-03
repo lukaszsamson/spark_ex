@@ -1555,13 +1555,14 @@ defmodule SparkEx.DataFrame do
 
   - `:num_rows` — number of rows (default: 20)
   - `:truncate` — column width truncation (default: 20)
+  - `:timeout` — gRPC call timeout in ms (default: 60_000)
   """
   @spec html_string(t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def html_string(%__MODULE__{} = df, opts \\ []) do
     with {:ok, num_rows} <- fetch_non_neg_integer_option(opts, :num_rows, 20),
          {:ok, truncate} <- fetch_non_neg_integer_option(opts, :truncate, 20) do
       html_plan = {:html_string, df.plan, num_rows, truncate}
-      SparkEx.Session.execute_show(df.session, html_plan)
+      SparkEx.Session.execute_show(df.session, html_plan, show_request_opts(df, opts))
     end
   end
 
@@ -1917,7 +1918,9 @@ defmodule SparkEx.DataFrame do
   def collect(df_or_other, opts \\ [])
 
   def collect(%__MODULE__{} = df, opts) do
-    SparkEx.Session.execute_collect(df.session, df.plan, merge_tags(df, opts))
+    with :ok <- validate_map_format_option(opts) do
+      SparkEx.Session.execute_collect(df.session, df.plan, merge_tags(df, opts))
+    end
   end
 
   def collect(other, _opts) do
@@ -2023,6 +2026,8 @@ defmodule SparkEx.DataFrame do
 
   ## Options
 
+    * `:map_format` — `:key_value_pairs` (default) or `:map`; see `collect/2`.
+      Applied per batch as rows stream in.
     * `:on_metrics` — 1-arity callback invoked once on stream finalize
       with the merged observed/execution metrics map
       `%{observed_metrics: ..., execution_metrics: ...}`. Mirrors the
@@ -2031,24 +2036,32 @@ defmodule SparkEx.DataFrame do
   """
   @spec to_local_iterator(t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
   def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
-    case SparkEx.Session.execute_plan_reattachable_stream(
-           df.session,
-           df.plan,
-           merge_tags(df, opts)
-         ) do
-      {:ok, stream} ->
-        # Pass the underlying %Session{} struct so streaming gRPC errors flow
-        # through Errors.from_grpc_error/2 the same way collected results do.
-        # The decoder applies the same session-id integrity checks used by
-        # the collected-result path, surfacing drift as `{:error, _}`
-        # elements instead of merging foreign-session rows silently.
-        session_state = fetch_session_state(df.session)
-        decoder_opts = Keyword.take(opts, [:on_metrics])
+    with :ok <- validate_map_format_option(opts),
+         {:ok, stream} <-
+           SparkEx.Session.execute_plan_reattachable_stream(
+             df.session,
+             df.plan,
+             merge_tags(df, opts)
+           ) do
+      # Pass the underlying %Session{} struct so streaming gRPC errors flow
+      # through Errors.from_grpc_error/2 the same way collected results do.
+      # The decoder applies the same session-id integrity checks used by
+      # the collected-result path, surfacing drift as `{:error, _}`
+      # elements instead of merging foreign-session rows silently.
+      session_state = fetch_session_state(df.session)
+      decoder_opts = Keyword.take(opts, [:on_metrics, :map_format])
 
-        {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state, decoder_opts)}
+      {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state, decoder_opts)}
+    end
+  end
 
-      {:error, _} = error ->
-        error
+  @map_formats [:key_value_pairs, :map]
+
+  defp validate_map_format_option(opts) do
+    case Keyword.fetch(opts, :map_format) do
+      :error -> :ok
+      {:ok, format} when format in @map_formats -> :ok
+      {:ok, other} -> {:error, {:invalid_option, {:map_format, other}}}
     end
   end
 
@@ -2060,10 +2073,14 @@ defmodule SparkEx.DataFrame do
 
   @doc """
   Returns the row count of the DataFrame.
+
+  ## Options
+
+  - `:timeout` — gRPC call timeout in ms (default: 60_000)
   """
-  @spec count(t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def count(%__MODULE__{} = df) do
-    SparkEx.Session.execute_count(df.session, df.plan)
+  @spec count(t(), keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def count(%__MODULE__{} = df, opts \\ []) do
+    SparkEx.Session.execute_count(df.session, df.plan, merge_tags(df, opts))
   end
 
   @doc """
@@ -2217,6 +2234,7 @@ defmodule SparkEx.DataFrame do
   - `:num_rows` — number of rows to show (default: 20)
   - `:truncate` — column width truncation (default: 20, 0 for no truncation)
   - `:vertical` — vertical display format (default: false)
+  - `:timeout` — gRPC call timeout in ms (default: 60_000)
   """
   @spec show(t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def show(%__MODULE__{} = df, opts \\ []) do
@@ -2224,7 +2242,7 @@ defmodule SparkEx.DataFrame do
          {:ok, truncate} <- normalize_show_truncate_option(opts),
          {:ok, vertical} <- fetch_boolean_option(opts, :vertical, false) do
       show_plan = {:show_string, df.plan, num_rows, truncate, vertical}
-      SparkEx.Session.execute_show(df.session, show_plan)
+      SparkEx.Session.execute_show(df.session, show_plan, show_request_opts(df, opts))
     end
   end
 
@@ -2509,6 +2527,10 @@ defmodule SparkEx.DataFrame do
 
   defp merge_tags(%__MODULE__{tags: []}, opts), do: opts
   defp merge_tags(%__MODULE__{tags: tags}, opts), do: Keyword.put(opts, :tags, tags)
+
+  # show/html_string formatting options stay client-side; only the request
+  # options (timeout + DataFrame tags) travel to the Session.
+  defp show_request_opts(df, opts), do: merge_tags(df, Keyword.take(opts, [:timeout]))
 
   defp normalize_hint_parameters(parameters) do
     parameters

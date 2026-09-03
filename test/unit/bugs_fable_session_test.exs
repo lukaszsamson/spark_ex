@@ -259,12 +259,11 @@ defmodule SparkEx.Unit.BugsFableSessionTest do
       assert %Writer{partition_by: ["a", "b"]} = Writer.partition_by(writer, ["a", "b"])
     end
 
-    test "empty list still raises" do
+    test "empty list clears the partitioning (T-51)" do
       empty = Enum.filter(["x"], fn _ -> false end)
 
-      assert_raise ArgumentError, ~r/should not be empty/, fn ->
-        Writer.partition_by(%Writer{}, empty)
-      end
+      assert %Writer{partition_by: []} =
+               Writer.partition_by(%Writer{partition_by: ["a"]}, empty)
     end
   end
 
@@ -288,10 +287,8 @@ defmodule SparkEx.Unit.BugsFableSessionTest do
       assert :ok = SparkEx.clear_progress_handlers(name)
     end
 
-    test "is_stopped/1 raises a clear error for an unknown name" do
-      assert_raise ArgumentError, ~r/no process associated/, fn ->
-        SparkEx.is_stopped(:fable45_nonexistent_name)
-      end
+    test "is_stopped/1 reports an unknown name as stopped (T-45)" do
+      assert SparkEx.is_stopped(:fable45_nonexistent_name)
     end
   end
 

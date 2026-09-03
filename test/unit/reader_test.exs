@@ -140,15 +140,27 @@ defmodule SparkEx.ReaderTest do
     end
 
     test "raises when a convenience option is also given inside :options" do
-      assert_raise ArgumentError, ~r/multiple values for option "header"/, fn ->
+      assert_raise ArgumentError, ~r/multiple values for keyword argument\(s\) "header"/, fn ->
         Reader.csv(self(), "/data/file.csv", header: true, options: %{"header" => "false"})
       end
     end
 
-    test "raises when :separator and :sep are both given" do
-      assert_raise ArgumentError, ~r/multiple values for option "sep"/, fn ->
+    test "raises when :separator and :sep disagree" do
+      assert_raise ArgumentError, ~r/conflicting :sep and :separator/, fn ->
         Reader.csv(self(), "/data/file.csv", separator: "|", sep: ",")
       end
+    end
+
+    test "accepts :separator and :sep when they agree (T-22)" do
+      df = Reader.csv(self(), "/data/file.csv", separator: "|", sep: "|")
+      assert {:read_data_source, "csv", _, nil, %{"sep" => "|"}} = unwrap_plan(df)
+    end
+
+    test "accepts a keyword list for :options (T-22)" do
+      df = Reader.csv(self(), "/data/file.csv", header: true, options: [multi_line: true])
+
+      assert {:read_data_source, "csv", _, nil, %{"header" => "true", "multiLine" => "true"}} =
+               unwrap_plan(df)
     end
   end
 
@@ -157,7 +169,7 @@ defmodule SparkEx.ReaderTest do
       assert_raise ArgumentError, ~r/multiple values for keyword argument/, fn ->
         Reader.json(self(), "/data/file.json",
           multi_line: true,
-          options: %{"multi_line" => "false"}
+          options: %{"multiLine" => "false"}
         )
       end
     end
@@ -177,7 +189,7 @@ defmodule SparkEx.ReaderTest do
         )
 
       assert {:read_data_source, "json", ["/data/file.json"], nil,
-              %{"multi_line" => "true", "mode" => "PERMISSIVE"}} = unwrap_plan(df)
+              %{"multiLine" => "true", "mode" => "PERMISSIVE"}} = unwrap_plan(df)
     end
   end
 end

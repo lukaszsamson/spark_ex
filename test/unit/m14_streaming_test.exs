@@ -726,7 +726,7 @@ defmodule SparkEx.M14.StreamingTest do
         )
 
       assert {:read_data_source_streaming, "json", ["/data/stream"], nil, opts} = unwrap_plan(df)
-      assert opts["multi_line"] == "true"
+      assert opts["multiLine"] == "true"
       assert opts["mode"] == "PERMISSIVE"
     end
 
@@ -895,11 +895,9 @@ defmodule SparkEx.M14.StreamingTest do
       assert writer.partition_by == ["year", "month"]
     end
 
-    test "partition_by raises on empty list" do
-      assert_raise ArgumentError, "partition_by columns should not be empty", fn ->
-        %SparkEx.StreamWriter{df: nil}
-        |> SparkEx.StreamWriter.partition_by([])
-      end
+    test "partition_by with an empty list clears the columns (T-51)" do
+      writer = %SparkEx.StreamWriter{df: nil, partition_by: ["a"]}
+      assert SparkEx.StreamWriter.partition_by(writer, []).partition_by == []
     end
 
     test "cluster_by sets columns" do
@@ -918,11 +916,9 @@ defmodule SparkEx.M14.StreamingTest do
       assert writer.cluster_by == ["region"]
     end
 
-    test "cluster_by raises on empty list" do
-      assert_raise ArgumentError, "cluster_by columns should not be empty", fn ->
-        %SparkEx.StreamWriter{df: nil}
-        |> SparkEx.StreamWriter.cluster_by([])
-      end
+    test "cluster_by with an empty list clears the columns (T-51)" do
+      writer = %SparkEx.StreamWriter{df: nil, cluster_by: ["a"]}
+      assert SparkEx.StreamWriter.cluster_by(writer, []).cluster_by == []
     end
 
     test "option with nil value is skipped" do

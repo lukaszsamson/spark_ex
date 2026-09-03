@@ -50,7 +50,8 @@ defmodule SparkEx.StreamReader do
         SparkEx.Types.struct_field("name", :string)
       ]))
   """
-  @spec schema(t(), String.t() | SparkEx.Types.struct_type()) :: t()
+  @spec schema(t(), String.t() | SparkEx.Types.struct_type() | SparkEx.Types.data_type_proto()) ::
+          t()
   def schema(%__MODULE__{} = reader, schema_ddl) when is_binary(schema_ddl) do
     %{reader | schema: schema_ddl}
   end
@@ -59,13 +60,20 @@ defmodule SparkEx.StreamReader do
     %{reader | schema: SparkEx.Types.to_json(struct_type)}
   end
 
-  @spec option(t(), String.t(), term()) :: t()
-  def option(%__MODULE__{} = reader, key, nil) when is_binary(key) do
-    %{reader | options: Map.delete(reader.options, key)}
+  def schema(%__MODULE__{} = reader, %Spark.Connect.DataType{} = schema) do
+    %{reader | schema: SparkEx.Types.data_type_to_json(schema)}
   end
 
-  def option(%__MODULE__{} = reader, key, value) when is_binary(key) do
-    %{reader | options: Map.put(reader.options, key, normalize_option_value(value))}
+  @spec option(t(), String.t(), term()) :: t()
+  def option(%__MODULE__{} = reader, key, nil) when is_binary(key) or is_atom(key) do
+    %{reader | options: Map.delete(reader.options, normalize_option_key(key))}
+  end
+
+  def option(%__MODULE__{} = reader, key, value) when is_binary(key) or is_atom(key) do
+    %{
+      reader
+      | options: Map.put(reader.options, normalize_option_key(key), normalize_option_value(value))
+    }
   end
 
   @spec options(t(), map() | keyword()) :: t()
@@ -75,7 +83,7 @@ defmodule SparkEx.StreamReader do
 
     {drops, sets} =
       Enum.reduce(pairs, {[], []}, fn {k, v}, {drops, sets} ->
-        key = to_string(k)
+        key = normalize_option_key(k)
         if is_nil(v), do: {[key | drops], sets}, else: {drops, [{key, v} | sets]}
       end)
 
@@ -132,8 +140,9 @@ defmodule SparkEx.StreamReader do
           raise ArgumentError, "stream load path must be a string, got: #{inspect(other)}"
       end
 
-    format = Keyword.get(opts, :format, reader.format)
-    schema = opts |> Keyword.get(:schema, reader.schema) |> normalize_schema()
+    # PySpark only overrides when the argument is non-None.
+    format = Keyword.get(opts, :format) || reader.format
+    schema = (Keyword.get(opts, :schema) || reader.schema) |> normalize_schema()
     call_time_options = merge_source_options(opts, [:format, :schema])
     merged_options = Map.merge(reader.options, call_time_options)
 
@@ -152,19 +161,9 @@ defmodule SparkEx.StreamReader do
 
   @spec rate(GenServer.server(), keyword()) :: DataFrame.t()
   def rate(session, opts \\ []) do
-    options = Keyword.get(opts, :options, %{})
-
-    extra =
-      opts
-      |> Keyword.drop([:options])
-      |> Enum.reduce(options, fn
-        {:rows_per_second, v}, acc -> Map.put(acc, "rowsPerSecond", to_string(v))
-        {:num_partitions, v}, acc -> Map.put(acc, "numPartitions", to_string(v))
-        {:ramp_up_time, v}, acc -> Map.put(acc, "rampUpTime", to_string(v))
-        {k, v}, acc -> Map.put(acc, to_string(k), to_string(v))
-      end)
-
-    options = normalize_options(extra)
+    # :rows_per_second/:num_partitions/:ramp_up_time normalize to their camelCase
+    # Spark names through the shared key normalizer.
+    options = merge_source_options(opts, [])
 
     DataFrame.new(session, {:read_data_source_streaming, "rate", [], nil, options})
   end
@@ -224,31 +223,28 @@ defmodule SparkEx.StreamReader do
   end
 
   defp merge_source_options(opts, reserved_keys) do
-    nested_options = opts |> Keyword.get(:options, %{}) |> normalize_options()
-
-    top_level_options =
-      opts
-      |> Keyword.drop([:options | reserved_keys])
-      |> normalize_options()
-
-    Map.merge(top_level_options, nested_options)
+    SparkEx.Internal.OptionUtils.merge_source_options(opts, reserved_keys)
   end
 
   defp normalize_schema(nil), do: nil
   defp normalize_schema(schema) when is_binary(schema), do: schema
   defp normalize_schema({:struct, _} = schema), do: SparkEx.Types.to_json(schema)
 
+  defp normalize_schema(%Spark.Connect.DataType{} = schema),
+    do: SparkEx.Types.data_type_to_json(schema)
+
   defp normalize_schema(schema) do
     raise ArgumentError,
-          "schema must be a string or {:struct, fields} tuple, got: #{inspect(schema)}"
+          "schema must be a string, {:struct, fields} tuple, or Spark.Connect.DataType, " <>
+            "got: #{inspect(schema)}"
   end
 
-  defp normalize_options(opts) when is_list(opts) do
+  defp normalize_options(opts) do
     SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
   end
 
-  defp normalize_options(opts) when is_map(opts) do
-    SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
+  defp normalize_option_key(key) do
+    SparkEx.Internal.OptionUtils.normalize_option_key(key)
   end
 
   defp normalize_option_value(value) do

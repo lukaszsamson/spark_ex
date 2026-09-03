@@ -20,6 +20,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wave 3 triage fixes — Session plumbing and option handling** (see
+  `BUGS_TRIAGED.txt` T-11, T-13, T-14, T-22, T-23, T-39, T-44..T-46,
+  T-50..T-54):
+  - Out-of-band interrupts observe the server-side session id through the
+    same integrity check as every other RPC: the first id learned via
+    `Interrupt` republishes the connection snapshot and a rotated id closes
+    the session (T-11).
+  - `map_format: :map` survives the unique-column and legacy collect retry
+    paths (T-13), is validated (`{:error, {:invalid_option, {:map_format, _}}}`
+    for typos) and is honoured by `to_local_iterator/2` (T-39).
+  - `DataFrame.count/2`, `show/2` and `html_string/2` forward DataFrame tags
+    and accept `:timeout` (T-14).
+  - Stream APIs no longer block behind a running execute when probing the
+    Session process (T-44); `Session.is_stopped/1` returns `true` for a
+    stopped session instead of exiting (T-45); tags are deduplicated (T-46).
+  - Reader/Writer/StreamReader/StreamWriter share one option-normalization
+    path: keyword-list `:options` no longer crash `Reader.csv/3` and
+    `StreamReader.rate/2`, equal `sep`/`separator` aliases are accepted,
+    duplicate top-level/nested options raise consistently in all four
+    builders (spelling-insensitively, so `multi_line:` and `"multiLine"`
+    collide), and lowercase snake_case atom keys such as `multi_line:` are
+    sent as Spark's camelCase names instead of being silently ignored
+    (T-22, T-23, T-52). Dotted, uppercase or otherwise non-snake_case atoms,
+    JDBC connection `properties` and `WriterV2` table properties are sent
+    verbatim. Singular `option/3` accepts atom keys; `Writer.jdbc/4` accepts
+    `properties:` like the reader.
+  - Explicit `format: nil` / `schema: nil` on `load/3` keep the builder's
+    value (T-50); `StreamWriter.option(key, nil)` clears the option and `[]`
+    clears partition/bucket/cluster configuration (T-51).
+  - `StreamReader.schema/2` accepts a protobuf `DataType`; the
+    non-partitioned `Reader.jdbc/4` accepts a `properties` map;
+    `Reader.table/3` rejects a `%Reader{}` passed as the session with a clear
+    error (T-52, T-53).
+  - Catalog database DDL quotes dotted names per component and alter
+    builders accept keyword-list properties (T-54).
+
 - **Wave 2 triage fixes — transport, retry and stream lifecycle** (see
   `BUGS_TRIAGED.txt` T-03, T-08, T-09, T-15..T-19, T-37, T-41..T-43):
   - Managed streams (streaming listener event streams) now release their

@@ -150,6 +150,10 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   ## Options
 
+    * `:map_format` — `:key_value_pairs` (default) keeps MAP columns as the
+      wire list of `%{"key" => k, "value" => v}` entries; `:map` converts
+      them to Elixir maps per batch using the wire schema (see
+      `SparkEx.DataFrame.collect/2`).
     * `:on_metrics` — 1-arity function invoked once when the stream is
       finalized with the merged observed/execution metrics map
       `%{observed_metrics: ..., execution_metrics: ...}`. Mirrors PySpark's
@@ -160,6 +164,7 @@ defmodule SparkEx.Connect.ResultDecoder do
   @spec rows_stream(Enumerable.t(), SparkEx.Session.t() | nil, keyword()) :: Enumerable.t()
   def rows_stream(stream, session \\ nil, opts \\ []) do
     on_metrics = Keyword.get(opts, :on_metrics)
+    map_format = Keyword.get(opts, :map_format, :key_value_pairs)
 
     Stream.transform(
       stream,
@@ -185,7 +190,7 @@ defmodule SparkEx.Connect.ResultDecoder do
               # Track the wire schema so UDT deserializers (FABLE-15) can be
               # applied to each batch's rows on the to_local_iterator path.
               state = if resp.schema, do: %{state | schema: resp.schema}, else: state
-              handle_rows_stream_response(resp, state)
+              handle_rows_stream_response(resp, state, map_format)
 
             {:error, reason} ->
               emit_rows_stream_error(reason, state)
@@ -213,6 +218,9 @@ defmodule SparkEx.Connect.ResultDecoder do
       end
     )
   end
+
+  defp maybe_convert_map_columns(rows, schema, :map), do: convert_map_columns(rows, schema)
+  defp maybe_convert_map_columns(rows, _schema, _format), do: rows
 
   defp merge_metrics_from_response(state, %ExecutePlanResponse{} = resp) do
     %{
@@ -244,11 +252,14 @@ defmodule SparkEx.Connect.ResultDecoder do
     :ok
   end
 
-  defp handle_rows_stream_response(%ExecutePlanResponse{} = resp, state) do
+  defp handle_rows_stream_response(%ExecutePlanResponse{} = resp, state, map_format) do
     case resp.response_type do
       {:arrow_batch, %ExecutePlanResponse.ArrowBatch{} = batch} ->
         case handle_arrow_batch_rows_stream(state, batch) do
           {:ok, rows, next_state} ->
+            # `map_format: :map` (DataFrame.to_local_iterator/2) converts each
+            # batch against the tracked wire schema, mirroring collect/2.
+            rows = maybe_convert_map_columns(rows, next_state.schema, map_format)
             {Enum.map(rows, &{:ok, &1}), next_state}
 
           {:error, reason} ->
@@ -1419,9 +1430,13 @@ defmodule SparkEx.Connect.ResultDecoder do
 
     fn
       entries when is_list(entries) ->
-        Map.new(entries, fn
-          %{"key" => k, "value" => v} -> {key_fun.(k), value_fun.(v)}
-        end)
+        # Only convert a genuine wire map; a schema/value mismatch (e.g. a
+        # duplicate-named column of another type) degrades to the raw value.
+        if Enum.all?(entries, &match?(%{"key" => _, "value" => _}, &1)) do
+          Map.new(entries, fn %{"key" => k, "value" => v} -> {key_fun.(k), value_fun.(v)} end)
+        else
+          entries
+        end
 
       other ->
         other
