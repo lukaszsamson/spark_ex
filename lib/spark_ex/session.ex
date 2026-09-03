@@ -659,6 +659,11 @@ defmodule SparkEx.Session do
   @doc """
   Creates a DataFrame from local data.
 
+  Accepted row shapes: an `Explorer.DataFrame`, a list of maps, a list of
+  keyword lists (treated like map rows), a list of tuples or lists
+  (positional; requires a schema or column names), or a list of scalars
+  (single-column rows).
+
   For small data (under the cache threshold), the data is embedded directly
   in the plan as a `LocalRelation`. For larger data, the Arrow IPC bytes
   are split into one or more chunks, each uploaded to the server via
@@ -791,7 +796,7 @@ defmodule SparkEx.Session do
   """
   @spec interrupt_all(GenServer.server()) :: {:ok, [String.t()]} | {:error, term()}
   def interrupt_all(session) do
-    GenServer.call(session, {:interrupt, :all})
+    interrupt(session, :all)
   end
 
   @doc """
@@ -801,7 +806,7 @@ defmodule SparkEx.Session do
   """
   @spec interrupt_tag(GenServer.server(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
   def interrupt_tag(session, tag) when is_binary(tag) do
-    GenServer.call(session, {:interrupt, {:tag, tag}})
+    interrupt(session, {:tag, tag})
   end
 
   @doc """
@@ -812,8 +817,36 @@ defmodule SparkEx.Session do
   @spec interrupt_operation(GenServer.server(), String.t()) ::
           {:ok, [String.t()]} | {:error, term()}
   def interrupt_operation(session, operation_id) when is_binary(operation_id) do
-    GenServer.call(session, {:interrupt, {:operation_id, operation_id}})
+    interrupt(session, {:operation_id, operation_id})
   end
+
+  # Interrupt must not queue behind a running execute on the Session
+  # GenServer (its whole purpose is to cancel one), so it runs from the
+  # caller's process against the published connection snapshot. Sessions
+  # without a snapshot (fake test sessions, released/closed sessions) fall
+  # back to the GenServer call and get its lifecycle error replies.
+  defp interrupt(session, type) do
+    case SparkEx.Internal.SessionSnapshot.fetch(session) do
+      {:ok, snapshot} ->
+        case Client.interrupt(snapshot, type) do
+          {:ok, interrupted_ids, server_side_session_id} ->
+            observe_server_session_id(session, server_side_session_id)
+            {:ok, interrupted_ids}
+
+          {:error, _} = error ->
+            error
+        end
+
+      :error ->
+        GenServer.call(session, {:interrupt, type})
+    end
+  end
+
+  defp observe_server_session_id(_session, nil), do: :ok
+  defp observe_server_session_id(_session, ""), do: :ok
+
+  defp observe_server_session_id(session, id),
+    do: GenServer.cast(session, {:update_server_side_session_id, id})
 
   @doc """
   Stops the session process. Calls `ReleaseSession` if not already released,
@@ -878,6 +911,8 @@ defmodule SparkEx.Session do
         preferred_arrow_chunk_size: preferred_arrow_chunk_size,
         retry_policies: retry_policies
       }
+
+      publish_connection_snapshot(state)
 
       {:ok, state}
     else
@@ -987,6 +1022,8 @@ defmodule SparkEx.Session do
     if state.released do
       {:reply, :ok, state}
     else
+      SparkEx.Internal.SessionSnapshot.delete(self())
+
       case Client.release_session(state) do
         {:ok, server_side_session_id} ->
           state = maybe_update_server_session(state, server_side_session_id)
@@ -1070,7 +1107,7 @@ defmodule SparkEx.Session do
 
           case maybe_execute_collect_with_json_projection(state, plan, proto_plan, opts) do
             {:ok, result, state} ->
-              reply_collect_result(result, state)
+              reply_collect_result(result, state, opts, proto_plan)
 
             {:no_fallback, state} ->
               execute_collect_no_fallback(state, plan, proto_plan, opts)
@@ -1175,6 +1212,9 @@ defmodule SparkEx.Session do
             {:ok, result} ->
               reply_execute_count_result(result, state)
 
+            {:error, %SparkEx.Error.Remote{} = remote} = error ->
+              reply_count_with_legacy_fallback(state, plan, remote, error)
+
             {:error, _} = error ->
               reply_error(error, state)
           end
@@ -1194,6 +1234,9 @@ defmodule SparkEx.Session do
           {:ok, schema, server_side_session_id} ->
             state = maybe_update_server_session(state, server_side_session_id)
             {:reply, {:ok, schema}, state}
+
+          {:error, %SparkEx.Error.Remote{} = remote} = error ->
+            reply_analyze_schema_with_legacy_fallback(state, plan, remote, error)
 
           {:error, _} = error ->
             reply_error(error, state)
@@ -1703,7 +1746,7 @@ defmodule SparkEx.Session do
         {:ok, result, state} =
           maybe_retry_collect_with_json_projection(state, plan, proto_plan, opts, result)
 
-        reply_collect_result(result, state)
+        reply_collect_result(result, state, opts, proto_plan)
 
       {:error, {:arrow_decode_failed, _reason}} = error ->
         execute_collect_retry_unique_columns(state, plan, proto_plan, opts, error)
@@ -1721,7 +1764,7 @@ defmodule SparkEx.Session do
       {:ok, result, state} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
         {result, state} = maybe_decode_retry_result_rows(state, plan, proto_plan, result)
-        reply_collect_result(result, state)
+        reply_collect_result(result, state, opts, proto_plan)
 
       {:error, state} ->
         reply_error(error, state)
@@ -1732,17 +1775,41 @@ defmodule SparkEx.Session do
     case retry_collect_with_legacy_fallbacks(state, plan, opts, remote) do
       {:ok, result, state} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
-        reply_collect_result(result, state)
+        reply_collect_result(result, state, opts)
 
       :error ->
         reply_error(error, state)
     end
   end
 
-  defp reply_collect_result(result, state) do
+  defp reply_collect_result(result, state, opts, proto_plan \\ nil) do
     state = %{state | last_execution_metrics: result.execution_metrics}
     SparkEx.Observation.store_observed_metrics(result.observed_metrics, state.session_id)
-    {:reply, {:ok, result.rows}, state}
+
+    rows =
+      case Keyword.get(opts, :map_format, :key_value_pairs) do
+        :map ->
+          # Analyze the original plan for the logical schema (only when the
+          # caller opted in): ExecutePlanResponse.schema is optional AND may
+          # describe a JSON-projection fallback (map columns typed STRING)
+          # rather than the logical types.
+          schema = fetch_schema_for_map_format(state, proto_plan) || result.schema
+          SparkEx.Connect.ResultDecoder.convert_map_columns(result.rows, schema)
+
+        _ ->
+          result.rows
+      end
+
+    {:reply, {:ok, rows}, state}
+  end
+
+  defp fetch_schema_for_map_format(_state, nil), do: nil
+
+  defp fetch_schema_for_map_format(state, proto_plan) do
+    case Client.analyze_schema(state, proto_plan) do
+      {:ok, schema, _server_side_session_id} -> schema
+      _ -> nil
+    end
   end
 
   defp reply_execute_count_result(result, state) do
@@ -1840,6 +1907,7 @@ defmodule SparkEx.Session do
   # and any observation rows this session accumulated (FABLE-29).
   defp cleanup_session_resources(state) do
     SparkEx.Internal.PlanIds.unregister_session(self())
+    SparkEx.Internal.SessionSnapshot.delete(self())
     SparkEx.Observation.clear_session(Map.get(state, :session_id))
     :ok
   end
@@ -2199,6 +2267,47 @@ defmodule SparkEx.Session do
     end
   end
 
+  # analyze_schema shares the UNPARSED legacy fallback with collect/count so
+  # DataFrame.schema/dtypes work on {:parse, ...} plans with string schemas on
+  # Spark 4.x (which rejects the Unparsed DataType).
+  defp reply_analyze_schema_with_legacy_fallback(state, plan, remote, error) do
+    with :legacy_unparsed <- classify_legacy_recovery_strategy(remote),
+         {:ok, rewritten} <- rewrite_parse_collect_plan(state, plan),
+         {{proto_plan, counter}, nil} <- safe_encode(rewritten, state.plan_id_counter),
+         state = %{state | plan_id_counter: counter},
+         {:ok, schema, server_side_session_id} <- Client.analyze_schema(state, proto_plan) do
+      {:reply, {:ok, schema}, maybe_update_server_session(state, server_side_session_id)}
+    else
+      _ -> reply_error(error, state)
+    end
+  end
+
+  defp reply_count_with_legacy_fallback(state, plan, remote, error) do
+    case retry_count_with_legacy_parse_rewrite(state, plan, remote) do
+      {:ok, result, state} -> reply_execute_count_result(result, state)
+      :error -> reply_error(error, state)
+    end
+  end
+
+  # count/1 shares the UNPARSED legacy fallback with collect: Spark 4.x
+  # rejects the Unparsed schema on {:parse, ...} plans, so rewrite the parse
+  # node into from_csv/from_json projections and retry the count.
+  defp retry_count_with_legacy_parse_rewrite(state, plan, remote) do
+    with :legacy_unparsed <- classify_legacy_recovery_strategy(remote),
+         {:ok, rewritten} <- rewrite_parse_collect_plan(state, plan),
+         {{proto_plan, counter}, nil} <- safe_encode_count(rewritten, state.plan_id_counter),
+         {:ok, result} <-
+           Client.execute_plan(
+             %{state | plan_id_counter: counter},
+             proto_plan,
+             merge_session_tags([], state.tags)
+           ) do
+      {:ok, result, %{state | plan_id_counter: counter}}
+    else
+      _ -> :error
+    end
+  end
+
   defp retry_collect_with_legacy_fallbacks(state, plan, opts, %SparkEx.Error.Remote{} = remote) do
     case classify_legacy_recovery_strategy(remote) do
       :legacy_grouping_sets ->
@@ -2277,6 +2386,7 @@ defmodule SparkEx.Session do
       &rewrite_transpose_collect_plan/1,
       &rewrite_table_function_collect_plan/1,
       &rewrite_as_of_join_collect_plan/1,
+      &rewrite_lateral_join_collect_plan/1,
       &rewrite_subquery_collect_plan/1
     ]
 
@@ -2295,6 +2405,12 @@ defmodule SparkEx.Session do
       end
     end)
   end
+
+  # DataFrame plans carry a {:plan_id, n, inner} envelope (added for
+  # dataframe-column resolution); the legacy rewriters below match on the
+  # bare plan shapes, so unwrap at every nesting level before matching.
+  defp rewrite_transpose_collect_plan({:plan_id, _id, inner}),
+    do: rewrite_transpose_collect_plan(inner)
 
   defp rewrite_transpose_collect_plan({:transpose, child_plan, index_columns}) do
     case transpose_emulation_plan(child_plan, index_columns) do
@@ -2317,6 +2433,9 @@ defmodule SparkEx.Session do
 
   defp rewrite_transpose_collect_plan(_plan), do: :error
 
+  defp rewrite_table_function_collect_plan({:plan_id, _id, inner}),
+    do: rewrite_table_function_collect_plan(inner)
+
   defp rewrite_table_function_collect_plan({:table_valued_function, function_name, arg_exprs})
        when is_binary(function_name) and is_list(arg_exprs) do
     with {:ok, args_sql} <- expr_list_to_sql(arg_exprs) do
@@ -2332,6 +2451,21 @@ defmodule SparkEx.Session do
   end
 
   defp rewrite_table_function_collect_plan(_plan), do: :error
+
+  # Spark 3.5 servers don't know the LateralJoin relation ("Expected Relation
+  # to be set, but is empty."). Downgrade to a regular join — correct only for
+  # correlation-free right sides, which is all a 3.5 server can express anyway.
+  defp rewrite_lateral_join_collect_plan({:plan_id, _id, inner}),
+    do: rewrite_lateral_join_collect_plan(inner)
+
+  defp rewrite_lateral_join_collect_plan({:lateral_join, left_plan, right_plan, cond_expr, type}) do
+    {:ok, {:join, left_plan, right_plan, cond_expr, type, []}}
+  end
+
+  defp rewrite_lateral_join_collect_plan(_plan), do: :error
+
+  defp rewrite_as_of_join_collect_plan({:plan_id, _id, inner}),
+    do: rewrite_as_of_join_collect_plan(inner)
 
   defp rewrite_as_of_join_collect_plan(
          {:as_of_join, left_plan, right_plan, _left_as_of, _right_as_of, join_expr, using_columns,
@@ -2378,6 +2512,9 @@ defmodule SparkEx.Session do
   end
 
   defp transpose_emulation_plan(_child_plan, _index_columns), do: :error
+
+  defp rewrite_grouping_sets_collect_plan({:plan_id, _id, inner}),
+    do: rewrite_grouping_sets_collect_plan(inner)
 
   defp rewrite_grouping_sets_collect_plan({:sort, child_plan, sort_orders}) do
     with {:ok, rewritten_child} <- rewrite_grouping_sets_collect_plan(child_plan) do
@@ -2460,10 +2597,18 @@ defmodule SparkEx.Session do
     if changed?, do: {:ok, rewritten}, else: :error
   end
 
-  defp rewrite_parse_collect_plan(
-         state,
-         {:parse, child_plan, format, schema, options}
-       )
+  # Rewrites {:parse, ...} nodes anywhere in the plan tree (the parse
+  # relation may sit under filters/aggregates/joins, and every node is
+  # wrapped in a {:plan_id, n, inner} envelope). Returns :error when no
+  # parse node could be rewritten.
+  defp rewrite_parse_collect_plan(state, plan) do
+    case rewrite_parse_deep(state, plan) do
+      {rewritten, true} -> {:ok, rewritten}
+      {_plan, false} -> :error
+    end
+  end
+
+  defp rewrite_parse_deep(state, {:parse, child_plan, format, schema, options} = node)
        when format in [:csv, :json] do
     with {:ok, source_column} <- first_schema_column_name(state, child_plan),
          {:ok, parsed_field_names} <- parse_schema_field_names(state, schema),
@@ -2477,11 +2622,34 @@ defmodule SparkEx.Session do
            field_name}
         end)
 
-      {:ok, {:project, parsed_plan, projected_fields}}
+      {{:project, parsed_plan, projected_fields}, true}
+    else
+      _ -> rewrite_parse_walk(state, node)
     end
   end
 
-  defp rewrite_parse_collect_plan(_state, _plan), do: :error
+  defp rewrite_parse_deep(state, term) when is_tuple(term) or is_list(term),
+    do: rewrite_parse_walk(state, term)
+
+  defp rewrite_parse_deep(_state, term), do: {term, false}
+
+  defp rewrite_parse_walk(state, term) when is_tuple(term) do
+    {elements, changed?} = rewrite_parse_walk_list(state, Tuple.to_list(term))
+    {List.to_tuple(elements), changed?}
+  end
+
+  defp rewrite_parse_walk(state, term) when is_list(term),
+    do: rewrite_parse_walk_list(state, term)
+
+  defp rewrite_parse_walk_list(state, elements) do
+    Enum.map_reduce(elements, false, fn element, changed? ->
+      if changed? do
+        {element, changed?}
+      else
+        rewrite_parse_deep(state, element)
+      end
+    end)
+  end
 
   defp first_schema_column_name(state, plan) do
     with {{proto_plan, _counter}, nil} <- safe_encode(plan, 0),
@@ -3240,6 +3408,23 @@ defmodule SparkEx.Session do
       {nil, {:error, {:plan_encode_error, formatted}}}
   end
 
+  # Publishes the connection fields Interrupt needs so it can run from the
+  # caller's process while this GenServer is busy (see
+  # SparkEx.Internal.SessionSnapshot). Removed on release/close/terminate so
+  # the fast path falls back to the GenServer's lifecycle error replies.
+  defp publish_connection_snapshot(state) do
+    SparkEx.Internal.SessionSnapshot.put(self(), %{
+      channel: state.channel,
+      session_id: state.session_id,
+      server_side_session_id: state.server_side_session_id,
+      user_id: state.user_id,
+      client_type: state.client_type,
+      retry_policies: state.retry_policies
+    })
+
+    state
+  end
+
   defp maybe_update_server_session(state, nil), do: state
   defp maybe_update_server_session(state, ""), do: state
 
@@ -3248,8 +3433,11 @@ defmodule SparkEx.Session do
            id,
            state.server_side_session_id
          ) do
+      {:ok, ^id} when state.server_side_session_id == id ->
+        state
+
       {:ok, ^id} ->
-        %{state | server_side_session_id: id}
+        publish_connection_snapshot(%{state | server_side_session_id: id})
 
       {:ok, current} ->
         %{state | server_side_session_id: current}
@@ -3260,6 +3448,7 @@ defmodule SparkEx.Session do
             "(pinned=#{ctx.pinned}, got=#{ctx.got})"
         )
 
+        SparkEx.Internal.SessionSnapshot.delete(self())
         %{state | closed: true}
     end
   end
@@ -3277,6 +3466,7 @@ defmodule SparkEx.Session do
           "INVALID_HANDLE.SESSION_CHANGED (#{summarize_session_changed(error)})"
       )
 
+      SparkEx.Internal.SessionSnapshot.delete(self())
       %{state | closed: true}
     else
       state
@@ -3595,6 +3785,12 @@ defmodule SparkEx.Session do
       Enum.all?(data, &is_tuple/1) ->
         normalize_tuple_rows(data, schema)
 
+      # Keyword-list rows are the idiomatic Elixir analogue of PySpark dict
+      # rows; treat them as map rows (must come before the generic list arm,
+      # which would coerce them to tuples of `{key, value}` pairs).
+      Enum.all?(data, &keyword_row?/1) ->
+        normalize_list_data_and_schema(Enum.map(data, &Map.new/1), schema)
+
       # PySpark treats list rows like tuple rows (multi-column); coerce to tuples.
       Enum.all?(data, &is_list/1) ->
         tupled = Enum.map(data, &List.to_tuple/1)
@@ -3626,6 +3822,8 @@ defmodule SparkEx.Session do
       end
     end
   end
+
+  defp keyword_row?(row), do: row != [] and Keyword.keyword?(row)
 
   # Scalars that are not row-shaped (map / tuple / list). Struct values
   # also fall through here and are treated as single-column values.
@@ -4292,7 +4490,17 @@ defmodule SparkEx.Session do
   defp infer_single_type(v) when is_boolean(v), do: :boolean
   # PySpark infers Python int as LongType regardless of the value's bit-width
   # (python/pyspark/sql/types.py:_infer_type). Match that for parity even
-  # though Elixir integers can fit in narrower types.
+  # though Elixir integers can fit in narrower types. Values outside the
+  # 64-bit range would otherwise be shipped as-is and die server-side with an
+  # opaque MALFORMED_RECORD_IN_PARSING error.
+  defp infer_single_type(v)
+       when is_integer(v) and
+              (v < -9_223_372_036_854_775_808 or v > 9_223_372_036_854_775_807) do
+    raise ArgumentError,
+          "integer #{v} is out of range for Spark BIGINT (64-bit); " <>
+            "pass it as a Decimal (DECIMAL supports up to 38 digits) or a string"
+  end
+
   defp infer_single_type(v) when is_integer(v), do: :long
   defp infer_single_type(v) when is_float(v), do: :double
 

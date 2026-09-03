@@ -1079,7 +1079,10 @@ defmodule SparkEx.Connect.Client do
   - `{:tag, tag}` — interrupt operations matching the given tag
   - `{:operation_id, id}` — interrupt a specific operation by ID
   """
-  @spec interrupt(SparkEx.Session.t(), :all | {:tag, String.t()} | {:operation_id, String.t()}) ::
+  @spec interrupt(
+          SparkEx.Session.t() | SparkEx.Internal.SessionSnapshot.snapshot(),
+          :all | {:tag, String.t()} | {:operation_id, String.t()}
+        ) ::
           {:ok, [String.t()], String.t() | nil} | {:error, term()}
   def interrupt(session, type) do
     with {:ok, type} <- validate_interrupt_type(type) do

@@ -74,6 +74,11 @@ defmodule SparkEx.UDFRegistration do
   derive them from Elixir, so the caller is responsible for supplying
   them. There is no default.
 
+  Registration is lazy on the server: `:ok` means the command was accepted,
+  not that the payload is valid. Invalid `python_command` bytes only fail at
+  first use of the function (as a `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON`
+  error carrying the Python traceback).
+
   ## Parameters
 
   - `session` — the SparkEx session (GenServer reference).
@@ -128,6 +133,10 @@ defmodule SparkEx.UDFRegistration do
   `:python_ver` must match the runtime that produced the bytes in
   `python_command` — there is no portable way to derive it from Elixir,
   so the caller is responsible for supplying it. There is no default.
+
+  Registration is lazy on the server: `:ok` means the command was accepted,
+  not that the payload is valid. Invalid `python_command` bytes only fail at
+  first use of the data source (as a `PYTHON_DATA_SOURCE_ERROR`).
 
   ## Parameters
 

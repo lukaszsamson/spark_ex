@@ -34,6 +34,11 @@ defmodule SparkEx.StreamingQueryListener do
     * `:data` — event data as a parsed JSON map, or the raw JSON string
       if decoding fails (`map() | String.t()`)
     * `:raw_json` — the original JSON string from the server
+
+  Note the shape of `:data` mirrors the server's JSON and differs per event
+  type: `:started` and `:terminated` events are flat maps (keys like `"id"`,
+  `"runId"`, `"name"`), while `:progress` events nest the report under a
+  `"progress"` key — read it as `event.data["progress"]`.
   """
 
   @type event :: %{

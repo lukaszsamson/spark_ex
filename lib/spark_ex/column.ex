@@ -374,40 +374,52 @@ defmodule SparkEx.Column do
 
   # ── Sort ordering ──
 
-  @doc "Sort ascending (nulls first by default)"
-  @spec asc(t()) :: t()
-  def asc(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:sort_order, col.expr, :asc, :nulls_first}}
+  # PySpark's asc/desc accept both Column objects and column-name strings;
+  # mirror that here (atoms are accepted as name shorthand, matching other
+  # column-name call sites in the API).
+  defp to_sort_column(%__MODULE__{} = col), do: col
+
+  defp to_sort_column(name) when is_binary(name), do: %__MODULE__{expr: {:col, name}}
+
+  defp to_sort_column(name) when is_atom(name) and not is_nil(name) and not is_boolean(name),
+    do: %__MODULE__{expr: {:col, Atom.to_string(name)}}
+
+  @sort_col_doc "Accepts a Column or a column name (string/atom)."
+
+  @doc "Sort ascending (nulls first by default). #{@sort_col_doc}"
+  @spec asc(t() | String.t() | atom()) :: t()
+  def asc(col) do
+    %__MODULE__{expr: {:sort_order, to_sort_column(col).expr, :asc, :nulls_first}}
   end
 
-  @doc "Sort descending (nulls last by default)"
-  @spec desc(t()) :: t()
-  def desc(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:sort_order, col.expr, :desc, :nulls_last}}
+  @doc "Sort descending (nulls last by default). #{@sort_col_doc}"
+  @spec desc(t() | String.t() | atom()) :: t()
+  def desc(col) do
+    %__MODULE__{expr: {:sort_order, to_sort_column(col).expr, :desc, :nulls_last}}
   end
 
-  @doc "Sort ascending with nulls first"
-  @spec asc_nulls_first(t()) :: t()
-  def asc_nulls_first(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:sort_order, col.expr, :asc, :nulls_first}}
+  @doc "Sort ascending with nulls first. #{@sort_col_doc}"
+  @spec asc_nulls_first(t() | String.t() | atom()) :: t()
+  def asc_nulls_first(col) do
+    %__MODULE__{expr: {:sort_order, to_sort_column(col).expr, :asc, :nulls_first}}
   end
 
-  @doc "Sort ascending with nulls last"
-  @spec asc_nulls_last(t()) :: t()
-  def asc_nulls_last(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:sort_order, col.expr, :asc, :nulls_last}}
+  @doc "Sort ascending with nulls last. #{@sort_col_doc}"
+  @spec asc_nulls_last(t() | String.t() | atom()) :: t()
+  def asc_nulls_last(col) do
+    %__MODULE__{expr: {:sort_order, to_sort_column(col).expr, :asc, :nulls_last}}
   end
 
-  @doc "Sort descending with nulls first"
-  @spec desc_nulls_first(t()) :: t()
-  def desc_nulls_first(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:sort_order, col.expr, :desc, :nulls_first}}
+  @doc "Sort descending with nulls first. #{@sort_col_doc}"
+  @spec desc_nulls_first(t() | String.t() | atom()) :: t()
+  def desc_nulls_first(col) do
+    %__MODULE__{expr: {:sort_order, to_sort_column(col).expr, :desc, :nulls_first}}
   end
 
-  @doc "Sort descending with nulls last"
-  @spec desc_nulls_last(t()) :: t()
-  def desc_nulls_last(%__MODULE__{} = col) do
-    %__MODULE__{expr: {:sort_order, col.expr, :desc, :nulls_last}}
+  @doc "Sort descending with nulls last. #{@sort_col_doc}"
+  @spec desc_nulls_last(t() | String.t() | atom()) :: t()
+  def desc_nulls_last(col) do
+    %__MODULE__{expr: {:sort_order, to_sort_column(col).expr, :desc, :nulls_last}}
   end
 
   # ── Naming ──

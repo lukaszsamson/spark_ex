@@ -1384,6 +1384,90 @@ defmodule SparkEx.Connect.ResultDecoder do
     end)
   end
 
+  # Converts MAP-typed column values from the wire representation (a list of
+  # `%{"key" => k, "value" => v}` entries — polars/Arrow has no map type) into
+  # Elixir maps, recursively through arrays and structs. Used by collect's
+  # opt-in `map_format: :map`. Duplicate map keys collapse (last entry wins),
+  # matching PySpark's dict semantics.
+  @doc false
+  @spec convert_map_columns([map()], Spark.Connect.DataType.t() | term()) :: [map()]
+  def convert_map_columns(rows, %Spark.Connect.DataType{kind: {:struct, struct}}) do
+    converters =
+      struct.fields
+      |> Enum.flat_map(fn %Spark.Connect.DataType.StructField{name: name, data_type: dt} ->
+        case map_value_converter(dt) do
+          nil -> []
+          fun -> [{name, fun}]
+        end
+      end)
+      |> Map.new()
+
+    if map_size(converters) == 0 do
+      rows
+    else
+      Enum.map(rows, &apply_transforms_to_row(&1, converters))
+    end
+  end
+
+  def convert_map_columns(rows, _schema), do: rows
+
+  defp map_value_converter(%Spark.Connect.DataType{
+         kind: {:map, %Spark.Connect.DataType.Map{key_type: kt, value_type: vt}}
+       }) do
+    key_fun = map_value_converter(kt) || (&Function.identity/1)
+    value_fun = map_value_converter(vt) || (&Function.identity/1)
+
+    fn
+      entries when is_list(entries) ->
+        Map.new(entries, fn
+          %{"key" => k, "value" => v} -> {key_fun.(k), value_fun.(v)}
+        end)
+
+      other ->
+        other
+    end
+  end
+
+  defp map_value_converter(%Spark.Connect.DataType{
+         kind: {:array, %Spark.Connect.DataType.Array{element_type: et}}
+       }) do
+    case map_value_converter(et) do
+      nil ->
+        nil
+
+      fun ->
+        fn
+          list when is_list(list) -> Enum.map(list, fun)
+          other -> other
+        end
+    end
+  end
+
+  defp map_value_converter(%Spark.Connect.DataType{
+         kind: {:struct, %Spark.Connect.DataType.Struct{fields: fields}}
+       }) do
+    field_funs =
+      Enum.flat_map(fields, fn %Spark.Connect.DataType.StructField{name: name, data_type: dt} ->
+        case map_value_converter(dt) do
+          nil -> []
+          fun -> [{name, fun}]
+        end
+      end)
+
+    case field_funs do
+      [] ->
+        nil
+
+      funs ->
+        fn
+          %{} = struct_value -> apply_transforms_to_row(struct_value, Map.new(funs))
+          other -> other
+        end
+    end
+  end
+
+  defp map_value_converter(_), do: nil
+
   defp merge_observed_metrics(acc, nil), do: acc
 
   defp merge_observed_metrics(acc, observed_metrics) when is_list(observed_metrics) do

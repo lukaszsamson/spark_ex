@@ -5,6 +5,12 @@ defmodule SparkEx.MergeIntoWriter do
   Constructed via `SparkEx.DataFrame.merge_into/3`, configured with match
   actions, and executed with `merge/1`.
 
+  > #### Catalog requirement {: .warning}
+  >
+  > `MERGE INTO` needs a table format that supports row-level operations
+  > (Delta, Iceberg, ...). Tables in the default `spark_catalog` fail with
+  > "does not support MERGE INTO TABLE".
+
   ## Examples
 
       import SparkEx.Functions, only: [col: 1]

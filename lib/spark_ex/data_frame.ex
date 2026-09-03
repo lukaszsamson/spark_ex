@@ -518,14 +518,12 @@ defmodule SparkEx.DataFrame do
         %Column{expr: e} -> e
       end
 
-    join_plan =
-      if tvf_plan?(right.plan) do
-        {:join, left.plan, right.plan, cond_expr, canonical, []}
-      else
-        {:lateral_join, left.plan, right.plan, cond_expr, canonical}
-      end
-
-    update_plan(left, join_plan)
+    # Always encode a LateralJoin relation (PySpark parity) so outer column
+    # references in the right side (e.g. tvf.explode(col("arr")) against the
+    # left) resolve. Spark 3.5 servers lack the LateralJoin relation; the
+    # empty-relation legacy fallback in Session downgrades TVF laterals to a
+    # regular join there (which only supports correlation-free right sides).
+    update_plan(left, {:lateral_join, left.plan, right.plan, cond_expr, canonical})
   end
 
   @doc """
@@ -1901,6 +1899,13 @@ defmodule SparkEx.DataFrame do
   ## Options
 
   - `:timeout` — gRPC call timeout in ms (default: 60_000)
+  - `:map_format` — how MAP-typed column values are represented:
+    - `:key_value_pairs` (default) — the wire representation, a list of
+      `%{"key" => k, "value" => v}` entries. Preserves duplicate map keys
+      and roundtrips symmetrically through writers.
+    - `:map` — plain Elixir maps (recursively, including maps nested in
+      arrays/structs), mirroring PySpark's dicts. Duplicate map keys
+      collapse (last entry wins).
   """
   @spec collect(t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def collect(df_or_other, opts \\ [])
@@ -1918,7 +1923,8 @@ defmodule SparkEx.DataFrame do
   @doc """
   Collects rows into a map using the first column as key and second column as value.
 
-  The DataFrame must have exactly two columns.
+  The DataFrame must have exactly two columns with distinct names (rows decode
+  to maps keyed by column name, so duplicate names cannot be told apart).
   """
   @spec collect_as_map(t(), keyword()) :: {:ok, map()} | {:error, term()}
   def collect_as_map(%__MODULE__{} = df, opts \\ []) do
@@ -1935,6 +1941,9 @@ defmodule SparkEx.DataFrame do
       {:error, _} = error -> error
     end
   end
+
+  defp collect_as_map_columns([same_col, same_col]),
+    do: {:error, :collect_as_map_requires_distinct_column_names}
 
   defp collect_as_map_columns([key_col, value_col]), do: {:ok, [key_col, value_col]}
   defp collect_as_map_columns(_), do: {:error, :collect_as_map_requires_two_columns}
@@ -2474,6 +2483,11 @@ defmodule SparkEx.DataFrame do
         %SparkEx.Column{expr: e} ->
           e
 
+        # Table arguments (PySpark: DataFrame.asTable()) encode as subquery
+        # expressions carrying their partitioning/ordering spec.
+        %SparkEx.TableArg{} = table_arg ->
+          SparkEx.TableArg.to_subquery_expr(table_arg)
+
         # PySpark's tvf._fn applies _to_col(arg) (tvf.py:117-124), converting
         # bare strings to column references (via the same star handling as
         # col/1). Non-string scalars remain literals.
@@ -2491,9 +2505,6 @@ defmodule SparkEx.DataFrame do
 
   defp merge_tags(%__MODULE__{tags: []}, opts), do: opts
   defp merge_tags(%__MODULE__{tags: tags}, opts), do: Keyword.put(opts, :tags, tags)
-  defp tvf_plan?({:plan_id, _, inner}), do: tvf_plan?(inner)
-  defp tvf_plan?({:table_valued_function, _, _}), do: true
-  defp tvf_plan?(_), do: false
 
   defp normalize_hint_parameters(parameters) do
     parameters

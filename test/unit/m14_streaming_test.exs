@@ -234,7 +234,7 @@ defmodule SparkEx.M14.StreamingTest do
           assert write_op.trigger == {:once, true}
         end)
 
-      assert stderr =~ "Trigger.Once was removed in Spark 4"
+      assert stderr =~ "Trigger.Once is deprecated"
     end
 
     test "encodes with continuous trigger" do

@@ -108,7 +108,10 @@ defmodule SparkEx.BugsFableStreamingTest do
 
     test "StreamingTimeout.resolve converts positive seconds to ms" do
       assert {5_000, opts} = StreamingTimeout.resolve(timeout: 5)
-      assert Keyword.fetch!(opts, :timeout) == 5_000
+      # FAB-7: the call/gRPC deadline gets headroom on top of the server-side
+      # wait so a `terminated: false` reply at the wait boundary isn't lost to
+      # a client deadline race (previously surfaced as a :stream_error).
+      assert Keyword.fetch!(opts, :timeout) == 5_000 + 30_000
     end
 
     test "await_termination with no timeout passes :timeout = nil (not finite, not absent)" do
@@ -133,7 +136,8 @@ defmodule SparkEx.BugsFableStreamingTest do
       assert_receive {:recorded,
                       {:streaming_query_command, "q1", "r1", {:await_termination, 5_000}}, opts}
 
-      assert Keyword.fetch!(opts, :timeout) == 5_000
+      # Proto timeout stays at 5s; the call deadline carries FAB-7 headroom.
+      assert Keyword.fetch!(opts, :timeout) == 5_000 + 30_000
     end
 
     test "await_any_termination with no timeout passes :timeout = nil" do

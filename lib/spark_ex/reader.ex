@@ -224,11 +224,20 @@ defmodule SparkEx.Reader do
 
     options =
       csv_opts
-      |> Enum.reduce(extra_options, fn
-        {:header, v}, acc -> Map.put(acc, "header", to_string(v))
-        {:infer_schema, v}, acc -> Map.put(acc, "inferSchema", to_string(v))
-        {:separator, v}, acc -> Map.put(acc, "sep", normalize_option_value(v))
-        {:sep, v}, acc -> Map.put(acc, "sep", normalize_option_value(v))
+      |> Enum.map(fn
+        {:header, v} -> {"header", to_string(v)}
+        {:infer_schema, v} -> {"inferSchema", to_string(v)}
+        {:separator, v} -> {"sep", normalize_option_value(v)}
+        {:sep, v} -> {"sep", normalize_option_value(v)}
+      end)
+      |> Enum.reduce(extra_options, fn {name, v}, acc ->
+        if Map.has_key?(acc, name) do
+          raise ArgumentError,
+                "got multiple values for option #{inspect(name)} — pass it either as a " <>
+                  "top-level keyword OR inside :options, not both"
+        end
+
+        Map.put(acc, name, v)
       end)
 
     data_source(session, "csv", paths, Keyword.put(rest, :options, options))
@@ -457,6 +466,18 @@ defmodule SparkEx.Reader do
       opts
       |> Keyword.drop([:options | reserved_keys])
       |> normalize_options_reject_nil()
+
+    duplicates =
+      top_level_options
+      |> Map.keys()
+      |> Enum.filter(&Map.has_key?(nested_options, &1))
+
+    if duplicates != [] do
+      raise ArgumentError,
+            "got multiple values for keyword argument(s) " <>
+              Enum.map_join(duplicates, ", ", &inspect/1) <>
+              " — pass each option either as a top-level keyword OR inside :options, not both"
+    end
 
     Map.merge(top_level_options, nested_options)
   end

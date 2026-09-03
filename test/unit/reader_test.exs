@@ -138,6 +138,29 @@ defmodule SparkEx.ReaderTest do
 
       assert {:read_data_source, "csv", _, nil, %{"sep" => "|"}} = unwrap_plan(df)
     end
+
+    test "raises when a convenience option is also given inside :options" do
+      assert_raise ArgumentError, ~r/multiple values for option "header"/, fn ->
+        Reader.csv(self(), "/data/file.csv", header: true, options: %{"header" => "false"})
+      end
+    end
+
+    test "raises when :separator and :sep are both given" do
+      assert_raise ArgumentError, ~r/multiple values for option "sep"/, fn ->
+        Reader.csv(self(), "/data/file.csv", separator: "|", sep: ",")
+      end
+    end
+  end
+
+  describe "option collisions (FAB-3)" do
+    test "generic source raises when a top-level option is also in :options" do
+      assert_raise ArgumentError, ~r/multiple values for keyword argument/, fn ->
+        Reader.json(self(), "/data/file.json",
+          multi_line: true,
+          options: %{"multi_line" => "false"}
+        )
+      end
+    end
   end
 
   describe "json/2" do

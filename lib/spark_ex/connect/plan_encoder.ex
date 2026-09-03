@@ -3444,6 +3444,20 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
+  # Atoms (nil/true/false are handled above) encode as strings, matching
+  # create_dataframe's inference for atom values.
+  defp encode_literal(v) when is_atom(v) do
+    encode_literal(Atom.to_string(v))
+  end
+
+  defp encode_literal(other) do
+    raise ArgumentError,
+          "cannot encode #{inspect(other)} as a Spark literal; supported values: " <>
+            "nil, booleans, numbers, strings, atoms, Decimal, Date, Time, DateTime, " <>
+            "NaiveDateTime, lists, maps, and tagged tuples such as {:binary, bytes}, " <>
+            "{:decimal, string}, {:array, list}, {:map, map}, {:struct, fields}"
+  end
+
   defp encode_map_literal_expression(map) when map_size(map) == 0 do
     encode_expression({:fn, "map", [], false})
   end

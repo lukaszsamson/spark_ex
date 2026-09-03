@@ -142,6 +142,25 @@ defmodule SparkEx.ColumnTest do
       result = Column.desc_nulls_last(Functions.col("x"))
       assert %Column{expr: {:sort_order, {:col, "x"}, :desc, :nulls_last}} = result
     end
+
+    test "asc/desc accept column-name strings (L1/FAB-12)" do
+      assert %Column{expr: {:sort_order, {:col, "x"}, :asc, :nulls_first}} = Column.asc("x")
+      assert %Column{expr: {:sort_order, {:col, "x"}, :desc, :nulls_last}} = Column.desc("x")
+
+      assert %Column{expr: {:sort_order, {:col, "x"}, :desc, :nulls_first}} =
+               Column.desc_nulls_first("x")
+
+      assert %Column{expr: {:sort_order, {:col, "x"}, :asc, :nulls_last}} =
+               Column.asc_nulls_last("x")
+    end
+
+    test "asc/desc accept atom column names" do
+      assert %Column{expr: {:sort_order, {:col, "salary"}, :asc, :nulls_first}} =
+               Column.asc(:salary)
+
+      assert %Column{expr: {:sort_order, {:col, "salary"}, :desc, :nulls_last}} =
+               Column.desc(:salary)
+    end
   end
 
   describe "alias" do

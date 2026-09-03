@@ -4,6 +4,15 @@ defmodule SparkEx.WriterV2 do
 
   Mirrors PySpark's `DataFrameWriterV2` with a builder pattern.
 
+  > #### Catalog requirement {: .warning}
+  >
+  > Most V2 operations need a catalog whose tables implement the V2 write
+  > interfaces (Delta, Iceberg, or another `TableCatalog`). Against the
+  > default `spark_catalog` (session catalog with V1 tables) only `create/1`
+  > succeeds (via a CTAS fallback); `append/overwrite/overwrite_partitions`
+  > fail with "Cannot write into v1 table" and `replace/create_or_replace`
+  > with `UNSUPPORTED_FEATURE.TABLE_OPERATION`.
+
   ## Examples
 
       import SparkEx.WriterV2

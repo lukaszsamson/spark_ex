@@ -7,19 +7,29 @@ defmodule SparkEx.Internal.StreamingTimeout do
   # seconds and is converted to milliseconds for the proto and the
   # GenServer call timeout.
 
+  # Headroom added to the client-side call/gRPC deadline on top of the
+  # server-side wait. With zero headroom the RPC deadline fires exactly at
+  # the server's wait boundary and the `terminated: false` reply races the
+  # stream teardown, surfacing as a transport error instead of {:ok, false}.
+  @call_deadline_headroom_ms 30_000
+
   @doc """
   Resolves the user-supplied opts into `{timeout_ms, opts_for_call}`.
 
   - `timeout_ms` is the value to put in the proto's `timeout_ms` field
     (`nil` for "no timeout").
   - `opts_for_call` is the opts list with `:timeout` rewritten to the
-    millisecond value so that the downstream GenServer call timeout
-    matches the gRPC timeout instead of being interpreted as raw ms.
+    millisecond value (plus headroom for the server's reply to arrive) so
+    that the downstream GenServer call timeout tracks the gRPC timeout
+    instead of being interpreted as raw ms.
   """
   @spec resolve(keyword()) :: {non_neg_integer() | nil, keyword()}
   def resolve(opts) when is_list(opts) do
     timeout_ms = normalize(Keyword.get(opts, :timeout, nil))
-    {timeout_ms, Keyword.put(opts, :timeout, timeout_ms)}
+
+    call_timeout = if timeout_ms, do: timeout_ms + @call_deadline_headroom_ms
+
+    {timeout_ms, Keyword.put(opts, :timeout, call_timeout)}
   end
 
   defp normalize(nil), do: nil

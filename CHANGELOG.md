@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`map_format: :map` option on `DataFrame.collect/2`** (FAB-16): opt-in
+  decoding of MAP-typed columns into Elixir maps (recursively through
+  arrays/structs), mirroring PySpark's dicts. The default wire representation
+  (list of `%{"key" => k, "value" => v}` entries) is unchanged.
+- **Out-of-band interrupts** (FAB-15): `interrupt_all/tag/operation` now run
+  from the caller's process against an ETS-published connection snapshot, so
+  they can actually cancel a running operation instead of queueing behind it
+  on the Session GenServer (first slice of the NO_SERIALIZED_RPC plan).
+
+### Fixed
+
+- **`lateral_join/4` kept TVF right-sides correlated** (FAB-13): TVF plans were
+  silently downgraded to a regular join, so outer column references
+  (`tvf.explode(col("arr"))` against the left side) always failed with
+  `UNRESOLVED_COLUMN`. LateralJoin is now always encoded (PySpark parity); the
+  Spark 3.5 regular-join downgrade moved into the empty-relation legacy
+  fallback. `DataFrame.schema/dtypes` on `parse` plans also gained the UNPARSED
+  fallback (FAB-14), completing the FAB-11 fix.
+
+- **Legacy collect-retry rewrites were dead code** (FAB-11): the `{:plan_id, n, _}`
+  plan envelope broke pattern matching in every legacy fallback rewriter
+  (UNPARSED `parse` rewrite, grouping-sets, transpose/table-function/as-of-join
+  empty-relation rewrites). `DataFrame.parse/3,4` with a DDL string schema now
+  works again on Spark 4.x, including under filters/aggregates and via
+  `DataFrame.count/1` (the parse rewrite is now a deep tree rewrite).
+- **Timed `await_termination` returned a transport error instead of
+  `{:ok, false}`** (FAB-7): the client gRPC deadline equalled the server-side
+  wait, so the reply lost the race. The call deadline now carries 30s headroom.
+  Affects `StreamingQuery.await_termination/2` and
+  `StreamingQueryManager.await_any_termination/2`.
+- **Writer format shortcuts compose with the builder** (FAB-10):
+  `df |> DataFrame.write() |> Writer.mode(:overwrite) |> Writer.parquet(path)`
+  (the README idiom) crashed with a `KeyError`; `parquet/csv/json/orc/avro/xml/
+  text` now accept either a DataFrame or a Writer builder.
+- **`Column.asc/desc` (and `*_nulls_*` variants) accept column-name strings and
+  atoms** (FAB-12, V02_BLOCKERS L1) — PySpark parity; the README quick-start
+  `order_by([desc("salary")])` no longer raises.
+- **Reader option-collision handling matches Writer** (FAB-3): passing the same
+  option both top-level and inside `:options` now raises `ArgumentError`
+  (previously the generic reader path silently let `:options` win and
+  `Reader.csv/3` silently let top-level win).
+- **`create_dataframe` accepts keyword-list rows** (FAB-2) as the idiomatic
+  analogue of PySpark dict rows (previously a leaked `Jason.Encoder` error),
+  and rejects integers outside the 64-bit range with a clear message instead
+  of an opaque server-side `MALFORMED_RECORD_IN_PARSING` failure (FAB-6).
+- **`collect_as_map/2` errors on duplicate column names** (FAB-1) instead of
+  silently returning `key => key` pairs.
+- **`TableValuedFunction` accepts `%SparkEx.TableArg{}` arguments** (FAB-4)
+  directly (previously required hand-wrapping in a subquery expression).
+- **`lit/1` encodes atoms as strings and raises a descriptive `ArgumentError`
+  for unsupported literal shapes** (FAB-5) instead of leaking a
+  `FunctionClauseError` from the plan encoder.
+- **`trigger(once: true)` warning corrected** (FAB-8): Spark 4.x still accepts
+  `:once`; the warning now marks it deprecated rather than removed. Documented
+  the per-event-type `:data` shape of streaming listener events (FAB-9).
+
 ## [0.2.0] - 2026-06-20
 
 This release is a large correctness and parity pass over the v0.1.x client,

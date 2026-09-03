@@ -141,6 +141,43 @@ defmodule SparkEx.Unit.WriterTest do
     end
   end
 
+  describe "format shortcuts compose with a Writer builder (FAB-10)" do
+    test "parquet/3 accepts a Writer and keeps builder mode/partitioning" do
+      {:ok, session} = FakeSession.start_link(parent: self())
+      df = DataFrame.new(session, {:sql, "SELECT 1", nil})
+
+      assert :ok =
+               df
+               |> DataFrame.write()
+               |> Writer.mode(:overwrite)
+               |> Writer.partition_by("p")
+               |> Writer.parquet("/tmp/out")
+
+      assert_receive {:execute_command, {:write_operation, _, write_opts}, _exec_opts}
+      assert Keyword.get(write_opts, :mode) == :overwrite
+      assert Keyword.get(write_opts, :partition_by) == ["p"]
+      assert Keyword.get(write_opts, :format) == "parquet"
+    end
+
+    test "csv/3 accepts a Writer and merges convenience options" do
+      {:ok, session} = FakeSession.start_link(parent: self())
+      df = DataFrame.new(session, {:sql, "SELECT 1", nil})
+
+      assert :ok =
+               df
+               |> DataFrame.write()
+               |> Writer.mode(:append)
+               |> Writer.option("compression", "gzip")
+               |> Writer.csv("/tmp/out", header: true)
+
+      assert_receive {:execute_command, {:write_operation, _, write_opts}, _exec_opts}
+      assert Keyword.get(write_opts, :mode) == :append
+      assert Keyword.get(write_opts, :options)["header"] == "true"
+      assert Keyword.get(write_opts, :options)["compression"] == "gzip"
+      assert Keyword.get(write_opts, :format) == "csv"
+    end
+  end
+
   describe "convenience option handling" do
     test "parquet merges top-level and nested options into sink options" do
       {:ok, session} = FakeSession.start_link(parent: self())

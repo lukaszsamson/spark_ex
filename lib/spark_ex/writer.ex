@@ -263,6 +263,12 @@ defmodule SparkEx.Writer do
 
   # --- Format-specific convenience functions ---
 
+  # Format shortcuts accept either a bare DataFrame or a Writer builder
+  # (PySpark: `df.write.mode("overwrite").parquet(path)`), so builder state
+  # like mode/partitioning composes with the shortcut.
+  defp seed_writer(%__MODULE__{} = writer, source), do: %{writer | source: source}
+  defp seed_writer(%SparkEx.DataFrame{} = df, source), do: %__MODULE__{df: df, source: source}
+
   @doc """
   Writes the DataFrame as Parquet.
 
@@ -272,13 +278,13 @@ defmodule SparkEx.Writer do
   - `:options` — map of Parquet writer options
   - `:partition_by` — partitioning columns
   """
-  @spec parquet(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec parquet(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def parquet(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
-      %__MODULE__{df: df, source: "parquet"}
+      seed_writer(df, "parquet")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -300,7 +306,7 @@ defmodule SparkEx.Writer do
   both `:sep` and `:separator` are present and disagree an `ArgumentError`
   is raised.
   """
-  @spec csv(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec csv(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def csv(df, path, opts \\ []) do
     {csv_opts, rest} = Keyword.split(opts, [:header, :separator, :sep])
 
@@ -329,7 +335,7 @@ defmodule SparkEx.Writer do
     end
 
     writer =
-      %__MODULE__{df: df, source: "csv"}
+      seed_writer(df, "csv")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -349,13 +355,13 @@ defmodule SparkEx.Writer do
   - `:mode` — save mode (default: `:error_if_exists`)
   - `:options` — map of JSON writer options
   """
-  @spec json(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec json(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def json(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
-      %__MODULE__{df: df, source: "json"}
+      seed_writer(df, "json")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -371,13 +377,13 @@ defmodule SparkEx.Writer do
   - `:mode` — save mode (default: `:error_if_exists`)
   - `:options` — map of ORC writer options
   """
-  @spec orc(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec orc(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def orc(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
-      %__MODULE__{df: df, source: "orc"}
+      seed_writer(df, "orc")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -394,13 +400,13 @@ defmodule SparkEx.Writer do
   - `:options` — map of Avro writer options
   - `:partition_by` — partitioning columns
   """
-  @spec avro(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec avro(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def avro(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
-      %__MODULE__{df: df, source: "avro"}
+      seed_writer(df, "avro")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -417,13 +423,13 @@ defmodule SparkEx.Writer do
   - `:options` — map of XML writer options
   - `:partition_by` — partitioning columns
   """
-  @spec xml(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec xml(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def xml(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
-      %__MODULE__{df: df, source: "xml"}
+      seed_writer(df, "xml")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -470,12 +476,12 @@ defmodule SparkEx.Writer do
   - `:mode` — save mode (default: `:error_if_exists`)
   - `:options` — map of text writer options
   """
-  @spec text(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec text(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def text(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} = split_convenience_opts(opts, [:mode])
 
     writer =
-      %__MODULE__{df: df, source: "text"}
+      seed_writer(df, "text")
       |> maybe_set_mode(write_opts)
 
     writer = %{writer | options: Map.merge(writer.options, option_overrides)}

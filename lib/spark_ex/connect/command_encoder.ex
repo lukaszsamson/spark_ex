@@ -540,8 +540,9 @@ defmodule SparkEx.Connect.CommandEncoder do
 
   defp apply_trigger(proto, :once) do
     IO.warn(
-      "Trigger.Once was removed in Spark 4; use `:available_now` to drain all available data " <>
-        "in a single batch. SparkEx will forward the request; Spark 4 servers will reject it."
+      "Trigger.Once is deprecated (since Spark 3.4); use `:available_now` to drain all " <>
+        "available data in a single batch. Spark 4.x servers still accept `:once`, but it " <>
+        "may be removed in a future Spark release."
     )
 
     %{proto | trigger: {:once, true}}

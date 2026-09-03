@@ -15,7 +15,11 @@ defmodule SparkEx.EtsTableOwner do
     # the first registering session were the creator, that session's
     # exit would tear down the table and orphan other live sessions'
     # allocator refs.
-    {:spark_ex_plan_id_counters, :set}
+    {:spark_ex_plan_id_counters, :set},
+    # Session-pid -> connection snapshot for SparkEx.Internal.SessionSnapshot
+    # (out-of-band Interrupt RPCs that must not queue behind a running
+    # execute on the Session GenServer).
+    {:spark_ex_session_snapshots, :set}
   ]
 
   @spec start_link(keyword()) :: GenServer.on_start()
