@@ -72,11 +72,21 @@ defmodule SparkEx.GroupedDataTest do
       assert result.session == session
     end
 
-    test "raises when aggregate list is empty" do
+    test "an empty aggregate map yields the distinct grouping keys (T-26)" do
       df = DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
       grouped = DataFrame.group_by(df, ["dept"])
 
-      assert_raise ArgumentError, ~r/at least one aggregate column/, fn ->
+      assert %DataFrame{plan: {:plan_id, _, {:aggregate, _, :groupby, grouping, []}}} =
+               GroupedData.agg(grouped, %{})
+
+      assert grouping == [{:col, "dept"}]
+    end
+
+    test "an empty positional aggregate list raises like PySpark" do
+      df = DataFrame.new(self(), {:sql, "SELECT * FROM t", nil})
+      grouped = DataFrame.group_by(df, ["dept"])
+
+      assert_raise ArgumentError, ~r/at least one aggregate/, fn ->
         GroupedData.agg(grouped, [])
       end
     end

@@ -2296,8 +2296,10 @@ defmodule SparkEx.Functions do
   def to_expr(nil), do: {:lit, nil}
   def to_expr(value) when is_boolean(value), do: {:lit, value}
   def to_expr(value) when is_number(value), do: {:lit, value}
-  def to_expr(name) when is_binary(name), do: {:col, name}
-  def to_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
+  # Route through col/1 so "*" / "x.*" become UnresolvedStar rather than an
+  # UnresolvedAttribute the server rejects (count("*"), count_distinct("*"), ...).
+  def to_expr(name) when is_binary(name), do: col(name).expr
+  def to_expr(name) when is_atom(name), do: col(Atom.to_string(name)).expr
 
   @doc false
   def lit_expr(%Column{expr: e}), do: e

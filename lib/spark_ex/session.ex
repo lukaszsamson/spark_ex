@@ -577,7 +577,14 @@ defmodule SparkEx.Session do
   @spec artifact_status(GenServer.server(), [String.t()]) ::
           {:ok, %{String.t() => boolean()}} | {:error, term()}
   def artifact_status(session, names) do
-    GenServer.call(session, {:artifact_status, names})
+    # Validate before entering the GenServer: protobuf encoding of a
+    # non-list / non-binary `names` would raise inside the shared Session
+    # process and take it down (T-01). Mirrors Client.add_artifacts.
+    if is_list(names) and Enum.all?(names, &is_binary/1) do
+      GenServer.call(session, {:artifact_status, names})
+    else
+      {:error, {:invalid_artifact_names, names}}
+    end
   end
 
   @doc """
@@ -1136,15 +1143,24 @@ defmodule SparkEx.Session do
       max_rows = Keyword.get(opts, :max_rows, 10_000)
       unsafe = Keyword.get(opts, :unsafe, false)
 
-      {effective_plan, decoder_opts} =
-        if unsafe do
-          # Skip remote LIMIT injection only; local decoder limits stay active unless overridden.
-          {plan, opts}
-        else
-          {{:limit, plan, max_rows}, opts}
+      # `:infinity` is a decoder-only option (DataFrame.to_explorer docs): it
+      # must not be injected into the int32 LIMIT field. Any other
+      # non-integer/negative value is rejected instead of crashing on encode.
+      effective_plan =
+        cond do
+          max_rows != :infinity and not (is_integer(max_rows) and max_rows >= 0) ->
+            {:error, {:invalid_option, {:max_rows, max_rows}}}
+
+          unsafe or max_rows == :infinity ->
+            {:ok, plan}
+
+          true ->
+            {:ok, {:limit, plan, max_rows}}
         end
 
-      case safe_encode(effective_plan, state.plan_id_counter) do
+      decoder_opts = opts
+
+      case execute_explorer_encode(effective_plan, state.plan_id_counter) do
         {{proto_plan, counter}, nil} ->
           state = %{state | plan_id_counter: counter}
 
@@ -1913,6 +1929,24 @@ defmodule SparkEx.Session do
   end
 
   @doc false
+  # Test seam for the DDL top-level field splitter (T-10).
+  def __split_top_level_schema_fields__(schema_ddl), do: split_top_level_schema_fields(schema_ddl)
+
+  @doc false
+  # Test seam for the parse-relation sibling walk (T-12): `rewriter` receives
+  # each `{:parse, ...}` node and must return {rewritten, changed?}.
+  def __rewrite_parse_walk__(term, rewriter) when is_function(rewriter, 1),
+    do: rewrite_parse_deep({:test_rewriter, rewriter}, term)
+
+  @doc false
+  # Test seam for local-relation type inference (T-04).
+  def __infer_value_type__(values), do: infer_value_type(values)
+
+  @doc false
+  # Test seam for JSON local-relation row normalization (T-04).
+  def __normalize_rows_for_schema__(rows), do: normalize_rows_for_schema(rows)
+
+  @doc false
   @spec safe_disconnect(term()) :: :ok
   def safe_disconnect(channel) do
     do_safe_disconnect(channel)
@@ -2608,6 +2642,9 @@ defmodule SparkEx.Session do
     end
   end
 
+  defp rewrite_parse_deep({:test_rewriter, rewriter}, {:parse, _, _, _, _} = node),
+    do: rewriter.(node)
+
   defp rewrite_parse_deep(state, {:parse, child_plan, format, schema, options} = node)
        when format in [:csv, :json] do
     with {:ok, source_column} <- first_schema_column_name(state, child_plan),
@@ -2641,13 +2678,12 @@ defmodule SparkEx.Session do
   defp rewrite_parse_walk(state, term) when is_list(term),
     do: rewrite_parse_walk_list(state, term)
 
+  # Visit every sibling and OR the changed flags (T-12): a union/join of two
+  # parse relations must have both branches rewritten, not just the first.
   defp rewrite_parse_walk_list(state, elements) do
     Enum.map_reduce(elements, false, fn element, changed? ->
-      if changed? do
-        {element, changed?}
-      else
-        rewrite_parse_deep(state, element)
-      end
+      {rewritten, element_changed?} = rewrite_parse_deep(state, element)
+      {rewritten, changed? or element_changed?}
     end)
   end
 
@@ -3376,6 +3412,11 @@ defmodule SparkEx.Session do
   defp safe_encode(plan, counter) do
     safe_encode_with(&PlanEncoder.encode/2, plan, counter)
   end
+
+  # T-02: the explorer path validates `:max_rows` before encoding; a
+  # validation error skips encoding and is reported like an encode failure.
+  defp execute_explorer_encode({:ok, plan}, counter), do: safe_encode(plan, counter)
+  defp execute_explorer_encode({:error, _} = error, _counter), do: {nil, error}
 
   defp safe_encode_count(plan, counter) do
     safe_encode_with(&PlanEncoder.encode_count/2, plan, counter)
@@ -4326,30 +4367,59 @@ defmodule SparkEx.Session do
     |> Enum.join(", ")
   end
 
+  # Splits a DDL field list on top-level commas only. Tracks `<>` and `()`
+  # nesting (STRUCT<…>, DECIMAL(10, 2)) and never splits inside a
+  # backtick-quoted identifier or a single/double-quoted string literal
+  # (doubled-quote escapes are honoured) (T-10).
   defp split_top_level_schema_fields(schema_ddl) do
-    {parts, current, _depth} =
-      schema_ddl
-      |> String.graphemes()
-      |> Enum.reduce({[], "", 0}, fn
-        "<", {parts, current, depth} ->
-          {parts, current <> "<", depth + 1}
-
-        ">", {parts, current, depth} when depth > 0 ->
-          {parts, current <> ">", depth - 1}
-
-        ",", {parts, current, 0} ->
-          {[String.trim(current) | parts], "", 0}
-
-        ch, {parts, current, depth} ->
-          {parts, current <> ch, depth}
-      end)
-
+    {parts, current} = split_top_level_fields(schema_ddl, [], [], 0, nil)
     parts = [String.trim(current) | parts]
 
     parts
     |> Enum.reverse()
     |> Enum.reject(&(&1 == ""))
   end
+
+  # split_top_level_fields(rest, parts_rev, current_rev_iodata, depth, quote)
+  defp split_top_level_fields(<<>>, parts, current, _depth, _quote),
+    do: {parts, IO.iodata_to_binary(Enum.reverse(current))}
+
+  # Inside a quoted run: a backslash escapes the next char (Spark string
+  # literals accept \' and \"), a doubled quote char is an escape, a single
+  # one closes.
+  defp split_top_level_fields(<<"\\", ch::utf8, rest::binary>>, parts, current, depth, q)
+       when not is_nil(q),
+       do: split_top_level_fields(rest, parts, [<<"\\", ch::utf8>> | current], depth, q)
+
+  defp split_top_level_fields(<<q::utf8, q::utf8, rest::binary>>, parts, current, depth, q),
+    do: split_top_level_fields(rest, parts, [<<q::utf8, q::utf8>> | current], depth, q)
+
+  defp split_top_level_fields(<<q::utf8, rest::binary>>, parts, current, depth, q),
+    do: split_top_level_fields(rest, parts, [<<q::utf8>> | current], depth, nil)
+
+  defp split_top_level_fields(<<ch::utf8, rest::binary>>, parts, current, depth, q)
+       when not is_nil(q),
+       do: split_top_level_fields(rest, parts, [<<ch::utf8>> | current], depth, q)
+
+  defp split_top_level_fields(<<q::utf8, rest::binary>>, parts, current, depth, nil)
+       when q in [?`, ?', ?"],
+       do: split_top_level_fields(rest, parts, [<<q::utf8>> | current], depth, q)
+
+  defp split_top_level_fields(<<open::utf8, rest::binary>>, parts, current, depth, nil)
+       when open in [?<, ?(],
+       do: split_top_level_fields(rest, parts, [<<open::utf8>> | current], depth + 1, nil)
+
+  defp split_top_level_fields(<<close::utf8, rest::binary>>, parts, current, depth, nil)
+       when close in [?>, ?)] and depth > 0,
+       do: split_top_level_fields(rest, parts, [<<close::utf8>> | current], depth - 1, nil)
+
+  defp split_top_level_fields(<<",", rest::binary>>, parts, current, 0, nil) do
+    field = current |> Enum.reverse() |> IO.iodata_to_binary() |> String.trim()
+    split_top_level_fields(rest, [field | parts], [], 0, nil)
+  end
+
+  defp split_top_level_fields(<<ch::utf8, rest::binary>>, parts, current, depth, nil),
+    do: split_top_level_fields(rest, parts, [<<ch::utf8>> | current], depth, nil)
 
   defp parse_schema_field(field) do
     case String.trim_leading(field) do
@@ -4503,6 +4573,8 @@ defmodule SparkEx.Session do
 
   defp infer_single_type(v) when is_integer(v), do: :long
   defp infer_single_type(v) when is_float(v), do: :double
+  # Explorer represents non-finite floats as these atoms (T-04).
+  defp infer_single_type(v) when v in [:nan, :infinity, :neg_infinity], do: :double
 
   # PySpark infers decimal.Decimal as DecimalType(38, 18) regardless of the
   # individual value's precision/scale (python/pyspark/sql/types.py:_type_mappings
@@ -4625,6 +4697,14 @@ defmodule SparkEx.Session do
   # values to survive the JSON-relation path. Encode as base64 to match the
   # schema-aware normalize_binary_field_value path.
   defp normalize_json_value({:binary, v}) when is_binary(v), do: Base.encode64(v)
+
+  # Explorer's non-finite float sentinels. Jason would encode the atoms as the
+  # strings "nan"/"infinity"/"neg_infinity"; Spark's from_json accepts exactly
+  # "NaN" / "Infinity" / "-Infinity" for DOUBLE/FLOAT (JacksonParser, with the
+  # default allowNonNumericNumbers=true) (T-04).
+  defp normalize_json_value(:nan), do: "NaN"
+  defp normalize_json_value(:infinity), do: "Infinity"
+  defp normalize_json_value(:neg_infinity), do: "-Infinity"
 
   defp normalize_json_value(value), do: value
 

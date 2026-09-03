@@ -744,23 +744,28 @@ defmodule SparkEx.Catalog do
         is_binary(using_jar) ->
           ["USING", "JAR", sql_string(using_jar)]
 
-        is_list(using_jars) ->
+        is_list(using_jars) and using_jars != [] ->
           jars = Enum.map(using_jars, &join_sql(["JAR", sql_string(&1)]))
-          ["USING", Enum.join(jars, " ")]
+          ["USING", Enum.join(jars, ", ")]
 
         true ->
           []
       end
 
-    clauses =
+    prefix_clauses =
       []
       |> maybe_add("TEMPORARY", temporary)
+
+    suffix_clauses =
+      []
       |> maybe_add("IF NOT EXISTS", if_not_exists)
 
     join_sql(
       ["CREATE"] ++
-        clauses ++
-        ["FUNCTION", quote_qualified_name(function_name), "AS", sql_string(class_name)] ++
+        prefix_clauses ++
+        ["FUNCTION"] ++
+        suffix_clauses ++
+        [quote_qualified_name(function_name), "AS", sql_string(class_name)] ++
         using_clause
     )
   end

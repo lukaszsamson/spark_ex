@@ -11,6 +11,11 @@ defmodule SparkEx.DataFrame.NA do
 
   alias SparkEx.DataFrame
 
+  # Sentinel for the optional `value` argument of `replace/4`. Mirrors PySpark's
+  # `_NoValue` (dataframe.py ~1380-1387): when `to_replace` is not a map and no
+  # `value` was given, replace/4 must raise instead of silently replacing with nil.
+  @no_value :"$spark_ex_na_replace_no_value"
+
   @doc """
   Fills null values with the given replacement.
 
@@ -170,7 +175,7 @@ defmodule SparkEx.DataFrame.NA do
       DataFrame.NA.replace(df, [1, 2], [10, 20], subset: ["score"])
   """
   @spec replace(DataFrame.t(), term(), term(), keyword()) :: DataFrame.t()
-  def replace(df, to_replace, value \\ nil, opts \\ [])
+  def replace(df, to_replace, value \\ @no_value, opts \\ [])
 
   def replace(%DataFrame{} = df, to_replace, value_or_opts, opts) when is_map(to_replace) do
     {_value, effective_opts} = extract_replace_value_and_opts(value_or_opts, opts)
@@ -182,6 +187,7 @@ defmodule SparkEx.DataFrame.NA do
 
   def replace(%DataFrame{} = df, to_replace, value_or_opts, opts) when is_list(to_replace) do
     {value, effective_opts} = extract_replace_value_and_opts(value_or_opts, opts)
+    value = require_replace_value!(value)
     cols = normalize_subset(Keyword.get(effective_opts, :subset, nil))
 
     values =
@@ -202,10 +208,19 @@ defmodule SparkEx.DataFrame.NA do
 
   def replace(%DataFrame{} = df, to_replace, value_or_opts, opts) do
     {value, effective_opts} = extract_replace_value_and_opts(value_or_opts, opts)
+    value = require_replace_value!(value)
     cols = normalize_subset(Keyword.get(effective_opts, :subset, nil))
     validate_replace_types!([{to_replace, value}])
     build_replace_df(df, cols, promote_numeric_replacements([{to_replace, value}]))
   end
+
+  defp require_replace_value!(@no_value) do
+    raise ArgumentError,
+          "replace/4 requires a `value` argument when `to_replace` is not a map " <>
+            "(pass a map of replacements, or provide `value` explicitly)"
+  end
+
+  defp require_replace_value!(value), do: value
 
   defp normalize_subset(nil), do: []
   defp normalize_subset(col) when is_binary(col), do: [col]
@@ -220,7 +235,7 @@ defmodule SparkEx.DataFrame.NA do
 
   defp extract_replace_value_and_opts(value_or_opts, opts) do
     if opts == [] and is_list(value_or_opts) and Keyword.keyword?(value_or_opts) do
-      {nil, value_or_opts}
+      {@no_value, value_or_opts}
     else
       {value_or_opts, opts}
     end

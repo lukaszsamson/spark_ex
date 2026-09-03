@@ -102,7 +102,13 @@ defmodule SparkEx.DataFrame do
   """
   @spec col(t(), String.t() | atom()) :: Column.t()
   def col(%__MODULE__{plan: {:plan_id, _, _} = plan}, name) when is_binary(name) do
-    %Column{expr: {:col, name, plan}}
+    # Mirror Functions.col/1 star handling so "*" / "x.*" become a plan-bound
+    # UnresolvedStar instead of an UnresolvedAttribute the server rejects.
+    case name_to_col_expr(name) do
+      {:star} -> %Column{expr: {:star, nil, plan}}
+      {:star, target} -> %Column{expr: {:star, target, plan}}
+      {:col, ^name} -> %Column{expr: {:col, name, plan}}
+    end
   end
 
   def col(%__MODULE__{} = df, name) when is_atom(name) do
@@ -2374,22 +2380,20 @@ defmodule SparkEx.DataFrame do
     do: SparkEx.DataFrame.NA.drop(df, opts)
 
   @doc "Replaces values. Delegates to `SparkEx.DataFrame.NA.replace/4`."
-  @spec replace(t(), term(), keyword()) :: t()
+  @spec replace(t(), map()) :: t()
+  @spec replace(t(), term(), keyword() | term()) :: t()
   @spec replace(t(), term(), term(), keyword()) :: t()
-  def replace(df, to_replace, value_or_opts \\ nil, opts \\ [])
+  # No `value` default here: an omitted replacement must reach NA.replace as
+  # "not given" (so it can raise unless `to_replace` is a map), not as an
+  # explicit `nil`. NA.replace/2,3 handle the keyword-list-in-value position.
+  def replace(%__MODULE__{} = df, to_replace),
+    do: SparkEx.DataFrame.NA.replace(df, to_replace)
 
-  def replace(%__MODULE__{} = df, to_replace, value_or_opts, opts)
-      when is_list(value_or_opts) and opts == [] do
-    if Keyword.keyword?(value_or_opts) do
-      SparkEx.DataFrame.NA.replace(df, to_replace, nil, value_or_opts)
-    else
-      SparkEx.DataFrame.NA.replace(df, to_replace, value_or_opts, opts)
-    end
-  end
+  def replace(%__MODULE__{} = df, to_replace, value_or_opts),
+    do: SparkEx.DataFrame.NA.replace(df, to_replace, value_or_opts)
 
-  def replace(%__MODULE__{} = df, to_replace, value, opts) do
-    SparkEx.DataFrame.NA.replace(df, to_replace, value, opts)
-  end
+  def replace(%__MODULE__{} = df, to_replace, value, opts),
+    do: SparkEx.DataFrame.NA.replace(df, to_replace, value, opts)
 
   @doc "Describes basic statistics. Delegates to `SparkEx.DataFrame.Stat.describe/2`."
   @spec describe(t(), String.t() | [String.t()]) :: t()

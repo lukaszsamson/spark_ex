@@ -20,6 +20,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wave 1 triage fixes** (see `BUGS_TRIAGED.txt` T-01..T-27, T-40):
+  - `Session.artifact_status/2` validates its `names` argument instead of
+    crashing the shared Session process on protobuf encode (T-01).
+  - `DataFrame.to_explorer(max_rows: :infinity)` no longer injects the atom
+    into the remote int32 `LIMIT`; invalid `max_rows` values return
+    `{:error, {:invalid_option, _}}` even with `unsafe: true` (T-02).
+  - Explorer's non-finite float sentinels (`:nan`, `:infinity`,
+    `:neg_infinity`) encode as DOUBLE literals and infer DOUBLE in
+    `create_dataframe`, instead of silently becoming strings (T-04).
+  - `count("*")`, `count_distinct("*")`, `GroupedData.count/2` and
+    `DataFrame.col("*")`/`col("t.*")` route to star expressions; the
+    `count(*)` -> `count(1)` rewrite now applies to every star form, and the
+    dict-agg star key is no longer aliased as `count(*)` (T-05, T-40).
+  - Integers outside the int64 range inside array/map literals infer a
+    DECIMAL element type consistently with their children (T-06).
+  - `instr/2` treats its second argument as a literal substring, not a
+    column (T-07). `first_value`/`last_value` emit their own Spark functions
+    instead of `first`/`last` (T-25).
+  - The DDL top-level field splitter honours parentheses, backtick/single/
+    double-quoted runs and escapes, so `DECIMAL(10, 2)` and comma-containing
+    comments no longer produce phantom fields (T-10).
+  - The Spark 4.x parse-schema fallback rewrites every sibling parse
+    relation, not just the first changed one (T-12).
+  - `Writer.jdbc/2,4` compose with an existing Writer builder and reject
+    partitioning/bucketing/clustering like Spark's `DataFrameWriter.jdbc`
+    (T-20). `Catalog.create_function` emits grammatical SQL for
+    `IF NOT EXISTS`, multiple resources and empty resource lists (T-21).
+  - `NA.replace` / `DataFrame.replace` raise when the replacement value is
+    omitted for a non-map `to_replace`, instead of replacing with `nil`
+    (T-24). `GroupedData.agg(%{})` and the numeric shortcuts accept an empty
+    aggregate set (distinct grouping keys), matching PySpark (T-26).
+  - Decimal types with unset precision/scale serialize as `decimal(10,0)`
+    rather than `decimal(,)` (T-27).
+
 - **`lateral_join/4` kept TVF right-sides correlated** (FAB-13): TVF plans were
   silently downgraded to a regular join, so outer column references
   (`tvf.explode(col("arr"))` against the left side) always failed with

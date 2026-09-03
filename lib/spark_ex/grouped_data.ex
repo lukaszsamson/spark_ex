@@ -59,8 +59,10 @@ defmodule SparkEx.GroupedData do
         ) :: DataFrame.t()
   def agg(%__MODULE__{} = gd, agg_columns) when is_list(agg_columns) do
     cond do
+      # PySpark's positional `agg(*exprs)` asserts a non-empty list; only the
+      # dict form and the numeric shortcuts allow an empty aggregate set.
       agg_columns == [] ->
-        raise ArgumentError, "expected at least one aggregate column"
+        raise ArgumentError, "expected at least one aggregate expression"
 
       Enum.all?(agg_columns, &match?(%Column{}, &1)) ->
         agg_with_exprs(gd, Enum.map(agg_columns, fn %Column{} = c -> c.expr end))
@@ -76,10 +78,6 @@ defmodule SparkEx.GroupedData do
   end
 
   def agg(%__MODULE__{} = gd, agg_map) when is_map(agg_map) do
-    if map_size(agg_map) == 0 do
-      raise ArgumentError, "expected at least one aggregate expression"
-    end
-
     sorted = Enum.sort_by(agg_map, fn {col_name, _} -> to_string(col_name) end)
 
     unless Enum.all?(sorted, &agg_pair?/1) do
@@ -87,7 +85,9 @@ defmodule SparkEx.GroupedData do
             "expected all aggregate expressions to be {column, function} name pairs"
     end
 
-    agg(gd, pairs_to_columns(sorted))
+    # PySpark's dict form permits an empty mapping (distinct grouping keys);
+    # only the positional form asserts a non-empty list.
+    agg_with_exprs(gd, Enum.map(pairs_to_columns(sorted), fn %Column{expr: e} -> e end))
   end
 
   def agg(%__MODULE__{}, _other) do
@@ -129,12 +129,15 @@ defmodule SparkEx.GroupedData do
   defp pairs_to_columns(pairs) do
     Enum.map(pairs, fn {col_name, func_name} ->
       name = to_string(col_name)
+      expr = {:fn, to_string(func_name), [name_to_col_expr(name)], false}
 
-      %Column{
-        expr:
-          {:alias, {:fn, to_string(func_name), [name_to_col_expr(name)], false},
-           "#{func_name}(#{col_name})"}
-      }
+      # PySpark leaves the star key unaliased so the server names it count(1);
+      # aliasing here would produce count(*) instead.
+      case name_to_col_expr(name) do
+        {:star} -> %Column{expr: expr}
+        {:star, _} -> %Column{expr: expr}
+        _ -> %Column{expr: {:alias, expr, "#{func_name}(#{col_name})"}}
+      end
     end)
   end
 
@@ -176,7 +179,7 @@ defmodule SparkEx.GroupedData do
               [%Column{expr: {:alias, {:fn, "count", [{:lit, 1}], false}, "count"}}]
 
             col when is_binary(col) ->
-              [%Column{expr: {:fn, "count", [{:col, col}], false}}]
+              [%Column{expr: {:fn, "count", [name_to_col_expr(col)], false}}]
 
             %Column{} = c ->
               [%Column{expr: {:fn, "count", [c.expr], false}}]
@@ -187,7 +190,7 @@ defmodule SparkEx.GroupedData do
                   %Column{expr: {:fn, "count", [c.expr], false}}
 
                 name when is_binary(name) ->
-                  %Column{expr: {:fn, "count", [{:col, name}], false}}
+                  %Column{expr: {:fn, "count", [name_to_col_expr(name)], false}}
               end)
           end
 
@@ -232,10 +235,6 @@ defmodule SparkEx.GroupedData do
 
           names
       end
-
-    if agg_names == [] do
-      raise ArgumentError, "expected at least one numeric column"
-    end
 
     agg_exprs =
       Enum.map(agg_names, fn name ->

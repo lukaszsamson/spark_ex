@@ -440,30 +440,52 @@ defmodule SparkEx.Writer do
   @doc """
   Writes the DataFrame via JDBC.
 
+  Accepts either a bare `DataFrame` or an existing `Writer` builder (in which
+  case builder state such as mode/options/partitioning is preserved).
+
   ## Options
 
   - `:mode` — save mode (default: `:error_if_exists`)
   - `:options` — map of JDBC writer options (e.g. `url`, `dbtable`)
   """
-  @spec jdbc(SparkEx.DataFrame.t(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec jdbc(t() | SparkEx.DataFrame.t(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, term()}
   def jdbc(df, url, table, opts \\ []) when is_binary(url) and is_binary(table) do
     {write_opts, option_overrides, exec_opts} = split_convenience_opts(opts, [:mode])
-    merged = option_overrides |> Map.put("url", url) |> Map.put("dbtable", table)
 
     writer =
-      %__MODULE__{df: df, source: "jdbc", options: merged}
+      seed_writer(df, "jdbc")
       |> maybe_set_mode(write_opts)
+
+    # Spark's DataFrameWriter.jdbc asserts the writer is not partitioned,
+    # bucketed, or clustered.
+    if writer.partition_by != [] or writer.sort_by != [] or writer.bucket_by != nil or
+         writer.cluster_by != [] do
+      raise ArgumentError,
+            "jdbc writes do not support partition_by/bucket_by/sort_by/cluster_by " <>
+              "(Spark rejects them); remove them from the writer before calling jdbc/4"
+    end
+
+    merged =
+      writer.options
+      |> Map.merge(option_overrides)
+      |> Map.put("url", url)
+      |> Map.put("dbtable", table)
+
+    writer = %{writer | options: merged}
 
     execute_write(writer.df, build_write_opts(writer, []), exec_opts)
   end
 
-  @spec jdbc(SparkEx.DataFrame.t(), keyword()) :: :ok | {:error, term()}
+  @spec jdbc(t() | SparkEx.DataFrame.t(), keyword()) :: :ok | {:error, term()}
   def jdbc(df, opts) when is_list(opts) do
     {write_opts, option_overrides, exec_opts} = split_convenience_opts(opts, [:mode])
 
     writer =
-      %__MODULE__{df: df, source: "jdbc", options: option_overrides}
+      seed_writer(df, "jdbc")
       |> maybe_set_mode(write_opts)
+
+    writer = %{writer | options: Map.merge(writer.options, option_overrides)}
 
     execute_write(writer.df, build_write_opts(writer, []), exec_opts)
   end
