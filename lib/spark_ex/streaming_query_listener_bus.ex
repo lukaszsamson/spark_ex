@@ -154,6 +154,8 @@ defmodule SparkEx.StreamingQueryListenerBus do
   defstruct [
     :session,
     :stream_task,
+    :stream_task_ref,
+    :stream_token,
     listeners: [],
     registered?: false,
     pending_register_waiters: [],
@@ -287,12 +289,14 @@ defmodule SparkEx.StreamingQueryListenerBus do
            }}
 
         true ->
-          task = start_reader_task(state.session)
+          {task, ref, token} = start_reader_task(state.session)
 
           {:noreply,
            %{
              state
              | stream_task: task,
+               stream_task_ref: ref,
+               stream_token: token,
                listeners: listeners,
                pending_register_waiters: [from | state.pending_register_waiters]
            }}
@@ -328,13 +332,35 @@ defmodule SparkEx.StreamingQueryListenerBus do
     {:noreply, state}
   end
 
+  # Every reader -> bus message carries the reader's `token`. A message from a
+  # reader that is no longer the current one is stale (its task was killed or
+  # already replaced) and must be dropped, exactly like the stale :DOWN clause
+  # below: otherwise a queued EOF from reader1 can tear down reader2 (orphaning
+  # its gRPC stream and the server-side listener, so every listener sees
+  # duplicate events once a third reader connects), and a stale registration
+  # can flip `registered?` and answer reader2's waiter early.
   @impl true
-  def handle_info({:listener_event, event}, state) do
+  def handle_info({:listener_event, token, _event}, %{stream_token: current} = state)
+      when token != current do
+    {:noreply, state}
+  end
+
+  def handle_info({:listener_bus_registered, token}, %{stream_token: current} = state)
+      when token != current do
+    {:noreply, state}
+  end
+
+  def handle_info({:listener_stream_ended, token, _reason}, %{stream_token: current} = state)
+      when token != current do
+    {:noreply, state}
+  end
+
+  def handle_info({:listener_event, _token, event}, state) do
     dispatch_event(state.listeners, event)
     {:noreply, state}
   end
 
-  def handle_info(:listener_bus_registered, state) do
+  def handle_info({:listener_bus_registered, _token}, state) do
     Enum.each(state.pending_register_waiters, &GenServer.reply(&1, :ok))
 
     {:noreply,
@@ -347,7 +373,7 @@ defmodule SparkEx.StreamingQueryListenerBus do
      }}
   end
 
-  def handle_info({:listener_stream_ended, reason}, state) do
+  def handle_info({:listener_stream_ended, _token, reason}, state) do
     case reason do
       :normal ->
         maybe_reconnect(state, "graceful EOF")
@@ -367,6 +393,8 @@ defmodule SparkEx.StreamingQueryListenerBus do
          %{
            state
            | stream_task: nil,
+             stream_task_ref: nil,
+             stream_token: nil,
              registered?: false,
              pending_register_waiters: [],
              closing_stream?: false
@@ -383,8 +411,8 @@ defmodule SparkEx.StreamingQueryListenerBus do
         {:noreply, state}
 
       true ->
-        task = start_reader_task(state.session)
-        {:noreply, %{state | stream_task: task}}
+        {task, ref, token} = start_reader_task(state.session)
+        {:noreply, %{state | stream_task: task, stream_task_ref: ref, stream_token: token}}
     end
   end
 
@@ -402,26 +430,31 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   # From here on, `pid == state.stream_task`: this DOWN is authoritative.
   def handle_info({:DOWN, _ref, :process, _pid, :normal}, state) do
-    {:noreply, %{state | stream_task: nil}}
+    {:noreply, %{state | stream_task: nil, stream_task_ref: nil, stream_token: nil}}
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, :shutdown}, %{closing_stream?: true} = state) do
-    {:noreply, %{state | stream_task: nil, closing_stream?: false}}
-  end
-
-  def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
-    Enum.each(state.pending_register_waiters, &GenServer.reply(&1, {:error, reason}))
-
-    Logger.warning("StreamingQueryListenerBus stream task crashed: #{inspect(reason)}")
-
     {:noreply,
      %{
        state
        | stream_task: nil,
-         registered?: false,
-         pending_register_waiters: [],
-         closing_stream?: false
+         stream_task_ref: nil,
+         stream_token: nil,
+         closing_stream?: false,
+         reconnect_attempts: 0
      }}
+  end
+
+  # T-18: an abnormal DOWN from the *current* reader is the same failure mode as
+  # a transport error on the stream itself — reconnect with the shared backoff
+  # and telemetry instead of silently going inert.
+  def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
+    Logger.warning("StreamingQueryListenerBus stream task crashed: #{inspect(reason)}")
+
+    maybe_reconnect(
+      %{state | stream_task_ref: nil, stream_token: nil},
+      "reader crash"
+    )
   end
 
   @impl true
@@ -481,6 +514,8 @@ defmodule SparkEx.StreamingQueryListenerBus do
        %{
          state
          | stream_task: nil,
+           stream_task_ref: nil,
+           stream_token: nil,
            registered?: false,
            pending_register_waiters: [],
            closing_stream?: false
@@ -500,36 +535,37 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   defp start_reader_task(session) do
     parent = self()
+    token = make_ref()
 
-    {pid, _ref} =
+    {pid, ref} =
       spawn_monitor(fn ->
         case SparkEx.Session.execute_command_stream(
                session,
                {:streaming_query_listener_bus_command, :add}
              ) do
           {:ok, stream} ->
-            read_events(stream, parent)
+            read_events(stream, parent, token)
 
           {:error, reason} ->
-            send(parent, {:listener_stream_ended, reason})
+            send(parent, {:listener_stream_ended, token, reason})
         end
       end)
 
-    pid
+    {pid, ref, token}
   end
 
-  defp read_events(stream, parent) do
+  defp read_events(stream, parent, token) do
     result =
       Enum.reduce_while(stream, :normal, fn
         {:ok, %ExecutePlanResponse{} = resp}, _acc ->
           case resp.response_type do
             {:streaming_query_listener_events_result, result} ->
               if result.listener_bus_listener_added == true do
-                send(parent, :listener_bus_registered)
+                send(parent, {:listener_bus_registered, token})
               end
 
               Enum.each(result.events, fn event ->
-                send(parent, {:listener_event, parse_event(event)})
+                send(parent, {:listener_event, token, parse_event(event)})
               end)
 
             _ ->
@@ -543,7 +579,7 @@ defmodule SparkEx.StreamingQueryListenerBus do
           {:halt, {:error, reason}}
       end)
 
-    send(parent, {:listener_stream_ended, result})
+    send(parent, {:listener_stream_ended, token, result})
   end
 
   defp stop_event_stream(%__MODULE__{stream_task: nil} = state), do: state
@@ -562,6 +598,16 @@ defmodule SparkEx.StreamingQueryListenerBus do
       _, _ -> :ok
     end
 
+    # T-17: drop the monitor (flushing any DOWN already in flight) *before*
+    # killing the task, so no later DOWN can arrive for a pid we no longer
+    # track. Because nothing is left to observe, the closing window ends here:
+    # clear `closing_stream?` immediately and reset the reconnect budget, so a
+    # subsequent add_listener starts from a clean slate instead of being
+    # permanently answered with {:error, :stream_closed}.
+    if state.stream_task_ref do
+      Process.demonitor(state.stream_task_ref, [:flush])
+    end
+
     if state.stream_task do
       Process.exit(state.stream_task, :shutdown)
     end
@@ -571,9 +617,12 @@ defmodule SparkEx.StreamingQueryListenerBus do
     %{
       state
       | stream_task: nil,
+        stream_task_ref: nil,
+        stream_token: nil,
         registered?: false,
         pending_register_waiters: [],
-        closing_stream?: true
+        closing_stream?: false,
+        reconnect_attempts: 0
     }
   end
 

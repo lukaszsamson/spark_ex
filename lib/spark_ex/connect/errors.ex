@@ -135,7 +135,11 @@ defmodule SparkEx.Error do
 
     @impl true
     def message(%__MODULE__{} = e) do
-      parts = [e.message || e.server_message || "Unknown Spark error"]
+      # T-43: the gRPC status message is truncated by the server; the full text
+      # only arrives via FetchErrorDetails and lands in `server_message`.
+      # PySpark reads `resp.errors[root_error_idx].message`, so prefer that and
+      # keep the gRPC message as the fallback.
+      parts = [e.server_message || e.message || "Unknown Spark error"]
 
       parts =
         if e.error_class do
@@ -335,6 +339,9 @@ defmodule SparkEx.Connect.Errors do
     # times out we fire-and-forget a graceful shutdown in a separate task
     # (to avoid adding an extra 1 s to the caller's wall-clock wait) and
     # fall back to the base error immediately.
+    # T-19: during application shutdown the task supervisor may already be gone;
+    # `async_nolink` then exits with :noproc. Enrichment is best-effort, so
+    # degrade to the un-enriched error instead of crashing the caller.
     task =
       Task.Supervisor.async_nolink(SparkEx.TaskSupervisor, fn ->
         try do
@@ -352,9 +359,14 @@ defmodule SparkEx.Connect.Errors do
       nil ->
         # Yield timed out — shut the task down asynchronously so the
         # caller is not blocked for an additional grace period.
-        Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
-          _ = Task.shutdown(task, 1_000)
-        end)
+        _ =
+          try do
+            Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
+              _ = Task.shutdown(task, 1_000)
+            end)
+          catch
+            :exit, {:noproc, _} -> :ok
+          end
 
         {:error, :timeout}
 
@@ -373,6 +385,8 @@ defmodule SparkEx.Connect.Errors do
             {:error, {:task_exit, reason}}
         end
     end
+  catch
+    :exit, {:noproc, _} -> {:error, :task_supervisor_unavailable}
   end
 
   defp enrich_from_response(error, %FetchErrorDetailsResponse{} = resp) do

@@ -132,8 +132,14 @@ defmodule SparkEx.Connect.RetryTest do
 
     assert {:error, %Remote{grpc_status: 14}} = result
     assert Process.get(attempt_counter) == 6
-    assert_received {:slept, 5_000}
-    assert_received {:slept, 5_000}
+
+    # T-16: the 5000 ms server floor is above the default 2000 ms jitter
+    # threshold, so the default 0..500 ms jitter is added AFTER the max with
+    # the floor (PySpark retries.py order) rather than being discarded by it.
+    assert_received {:slept, first_floor_wait}
+    assert first_floor_wait in 5_000..5_500
+    assert_received {:slept, second_floor_wait}
+    assert second_floor_wait in 5_000..5_500
     assert_received {:slept, 40}
     assert_received {:slept, 80}
     assert_received {:slept, 80}

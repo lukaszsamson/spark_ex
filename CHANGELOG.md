@@ -20,6 +20,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wave 2 triage fixes — transport, retry and stream lifecycle** (see
+  `BUGS_TRIAGED.txt` T-03, T-08, T-09, T-15..T-19, T-37, T-41..T-43):
+  - Managed streams (streaming listener event streams) now release their
+    server-side execution when the owner process exits abnormally: the
+    controller is started unlinked and relies on the owner monitor (T-03).
+    They also go through the reattachable execution machinery, so a graceful
+    EOF or transient transport loss reattaches instead of truncating (T-09).
+  - The initial reattachable `ExecutePlan` RPC is retried with the reattach
+    policy like every other RPC (T-08); a fresh `ExecutePlan` after
+    `OPERATION_NOT_FOUND` now honours the retry budget instead of looping
+    (T-15); jitter is applied after the server-provided `RetryInfo` floor so
+    throttled clients no longer retry in lockstep (T-16).
+  - Streaming listener bus: stopping the event stream no longer leaves the
+    bus permanently in a "closing" state (T-17), and a crashed reader task
+    reconnects with the same backoff as a transport error (T-18).
+  - Best-effort release and error-enrichment tasks tolerate
+    `SparkEx.TaskSupervisor` being down during shutdown instead of taking a
+    successful result down with them (T-19).
+  - TLS connections without `ssl_cacert` now explicitly request
+    `verify_peer` with the OS CA store and HTTPS hostname checking, rather
+    than relying on OTP/gun defaults (which only verify on OTP 26+);
+    `ssl_verify=none` remains an explicit opt-out (T-37).
+  - `DataFrame.to_arrow/2` forwards `max_rows`/`max_bytes` (T-41); the raw
+    reattachable stream halts at `ResultComplete` (T-42);
+    `SparkEx.Error.Remote` messages prefer the full server-side error text
+    over the truncated gRPC status message (T-43).
+
 - **Wave 1 triage fixes** (see `BUGS_TRIAGED.txt` T-01..T-27, T-40):
   - `Session.artifact_status/2` validates its `names` argument instead of
     crashing the shared Session process on protobuf encode (T-01).

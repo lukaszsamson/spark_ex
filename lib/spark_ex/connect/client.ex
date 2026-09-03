@@ -548,7 +548,11 @@ defmodule SparkEx.Connect.Client do
         operation_id,
         reattachable,
         opts,
-        &ResultDecoder.decode_stream_arrow(&1, session)
+        &ResultDecoder.decode_stream_arrow(
+          &1,
+          session,
+          Keyword.take(opts, [:max_rows, :max_bytes])
+        )
       )
     end
   end
@@ -647,29 +651,57 @@ defmodule SparkEx.Connect.Client do
     operation_id = generate_operation_id()
     request = build_managed_stream_request(session, plan, operation_id, opts)
 
-    case Stub.execute_plan(session.channel, request, timeout: timeout) do
-      {:ok, stream} ->
-        release_fun = fn release_opts -> release_execute(session, operation_id, release_opts) end
+    release_fun =
+      Keyword.get(opts, :release_execute_fun, fn release_opts ->
+        release_execute(session, operation_id, release_opts)
+      end)
 
+    # Shared closed flag: set by the controller on any close (explicit, owner
+    # down, idle timeout, stream finished) and consulted by the reattach
+    # machinery so a consumer blocked in the stream halts instead of
+    # reattaching to / re-issuing the operation the owner just released.
+    closed_flag = ManagedStream.new_closed_flag()
+
+    # The controller owns the terminal release_all (exactly once, async, also
+    # on owner-down). The inner reattach stream therefore only issues the
+    # per-response `release_until` checkpoints; its release_all calls (which
+    # carry no `until_response_id`) are no-ops so an early halt neither
+    # blocks the consumer on a synchronous release nor double-releases.
+    inner_release_fun = fn
+      [] -> {:ok, nil}
+      release_opts -> release_fun.(release_opts)
+    end
+
+    reattach_opts =
+      opts
+      |> Keyword.put(:release_execute_fun, inner_release_fun)
+      |> Keyword.put(:stream_closed_fun, fn -> ManagedStream.closed?(closed_flag) end)
+
+    # T-09: the request advertises `reattachable: true`, so the consumed stream
+    # must actually reattach on graceful EOF / transient transport loss instead
+    # of handing the raw initial gRPC stream to the caller. Route through the
+    # same reattach machinery as execute_plan/3; the identity decode_fn keeps
+    # the lazy `{:ok, resp} | {:error, term}` shape the managed-stream
+    # consumers expect.
+    case execute_reattachable(session, request, operation_id, timeout, reattach_opts, &{:ok, &1}) do
+      {:ok, stream} ->
         case ManagedStream.new(stream,
                owner: owner,
                idle_timeout: idle_timeout,
                release_fun: release_fun,
-               release_timeout: release_timeout
+               release_timeout: release_timeout,
+               closed_flag: closed_flag
              ) do
           {:ok, managed_stream} ->
             {:ok, managed_stream}
 
           {:error, _} = error ->
-            _ = release_execute(session, operation_id)
+            _ = release_fun.([])
             error
         end
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -1495,9 +1527,42 @@ defmodule SparkEx.Connect.Client do
         release_execute(session, operation_id, release_opts)
       end)
 
-    case execute_stream_fun.(request, timeout) do
+    stream_closed_fun = Keyword.get(opts, :stream_closed_fun, fn -> false end)
+
+    # T-08: a retryable failure of the initial ExecutePlan handshake must NOT
+    # be retried by re-sending the identical request: grpc-elixir's do_call is
+    # send_request |> recv, so the server may already have registered the
+    # operation and Spark 3.5 answers a re-sent operation_id with the
+    # non-retryable INVALID_HANDLE.OPERATION_ALREADY_EXISTS (leaking the
+    # execution). PySpark (reattach.py _call_iter) re-issues ReattachExecute
+    # instead and only falls back to ExecutePlan on OPERATION_NOT_FOUND. We
+    # get the same behaviour by feeding the error into the reattach state
+    # machine as a one-element initial stream: handle_inner_error ->
+    # perform_reattach(nil) -> handle_invalid_handle nil-branch (fresh
+    # ExecutePlan). Non-retryable failures are returned immediately.
+    initial_result =
+      case execute_stream_fun.(request, timeout) do
+        {:ok, _} = ok ->
+          ok
+
+        {:error, %GRPC.RPCError{} = grpc_error} ->
+          remote = Errors.from_grpc_error(grpc_error, session)
+
+          if retryable_error?(remote),
+            do: {:ok, [{:error, grpc_error}]},
+            else: {:error, remote}
+
+        {:error, _} = error ->
+          error
+      end
+
+    case initial_result do
       {:ok, initial_stream} ->
         ctx = %{
+          # Consulted before every reattach / fresh ExecutePlan so a stream
+          # whose owner released it (ManagedStream.close/1) halts instead of
+          # resurrecting the cancelled operation (T-09 review).
+          stream_closed_fun: stream_closed_fun,
           session: session,
           request: request,
           execute_stream_fun: execute_stream_fun,
@@ -1518,11 +1583,8 @@ defmodule SparkEx.Connect.Client do
         response_stream = build_reattachable_response_stream(ctx, initial_stream)
         decode_fn.(response_stream)
 
-      {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -1559,26 +1621,11 @@ defmodule SparkEx.Connect.Client do
   # unboundedly.
   @empty_eof_streak_backoff_cap 3
 
-  defp reattach_stream_step(%{result_complete?: true, iter: iter} = state) do
-    case pull_iter(iter) do
-      {:value, {:ok, %ExecutePlanResponse{} = resp}, new_iter} ->
-        new_id = response_id_or_nil(resp.response_id) || state.last_response_id
-
-        {[{:ok, resp}],
-         %{
-           state
-           | iter: new_iter,
-             last_response_id: new_id,
-             emitted_count: state.emitted_count + 1
-         }}
-
-      {:value, {:error, _error}, _new_iter} ->
-        {:halt, state}
-
-      :done ->
-        {:halt, state}
-    end
-  end
+  # T-42: ResultComplete (or a terminal error) is the end of the operation.
+  # PySpark's reattach iterator stops there too; anything the server might
+  # still have buffered after it is not part of the result and must not be
+  # yielded, so halt without pulling from the underlying stream again.
+  defp reattach_stream_step(%{result_complete?: true} = state), do: {:halt, state}
 
   defp reattach_stream_step(state) do
     case pull_iter(state.iter) do
@@ -1678,8 +1725,29 @@ defmodule SparkEx.Connect.Client do
     {[{:error, error}], %{state | result_complete?: true}}
   end
 
+  # T-19: `Task.Supervisor.start_child/2` and `async_nolink/2` exit with
+  # `{:noproc, _}` once SparkEx.TaskSupervisor has stopped (app shutdown or a
+  # caller outliving the application). Release RPCs are best-effort, so a
+  # missing supervisor must degrade to a reported failure, not crash the
+  # stream consumer mid-teardown.
+  @doc false
+  @spec start_supervised_task((-> term())) :: {:ok, pid()} | {:error, term()}
+  def start_supervised_task(fun) when is_function(fun, 0) do
+    Task.Supervisor.start_child(SparkEx.TaskSupervisor, fun)
+  catch
+    :exit, {:noproc, _} -> {:error, :noproc}
+  end
+
+  @doc false
+  @spec async_nolink_supervised((-> term())) :: {:ok, Task.t()} | {:error, :noproc}
+  def async_nolink_supervised(fun) when is_function(fun, 0) do
+    {:ok, Task.Supervisor.async_nolink(SparkEx.TaskSupervisor, fun)}
+  catch
+    :exit, {:noproc, _} -> {:error, :noproc}
+  end
+
   defp fire_release_all(release_execute_fun, timeout_ms) do
-    Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
+    start_supervised_task(fn ->
       task =
         Task.async(fn ->
           try do
@@ -1703,18 +1771,21 @@ defmodule SparkEx.Connect.Client do
   # but never charge the retry budget nor surface :reattach_incomplete_result
   # for graceful EOFs (FABLE-38). The retry budget applies only to transient
   # errors, which raise the max-retries error as before.
-  defp perform_reattach(state, {:graceful_eof, _} = reason) do
-    do_perform_reattach(state, reason)
-  end
-
   defp perform_reattach(state, reason) do
-    %{ctx: ctx, attempt: attempt} = state
-    %{policy: policy} = ctx
+    cond do
+      state.ctx.stream_closed_fun.() ->
+        # The owner released the operation; do not reattach to (or re-issue)
+        # something the user just cancelled.
+        {:halt, state}
 
-    if attempt >= policy.max_retries do
-      reattach_max_retries_error(state)
-    else
-      do_perform_reattach(state, reason)
+      match?({:graceful_eof, _}, reason) ->
+        do_perform_reattach(state, reason)
+
+      state.attempt >= state.ctx.policy.max_retries ->
+        reattach_max_retries_error(state)
+
+      true ->
+        do_perform_reattach(state, reason)
     end
   end
 
@@ -1824,17 +1895,24 @@ defmodule SparkEx.Connect.Client do
 
   defp handle_invalid_handle(state, _remote, session, _operation_id, next_attempt, ctx)
        when is_nil(state.last_response_id) do
-    case ctx.execute_stream_fun.(ctx.request, ctx.timeout) do
-      {:ok, fresh_stream} ->
-        new_state = %{state | iter: start_iter(fresh_stream), attempt: next_attempt + 1}
-        reattach_stream_step(new_state)
+    # T-15: re-issuing a fresh ExecutePlan after the server lost the operation
+    # consumes the retry budget like any other retry. Without this check a
+    # graceful-EOF -> OPERATION_NOT_FOUND cycle (graceful EOF never charges the
+    # budget) would reissue the plan forever.
+    # `next_attempt` already includes the reattach that just failed; the
+    # fresh ExecutePlan is itself a retry, so it is allowed while the budget
+    # is not yet exceeded (`>`), and charged (+1) once issued. With
+    # `reattach_retries: 1` this still permits: transient error -> reattach ->
+    # OPERATION_NOT_FOUND -> one fresh ExecutePlan.
+    cond do
+      ctx.stream_closed_fun.() ->
+        {:halt, state}
 
-      {:error, %GRPC.RPCError{} = grpc_error} ->
-        {[{:error, Errors.from_grpc_error(grpc_error, session)}],
-         %{state | result_complete?: true}}
+      next_attempt > ctx.policy.max_retries ->
+        reattach_max_retries_error(%{state | attempt: next_attempt})
 
-      {:error, err} ->
-        {[{:error, err}], %{state | result_complete?: true}}
+      true ->
+        reissue_execute_plan(state, session, next_attempt, ctx)
     end
   end
 
@@ -1847,6 +1925,36 @@ defmodule SparkEx.Connect.Client do
     }
 
     {[{:error, error}], %{state | result_complete?: true}}
+  end
+
+  defp reissue_execute_plan(state, session, next_attempt, ctx) do
+    case ctx.execute_stream_fun.(ctx.request, ctx.timeout) do
+      {:ok, fresh_stream} ->
+        new_state = %{state | iter: start_iter(fresh_stream), attempt: next_attempt + 1}
+        reattach_stream_step(new_state)
+
+      {:error, %GRPC.RPCError{} = grpc_error} ->
+        remote = Errors.from_grpc_error(grpc_error, session)
+
+        if retryable_error?(remote) do
+          # Same reasoning as the initial handshake (T-08): the re-issued plan
+          # may have been registered before the transport failed, so route the
+          # error through the state machine (reattach first) rather than
+          # failing terminally or re-sending the identical request.
+          new_state = %{
+            state
+            | iter: start_iter([{:error, grpc_error}]),
+              attempt: next_attempt + 1
+          }
+
+          reattach_stream_step(new_state)
+        else
+          {[{:error, remote}], %{state | result_complete?: true}}
+        end
+
+      {:error, err} ->
+        {[{:error, err}], %{state | result_complete?: true}}
+    end
   end
 
   # Suspends an enumerable so elements can be pulled one at a time via pull_iter/1.
@@ -1886,7 +1994,7 @@ defmodule SparkEx.Connect.Client do
     else
       :counters.add(counter, 1, 1)
 
-      case Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
+      case start_supervised_task(fn ->
              task =
                Task.async(fn ->
                  try do
@@ -2191,25 +2299,10 @@ defmodule SparkEx.Connect.Client do
   defp release_execute_best_effort(release_execute_fun, opts, timeout_ms) do
     start_time = System.monotonic_time()
 
-    task =
-      Task.Supervisor.async_nolink(SparkEx.TaskSupervisor, fn -> release_execute_fun.(opts) end)
-
     outcome =
-      case Task.yield(task, timeout_ms) || Task.shutdown(task, @shutdown_grace_ms) do
-        {:ok, {:ok, _}} ->
-          :ok
-
-        {:ok, {:error, reason}} ->
-          if benign_release_execute_error?(reason), do: :benign_not_found, else: {:error, reason}
-
-        {:ok, other} ->
-          {:error, {:unexpected_release_execute_result, other}}
-
-        {:exit, reason} ->
-          {:error, {:task_exit, reason}}
-
-        nil ->
-          :timeout
+      case async_nolink_supervised(fn -> release_execute_fun.(opts) end) do
+        {:ok, task} -> await_release_task(task, timeout_ms)
+        {:error, :noproc} -> {:error, :noproc}
       end
 
     duration = System.monotonic_time() - start_time
@@ -2238,6 +2331,25 @@ defmodule SparkEx.Connect.Client do
         )
 
         :ok
+    end
+  end
+
+  defp await_release_task(task, timeout_ms) do
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, @shutdown_grace_ms) do
+      {:ok, {:ok, _}} ->
+        :ok
+
+      {:ok, {:error, reason}} ->
+        if benign_release_execute_error?(reason), do: :benign_not_found, else: {:error, reason}
+
+      {:ok, other} ->
+        {:error, {:unexpected_release_execute_result, other}}
+
+      {:exit, reason} ->
+        {:error, {:task_exit, reason}}
+
+      nil ->
+        :timeout
     end
   end
 
@@ -2556,11 +2668,17 @@ defmodule SparkEx.Connect.Client do
   end
 
   defp backoff_ms(attempt, policy) do
+    with_jitter(exponential_backoff_ms(attempt, policy), policy)
+  end
+
+  # Exponential backoff without jitter: initial * multiplier^attempt, capped.
+  defp exponential_backoff_ms(attempt, policy) do
     multiplier = Map.get(policy, :backoff_multiplier, 2.0)
     base = policy.initial_backoff_ms * :math.pow(multiplier, attempt)
-    capped = Kernel.min(round(base), policy.max_backoff_ms)
-    capped + jitter_amount(capped, policy)
+    Kernel.min(round(base), policy.max_backoff_ms)
   end
+
+  defp with_jitter(wait_ms, policy), do: wait_ms + jitter_amount(wait_ms, policy)
 
   defp jitter_amount(capped, policy) do
     jitter_fun = Map.get(policy, :jitter_fun)
@@ -2583,8 +2701,13 @@ defmodule SparkEx.Connect.Client do
 
   @retry_info_type_url "type.googleapis.com/google.rpc.RetryInfo"
 
-  defp extract_server_retry_delay(%GRPC.RPCError{details: details}) when is_list(details) do
-    Enum.find_value(details, nil, fn
+  # A transport-level error (or one built without status details) may carry
+  # `details: nil` at runtime despite the struct type; List.wrap/1 treats it as
+  # "no RetryInfo" so the caller falls back to the policy backoff.
+  defp extract_server_retry_delay(%GRPC.RPCError{details: details}) do
+    details
+    |> List.wrap()
+    |> Enum.find_value(nil, fn
       %Google.Protobuf.Any{type_url: @retry_info_type_url, value: value} ->
         case safe_decode_retry_info(value) do
           {:ok, %Google.Rpc.RetryInfo{retry_delay: nil}} ->
@@ -2616,10 +2739,20 @@ defmodule SparkEx.Connect.Client do
   # exponential backoff, never a replacement (pyspark client/retries.py:157-167):
   #   wait = max(exponential_backoff_with_jitter, min(retry_delay, max_server_retry_delay))
   # A small server hint (10-100 ms) must not suppress attempt-based backoff.
+  #
+  # T-16: jitter is applied AFTER the max(...) with the server floor (retries.py
+  # nextAttempt: "Jitter current backoff, after the future backoff was
+  # computed"). Adding jitter inside the exponential term and then taking the
+  # max would discard it whenever the server floor dominates, so many clients
+  # honouring the same RetryInfo would all wake at exactly the same instant.
   defp backoff_with_retry_info(attempt, policy, retry_delay_ms)
        when is_integer(retry_delay_ms) and retry_delay_ms > 0 do
     server_floor = Kernel.min(retry_delay_ms, policy.max_server_retry_delay)
-    Kernel.max(backoff_ms(attempt, policy), server_floor)
+
+    attempt
+    |> exponential_backoff_ms(policy)
+    |> Kernel.max(server_floor)
+    |> with_jitter(policy)
   end
 
   defp backoff_with_retry_info(attempt, policy, _retry_delay_ms) do

@@ -1255,7 +1255,8 @@ defmodule SparkEx.M14.StreamingTest do
 
       :ok = SparkEx.StreamingQueryListenerBus.add_listener(bus, StartedListener)
 
-      send(bus, {:listener_stream_ended, :normal})
+      token = :sys.get_state(bus).stream_token
+      send(bus, {:listener_stream_ended, token, :normal})
 
       assert_receive {:telemetry_reconnect, %{attempt: 1, delay_ms: delay}}, 500
       assert is_integer(delay) and delay > 0
@@ -1282,7 +1283,8 @@ defmodule SparkEx.M14.StreamingTest do
 
       :ok = SparkEx.StreamingQueryListenerBus.add_listener(bus, StartedListener)
 
-      send(bus, {:listener_stream_ended, {:error, :econnreset}})
+      token = :sys.get_state(bus).stream_token
+      send(bus, {:listener_stream_ended, token, {:error, :econnreset}})
 
       assert_receive {:telemetry_reconnect, %{attempt: 1, delay_ms: _}}, 500
     end
@@ -1308,8 +1310,9 @@ defmodule SparkEx.M14.StreamingTest do
 
       :ok = SparkEx.StreamingQueryListenerBus.add_listener(bus, StartedListener)
 
+      token = :sys.get_state(bus).stream_token
       :sys.replace_state(bus, fn state -> %{state | reconnect_attempts: 100} end)
-      send(bus, {:listener_stream_ended, :normal})
+      send(bus, {:listener_stream_ended, token, :normal})
 
       assert_receive {:telemetry_exhausted, %{attempts: 100}}, 500
     end
