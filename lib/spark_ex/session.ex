@@ -2587,6 +2587,9 @@ defmodule SparkEx.Session do
       {{retry_proto_plan, counter}, nil} ->
         state = %{state | plan_id_counter: counter}
 
+        {retry_plan, retry_proto_plan, state} =
+          preflight_retry_plan(state, retry_plan, retry_proto_plan)
+
         case Client.execute_plan(state, retry_proto_plan, opts) do
           {:ok, result} ->
             {:ok, Map.put(result, :executed_proto_plan, retry_proto_plan), state}
@@ -2606,6 +2609,47 @@ defmodule SparkEx.Session do
 
       _ ->
         {:error, state}
+    end
+  end
+
+  # A rewritten fallback plan can legitimately produce duplicate column names
+  # (e.g. a Spark 3.5 lateral join downgraded to a cross join between two
+  # relations that both expose `id`). Decoding such a payload panics inside
+  # the Explorer/polars NIF before the unique-columns retry can recover, so
+  # rename duplicates up front, exactly like the primary collect preflight.
+  # Any analysis failure leaves the plan untouched; the retry then surfaces
+  # the server's own error.
+  defp preflight_retry_plan(state, retry_plan, retry_proto_plan) do
+    case safe_analyze_schema(state, retry_proto_plan) do
+      {:ok, schema, state} ->
+        case unique_schema_column_names(schema) do
+          unique_names when is_list(unique_names) ->
+            renamed = {:to_df, retry_plan, unique_names}
+
+            case safe_encode(renamed, state.plan_id_counter) do
+              {{renamed_proto, counter}, nil} ->
+                {renamed, renamed_proto, %{state | plan_id_counter: counter}}
+
+              _ ->
+                {retry_plan, retry_proto_plan, state}
+            end
+
+          _ ->
+            {retry_plan, retry_proto_plan, state}
+        end
+
+      :error ->
+        {retry_plan, retry_proto_plan, state}
+    end
+  end
+
+  defp safe_analyze_schema(state, proto_plan) do
+    case Client.analyze_schema(state, proto_plan) do
+      {:ok, schema, server_side_session_id} ->
+        {:ok, schema, maybe_update_server_session(state, server_side_session_id)}
+
+      _ ->
+        :error
     end
   end
 

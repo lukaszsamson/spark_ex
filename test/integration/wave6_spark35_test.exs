@@ -73,6 +73,24 @@ defmodule SparkEx.Integration.Wave6Spark35Test do
     end
   end
 
+  describe "lateral join over a table-valued function" do
+    # Both sides expose `id`; on Spark 3.5 the fallback downgrades the lateral
+    # join to a cross join whose payload has duplicate column names, which must
+    # be renamed before the Arrow decode (the polars IPC reader panics on
+    # duplicates). Works natively on 4.x.
+    test "duplicate column names never reach the decoder", %{session: session} do
+      left = SparkEx.sql(session, "SELECT * FROM VALUES (1), (2) AS t(id)")
+      right = DataFrame.table_function(session, "range", [Functions.lit(2)])
+
+      assert {:ok, rows} =
+               DataFrame.lateral_join(left, right, Functions.lit(true), :cross)
+               |> DataFrame.collect()
+
+      assert length(rows) == 4
+      assert Enum.all?(rows, &(map_size(&1) == 2))
+    end
+  end
+
   describe "as-of join below other operators" do
     # Rows where a plain equi-join and a backward as-of join disagree: id 2 has
     # two right candidates (19 and 25); the as-of match for t1=20 is 19 only.

@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Spark 3.5 compatibility**:
+  - Rewritten Spark 3.5 fallback plans are checked for duplicate column names
+    before decoding (a lateral join over a table-valued function that also
+    exposes `id` becomes a cross join with two `id` columns); duplicates are
+    renamed up front instead of panicking inside the Arrow decoder first.
   - As-of joins are no longer downgraded to a plain join on Spark 3.5 servers
     (that dropped the as-of columns, tolerance, direction and exact-match
     policy and could return different rows). `collect/1`, `count/1` and
