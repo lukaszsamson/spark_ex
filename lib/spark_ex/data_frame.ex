@@ -2037,8 +2037,8 @@ defmodule SparkEx.DataFrame do
   @spec to_local_iterator(t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
   def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
     with :ok <- validate_map_format_option(opts),
-         {:ok, stream} <-
-           SparkEx.Session.execute_plan_reattachable_stream(
+         {:ok, stream, json_schema} <-
+           SparkEx.Session.execute_plan_reattachable_stream_safe(
              df.session,
              df.plan,
              merge_tags(df, opts)
@@ -2051,9 +2051,38 @@ defmodule SparkEx.DataFrame do
       session_state = fetch_session_state(df.session)
       decoder_opts = Keyword.take(opts, [:on_metrics, :map_format])
 
-      {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state, decoder_opts)}
+      rows =
+        SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state, decoder_opts)
+
+      {:ok, decode_json_projection_stream(rows, json_schema, Keyword.get(opts, :map_format))}
     end
   end
+
+  # When the Arrow preflight rewrote the plan to a JSON projection, complex
+  # columns stream in as JSON strings: decode them lazily, per element, so the
+  # iterator stays lazy (T-33).
+  defp decode_json_projection_stream(rows, nil, _map_format), do: rows
+
+  defp decode_json_projection_stream(rows, schema, map_format) do
+    Stream.map(rows, fn
+      {:ok, row} when is_map(row) ->
+        case SparkEx.Session.__decode_json_projection_rows__([row], schema) do
+          [decoded] -> {:ok, apply_iterator_map_format([decoded], schema, map_format) |> hd()}
+          _ -> {:ok, row}
+        end
+
+      other ->
+        other
+    end)
+  end
+
+  # The wire schema of a JSON-projected plan types MAP columns as STRING, so
+  # the decoder's map conversion is a no-op there; re-apply it against the
+  # logical schema once the JSON has been decoded.
+  defp apply_iterator_map_format(rows, schema, :map),
+    do: SparkEx.Connect.ResultDecoder.convert_map_columns(rows, schema)
+
+  defp apply_iterator_map_format(rows, _schema, _format), do: rows
 
   @map_formats [:key_value_pairs, :map]
 

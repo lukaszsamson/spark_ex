@@ -6,10 +6,12 @@ defmodule SparkEx.Connect.TypeMapper do
   @doc """
   Converts a Spark Connect `DataType` to an Explorer dtype atom.
 
-  Returns `{:ok, nil}` for Spark types that have no native Explorer dtype
-  (map, variant, UDT, geometry/geography, year-month/calendar interval). Cells
-  for those columns decode as maps/lists/strings; callers building a frame
-  should omit the dtype and let Explorer infer it from the decoded values.
+  Spark types without a native Explorer dtype are mapped to the dtype of their
+  Arrow wire representation: MAP → `{:list, {:struct, [key, value]}}`, VARIANT
+  and GEOMETRY/GEOGRAPHY → their `{:struct, _}` layout, UDT → its `sql_type`.
+  Returns `{:ok, nil}` only for types with no Explorer representation at all
+  (year-month / calendar interval, unparsed, or a UDT without `sql_type`);
+  callers building a frame should omit those dtypes and let Explorer infer.
 
   ## Examples
 
@@ -153,20 +155,41 @@ defmodule SparkEx.Connect.TypeMapper do
     end
   end
 
-  defp map_kind(:struct, _dt), do: {:struct, []}
+  # A struct without a decoded field list cannot be represented safely: a
+  # polars struct cast to `{:struct, []}` would silently drop every field.
+  defp map_kind(:struct, _dt), do: nil
 
-  # Map: Explorer has no native map dtype. Cells decode as maps/lists from
-  # Arrow, so we cannot assign a scalar dtype without a mismatch — leave it
-  # unmapped (nil) and let the rebuild path infer the dtype from the values.
-  defp map_kind(:map, _dt), do: nil
+  # Map: Explorer has no native map dtype. Arrow encodes MAP<K, V> as
+  # `map<struct<key: K, value: V>>`, which polars/Explorer reads as a list of
+  # structs, so that is the structurally correct dtype for both empty and
+  # non-empty frames (T-30). Collapses to nil when a component has no dtype.
+  defp map_kind(:map, %DataType{kind: {:map, %DataType.Map{key_type: kt, value_type: vt}}}) do
+    with {:ok, key_dtype} when not is_nil(key_dtype) <- to_explorer_dtype(kt),
+         {:ok, value_dtype} when not is_nil(value_dtype) <- to_explorer_dtype(vt) do
+      {:list, {:struct, [{"key", key_dtype}, {"value", value_dtype}]}}
+    else
+      _ -> nil
+    end
+  end
 
-  # Other types with no native Explorer dtype. Variant/UDT/geometry/geography
-  # cells decode as maps/lists/binaries; dtyping them :string mismatches the
-  # decoded values and crashes the schema-policy rebuild. Leave unmapped (nil).
-  defp map_kind(:variant, _dt), do: nil
+  # Variant is shipped over Arrow as `struct<value: binary, metadata: binary>`
+  # (ArrowUtils.toArrowField), so mirror that structure.
+  defp map_kind(:variant, _dt), do: {:struct, [{"value", :binary}, {"metadata", :binary}]}
+
+  # A UDT travels as its `sql_type`; when the server omits it the column is
+  # left unmapped so the decoded cells drive dtype inference.
+  defp map_kind(:udt, %DataType{kind: {:udt, %DataType.UDT{sql_type: %DataType{} = sql_type}}}) do
+    {:ok, dtype} = to_explorer_dtype(sql_type)
+    dtype
+  end
+
   defp map_kind(:udt, _dt), do: nil
-  defp map_kind(:geometry, _dt), do: nil
-  defp map_kind(:geography, _dt), do: nil
+
+  # Geometry / geography arrive as `struct<srid: int, wkb: binary>`.
+  defp map_kind(:geometry, _dt), do: {:struct, [{"srid", {:s, 32}}, {"wkb", :binary}]}
+  defp map_kind(:geography, _dt), do: {:struct, [{"srid", {:s, 32}}, {"wkb", :binary}]}
+
+  # Unparsed types carry no structure we can map; leave them for inference.
   defp map_kind(:unparsed, _dt), do: nil
 
   # Catch-all for future types: leave unmapped so the rebuild infers from cells.

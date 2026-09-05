@@ -93,7 +93,14 @@ defmodule SparkEx.Error do
       :error_type_hierarchy,
       :stack_trace_inline,
       :cause_chain,
-      :breaking_change_info
+      :breaking_change_info,
+      # T-35: the server-supplied `errorId` is kept on the struct so the
+      # (potentially slow) `FetchErrorDetails` enrichment RPC can be deferred
+      # until the error is actually terminal, instead of running on every
+      # retried attempt. `enriched?` records that the lazy fetch has already
+      # been attempted so it never runs twice for the same error.
+      :error_id,
+      enriched?: false
     ]
 
     @type stack_frame :: %{
@@ -130,7 +137,9 @@ defmodule SparkEx.Error do
             error_type_hierarchy: [String.t()] | nil,
             stack_trace_inline: String.t() | nil,
             cause_chain: [cause()] | nil,
-            breaking_change_info: breaking_change() | nil
+            breaking_change_info: breaking_change() | nil,
+            error_id: String.t() | nil,
+            enriched?: boolean()
           }
 
     @impl true
@@ -191,6 +200,23 @@ defmodule SparkEx.Connect.Errors do
   """
   @spec from_grpc_error(GRPC.RPCError.t(), SparkEx.Session.t()) :: SparkEx.Error.Remote.t()
   def from_grpc_error(%GRPC.RPCError{} = error, session) do
+    error
+    |> decode_grpc_error()
+    |> enrich(session)
+  end
+
+  @doc """
+  Cheap, RPC-free decoding of a gRPC error into `SparkEx.Error.Remote`.
+
+  Decodes the gRPC status plus the inline `google.rpc.ErrorInfo` /
+  `google.rpc.RetryInfo` status details — everything the retry decision and
+  the server-suggested retry delay need — without issuing a
+  `FetchErrorDetails` call. The server `errorId` (when present) is stored on
+  the struct so `enrich/2` can perform the enrichment RPC later, once, on the
+  error that is actually returned to the caller (T-35).
+  """
+  @spec decode_grpc_error(GRPC.RPCError.t()) :: SparkEx.Error.Remote.t()
+  def decode_grpc_error(%GRPC.RPCError{} = error) do
     retry_delay_ms = extract_retry_delay_ms(error)
     # Track RetryInfo *presence* separately from its retry_delay: PySpark retries
     # any error whose status details carry a RetryInfo, even when retry_delay is
@@ -199,9 +225,8 @@ defmodule SparkEx.Connect.Errors do
 
     case extract_error_info(error) do
       {:ok, error_info} ->
-        enriched = fetch_error_details(error_info, error, session)
-
-        enriched
+        error_info
+        |> base_error(error)
         |> maybe_add_retry_delay(retry_delay_ms)
         |> Map.put(:has_retry_info, has_retry_info)
 
@@ -210,10 +235,37 @@ defmodule SparkEx.Connect.Errors do
           message: error.message,
           grpc_status: error.status,
           retry_delay_ms: retry_delay_ms,
-          has_retry_info: has_retry_info
+          has_retry_info: has_retry_info,
+          enriched?: true
         }
     end
   end
+
+  @doc """
+  Performs the deferred `FetchErrorDetails` enrichment for a terminal error.
+
+  Runs at most once per error (guarded by `enriched?`) and only when the
+  server supplied an `errorId` and a real session with a channel is
+  available. Any other value is returned unchanged, so this is safe to call
+  on the terminal result of a retry loop regardless of the error type.
+  """
+  @spec enrich(term(), SparkEx.Session.t() | nil) :: term()
+  def enrich(%SparkEx.Error.Remote{enriched?: true} = error, _session), do: error
+
+  def enrich(%SparkEx.Error.Remote{error_id: error_id} = error, %SparkEx.Session{} = session)
+      when is_binary(error_id) and error_id != "" do
+    enriched =
+      case do_fetch_error_details(error_id, session) do
+        {:ok, resp} -> enrich_from_response(error, resp)
+        {:error, _} -> error
+      end
+
+    %{enriched | enriched?: true}
+  end
+
+  def enrich(%SparkEx.Error.Remote{} = error, _session), do: %{error | enriched?: true}
+
+  def enrich(other, _session), do: other
 
   # --- Private ---
 
@@ -289,16 +341,15 @@ defmodule SparkEx.Connect.Errors do
     %{error | retry_delay_ms: retry_delay_ms}
   end
 
-  defp fetch_error_details(error_info, grpc_error, session) do
-    error_id = Map.get(error_info.metadata, "errorId")
-
+  defp base_error(error_info, grpc_error) do
     # Build initial error from ErrorInfo metadata (available even without FetchErrorDetails).
     # PySpark's _convert_exception (errors/exceptions/connect.py) reads `classes`
     # (JSON list of Java exception class names) and `stackTrace` (raw JVM stacktrace
     # string) directly from ErrorInfo metadata; mirror that so callers can pattern
     # match on Java exception class names without a separate FetchErrorDetails call.
-    base_error = %SparkEx.Error.Remote{
+    %SparkEx.Error.Remote{
       message: grpc_error.message,
+      error_id: Map.get(error_info.metadata, "errorId"),
       grpc_status: grpc_error.status,
       error_class: Map.get(error_info.metadata, "errorClass"),
       sql_state: Map.get(error_info.metadata, "sqlState"),
@@ -307,18 +358,6 @@ defmodule SparkEx.Connect.Errors do
       classes: parse_classes(Map.get(error_info.metadata, "classes")),
       stack_trace_inline: Map.get(error_info.metadata, "stackTrace")
     }
-
-    if error_id do
-      case do_fetch_error_details(error_id, session) do
-        {:ok, resp} ->
-          enrich_from_response(base_error, resp)
-
-        {:error, _} ->
-          base_error
-      end
-    else
-      base_error
-    end
   end
 
   defp do_fetch_error_details(error_id, session) do

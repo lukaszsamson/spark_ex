@@ -290,6 +290,44 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Like `execute_plan_reattachable_stream/3`, but applies the same Arrow
+  preflight `execute_collect/3` uses (duplicate-column renaming and the
+  JSON/STRING projection fallback).
+
+  Returns `{:ok, stream, json_schema}` where `json_schema` is non-nil when the
+  plan was rewritten to a JSON projection: rows decoded from the stream must
+  then be passed through `__decode_json_projection_rows__/2`.
+  """
+  @spec execute_plan_reattachable_stream_safe(GenServer.server(), term(), keyword()) ::
+          {:ok, Enumerable.t(), term() | nil} | {:error, term()}
+  def execute_plan_reattachable_stream_safe(session, plan, opts \\ []) do
+    if real_session_process?(session) do
+      case GenServer.call(
+             session,
+             {:prepare_safe_execute_plan_stream, plan, opts},
+             call_timeout(opts)
+           ) do
+        {:ok, stream_state, proto_plan, stream_opts, json_schema} ->
+          case Client.execute_plan_reattachable_response_stream(
+                 stream_state,
+                 proto_plan,
+                 stream_opts
+               ) do
+            {:ok, stream} -> {:ok, stream, json_schema}
+            {:error, _} = error -> error
+          end
+
+        {:error, _} = error ->
+          error
+      end
+    else
+      with {:ok, stream} <- execute_plan_reattachable_stream(session, plan, opts) do
+        {:ok, stream, nil}
+      end
+    end
+  end
+
+  @doc """
   Executes a plan and returns an `Explorer.DataFrame`.
 
   Pushes a LIMIT into the plan unless `unsafe: true`. Enforces row/byte bounds.
@@ -1155,6 +1193,20 @@ defmodule SparkEx.Session do
     end)
   end
 
+  def handle_call({:prepare_safe_execute_plan_stream, plan, opts}, _from, state) do
+    {safe_plan, json_schema, state} = prepare_safe_collect_plan(state, plan)
+
+    case safe_encode(safe_plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
+        opts = merge_session_tags(opts, state.tags)
+        {:reply, {:ok, state, proto_plan, opts, json_schema}, state}
+
+      {nil, error} ->
+        reply_error(error, state)
+    end
+  end
+
   def handle_call({:prepare_execute_plan_stream, plan, opts}, _from, state) do
     case safe_encode(plan, state.plan_id_counter) do
       {{proto_plan, counter}, nil} ->
@@ -1171,6 +1223,10 @@ defmodule SparkEx.Session do
     operation_telemetry_span(:execute_explorer, state.session_id, fn ->
       max_rows = Keyword.get(opts, :max_rows, 10_000)
       unsafe = Keyword.get(opts, :unsafe, false)
+
+      # Apply the same Arrow preflight collect uses: duplicate column names and
+      # nested/unsupported types otherwise panic the Explorer decoder (T-33).
+      {plan, _json_schema, state} = prepare_safe_collect_plan(state, plan, :explorer)
 
       # `:infinity` is a decoder-only option (DataFrame.to_explorer docs): it
       # must not be injected into the int32 LIMIT field. Any other
@@ -2152,6 +2208,78 @@ defmodule SparkEx.Session do
         reraise e, __STACKTRACE__
     end
   end
+
+  # Shared Arrow preflight for the result paths that do not go through
+  # `execute_collect`'s retry cascade (`to_explorer` / `to_local_iterator`).
+  # Analyzes the plan schema and rewrites the plan the same way the collect
+  # preflight does — dedupe duplicate column names, cast complex/unsupported
+  # columns to JSON/STRING — so the Explorer decoder never sees a payload it
+  # panics on (T-33).
+  #
+  # Returns `{plan_to_execute, json_schema_or_nil, state}`; `json_schema` is the
+  # logical schema to decode a JSON-projected payload against (nil when no JSON
+  # projection was applied).
+  #
+  # `mode` is `:rows` (collect/to_local_iterator: any schema the row decoder
+  # cannot round-trip is JSON-projected and decoded back) or `:explorer`
+  # (to_explorer: only the shapes that make the Explorer decoder panic —
+  # nested maps and unsupported scalars — are projected; top-level struct/map/
+  # array columns stay native containers).
+  defp prepare_safe_collect_plan(state, plan, mode \\ :rows) do
+    with true <- maybe_preflight_collect_retry?(plan),
+         {{proto_plan, counter}, nil} <- safe_encode(plan, state.plan_id_counter),
+         state = %{state | plan_id_counter: counter},
+         {:ok, schema, server_side_session_id} <- Client.analyze_schema(state, proto_plan) do
+      state = maybe_update_server_session(state, server_side_session_id)
+      safe_collect_plan_for_schema(state, plan, schema, mode)
+    else
+      _ -> {plan, nil, state}
+    end
+  end
+
+  defp safe_collect_plan_for_schema(state, plan, schema, mode) do
+    case unique_schema_column_names(schema) do
+      unique_names when is_list(unique_names) ->
+        renamed_schema = __unique_columns_map_format_schema__(schema)
+
+        {safe_plan, json_schema} =
+          maybe_json_projection_plan({:to_df, plan, unique_names}, renamed_schema, mode)
+
+        {safe_plan, json_schema, state}
+
+      _ ->
+        {safe_plan, json_schema} = maybe_json_projection_plan(plan, schema, mode)
+        {safe_plan, json_schema, state}
+    end
+  end
+
+  defp maybe_json_projection_plan(plan, schema, mode) do
+    if json_projection_needed?(schema, mode) do
+      case json_fallback_projection_plan(plan, schema) do
+        nil -> {plan, nil}
+        projected -> {projected, schema}
+      end
+    else
+      {plan, nil}
+    end
+  end
+
+  defp json_projection_needed?(schema, :rows) do
+    schema_has_nested_map?(schema) or schema_has_struct_and_map?(schema) or
+      schema_has_unsupported_scalar?(schema)
+  end
+
+  defp json_projection_needed?(schema, :explorer) do
+    schema_has_nested_map?(schema) or schema_has_unsupported_scalar?(schema)
+  end
+
+  @doc false
+  # Decodes rows produced by the JSON-projection fallback against the logical
+  # schema. Exposed so streaming consumers (`DataFrame.to_local_iterator/2`)
+  # can decode batches as they arrive.
+  @spec __decode_json_projection_rows__([map()], term()) :: [map()]
+  def __decode_json_projection_rows__(rows, schema),
+    do: decode_rows_from_json_projection(rows, schema)
 
   defp maybe_execute_collect_with_json_projection(state, plan, proto_plan, opts) do
     if maybe_preflight_collect_retry?(plan) do
@@ -3345,7 +3473,9 @@ defmodule SparkEx.Session do
   defp decode_complex_json_value(nil, _data_type), do: nil
 
   defp decode_complex_json_value(value, data_type) when is_binary(value) do
-    case Jason.decode(value) do
+    # `floats: :decimals` keeps DECIMAL digits exact (Spark's to_json emits
+    # decimals as unquoted numbers); DOUBLE/FLOAT leaves are converted back.
+    case Jason.decode(value, floats: :decimals) do
       {:ok, decoded} -> coerce_complex_decoded_value(decoded, data_type)
       _ -> value
     end
@@ -3392,7 +3522,92 @@ defmodule SparkEx.Session do
     end)
   end
 
+  # Scalar leaves inside a `to_json` fallback payload arrive as JSON scalars
+  # (strings/numbers). The Arrow path decodes the same values as Decimal /
+  # DateTime / NaiveDateTime / Date / raw binary, so mirror that here, guarded
+  # by the schema type so plain STRING columns are never mangled (T-32).
+  defp coerce_complex_decoded_value(%Decimal{} = value, %Spark.Connect.DataType{kind: {kind, _}})
+       when kind in [:double, :float],
+       do: Decimal.to_float(value)
+
+  defp coerce_complex_decoded_value(value, %Spark.Connect.DataType{kind: {:decimal, _}}) do
+    coerce_json_decimal(value)
+  end
+
+  defp coerce_complex_decoded_value(value, %Spark.Connect.DataType{kind: {:timestamp, _}})
+       when is_binary(value) do
+    coerce_json_timestamp(value)
+  end
+
+  defp coerce_complex_decoded_value(value, %Spark.Connect.DataType{kind: {:timestamp_ntz, _}})
+       when is_binary(value) do
+    coerce_json_timestamp_ntz(value)
+  end
+
+  defp coerce_complex_decoded_value(value, %Spark.Connect.DataType{kind: {:date, _}})
+       when is_binary(value) do
+    case Date.from_iso8601(value) do
+      {:ok, date} -> date
+      _ -> value
+    end
+  end
+
+  defp coerce_complex_decoded_value(value, %Spark.Connect.DataType{kind: {:binary, _}})
+       when is_binary(value) do
+    case Base.decode64(value) do
+      {:ok, decoded} -> decoded
+      :error -> value
+    end
+  end
+
   defp coerce_complex_decoded_value(value, _data_type), do: value
+
+  # Spark's `to_json` renders DECIMAL as an unquoted JSON number; Jason decodes
+  # that as integer/float. Strings are also accepted (some Spark configs quote
+  # decimals).
+  defp coerce_json_decimal(%Decimal{} = value), do: value
+  defp coerce_json_decimal(value) when is_integer(value), do: Decimal.new(value)
+  defp coerce_json_decimal(value) when is_float(value), do: Decimal.from_float(value)
+
+  defp coerce_json_decimal(value) when is_binary(value) do
+    case Decimal.parse(value) do
+      {decimal, ""} -> decimal
+      _ -> value
+    end
+  end
+
+  defp coerce_json_decimal(value), do: value
+
+  # TIMESTAMP renders as an ISO-8601 instant (millisecond precision, with the
+  # session time zone offset). Spark's to_json truncates to milliseconds, so
+  # JSON-projected timestamps lose sub-millisecond digits the Arrow path keeps.
+  defp coerce_json_timestamp(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} ->
+        datetime
+
+      _ ->
+        case NaiveDateTime.from_iso8601(value) do
+          {:ok, naive} -> DateTime.from_naive!(naive, "Etc/UTC")
+          _ -> value
+        end
+    end
+  end
+
+  # TIMESTAMP_NTZ renders without an offset; the Arrow path yields a
+  # NaiveDateTime.
+  defp coerce_json_timestamp_ntz(value) do
+    case NaiveDateTime.from_iso8601(value) do
+      {:ok, naive} ->
+        naive
+
+      _ ->
+        case DateTime.from_iso8601(value) do
+          {:ok, datetime, _offset} -> DateTime.to_naive(datetime)
+          _ -> value
+        end
+    end
+  end
 
   defp coerce_json_map_key(key, %Spark.Connect.DataType{kind: {tag, _}})
        when tag in [:byte, :short, :integer, :long] do

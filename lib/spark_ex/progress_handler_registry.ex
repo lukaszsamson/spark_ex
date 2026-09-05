@@ -36,7 +36,31 @@ defmodule SparkEx.ProgressHandlerRegistry do
   @table :spark_ex_progress_handlers
   @event [:spark_ex, :result, :progress]
 
-  @type handler :: (map() -> any())
+  @typedoc """
+  Handler payload. Mirrors PySpark's `ProgressHandler(stages, inflight_tasks,
+  operation_id, done)`:
+
+    * `:stages` — list of `%{stage_id, num_tasks, num_completed_tasks,
+      input_bytes_read, done}` maps for the latest progress frame
+    * `:inflight_tasks` — number of currently running tasks
+    * `:operation_id` — the ExecutePlan operation id (may be `nil`)
+    * `:done` — `true` for the single terminal event emitted when the result
+      stream completes or fails
+
+  The raw telemetry `:event`, `:measurements` and `:metadata` are kept too.
+  Handlers are not invoked for progress frames whose stages carry no tasks.
+  """
+  @type payload :: %{
+          event: [atom()],
+          measurements: map(),
+          metadata: map(),
+          stages: [map()],
+          inflight_tasks: non_neg_integer(),
+          operation_id: String.t() | nil,
+          done: boolean()
+        }
+
+  @type handler :: (payload() -> any())
   @type opts :: [id: term()]
 
   @spec register(String.t(), handler()) :: :ok
@@ -101,10 +125,25 @@ defmodule SparkEx.ProgressHandlerRegistry do
   @doc false
   def dispatch(event, measurements, metadata, %{session_id: session_id, handler: handler}) do
     if Map.get(metadata, :session_id) == session_id do
-      invoke(handler, %{event: event, measurements: measurements, metadata: metadata})
+      invoke(handler, build_payload(event, measurements, metadata))
     end
 
     :ok
+  end
+
+  # Payload shape mirrors PySpark's `ProgressHandler.__call__(stages,
+  # inflight_tasks, operation_id, done)` while keeping the raw telemetry
+  # `event` / `measurements` / `metadata` keys for existing callers.
+  defp build_payload(event, measurements, metadata) do
+    %{
+      event: event,
+      measurements: measurements,
+      metadata: metadata,
+      stages: Map.get(metadata, :stages, []),
+      inflight_tasks: Map.get(measurements, :num_inflight_tasks, 0),
+      operation_id: Map.get(metadata, :operation_id),
+      done: Map.get(metadata, :done, false)
+    }
   end
 
   defp invoke(handler, payload) do

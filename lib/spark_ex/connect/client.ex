@@ -1435,7 +1435,7 @@ defmodule SparkEx.Connect.Client do
             {:ok, stream}
 
           {:error, %GRPC.RPCError{} = error} ->
-            {:error, Errors.from_grpc_error(error, session)}
+            {:error, Errors.decode_grpc_error(error)}
 
           {:error, reason} ->
             {:error, reason}
@@ -1546,11 +1546,14 @@ defmodule SparkEx.Connect.Client do
           ok
 
         {:error, %GRPC.RPCError{} = grpc_error} ->
-          remote = Errors.from_grpc_error(grpc_error, session)
+          # T-35: decode only (no FetchErrorDetails RPC) so a retryable
+          # handshake failure costs nothing extra; enrich lazily on the
+          # terminal error we hand back to the caller.
+          remote = Errors.decode_grpc_error(grpc_error)
 
           if retryable_error?(remote),
             do: {:ok, [{:error, grpc_error}]},
-            else: {:error, remote}
+            else: {:error, Errors.enrich(remote, session)}
 
         {:error, _} = error ->
           error
@@ -1701,7 +1704,7 @@ defmodule SparkEx.Connect.Client do
   end
 
   defp handle_inner_error(state, %GRPC.RPCError{} = grpc_error) do
-    remote = Errors.from_grpc_error(grpc_error, state.ctx.session)
+    remote = Errors.decode_grpc_error(grpc_error)
 
     if retryable_error?(remote) do
       # No pre-reattach release: reattach replays from last_response_id;
@@ -1710,7 +1713,7 @@ defmodule SparkEx.Connect.Client do
       # responses or terminal completion.
       perform_reattach(state, {:transient_error, grpc_error})
     else
-      emit_terminal_error(state, remote)
+      emit_terminal_error(state, Errors.enrich(remote, state.ctx.session))
     end
   end
 
@@ -1934,7 +1937,7 @@ defmodule SparkEx.Connect.Client do
         reattach_stream_step(new_state)
 
       {:error, %GRPC.RPCError{} = grpc_error} ->
-        remote = Errors.from_grpc_error(grpc_error, session)
+        remote = Errors.decode_grpc_error(grpc_error)
 
         if retryable_error?(remote) do
           # Same reasoning as the initial handshake (T-08): the re-issued plan
@@ -1949,7 +1952,7 @@ defmodule SparkEx.Connect.Client do
 
           reattach_stream_step(new_state)
         else
-          {[{:error, remote}], %{state | result_complete?: true}}
+          {[{:error, Errors.enrich(remote, session)}], %{state | result_complete?: true}}
         end
 
       {:error, err} ->
@@ -2510,7 +2513,7 @@ defmodule SparkEx.Connect.Client do
         end
 
       {:error, %GRPC.RPCError{} = error} ->
-        {:error, Errors.from_grpc_error(error, session)}
+        {:error, Errors.decode_grpc_error(error)}
 
       {:error, reason} ->
         {:error, reason}
@@ -2549,15 +2552,15 @@ defmodule SparkEx.Connect.Client do
     end
   end
 
-  defp handle_add_artifacts_response({:error, %GRPC.RPCError{} = error}, session),
-    do: {:error, Errors.from_grpc_error(error, session)}
+  defp handle_add_artifacts_response({:error, %GRPC.RPCError{} = error}, _session),
+    do: {:error, Errors.decode_grpc_error(error)}
 
   defp handle_add_artifacts_response({:error, reason}, _session), do: {:error, reason}
 
   defp stub_execute_plan(session, request, timeout) do
     case Stub.execute_plan(session.channel, request, timeout: timeout) do
       {:ok, stream} -> {:ok, stream}
-      {:error, %GRPC.RPCError{} = error} -> {:error, Errors.from_grpc_error(error, session)}
+      {:error, %GRPC.RPCError{} = error} -> {:error, Errors.decode_grpc_error(error)}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -2601,8 +2604,17 @@ defmodule SparkEx.Connect.Client do
 
     policy = Map.merge(base_policy, overrides)
 
-    do_retry(fun, 0, policy)
+    # T-35: the terminal error is the only one worth the FetchErrorDetails
+    # round-trip; retried attempts stay RPC-free.
+    fun
+    |> do_retry(0, policy)
+    |> enrich_terminal_error(session)
   end
+
+  defp enrich_terminal_error({:error, %SparkEx.Error.Remote{} = error}, %SparkEx.Session{} = s),
+    do: {:error, Errors.enrich(error, s)}
+
+  defp enrich_terminal_error(result, _session), do: result
 
   defp do_retry(fun, attempt, policy) do
     case fun.() do

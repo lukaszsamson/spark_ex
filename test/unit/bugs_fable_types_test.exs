@@ -34,13 +34,9 @@ defmodule SparkEx.BugsFableTypesTest do
       assert {:ok, {:duration, :microsecond}} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "map / variant / udt / geometry / geography / year-month interval map to nil" do
+    test "year-month / calendar interval and UDT without sql_type map to nil" do
       cases = [
-        {:map, %DataType.Map{}},
-        {:variant, %DataType.Variant{}},
         {:udt, %DataType.UDT{type: "udt"}},
-        {:geometry, %DataType.Geometry{}},
-        {:geography, %DataType.Geography{}},
         {:year_month_interval, %DataType.YearMonthInterval{}},
         {:calendar_interval, %DataType.CalendarInterval{}}
       ]
@@ -51,17 +47,36 @@ defmodule SparkEx.BugsFableTypesTest do
       end
     end
 
-    test "ARRAY of a non-native element collapses the list dtype to nil" do
-      element = %DataType{kind: {:map, %DataType.Map{}}}
+    test "map / variant / udt / geometry / geography map to their Arrow wire layout (T-30)" do
+      int = %DataType{kind: {:integer, %DataType.Integer{}}}
+      str = %DataType{kind: {:string, %DataType.String{}}}
+      geo = {:struct, [{"srid", {:s, 32}}, {"wkb", :binary}]}
+
+      cases = [
+        {{:map, %DataType.Map{key_type: str, value_type: int}},
+         {:list, {:struct, [{"key", :string}, {"value", {:s, 32}}]}}},
+        {{:variant, %DataType.Variant{}}, {:struct, [{"value", :binary}, {"metadata", :binary}]}},
+        {{:udt, %DataType.UDT{type: "udt", sql_type: int}}, {:s, 32}},
+        {{:geometry, %DataType.Geometry{}}, geo},
+        {{:geography, %DataType.Geography{}}, geo}
+      ]
+
+      for {kind, expected} <- cases do
+        assert {:ok, ^expected} = TypeMapper.to_explorer_dtype(%DataType{kind: kind})
+      end
+    end
+
+    test "ARRAY of an element without an Explorer dtype collapses the list dtype to nil" do
+      element = %DataType{kind: {:year_month_interval, %DataType.YearMonthInterval{}}}
       dt = %DataType{kind: {:array, %DataType.Array{element_type: element}}}
       assert {:ok, nil} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "STRUCT with a non-native field collapses the struct dtype to nil" do
+    test "STRUCT with a field without an Explorer dtype collapses the struct dtype to nil" do
       fields = [
         %DataType.StructField{
           name: "v",
-          data_type: %DataType{kind: {:variant, %DataType.Variant{}}}
+          data_type: %DataType{kind: {:calendar_interval, %DataType.CalendarInterval{}}}
         }
       ]
 
@@ -69,11 +84,7 @@ defmodule SparkEx.BugsFableTypesTest do
       assert {:ok, nil} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "rebuilding a map/variant column with the dropped-nil-dtype path does not crash" do
-      # The apply_schema_policy rebuild pulls cells and re-creates columns,
-      # dropping dtypes that mapped to nil. Previously these columns were dtyped
-      # :string while their cells decoded as maps, raising "cannot create
-      # series". With nil dtypes dropped, Explorer infers from the cells.
+    test "a variant column can be built with its mapped dtype" do
       if Code.ensure_loaded?(Explorer.DataFrame) do
         struct = %DataType.Struct{
           fields: [
@@ -85,10 +96,13 @@ defmodule SparkEx.BugsFableTypesTest do
         }
 
         {:ok, dtypes} = TypeMapper.schema_to_dtypes(struct)
-        kept = Enum.reject(dtypes, fn {_n, d} -> is_nil(d) end)
+        cells = [%{"value" => <<1>>, "metadata" => <<2>>}, nil]
 
-        df = Explorer.DataFrame.new([{"m", [%{"a" => 1}, %{"a" => 2}]}], dtypes: kept)
+        df = Explorer.DataFrame.new([{"m", cells}], dtypes: dtypes)
         assert Explorer.DataFrame.n_rows(df) == 2
+
+        assert Explorer.DataFrame.dtypes(Explorer.DataFrame.new([{"m", []}], dtypes: dtypes)) ==
+                 Explorer.DataFrame.dtypes(df)
       end
     end
   end

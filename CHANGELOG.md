@@ -20,6 +20,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wave 4 triage fixes — decoder and result-shape correctness** (see
+  `BUGS_TRIAGED.txt` T-30..T-33, T-35, T-36, T-61):
+  - `to_explorer/2` now applies the TIMESTAMP schema policy on non-empty
+    frames: TIMESTAMP columns are always `{:datetime, :microsecond, "Etc/UTC"}`
+    (previously the session time zone on non-empty frames and UTC on empty
+    ones), and empty MAP/VARIANT/GEOMETRY/GEOGRAPHY/UDT columns get
+    structurally correct dtypes instead of `:null` (T-30).
+    `TypeMapper.to_explorer_dtype/1` returns those structural dtypes instead of
+    `nil`. Year-month/calendar interval columns still map to `nil` (Explorer
+    has no interval dtype).
+  - UDT deserialisers now apply to UDTs nested in arrays, maps and structs on
+    the collect, `to_local_iterator` and `to_explorer` paths (T-31).
+  - The JSON-projection fallback decodes nested DECIMAL (exact digits, via
+    `Jason` `floats: :decimals`), TIMESTAMP (`DateTime`), TIMESTAMP_NTZ
+    (`NaiveDateTime`), DATE (`Date`) and BINARY (raw bytes) leaves instead of
+    leaving JSON scalars. Spark's `to_json` truncates timestamps to
+    milliseconds on this path (T-32).
+  - `to_explorer/2` and `to_local_iterator/2` apply collect's Arrow preflight
+    (duplicate-column renaming; JSON/STRING projection for shapes the decoder
+    cannot handle) instead of surfacing `arrow_decode_failed`. The Explorer
+    path projects only nested maps and unsupported scalars, so top-level
+    struct/map/array columns stay native containers. `to_local_iterator`
+    honours `map_format: :map` on projected plans. This adds one AnalyzePlan
+    round trip for SQL/read plans on those two paths (T-33).
+  - Explorer-mode decoding no longer drops command-result response variants;
+    results gain `command_result`/`command_results` (T-61).
+  - Progress handlers: payloads gain `stages`, `inflight_tasks`,
+    `operation_id` and `done`; handlers are not invoked for zero-task frames,
+    and exactly one `done: true` event fires at the end of every execution
+    (including failures), mirroring PySpark. Handlers that counted invocations
+    see one extra call per execution (T-36).
+  - `FetchErrorDetails` enrichment is lazy: retried RPC attempts no longer pay
+    the up-to-5 s round trip; only the terminal error is enriched, once.
+    `%SparkEx.Error.Remote{}` gains `error_id` and `enriched?` (T-35).
+
+### Fixed
+
 - **Wave 3 triage fixes — Session plumbing and option handling** (see
   `BUGS_TRIAGED.txt` T-11, T-13, T-14, T-22, T-23, T-39, T-44..T-46,
   T-50..T-54):
