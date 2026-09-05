@@ -4,6 +4,15 @@ defmodule SparkEx.WriterV2 do
 
   Mirrors PySpark's `DataFrameWriterV2` with a builder pattern.
 
+  > #### Catalog requirement {: .warning}
+  >
+  > Most V2 operations need a catalog whose tables implement the V2 write
+  > interfaces (Delta, Iceberg, or another `TableCatalog`). Against the
+  > default `spark_catalog` (session catalog with V1 tables) only `create/1`
+  > succeeds (via a CTAS fallback); `append/overwrite/overwrite_partitions`
+  > fail with "Cannot write into v1 table" and `replace/create_or_replace`
+  > with `UNSUPPORTED_FEATURE.TABLE_OPERATION`.
+
   ## Examples
 
       import SparkEx.WriterV2
@@ -63,13 +72,16 @@ defmodule SparkEx.WriterV2 do
   PySpark's `option(k, None)` behaviour).
   """
   @spec option(t(), String.t(), term()) :: t()
-  def option(%__MODULE__{} = writer, key, nil) when is_binary(key) do
-    %{writer | options: Map.delete(writer.options, key)}
+  def option(%__MODULE__{} = writer, key, nil) when is_binary(key) or is_atom(key) do
+    %{writer | options: Map.delete(writer.options, normalize_option_key(key))}
   end
 
   def option(%__MODULE__{} = writer, key, value)
-      when is_binary(key) do
-    %{writer | options: Map.put(writer.options, key, normalize_option_value(value))}
+      when is_binary(key) or is_atom(key) do
+    %{
+      writer
+      | options: Map.put(writer.options, normalize_option_key(key), normalize_option_value(value))
+    }
   end
 
   @doc """
@@ -78,7 +90,7 @@ defmodule SparkEx.WriterV2 do
   """
   @spec options(t(), map() | keyword()) :: t()
   def options(%__MODULE__{} = writer, opts) when is_map(opts) do
-    merge_pairs(writer, :options, opts)
+    merge_pairs(writer, :options, opts, &normalize_option_key/1)
   end
 
   def options(%__MODULE__{} = writer, opts) when is_list(opts) do
@@ -91,15 +103,20 @@ defmodule SparkEx.WriterV2 do
   Sets a single table property. A `nil` value removes the key.
   """
   @spec table_property(t(), String.t(), term()) :: t()
-  def table_property(%__MODULE__{} = writer, key, nil) when is_binary(key) do
-    %{writer | table_properties: Map.delete(writer.table_properties, key)}
+  def table_property(%__MODULE__{} = writer, key, nil) when is_binary(key) or is_atom(key) do
+    %{writer | table_properties: Map.delete(writer.table_properties, verbatim_option_key(key))}
   end
 
   def table_property(%__MODULE__{} = writer, key, value)
-      when is_binary(key) do
+      when is_binary(key) or is_atom(key) do
     %{
       writer
-      | table_properties: Map.put(writer.table_properties, key, normalize_option_value(value))
+      | table_properties:
+          Map.put(
+            writer.table_properties,
+            verbatim_option_key(key),
+            normalize_option_value(value)
+          )
     }
   end
 
@@ -109,7 +126,8 @@ defmodule SparkEx.WriterV2 do
   """
   @spec table_properties(t(), map() | keyword()) :: t()
   def table_properties(%__MODULE__{} = writer, props) when is_map(props) do
-    merge_pairs(writer, :table_properties, props)
+    # TBLPROPERTIES names are arbitrary and case-sensitive — no camelization.
+    merge_pairs(writer, :table_properties, props, &verbatim_option_key/1)
   end
 
   def table_properties(%__MODULE__{} = writer, props) when is_list(props) do
@@ -118,15 +136,18 @@ defmodule SparkEx.WriterV2 do
     |> then(&table_properties(writer, &1))
   end
 
-  defp merge_pairs(writer, field, opts) do
+  defp merge_pairs(writer, field, opts, key_fun) do
     {drops, sets} =
       Enum.reduce(opts, {[], []}, fn {k, v}, {drops, sets} ->
-        key = to_string(k)
+        key = key_fun.(k)
         if is_nil(v), do: {[key | drops], sets}, else: {drops, [{key, v} | sets]}
       end)
 
     current = Map.fetch!(writer, field)
-    new_value = current |> Map.drop(drops) |> Map.merge(stringify_options(Map.new(sets)))
+
+    new_value =
+      current |> Map.drop(drops) |> Map.merge(stringify_options(Map.new(sets), key_fun))
+
     Map.put(writer, field, new_value)
   end
 
@@ -262,8 +283,16 @@ defmodule SparkEx.WriterV2 do
   defp normalize_partition_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
   defp normalize_partition_expr(expr), do: expr
 
-  defp stringify_options(opts) when is_map(opts) do
-    SparkEx.Internal.OptionUtils.stringify_options(opts)
+  defp normalize_option_key(key) do
+    SparkEx.Internal.OptionUtils.normalize_option_key(key)
+  end
+
+  defp verbatim_option_key(key) do
+    SparkEx.Internal.OptionUtils.verbatim_option_key(key)
+  end
+
+  defp stringify_options(opts, key_fun) when is_map(opts) do
+    SparkEx.Internal.OptionUtils.stringify_options(opts, key_fun)
   end
 
   defp normalize_option_value(value) do

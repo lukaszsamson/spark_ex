@@ -19,12 +19,12 @@ defmodule SparkEx.StreamingQueryListener do
         def on_query_terminated(event) do
           IO.puts("Query terminated: \#{inspect(event.data)}")
         end
-
-        @impl true
-        def on_query_idle(event) do
-          IO.puts("Query idle: \#{inspect(event.data)}")
-        end
       end
+
+  `on_query_started` and `on_query_idle` are optional callbacks (mirroring
+  PySpark's `StreamingQueryListener.onQueryIdle`, which has a default no-op
+  implementation) — a listener that omits them simply does not receive
+  those events.
 
   ## Event Structure
 
@@ -34,6 +34,11 @@ defmodule SparkEx.StreamingQueryListener do
     * `:data` — event data as a parsed JSON map, or the raw JSON string
       if decoding fails (`map() | String.t()`)
     * `:raw_json` — the original JSON string from the server
+
+  Note the shape of `:data` mirrors the server's JSON and differs per event
+  type: `:started` and `:terminated` events are flat maps (keys like `"id"`,
+  `"runId"`, `"name"`), while `:progress` events nest the report under a
+  `"progress"` key — read it as `event.data["progress"]`.
   """
 
   @type event :: %{
@@ -47,5 +52,5 @@ defmodule SparkEx.StreamingQueryListener do
   @callback on_query_terminated(event()) :: any()
   @callback on_query_idle(event()) :: any()
 
-  @optional_callbacks on_query_started: 1
+  @optional_callbacks on_query_started: 1, on_query_idle: 1
 end

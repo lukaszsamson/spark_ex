@@ -38,7 +38,7 @@ defmodule SparkEx.BugsPlan5.StreamJTest do
           )
         end)
 
-      assert stderr =~ "Trigger.Once was removed in Spark 4"
+      assert stderr =~ "Trigger.Once is deprecated"
     end
   end
 

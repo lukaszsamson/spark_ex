@@ -135,15 +135,17 @@ defmodule SparkEx.WindowSpec do
   defp clamp_boundary(:unbounded, :lower), do: :unbounded_preceding
   defp clamp_boundary(:unbounded, :upper), do: :unbounded_following
 
-  defp clamp_boundary(value, _position) when is_integer(value) and value <= @preceding_threshold,
+  # PySpark clamps only in the direction the bound faces (connect/window.py:
+  # 105-108): `start <= _PRECEDING_THRESHOLD` and `end >= _FOLLOWING_THRESHOLD`.
+  # A huge *lower* bound or a tiny *upper* bound is left as the literal offset.
+  defp clamp_boundary(value, :lower) when is_integer(value) and value <= @preceding_threshold,
     do: :unbounded_preceding
 
-  defp clamp_boundary(value, _position) when is_integer(value) and value >= @following_threshold,
+  defp clamp_boundary(value, :upper) when is_integer(value) and value >= @following_threshold,
     do: :unbounded_following
 
   defp clamp_boundary(value, _position), do: value
 
   defp to_expr(%Column{expr: e}), do: e
-  defp to_expr(name) when is_binary(name), do: {:col, name}
-  defp to_expr(name) when is_atom(name), do: {:col, Atom.to_string(name)}
+  defp to_expr(name), do: SparkEx.Internal.ColumnName.to_col_expr(name)
 end

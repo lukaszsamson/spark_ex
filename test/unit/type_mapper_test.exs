@@ -129,7 +129,7 @@ defmodule SparkEx.Connect.TypeMapperTest do
       assert {:ok, {:struct, []}} = TypeMapper.to_explorer_dtype(dt)
     end
 
-    test "maps map to nil (no native Explorer dtype; cells inferred)" do
+    test "maps map to the Arrow list<struct<key, value>> layout (T-30)" do
       key = %DataType{kind: {:string, %DataType.String{}}}
       value = %DataType{kind: {:integer, %DataType.Integer{}}}
 
@@ -139,7 +139,8 @@ defmodule SparkEx.Connect.TypeMapperTest do
             {:map, %DataType.Map{key_type: key, value_type: value, value_contains_null: false}}
         }
 
-      assert {:ok, nil} = TypeMapper.to_explorer_dtype(dt)
+      assert {:ok, {:list, {:struct, [{"key", :string}, {"value", {:s, 32}}]}}} =
+               TypeMapper.to_explorer_dtype(dt)
     end
 
     test "maps day-time interval to {:duration, :microsecond}; others to nil" do
@@ -154,9 +155,11 @@ defmodule SparkEx.Connect.TypeMapperTest do
       end
     end
 
-    test "maps variant to nil (no native Explorer dtype; cells inferred)" do
+    test "maps variant to its struct<value, metadata> wire layout (T-30)" do
       dt = %DataType{kind: {:variant, %DataType.Variant{}}}
-      assert {:ok, nil} = TypeMapper.to_explorer_dtype(dt)
+
+      assert {:ok, {:struct, [{"value", :binary}, {"metadata", :binary}]}} =
+               TypeMapper.to_explorer_dtype(dt)
     end
 
     test "maps nil kind to :null" do

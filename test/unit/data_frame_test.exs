@@ -218,7 +218,7 @@ defmodule SparkEx.DataFrameTest do
       {:ok, session} = SchemaSession.start_link(schema)
       df = DataFrame.new(session, {:sql, "SELECT 1", nil})
 
-      assert {:ok, [{"id", "BIGINT"}]} = DataFrame.dtypes(df)
+      assert {:ok, [{"id", "bigint"}]} = DataFrame.dtypes(df)
     end
 
     test "accepts {:ok, dataframe} for create_dataframe-style pipelines" do
@@ -235,7 +235,7 @@ defmodule SparkEx.DataFrameTest do
       {:ok, session} = SchemaSession.start_link(schema)
       df = DataFrame.new(session, {:sql, "SELECT 1", nil})
 
-      assert {:ok, [{"id", "BIGINT"}]} = DataFrame.dtypes({:ok, df})
+      assert {:ok, [{"id", "bigint"}]} = DataFrame.dtypes({:ok, df})
     end
   end
 
@@ -283,6 +283,23 @@ defmodule SparkEx.DataFrameTest do
       df = DataFrame.new(session, {:sql, "SELECT 1", nil})
 
       assert {:error, :collect_as_map_requires_two_columns} = DataFrame.collect_as_map(df)
+    end
+
+    test "returns error when both columns share the same name" do
+      int_type = %Spark.Connect.DataType{kind: {:integer, %Spark.Connect.DataType.Integer{}}}
+
+      schema = %Spark.Connect.DataType.Struct{
+        fields: [
+          %Spark.Connect.DataType.StructField{name: "x", data_type: int_type, nullable: true},
+          %Spark.Connect.DataType.StructField{name: "x", data_type: int_type, nullable: true}
+        ]
+      }
+
+      {:ok, session} = CollectAsMapSession.start_link(schema, [%{"x" => 1}])
+      df = DataFrame.new(session, {:sql, "SELECT 1 AS x, 2 AS x", nil})
+
+      assert {:error, :collect_as_map_requires_distinct_column_names} =
+               DataFrame.collect_as_map(df)
     end
   end
 
@@ -874,13 +891,16 @@ defmodule SparkEx.DataFrameTest do
                SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
-    test "uses regular join plan when rhs is a TVF relation" do
+    # FAB-13: TVF right sides must stay LateralJoin so outer column
+    # references resolve (PySpark parity). Spark 3.5 servers get the
+    # regular-join downgrade via the empty-relation legacy fallback instead.
+    test "keeps the lateral join plan when rhs is a TVF relation" do
       left = DataFrame.new(self(), {:sql, "SELECT * FROM t1", nil})
       right = TableValuedFunction.new(self()) |> TableValuedFunction.call("range", [1, 3])
 
       result = DataFrame.lateral_join(left, right, nil, :inner)
 
-      assert {:join, {:sql, _, _}, {:table_valued_function, "range", _}, nil, :inner, []} =
+      assert {:lateral_join, {:sql, _, _}, {:table_valued_function, "range", _}, nil, :inner} =
                unwrap_plan(result)
     end
   end

@@ -75,12 +75,15 @@ defmodule SparkEx.Reader do
   key (mirroring PySpark's `option(k, None)` behaviour).
   """
   @spec option(t(), String.t(), term()) :: t()
-  def option(%__MODULE__{} = reader, key, nil) when is_binary(key) do
-    %{reader | options: Map.delete(reader.options, key)}
+  def option(%__MODULE__{} = reader, key, nil) when is_binary(key) or is_atom(key) do
+    %{reader | options: Map.delete(reader.options, normalize_option_key(key))}
   end
 
-  def option(%__MODULE__{} = reader, key, value) when is_binary(key) do
-    %{reader | options: Map.put(reader.options, key, normalize_option_value(value))}
+  def option(%__MODULE__{} = reader, key, value) when is_binary(key) or is_atom(key) do
+    %{
+      reader
+      | options: Map.put(reader.options, normalize_option_key(key), normalize_option_value(value))
+    }
   end
 
   @doc """
@@ -94,7 +97,7 @@ defmodule SparkEx.Reader do
 
     {drops, sets} =
       Enum.reduce(pairs, {[], []}, fn {k, v}, {drops, sets} ->
-        key = to_string(k)
+        key = normalize_option_key(k)
         if is_nil(v), do: {[key | drops], sets}, else: {drops, [{key, v} | sets]}
       end)
 
@@ -167,6 +170,12 @@ defmodule SparkEx.Reader do
     DataFrame.new(reader.session, {:read_named_table, table_name, reader.options})
   end
 
+  @spec table(GenServer.server(), String.t()) :: DataFrame.t()
+  def table(session, table_name)
+      when not is_struct(session, __MODULE__) and is_binary(table_name) do
+    table(session, table_name, [])
+  end
+
   @doc """
   Creates a DataFrame from a named table (catalog table).
 
@@ -179,7 +188,19 @@ defmodule SparkEx.Reader do
       df = SparkEx.Reader.table(session, "my_database.my_table")
   """
   @spec table(GenServer.server(), String.t(), keyword()) :: DataFrame.t()
-  def table(session, table_name, opts \\ []) when is_binary(table_name) do
+  def table(%__MODULE__{} = reader, table_name, []) when is_binary(table_name) do
+    table(reader, table_name)
+  end
+
+  def table(%__MODULE__{}, table_name, opts) when is_binary(table_name) do
+    raise ArgumentError,
+          "Reader.table/3 with a %SparkEx.Reader{} builder does not accept call-time " <>
+            "options; set them with Reader.options/2 and call Reader.table/2 instead. Got: " <>
+            inspect(opts)
+  end
+
+  def table(session, table_name, opts)
+      when not is_struct(session, __MODULE__) and is_binary(table_name) do
     options = merge_source_options(opts, [])
     DataFrame.new(session, {:read_named_table, table_name, options})
   end
@@ -220,18 +241,35 @@ defmodule SparkEx.Reader do
   @spec csv(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
   def csv(session, paths, opts \\ []) do
     {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator, :sep])
-    extra_options = Keyword.get(rest, :options, %{})
+    csv_opts = reconcile_csv_separator(csv_opts)
 
-    options =
-      csv_opts
-      |> Enum.reduce(extra_options, fn
-        {:header, v}, acc -> Map.put(acc, "header", to_string(v))
-        {:infer_schema, v}, acc -> Map.put(acc, "inferSchema", to_string(v))
-        {:separator, v}, acc -> Map.put(acc, "sep", normalize_option_value(v))
-        {:sep, v}, acc -> Map.put(acc, "sep", normalize_option_value(v))
-      end)
+    # :header/:infer_schema/:sep normalize to "header"/"inferSchema"/"sep" through
+    # the shared key normalizer, so they can simply ride along as top-level
+    # keywords and get the standard duplicate check against :options.
+    data_source(session, "csv", paths, Keyword.merge(rest, csv_opts))
+  end
 
-    data_source(session, "csv", paths, Keyword.put(rest, :options, options))
+  # `:separator` is a SparkEx-only alias for PySpark's `sep`. Compare the
+  # pre-normalization values so passing both with the same value is fine.
+  defp reconcile_csv_separator(csv_opts) do
+    # nil means "not given" everywhere else in the API, so drop nils first.
+    csv_opts = Enum.reject(csv_opts, fn {_k, v} -> is_nil(v) end)
+    sep = Keyword.get(csv_opts, :sep)
+    separator = Keyword.get(csv_opts, :separator)
+
+    cond do
+      Keyword.has_key?(csv_opts, :sep) and Keyword.has_key?(csv_opts, :separator) and
+          sep != separator ->
+        raise ArgumentError,
+              "csv reader received conflicting :sep and :separator options " <>
+                "(#{inspect(sep)} vs #{inspect(separator)}); pass only :sep"
+
+      Keyword.has_key?(csv_opts, :separator) ->
+        csv_opts |> Keyword.delete(:separator) |> Keyword.put_new(:sep, separator)
+
+      true ->
+        csv_opts
+    end
   end
 
   @doc """
@@ -334,8 +372,15 @@ defmodule SparkEx.Reader do
   """
   @spec jdbc(GenServer.server(), String.t(), String.t(), keyword()) :: DataFrame.t()
   def jdbc(session, url, table, opts \\ []) when is_binary(url) and is_binary(table) do
-    opts_options = opts |> Keyword.get(:options, %{}) |> normalize_options()
-    merged = opts_options |> Map.put("url", url) |> Map.put("dbtable", table)
+    {properties, opts} = Keyword.pop(opts, :properties)
+
+    merged =
+      opts
+      |> Keyword.get(:options)
+      |> normalize_options()
+      |> Map.merge(normalize_jdbc_properties(properties))
+      |> Map.put("url", url)
+      |> Map.put("dbtable", table)
 
     data_source(
       session,
@@ -410,8 +455,14 @@ defmodule SparkEx.Reader do
 
   defp normalize_jdbc_properties(nil), do: %{}
 
-  defp normalize_jdbc_properties(props) when is_map(props) or is_list(props),
-    do: normalize_options(props)
+  # JDBC connection properties are forwarded verbatim to the driver
+  # (JDBCOptions.asConnectionProperties), so their case and dots must survive.
+  defp normalize_jdbc_properties(props) when is_map(props) or is_list(props) do
+    SparkEx.Internal.OptionUtils.stringify_options(
+      props,
+      &SparkEx.Internal.OptionUtils.verbatim_option_key/1
+    )
+  end
 
   defp normalize_jdbc_properties(other) do
     raise ArgumentError,
@@ -419,8 +470,10 @@ defmodule SparkEx.Reader do
   end
 
   defp load_from_builder(reader, paths, opts) do
-    format = Keyword.get(opts, :format, reader.format)
-    schema = opts |> Keyword.get(:schema, reader.schema) |> normalize_schema()
+    # PySpark only overrides when the argument is non-None, so an explicit
+    # `format: nil` / `schema: nil` must not wipe the builder state.
+    format = Keyword.get(opts, :format) || reader.format
+    schema = (Keyword.get(opts, :schema) || reader.schema) |> normalize_schema()
 
     call_time_options = merge_source_options(opts, [:format, :schema, :predicates])
     merged_options = Map.merge(reader.options, call_time_options)
@@ -451,14 +504,7 @@ defmodule SparkEx.Reader do
   end
 
   defp merge_source_options(opts, reserved_keys) do
-    nested_options = opts |> Keyword.get(:options, %{}) |> normalize_options_reject_nil()
-
-    top_level_options =
-      opts
-      |> Keyword.drop([:options | reserved_keys])
-      |> normalize_options_reject_nil()
-
-    Map.merge(top_level_options, nested_options)
+    SparkEx.Internal.OptionUtils.merge_source_options(opts, reserved_keys)
   end
 
   defp normalize_schema(nil), do: nil
@@ -473,20 +519,12 @@ defmodule SparkEx.Reader do
           "schema must be a string, {:struct, fields} tuple, or Spark.Connect.DataType, got: #{inspect(schema)}"
   end
 
-  defp normalize_options(opts) when is_list(opts) do
+  defp normalize_options(opts) do
     SparkEx.Internal.OptionUtils.stringify_options(opts)
   end
 
-  defp normalize_options(opts) when is_map(opts) do
-    SparkEx.Internal.OptionUtils.stringify_options(opts)
-  end
-
-  defp normalize_options_reject_nil(opts) when is_list(opts) do
-    SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
-  end
-
-  defp normalize_options_reject_nil(opts) when is_map(opts) do
-    SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
+  defp normalize_option_key(key) do
+    SparkEx.Internal.OptionUtils.normalize_option_key(key)
   end
 
   defp normalize_option_value(value) do

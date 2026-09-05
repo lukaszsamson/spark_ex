@@ -1,5 +1,21 @@
 defmodule SparkEx.Connect.Channel do
-  @moduledoc false
+  @moduledoc """
+  Spark Connect URI parsing and gRPC channel construction.
+
+  ## TLS policy
+
+  When TLS is in use and the URI does not configure it otherwise, the channel
+  is built with an explicit secure default: `verify: :verify_peer`, the OS
+  trust store from `:public_key.cacerts_get/0`, and HTTPS hostname
+  verification via `:public_key.pkix_verify_hostname_match_fun(:https)`.
+  Nothing is left to OTP/gun defaults, which only verify peers on OTP 26+.
+
+  Two escapes keep the previous behaviour: `ssl_cacert=<path>` verifies
+  against that PEM bundle instead of the OS store, and `ssl_verify=none`
+  disables verification entirely. If the OS trust store or the hostname
+  match fun is unavailable, `verify_peer` is still requested and the
+  corresponding option is simply omitted.
+  """
 
   @default_port 15_002
   # Spark Connect / PySpark default: 128 MiB for both directions.
@@ -40,6 +56,14 @@ defmodule SparkEx.Connect.Channel do
   - `token` — bearer token for auth
   - `auth_transport` — `"auto"` (default) or `"metadata"`
   - `grpc_max_message_size` — max gRPC message size in bytes (default: 128 MiB)
+  - `ssl_cacert` — path to a PEM CA bundle; implies `verify_peer` against
+    that bundle instead of the OS trust store
+  - `ssl_servername` — SNI / hostname override
+  - `ssl_verify` — `"peer"` (default) or `"none"`. With TLS enabled and no
+    explicit setting, SparkEx pins `verify: :verify_peer` using the OS trust
+    store (`:public_key.cacerts_get/0`) plus HTTPS hostname verification,
+    rather than relying on transitive OTP/gun defaults; `ssl_verify=none`
+    is the explicit opt-out.
   - `grpc_keepalive_time_ms` — HTTP/2 keepalive ping interval in ms, wired
     into the gun adapter's `keepalive` option. `grpc_keepalive_timeout_ms`
     and `grpc_keepalive_permit_without_calls` are accepted for Spark Connect
@@ -183,22 +207,33 @@ defmodule SparkEx.Connect.Channel do
     end
   end
 
+  # T-37: make the TLS policy explicit instead of inheriting whatever the
+  # OTP/gun defaults happen to be (`verify_peer` is only the ssl default on
+  # OTP 26+, and OTP 25 is still admitted by mix.exs). When neither a
+  # `cacertfile` nor an explicit `verify` is configured we pin
+  # `verify: :verify_peer` with the OS trust store (`:public_key.cacerts_get/0`)
+  # and the HTTPS hostname-match fun. An explicit `ssl_verify=none` or a
+  # user-supplied `ssl_cacert` keeps the previous behaviour.
   defp build_ssl_opts(opts) do
     tls = Map.get(opts, :tls) || %{}
 
-    base = []
+    cacertfile = Map.get(tls, :cacertfile)
+    verify = Map.get(tls, :verify)
 
     base =
-      case Map.get(tls, :cacertfile) do
-        path when is_binary(path) and path != "" ->
-          [{:cacertfile, String.to_charlist(path)}, {:verify, :verify_peer} | base]
+      cond do
+        is_binary(cacertfile) and cacertfile != "" ->
+          [{:cacertfile, String.to_charlist(cacertfile)}, {:verify, :verify_peer}]
 
-        _ ->
-          base
+        verify == :verify_none ->
+          []
+
+        true ->
+          default_verify_opts()
       end
 
     base =
-      case Map.get(tls, :verify) do
+      case verify do
         nil -> base
         verify -> Keyword.put(base, :verify, verify)
       end
@@ -210,6 +245,50 @@ defmodule SparkEx.Connect.Channel do
       _ ->
         base
     end
+  end
+
+  # Secure defaults, degraded gracefully: if the OS trust store cannot be read
+  # (older OTP, no bundle installed) we still ask for `verify_peer` and let ssl
+  # source its own CA configuration rather than silently falling back to
+  # `verify_none`.
+  defp default_verify_opts do
+    opts = [verify: :verify_peer]
+
+    opts =
+      case os_cacerts() do
+        {:ok, cacerts} -> Keyword.put(opts, :cacerts, cacerts)
+        :error -> opts
+      end
+
+    case hostname_check_opts() do
+      {:ok, customize} -> Keyword.put(opts, :customize_hostname_check, customize)
+      :error -> opts
+    end
+  end
+
+  defp os_cacerts do
+    if Code.ensure_loaded?(:public_key) and function_exported?(:public_key, :cacerts_get, 0) do
+      {:ok, apply(:public_key, :cacerts_get, [])}
+    else
+      :error
+    end
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  defp hostname_check_opts do
+    if Code.ensure_loaded?(:public_key) and
+         function_exported?(:public_key, :pkix_verify_hostname_match_fun, 1) do
+      {:ok, [match_fun: apply(:public_key, :pkix_verify_hostname_match_fun, [:https])]}
+    else
+      :error
+    end
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
   end
 
   @doc """

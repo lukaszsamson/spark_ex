@@ -20,27 +20,50 @@ defmodule SparkEx.ManagedStream do
   defstruct [:stream, :controller]
 
   @doc false
+  @spec new_closed_flag() :: :atomics.atomics_ref()
+  def new_closed_flag, do: :atomics.new(1, signed: false)
+
+  @doc false
+  @spec closed?(:atomics.atomics_ref()) :: boolean()
+  def closed?(flag), do: :atomics.get(flag, 1) == 1
+
+  @doc false
   @spec new(Enumerable.t(), keyword()) :: {:ok, t()} | {:error, term()}
   def new(stream, opts) do
     owner = Keyword.get(opts, :owner, self())
     idle_timeout = Keyword.get(opts, :idle_timeout)
     release_fun = Keyword.fetch!(opts, :release_fun)
     release_timeout = Keyword.get(opts, :release_timeout, @default_release_timeout)
+    closed_flag = Keyword.get_lazy(opts, :closed_flag, &new_closed_flag/0)
 
+    # T-03: the controller must NOT be linked to the caller. The caller is
+    # almost always the owner, and an abnormal owner exit would take a linked
+    # controller down before it can act on the owner-monitor :DOWN — leaking
+    # the remote execution on exactly the failure path the monitor exists to
+    # cover. The controller is short-lived, stops itself after release, and is
+    # cleaned up by the owner monitor, so an unlinked start is safe.
     with {:ok, controller} <-
-           SparkEx.ManagedStream.Controller.start_link(
+           SparkEx.ManagedStream.Controller.start(
              owner: owner,
              idle_timeout: idle_timeout,
              release_fun: release_fun,
-             release_timeout: release_timeout
+             release_timeout: release_timeout,
+             closed_flag: closed_flag
            ) do
       wrapped =
         Stream.transform(
           stream,
           fn -> :ok end,
           fn item, state ->
-            SparkEx.ManagedStream.Controller.touch(controller)
-            {[item], state}
+            # A close from another process (owner/explicit) while this one is
+            # enumerating: stop yielding instead of continuing to consume an
+            # operation whose server-side state has been released.
+            if closed?(closed_flag) do
+              {:halt, state}
+            else
+              SparkEx.ManagedStream.Controller.touch(controller)
+              {[item], state}
+            end
           end,
           fn _ ->
             SparkEx.ManagedStream.Controller.close(controller, :stream_finished)
@@ -67,6 +90,12 @@ defmodule SparkEx.ManagedStream.Controller do
   use GenServer
   require Logger
 
+  @spec start(keyword()) :: GenServer.on_start()
+  def start(opts) do
+    GenServer.start(__MODULE__, opts)
+  end
+
+  @doc false
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
@@ -90,6 +119,7 @@ defmodule SparkEx.ManagedStream.Controller do
     idle_timeout = Keyword.get(opts, :idle_timeout, nil)
     release_fun = Keyword.fetch!(opts, :release_fun)
     release_timeout = Keyword.get(opts, :release_timeout, 5_000)
+    closed_flag = Keyword.get_lazy(opts, :closed_flag, &SparkEx.ManagedStream.new_closed_flag/0)
 
     owner_ref = Process.monitor(owner)
     timer_ref = arm_idle_timer(idle_timeout)
@@ -102,6 +132,7 @@ defmodule SparkEx.ManagedStream.Controller do
        timer_ref: timer_ref,
        release_fun: release_fun,
        release_timeout: release_timeout,
+       closed_flag: closed_flag,
        closed?: false
      }}
   end
@@ -143,13 +174,17 @@ defmodule SparkEx.ManagedStream.Controller do
   defp do_close(_reason, state) do
     if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
     Process.demonitor(state.owner_ref, [:flush])
+    :atomics.put(state.closed_flag, 1, 1)
     start_async_release(state.release_fun, state.release_timeout)
 
     {:ok, %{state | closed?: true, timer_ref: nil}}
   end
 
   defp start_async_release(release_fun, timeout_ms) do
-    case Task.Supervisor.start_child(SparkEx.TaskSupervisor, fn ->
+    # T-19: during application shutdown the TaskSupervisor may already be
+    # gone; start_child then exits with :noproc instead of returning an error
+    # tuple, which is what the helper normalises.
+    case SparkEx.Connect.Client.start_supervised_task(fn ->
            run_release_fun(release_fun, timeout_ms)
          end) do
       {:ok, _pid} ->
@@ -172,11 +207,15 @@ defmodule SparkEx.ManagedStream.Controller do
   @release_shutdown_grace_ms 1_000
 
   defp run_release_fun(release_fun, timeout_ms) do
-    task =
-      Task.Supervisor.async_nolink(SparkEx.TaskSupervisor, fn ->
-        release_fun.(timeout: timeout_ms)
-      end)
+    case SparkEx.Connect.Client.async_nolink_supervised(fn ->
+           release_fun.(timeout: timeout_ms)
+         end) do
+      {:ok, task} -> await_release(task, timeout_ms)
+      {:error, :noproc} -> log_release_failure({:task_start_failed, :noproc}, timeout_ms)
+    end
+  end
 
+  defp await_release(task, timeout_ms) do
     case Task.yield(task, timeout_ms) || Task.shutdown(task, @release_shutdown_grace_ms) do
       {:ok, {:ok, _}} ->
         :ok

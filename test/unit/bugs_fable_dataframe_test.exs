@@ -91,8 +91,9 @@ defmodule SparkEx.BugsFableDataFrameTest do
         |> DataFrame.group_by(["dept"])
         |> GroupedData.agg(%{"*" => "count"})
 
-      assert {:aggregate, _, :groupby, _,
-              [{:alias, {:fn, "count", [{:star}], false}, "count(*)"}]} =
+      # T-40: no explicit alias for the star key — Spark names the resolved
+      # expression `count(1)` (PySpark parity).
+      assert {:aggregate, _, :groupby, _, [{:fn, "count", [{:star}], false}]} =
                unwrap_plan(result)
     end
   end

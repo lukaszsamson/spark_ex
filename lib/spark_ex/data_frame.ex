@@ -30,6 +30,7 @@ defmodule SparkEx.DataFrame do
   """
 
   alias SparkEx.Column
+  alias SparkEx.Internal.ColumnName
   alias SparkEx.Internal.PlanIds
   alias SparkEx.Internal.Random
   alias SparkEx.Internal.Tag
@@ -102,11 +103,17 @@ defmodule SparkEx.DataFrame do
   """
   @spec col(t(), String.t() | atom()) :: Column.t()
   def col(%__MODULE__{plan: {:plan_id, _, _} = plan}, name) when is_binary(name) do
-    %Column{expr: {:col, name, plan}}
+    # Mirror Functions.col/1 star handling so "*" / "x.*" become a plan-bound
+    # UnresolvedStar instead of an UnresolvedAttribute the server rejects.
+    case name_to_col_expr(name) do
+      {:star} -> %Column{expr: {:star, nil, plan}}
+      {:star, target} -> %Column{expr: {:star, target, plan}}
+      {:col, ^name} -> %Column{expr: {:col, name, plan}}
+    end
   end
 
   def col(%__MODULE__{} = df, name) when is_atom(name) do
-    col(df, Atom.to_string(name))
+    col(df, SparkEx.Internal.ColumnName.normalize!(name))
   end
 
   def col(%__MODULE__{plan: plan}, _name) do
@@ -180,9 +187,9 @@ defmodule SparkEx.DataFrame do
 
       df |> SparkEx.DataFrame.with_column("doubled", col("value") |> SparkEx.Column.multiply(lit(2)))
   """
-  @spec with_column(t(), String.t(), Column.t()) :: t()
-  def with_column(%__MODULE__{} = df, name, %Column{} = col) when is_binary(name) do
-    update_plan(df, {:with_columns, df.plan, [{:alias, col.expr, name}]})
+  @spec with_column(t(), String.t() | atom(), Column.t()) :: t()
+  def with_column(%__MODULE__{} = df, name, %Column{} = col) do
+    update_plan(df, {:with_columns, df.plan, [{:alias, col.expr, ColumnName.normalize!(name)}]})
   end
 
   @doc """
@@ -210,7 +217,7 @@ defmodule SparkEx.DataFrame do
         name, {names, exprs} when is_binary(name) ->
           {[name | names], exprs}
 
-        name, {names, exprs} when is_atom(name) ->
+        name, {names, exprs} when is_atom(name) and not is_nil(name) and not is_boolean(name) ->
           {[Atom.to_string(name) | names], exprs}
 
         other, _acc ->
@@ -518,14 +525,12 @@ defmodule SparkEx.DataFrame do
         %Column{expr: e} -> e
       end
 
-    join_plan =
-      if tvf_plan?(right.plan) do
-        {:join, left.plan, right.plan, cond_expr, canonical, []}
-      else
-        {:lateral_join, left.plan, right.plan, cond_expr, canonical}
-      end
-
-    update_plan(left, join_plan)
+    # Always encode a LateralJoin relation (PySpark parity) so outer column
+    # references in the right side (e.g. tvf.explode(col("arr")) against the
+    # left) resolve. Spark 3.5 servers lack the LateralJoin relation; the
+    # empty-relation legacy fallback in Session downgrades TVF laterals to a
+    # regular join there (which only supports correlation-free right sides).
+    update_plan(left, {:lateral_join, left.plan, right.plan, cond_expr, canonical})
   end
 
   @doc """
@@ -643,9 +648,9 @@ defmodule SparkEx.DataFrame do
   def with_columns(%__MODULE__{} = df, columns) when is_list(columns) do
     aliases =
       Enum.map(columns, fn
-        {name, %Column{} = col} when is_binary(name) -> {:alias, col.expr, name}
-        {name, value} when is_binary(name) -> {:alias, {:lit, value}, name}
+        {name, %Column{} = col} -> {:alias, col.expr, ColumnName.normalize!(name)}
         %Column{expr: {:alias, _, _} = expr} -> expr
+        {name, value} -> {:alias, {:lit, value}, ColumnName.normalize!(name)}
       end)
 
     update_plan(df, {:with_columns, df.plan, aliases})
@@ -655,8 +660,8 @@ defmodule SparkEx.DataFrame do
     aliases =
       columns
       |> Enum.map(fn
-        {name, %Column{} = col} when is_binary(name) -> {:alias, col.expr, name}
-        {name, value} when is_binary(name) -> {:alias, {:lit, value}, name}
+        {name, %Column{} = col} -> {:alias, col.expr, ColumnName.normalize!(name)}
+        {name, value} -> {:alias, {:lit, value}, ColumnName.normalize!(name)}
       end)
 
     update_plan(df, {:with_columns, df.plan, aliases})
@@ -923,6 +928,11 @@ defmodule SparkEx.DataFrame do
 
   def sample(%__MODULE__{} = df, with_replacement, fraction, opts)
       when is_boolean(with_replacement) and is_number(fraction) and is_list(opts) do
+    unless Keyword.keyword?(opts) do
+      raise ArgumentError,
+            "expected sample options to be a keyword list, got: #{inspect(opts)}"
+    end
+
     fraction = fraction * 1.0
     validate_sample_fraction!(fraction, with_replacement)
     seed = normalize_sample_seed!(Keyword.get(opts, :seed, nil))
@@ -932,6 +942,11 @@ defmodule SparkEx.DataFrame do
 
   def sample(%__MODULE__{} = df, fraction, opts, _ignored)
       when is_number(fraction) and is_list(opts) do
+    unless Keyword.keyword?(opts) do
+      raise ArgumentError,
+            "expected sample options to be a keyword list, got: #{inspect(opts)}"
+    end
+
     fraction = fraction * 1.0
     with_replacement = normalize_with_replacement!(Keyword.get(opts, :with_replacement, false))
     validate_sample_fraction!(fraction, with_replacement)
@@ -1346,7 +1361,7 @@ defmodule SparkEx.DataFrame do
 
   ## Examples
 
-      df |> DataFrame.alias("t")
+      df |> DataFrame.alias_("t")
   """
   @spec alias_(t(), String.t()) :: t()
   def alias_(%__MODULE__{} = df, name) when is_binary(name) do
@@ -1465,6 +1480,10 @@ defmodule SparkEx.DataFrame do
   @spec sort(t(), [Column.t() | String.t() | atom()]) :: t()
   def sort(%__MODULE__{} = df, columns), do: order_by(df, columns)
 
+  @doc "Alias for `order_by/3` (PySpark `sort`), accepting the same options."
+  @spec sort(t(), [Column.t() | String.t() | atom()], keyword()) :: t()
+  def sort(%__MODULE__{} = df, columns, opts), do: order_by(df, columns, opts)
+
   @doc "Alias for `union/2`."
   @spec union_all(t(), t()) :: t()
   def union_all(%__MODULE__{} = left, %__MODULE__{} = right), do: union(left, right)
@@ -1551,13 +1570,14 @@ defmodule SparkEx.DataFrame do
 
   - `:num_rows` — number of rows (default: 20)
   - `:truncate` — column width truncation (default: 20)
+  - `:timeout` — gRPC call timeout in ms (default: 60_000)
   """
   @spec html_string(t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def html_string(%__MODULE__{} = df, opts \\ []) do
     with {:ok, num_rows} <- fetch_non_neg_integer_option(opts, :num_rows, 20),
          {:ok, truncate} <- fetch_non_neg_integer_option(opts, :truncate, 20) do
       html_plan = {:html_string, df.plan, num_rows, truncate}
-      SparkEx.Session.execute_show(df.session, html_plan)
+      SparkEx.Session.execute_show(df.session, html_plan, show_request_opts(df, opts))
     end
   end
 
@@ -1901,12 +1921,21 @@ defmodule SparkEx.DataFrame do
   ## Options
 
   - `:timeout` — gRPC call timeout in ms (default: 60_000)
+  - `:map_format` — how MAP-typed column values are represented:
+    - `:key_value_pairs` (default) — the wire representation, a list of
+      `%{"key" => k, "value" => v}` entries. Preserves duplicate map keys
+      and roundtrips symmetrically through writers.
+    - `:map` — plain Elixir maps (recursively, including maps nested in
+      arrays/structs), mirroring PySpark's dicts. Duplicate map keys
+      collapse (last entry wins).
   """
   @spec collect(t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def collect(df_or_other, opts \\ [])
 
   def collect(%__MODULE__{} = df, opts) do
-    SparkEx.Session.execute_collect(df.session, df.plan, merge_tags(df, opts))
+    with :ok <- validate_map_format_option(opts) do
+      SparkEx.Session.execute_collect(df.session, df.plan, merge_tags(df, opts))
+    end
   end
 
   def collect(other, _opts) do
@@ -1918,7 +1947,8 @@ defmodule SparkEx.DataFrame do
   @doc """
   Collects rows into a map using the first column as key and second column as value.
 
-  The DataFrame must have exactly two columns.
+  The DataFrame must have exactly two columns with distinct names (rows decode
+  to maps keyed by column name, so duplicate names cannot be told apart).
   """
   @spec collect_as_map(t(), keyword()) :: {:ok, map()} | {:error, term()}
   def collect_as_map(%__MODULE__{} = df, opts \\ []) do
@@ -1935,6 +1965,9 @@ defmodule SparkEx.DataFrame do
       {:error, _} = error -> error
     end
   end
+
+  defp collect_as_map_columns([same_col, same_col]),
+    do: {:error, :collect_as_map_requires_distinct_column_names}
 
   defp collect_as_map_columns([key_col, value_col]), do: {:ok, [key_col, value_col]}
   defp collect_as_map_columns(_), do: {:error, :collect_as_map_requires_two_columns}
@@ -2008,6 +2041,8 @@ defmodule SparkEx.DataFrame do
 
   ## Options
 
+    * `:map_format` — `:key_value_pairs` (default) or `:map`; see `collect/2`.
+      Applied per batch as rows stream in.
     * `:on_metrics` — 1-arity callback invoked once on stream finalize
       with the merged observed/execution metrics map
       `%{observed_metrics: ..., execution_metrics: ...}`. Mirrors the
@@ -2016,24 +2051,61 @@ defmodule SparkEx.DataFrame do
   """
   @spec to_local_iterator(t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
   def to_local_iterator(%__MODULE__{} = df, opts \\ []) do
-    case SparkEx.Session.execute_plan_reattachable_stream(
-           df.session,
-           df.plan,
-           merge_tags(df, opts)
-         ) do
-      {:ok, stream} ->
-        # Pass the underlying %Session{} struct so streaming gRPC errors flow
-        # through Errors.from_grpc_error/2 the same way collected results do.
-        # The decoder applies the same session-id integrity checks used by
-        # the collected-result path, surfacing drift as `{:error, _}`
-        # elements instead of merging foreign-session rows silently.
-        session_state = fetch_session_state(df.session)
-        decoder_opts = Keyword.take(opts, [:on_metrics])
+    with :ok <- validate_map_format_option(opts),
+         {:ok, stream, json_schema} <-
+           SparkEx.Session.execute_plan_reattachable_stream_safe(
+             df.session,
+             df.plan,
+             merge_tags(df, opts)
+           ) do
+      # Pass the underlying %Session{} struct so streaming gRPC errors flow
+      # through Errors.from_grpc_error/2 the same way collected results do.
+      # The decoder applies the same session-id integrity checks used by
+      # the collected-result path, surfacing drift as `{:error, _}`
+      # elements instead of merging foreign-session rows silently.
+      session_state = fetch_session_state(df.session)
+      decoder_opts = Keyword.take(opts, [:on_metrics, :map_format])
 
-        {:ok, SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state, decoder_opts)}
+      rows =
+        SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state, decoder_opts)
 
-      {:error, _} = error ->
-        error
+      {:ok, decode_json_projection_stream(rows, json_schema, Keyword.get(opts, :map_format))}
+    end
+  end
+
+  # When the Arrow preflight rewrote the plan to a JSON projection, complex
+  # columns stream in as JSON strings: decode them lazily, per element, so the
+  # iterator stays lazy (T-33).
+  defp decode_json_projection_stream(rows, nil, _map_format), do: rows
+
+  defp decode_json_projection_stream(rows, schema, map_format) do
+    Stream.map(rows, fn
+      {:ok, row} when is_map(row) ->
+        case SparkEx.Session.__decode_json_projection_rows__([row], schema) do
+          [decoded] -> {:ok, apply_iterator_map_format([decoded], schema, map_format) |> hd()}
+          _ -> {:ok, row}
+        end
+
+      other ->
+        other
+    end)
+  end
+
+  # The wire schema of a JSON-projected plan types MAP columns as STRING, so
+  # the decoder's map conversion is a no-op there; re-apply it against the
+  # logical schema once the JSON has been decoded.
+  defp apply_iterator_map_format(rows, schema, :map),
+    do: SparkEx.Connect.ResultDecoder.convert_map_columns(rows, schema)
+
+  defp apply_iterator_map_format(rows, _schema, _format), do: rows
+
+  @map_formats [:key_value_pairs, :map]
+
+  defp validate_map_format_option(opts) do
+    case Keyword.fetch(opts, :map_format) do
+      :error -> :ok
+      {:ok, format} when format in @map_formats -> :ok
+      {:ok, other} -> {:error, {:invalid_option, {:map_format, other}}}
     end
   end
 
@@ -2045,10 +2117,14 @@ defmodule SparkEx.DataFrame do
 
   @doc """
   Returns the row count of the DataFrame.
+
+  ## Options
+
+  - `:timeout` — gRPC call timeout in ms (default: 60_000)
   """
-  @spec count(t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def count(%__MODULE__{} = df) do
-    SparkEx.Session.execute_count(df.session, df.plan)
+  @spec count(t(), keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def count(%__MODULE__{} = df, opts \\ []) do
+    SparkEx.Session.execute_count(df.session, df.plan, merge_tags(df, opts))
   end
 
   @doc """
@@ -2136,7 +2212,7 @@ defmodule SparkEx.DataFrame do
     with {:ok, struct} <- unwrap_schema(df) do
       dtypes =
         Enum.map(struct.fields, fn field ->
-          {field.name, SparkEx.Connect.TypeMapper.data_type_to_ddl(field.data_type)}
+          {field.name, SparkEx.Connect.TypeMapper.simple_string(field.data_type)}
         end)
 
       {:ok, dtypes}
@@ -2202,6 +2278,7 @@ defmodule SparkEx.DataFrame do
   - `:num_rows` — number of rows to show (default: 20)
   - `:truncate` — column width truncation (default: 20, 0 for no truncation)
   - `:vertical` — vertical display format (default: false)
+  - `:timeout` — gRPC call timeout in ms (default: 60_000)
   """
   @spec show(t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def show(%__MODULE__{} = df, opts \\ []) do
@@ -2209,7 +2286,7 @@ defmodule SparkEx.DataFrame do
          {:ok, truncate} <- normalize_show_truncate_option(opts),
          {:ok, vertical} <- fetch_boolean_option(opts, :vertical, false) do
       show_plan = {:show_string, df.plan, num_rows, truncate, vertical}
-      SparkEx.Session.execute_show(df.session, show_plan)
+      SparkEx.Session.execute_show(df.session, show_plan, show_request_opts(df, opts))
     end
   end
 
@@ -2365,22 +2442,20 @@ defmodule SparkEx.DataFrame do
     do: SparkEx.DataFrame.NA.drop(df, opts)
 
   @doc "Replaces values. Delegates to `SparkEx.DataFrame.NA.replace/4`."
-  @spec replace(t(), term(), keyword()) :: t()
+  @spec replace(t(), map()) :: t()
+  @spec replace(t(), term(), keyword() | term()) :: t()
   @spec replace(t(), term(), term(), keyword()) :: t()
-  def replace(df, to_replace, value_or_opts \\ nil, opts \\ [])
+  # No `value` default here: an omitted replacement must reach NA.replace as
+  # "not given" (so it can raise unless `to_replace` is a map), not as an
+  # explicit `nil`. NA.replace/2,3 handle the keyword-list-in-value position.
+  def replace(%__MODULE__{} = df, to_replace),
+    do: SparkEx.DataFrame.NA.replace(df, to_replace)
 
-  def replace(%__MODULE__{} = df, to_replace, value_or_opts, opts)
-      when is_list(value_or_opts) and opts == [] do
-    if Keyword.keyword?(value_or_opts) do
-      SparkEx.DataFrame.NA.replace(df, to_replace, nil, value_or_opts)
-    else
-      SparkEx.DataFrame.NA.replace(df, to_replace, value_or_opts, opts)
-    end
-  end
+  def replace(%__MODULE__{} = df, to_replace, value_or_opts),
+    do: SparkEx.DataFrame.NA.replace(df, to_replace, value_or_opts)
 
-  def replace(%__MODULE__{} = df, to_replace, value, opts) do
-    SparkEx.DataFrame.NA.replace(df, to_replace, value, opts)
-  end
+  def replace(%__MODULE__{} = df, to_replace, value, opts),
+    do: SparkEx.DataFrame.NA.replace(df, to_replace, value, opts)
 
   @doc "Describes basic statistics. Delegates to `SparkEx.DataFrame.Stat.describe/2`."
   @spec describe(t(), String.t() | [String.t()]) :: t()
@@ -2474,6 +2549,11 @@ defmodule SparkEx.DataFrame do
         %SparkEx.Column{expr: e} ->
           e
 
+        # Table arguments (PySpark: DataFrame.asTable()) encode as subquery
+        # expressions carrying their partitioning/ordering spec.
+        %SparkEx.TableArg{} = table_arg ->
+          SparkEx.TableArg.to_subquery_expr(table_arg)
+
         # PySpark's tvf._fn applies _to_col(arg) (tvf.py:117-124), converting
         # bare strings to column references (via the same star handling as
         # col/1). Non-string scalars remain literals.
@@ -2491,9 +2571,10 @@ defmodule SparkEx.DataFrame do
 
   defp merge_tags(%__MODULE__{tags: []}, opts), do: opts
   defp merge_tags(%__MODULE__{tags: tags}, opts), do: Keyword.put(opts, :tags, tags)
-  defp tvf_plan?({:plan_id, _, inner}), do: tvf_plan?(inner)
-  defp tvf_plan?({:table_valued_function, _, _}), do: true
-  defp tvf_plan?(_), do: false
+
+  # show/html_string formatting options stay client-side; only the request
+  # options (timeout + DataFrame tags) travel to the Session.
+  defp show_request_opts(df, opts), do: merge_tags(df, Keyword.take(opts, [:timeout]))
 
   defp normalize_hint_parameters(parameters) do
     parameters
@@ -2545,8 +2626,7 @@ defmodule SparkEx.DataFrame do
   # the server rejects with UNRESOLVED_COLUMN). Mirrors col/1 exactly.
   defp normalize_column_expr(name) when is_binary(name), do: name_to_col_expr(name)
 
-  defp normalize_column_expr(name) when is_atom(name),
-    do: name_to_col_expr(Atom.to_string(name))
+  defp normalize_column_expr(name) when is_atom(name), do: name_to_col_expr(name)
 
   # {name, alias} tuple form (documented for unpivot/5 values): produce an
   # aliased expression instead of silently dropping the alias.
@@ -2554,7 +2634,7 @@ defmodule SparkEx.DataFrame do
     do: {:alias, name_to_col_expr(name), alias}
 
   defp normalize_column_expr({name, alias}) when is_atom(name) and is_binary(alias),
-    do: {:alias, name_to_col_expr(Atom.to_string(name)), alias}
+    do: {:alias, name_to_col_expr(name), alias}
 
   # PySpark treats integer args as 1-based schema ordinals (self[c - 1]), which
   # requires a schema-resolving RPC; resolve locally by raising, consistent with
@@ -2574,16 +2654,7 @@ defmodule SparkEx.DataFrame do
   defp normalize_column_expr({:metadata_col, _, _} = expr), do: expr
 
   # Mirror of SparkEx.Functions.col/1 string handling.
-  defp name_to_col_expr("*"), do: {:star}
-  defp name_to_col_expr(".*"), do: {:star}
-
-  defp name_to_col_expr(name) when is_binary(name) do
-    if String.ends_with?(name, ".*") do
-      {:star, name}
-    else
-      {:col, name}
-    end
-  end
+  defp name_to_col_expr(name), do: ColumnName.to_col_expr(name)
 
   defp normalize_dedup_column(%Column{expr: {:col, name}}), do: name
 
@@ -2592,7 +2663,7 @@ defmodule SparkEx.DataFrame do
   end
 
   defp normalize_dedup_column(name) when is_binary(name), do: name
-  defp normalize_dedup_column(name) when is_atom(name), do: Atom.to_string(name)
+  defp normalize_dedup_column(name) when is_atom(name), do: ColumnName.normalize!(name)
 
   defp normalize_sort_expr(%Column{expr: {:sort_order, _, _, _}} = col), do: col.expr
 
@@ -2605,7 +2676,7 @@ defmodule SparkEx.DataFrame do
   end
 
   defp normalize_sort_expr(name) when is_atom(name) do
-    {:sort_order, {:col, Atom.to_string(name)}, :asc, :nulls_first}
+    {:sort_order, {:col, ColumnName.normalize!(name)}, :asc, :nulls_first}
   end
 
   defp normalize_sort_expr(idx) when is_integer(idx) do
@@ -2658,7 +2729,7 @@ defmodule SparkEx.DataFrame do
   defp sort_inner_expr(%Column{expr: {:sort_order, inner, _, _}}), do: inner
   defp sort_inner_expr(%Column{expr: e}), do: e
   defp sort_inner_expr(name) when is_binary(name), do: name_to_col_expr(name)
-  defp sort_inner_expr(name) when is_atom(name), do: name_to_col_expr(Atom.to_string(name))
+  defp sort_inner_expr(name) when is_atom(name), do: name_to_col_expr(name)
 
   defp sort_inner_expr(idx) when is_integer(idx) do
     raise ArgumentError,

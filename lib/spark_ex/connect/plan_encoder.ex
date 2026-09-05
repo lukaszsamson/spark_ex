@@ -1500,7 +1500,8 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   # PySpark special-cases count(col("*")) to count(lit(1)) because
   # Spark Connect does not support UnresolvedStar inside count
-  def encode_expression({:fn, "count", [{:star}], false}) do
+  def encode_expression({:fn, "count", [star], false})
+      when elem(star, 0) == :star and tuple_size(star) in 1..3 do
     encode_expression({:fn, "count", [{:lit, 1}], false})
   end
 
@@ -2825,6 +2826,15 @@ defmodule SparkEx.Connect.PlanEncoder do
     rewrite_expr(child, plan_ids, refs, counter)
   end
 
+  # T-29(a): `DataFrame.direct_shuffle_partition_id/2` wraps an arbitrary column
+  # expression, which may reference a column of *another* DataFrame. Without this
+  # clause the child was left untouched, so the referenced plan was never hoisted
+  # into `with_relations.references` and the server reported "plan not found".
+  defp rewrite_expr({:direct_shuffle_partition_id, child}, plan_ids, refs, counter) do
+    {child, plan_ids, refs, counter} = rewrite_expr(child, plan_ids, refs, counter)
+    {{:direct_shuffle_partition_id, child}, plan_ids, refs, counter}
+  end
+
   # Idempotency clause: when a subquery has already been rewritten (its third
   # element is an integer plan_id), leave it alone. Re-entrance happens via
   # `attach_with_relations/2` inside `encode_relation({:plan_id, _, _})`.
@@ -2972,31 +2982,50 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_cast_to_type(type) when is_binary(type), do: {:type_str, type}
   defp encode_cast_to_type(%DataType{} = type), do: {:type, type}
 
+  # T-29(b): SQL arguments accept anything `encode_expression/1` understands.
+  # Enumerating a subset here silently reinterpreted valid expression tuples
+  # (e.g. `{:call_function, ...}`, `{:named_arg, ...}`, `{:outer, ...}`,
+  # `{:direct_shuffle_partition_id, ...}`, `{:update_fields, ...}`,
+  # `{:alias, expr, name, metadata}`) as opaque *literals*. Mirrors PySpark,
+  # where any `Column`/`Expression` argument is serialized via its own
+  # `to_plan` and only non-expressions become literals (plan.py SQL command).
+  @sql_argument_expression_tags %{
+    col: [2, 3],
+    metadata_col: [2, 3],
+    col_regex: [2, 3],
+    lit: [2],
+    expr: [2],
+    fn: [4],
+    call_function: [3],
+    named_arg: [3],
+    alias: [3, 4],
+    cast: [3, 4],
+    window: [5],
+    unresolved_extract_value: [3],
+    update_fields: [4],
+    lambda: [3],
+    lambda_var: [2],
+    sort_order: [4],
+    star: [1, 2, 3],
+    direct_shuffle_partition_id: [2],
+    outer: [2],
+    subquery: [4]
+  }
+
   defp encode_sql_argument(%Column{expr: expr}) do
     encode_expression(expr)
   end
 
-  defp encode_sql_argument({:col, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:col, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:lit, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:expr, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:col_regex, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:col_regex, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:metadata_col, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:metadata_col, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:fn, _, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:alias, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:sort_order, _, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:cast, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:cast, _, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:star} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:star, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:star, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:window, _, _, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:unresolved_extract_value, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:lambda, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:lambda_var, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:subquery, _, _, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument(expr) when is_tuple(expr) and tuple_size(expr) > 0 do
+    tag = elem(expr, 0)
+
+    if is_atom(tag) and tuple_size(expr) in Map.get(@sql_argument_expression_tags, tag, []) do
+      encode_expression(expr)
+    else
+      encode_literal_expression(expr)
+    end
+  end
+
   defp encode_sql_argument(value), do: encode_literal_expression(value)
 
   # PySpark keeps positional (`args`) and named (`named_args`) parameter channels
@@ -3444,6 +3473,31 @@ defmodule SparkEx.Connect.PlanEncoder do
     }
   end
 
+  # Explorer/Elixir non-finite float sentinels. These must precede the generic
+  # atom clause below, which would otherwise encode them as strings and silently
+  # change the column type on a collect -> create_dataframe round-trip.
+  # Protobuf encodes :nan / :infinity / :negative_infinity for double fields.
+  defp encode_literal(:nan), do: %Expression.Literal{literal_type: {:double, :nan}}
+
+  defp encode_literal(:infinity), do: %Expression.Literal{literal_type: {:double, :infinity}}
+
+  defp encode_literal(:neg_infinity),
+    do: %Expression.Literal{literal_type: {:double, :negative_infinity}}
+
+  # Atoms (nil/true/false are handled above) encode as strings, matching
+  # create_dataframe's inference for atom values.
+  defp encode_literal(v) when is_atom(v) do
+    encode_literal(Atom.to_string(v))
+  end
+
+  defp encode_literal(other) do
+    raise ArgumentError,
+          "cannot encode #{inspect(other)} as a Spark literal; supported values: " <>
+            "nil, booleans, numbers, strings, atoms, Decimal, Date, Time, DateTime, " <>
+            "NaiveDateTime, lists, maps, and tagged tuples such as {:binary, bytes}, " <>
+            "{:decimal, string}, {:array, list}, {:map, map}, {:struct, fields}"
+  end
+
   defp encode_map_literal_expression(map) when map_size(map) == 0 do
     encode_expression({:fn, "map", [], false})
   end
@@ -3693,8 +3747,19 @@ defmodule SparkEx.Connect.PlanEncoder do
     %DataType{kind: {:integer, %DataType.Integer{}}}
   end
 
+  defp infer_literal_data_type(v)
+       when is_integer(v) and v >= -9_223_372_036_854_775_808 and
+              v <= 9_223_372_036_854_775_807,
+       do: %DataType{kind: {:long, %DataType.Long{}}}
+
+  # Integers outside int64 encode as decimal literals; the collection element
+  # type must agree or the server rejects the proto (element_type Long with a
+  # decimal child).
   defp infer_literal_data_type(v) when is_integer(v),
-    do: %DataType{kind: {:long, %DataType.Long{}}}
+    do: infer_literal_data_type({:decimal, Integer.to_string(v)})
+
+  defp infer_literal_data_type(v) when v in [:nan, :infinity, :neg_infinity],
+    do: %DataType{kind: {:double, %DataType.Double{}}}
 
   defp infer_literal_data_type(v) when is_float(v),
     do: %DataType{kind: {:double, %DataType.Double{}}}
@@ -3839,6 +3904,30 @@ defmodule SparkEx.Connect.PlanEncoder do
        ),
        do: %Expression.Literal{lit | literal_type: {:double, v * 1.0}}
 
+  defp promote_literal_to_type(
+         %Expression.Literal{literal_type: {tag, v}} = lit,
+         %DataType{kind: {:decimal, %DataType.Decimal{precision: p, scale: sc}}}
+       )
+       when tag in [:integer, :long, :byte, :short] do
+    %Expression.Literal{
+      lit
+      | literal_type:
+          {:decimal,
+           %Expression.Literal.Decimal{
+             value: Integer.to_string(v),
+             precision: p,
+             scale: sc
+           }}
+    }
+  end
+
+  defp promote_literal_to_type(
+         %Expression.Literal{literal_type: {:decimal, %Expression.Literal.Decimal{} = d}} = lit,
+         %DataType{kind: {:decimal, %DataType.Decimal{precision: p, scale: sc}}}
+       ) do
+    %Expression.Literal{lit | literal_type: {:decimal, %{d | precision: p, scale: sc}}}
+  end
+
   defp promote_literal_to_type(%Expression.Literal{} = lit, _), do: lit
 
   defp merge_literal_data_types(%DataType{kind: {:null, _}}, right), do: right
@@ -3864,6 +3953,27 @@ defmodule SparkEx.Connect.PlanEncoder do
        when tag in [:integer, :long, :double],
        do: right
 
+  defp merge_literal_data_types(
+         %DataType{kind: {:decimal, %DataType.Decimal{} = left}},
+         %DataType{kind: {:decimal, %DataType.Decimal{} = right}}
+       ) do
+    scale = max(left.scale || 0, right.scale || 0)
+
+    precision =
+      max((left.precision || 0) - (left.scale || 0), (right.precision || 0) - (right.scale || 0)) +
+        scale
+
+    %DataType{kind: {:decimal, %DataType.Decimal{precision: precision, scale: scale}}}
+  end
+
+  defp merge_literal_data_types(%DataType{kind: {:decimal, _}} = left, %DataType{kind: {tag, _}})
+       when tag in [:byte, :short, :integer, :long],
+       do: merge_literal_data_types(left, integral_decimal_type(tag))
+
+  defp merge_literal_data_types(%DataType{kind: {tag, _}}, %DataType{kind: {:decimal, _}} = right)
+       when tag in [:byte, :short, :integer, :long],
+       do: merge_literal_data_types(integral_decimal_type(tag), right)
+
   defp merge_literal_data_types(left, right) do
     if left == right do
       left
@@ -3875,6 +3985,15 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   defp null_data_type, do: %DataType{kind: {:null, %DataType.NULL{}}}
+
+  # Widest decimal representation of each integral type (Spark's own mapping).
+  defp integral_decimal_type(:byte), do: decimal_type(3)
+  defp integral_decimal_type(:short), do: decimal_type(5)
+  defp integral_decimal_type(:integer), do: decimal_type(10)
+  defp integral_decimal_type(:long), do: decimal_type(20)
+
+  defp decimal_type(precision),
+    do: %DataType{kind: {:decimal, %DataType.Decimal{precision: precision, scale: 0}}}
 
   # Infers precision and scale from a decimal string value.
   # Matches PySpark's behavior of computing from the actual value.

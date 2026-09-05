@@ -618,7 +618,7 @@ defmodule SparkEx.Catalog do
     join_sql(
       ["CREATE", "DATABASE"] ++
         maybe_add([], "IF NOT EXISTS", if_not_exists) ++
-        [quote_identifier(db_name)] ++ tail_clauses
+        [quote_qualified_name(db_name)] ++ tail_clauses
     )
   end
 
@@ -633,7 +633,7 @@ defmodule SparkEx.Catalog do
 
     join_sql(
       ["DROP", "DATABASE"] ++
-        clauses ++ [quote_identifier(db_name)] ++ maybe_add([], "CASCADE", cascade)
+        clauses ++ [quote_qualified_name(db_name)] ++ maybe_add([], "CASCADE", cascade)
     )
   end
 
@@ -650,19 +650,19 @@ defmodule SparkEx.Catalog do
         join_sql([
           "ALTER",
           "DATABASE",
-          quote_identifier(db_name),
+          quote_qualified_name(db_name),
           "SET",
           "LOCATION",
           sql_string(loc)
         ])
 
-      {nil, props} when is_map(props) ->
+      {nil, props} when is_map(props) or is_list(props) ->
         props_sql = format_properties(props)
 
         join_sql([
           "ALTER",
           "DATABASE",
-          quote_identifier(db_name),
+          quote_qualified_name(db_name),
           "SET",
           "DBPROPERTIES",
           props_sql
@@ -711,7 +711,7 @@ defmodule SparkEx.Catalog do
           quote_qualified_name(new_name)
         ])
 
-      {nil, props} when is_map(props) ->
+      {nil, props} when is_map(props) or is_list(props) ->
         props_sql = format_properties(props)
 
         join_sql([
@@ -744,23 +744,28 @@ defmodule SparkEx.Catalog do
         is_binary(using_jar) ->
           ["USING", "JAR", sql_string(using_jar)]
 
-        is_list(using_jars) ->
+        is_list(using_jars) and using_jars != [] ->
           jars = Enum.map(using_jars, &join_sql(["JAR", sql_string(&1)]))
-          ["USING", Enum.join(jars, " ")]
+          ["USING", Enum.join(jars, ", ")]
 
         true ->
           []
       end
 
-    clauses =
+    prefix_clauses =
       []
       |> maybe_add("TEMPORARY", temporary)
+
+    suffix_clauses =
+      []
       |> maybe_add("IF NOT EXISTS", if_not_exists)
 
     join_sql(
       ["CREATE"] ++
-        clauses ++
-        ["FUNCTION", quote_qualified_name(function_name), "AS", sql_string(class_name)] ++
+        prefix_clauses ++
+        ["FUNCTION"] ++
+        suffix_clauses ++
+        [quote_qualified_name(function_name), "AS", sql_string(class_name)] ++
         using_clause
     )
   end
@@ -776,6 +781,12 @@ defmodule SparkEx.Catalog do
         ["FUNCTION"] ++
         maybe_add([], "IF EXISTS", if_exists) ++ [quote_qualified_name(function_name)]
     )
+  end
+
+  defp format_properties(props) when is_list(props) do
+    props
+    |> Map.new(fn {k, v} -> {to_string(k), v} end)
+    |> format_properties()
   end
 
   defp format_properties(props) when is_map(props) do
@@ -797,10 +808,6 @@ defmodule SparkEx.Catalog do
 
   defp quote_identifier(parts) when is_list(parts) do
     Enum.map_join(parts, ".", &quote_identifier_part/1)
-  end
-
-  defp quote_identifier(name) when is_binary(name) do
-    quote_identifier_part(name)
   end
 
   defp quote_identifier_part(name) when is_binary(name) do

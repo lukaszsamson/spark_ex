@@ -30,8 +30,32 @@ defmodule SparkEx.Session do
     tags: [],
     released: false,
     closed: false,
-    retry_policies: nil
+    retry_policies: nil,
+    local_relation_configs: nil
   ]
+
+  # Server configs that drive `create_dataframe/3` (T-64), mirroring PySpark's
+  # `SparkSession.createDataFrame` which reads them via `get_config_dict`.
+  # They are fetched lazily on the first local-relation build and cached in
+  # `:local_relation_configs`. Servers that predate a key (Spark 3.5 knows
+  # only the cache threshold) report `nil` for it and the default applies.
+  @local_relation_config_keys [
+    {"spark.sql.session.localRelationCacheThreshold", :cache_threshold},
+    {"spark.sql.session.localRelationChunkSizeRows", :chunk_size_rows},
+    {"spark.sql.session.localRelationChunkSizeBytes", :chunk_size_bytes},
+    {"spark.sql.session.localRelationBatchOfChunksSizeBytes", :batch_of_chunks_size_bytes}
+  ]
+
+  # Fallbacks match the pre-T-64 client default for the threshold (4 MiB) and
+  # Spark's SQLConf defaults for the chunking knobs.
+  @local_relation_config_timeout 5_000
+  @local_relation_config_retry_ms 60_000
+  @local_relation_config_defaults %{
+    cache_threshold: 4 * 1024 * 1024,
+    chunk_size_rows: 10_000,
+    chunk_size_bytes: 16 * 1024 * 1024,
+    batch_of_chunks_size_bytes: 1024 * 1024 * 1024
+  }
 
   @type t :: %__MODULE__{
           channel: GRPC.Channel.t() | nil,
@@ -47,6 +71,8 @@ defmodule SparkEx.Session do
           tags: [String.t()],
           released: boolean(),
           closed: boolean(),
+          local_relation_configs:
+            %{atom() => non_neg_integer()} | {:unavailable, integer()} | nil,
           retry_policies: %{atom() => map()} | nil
         }
 
@@ -182,7 +208,18 @@ defmodule SparkEx.Session do
   def is_stopped(%__MODULE__{released: released}), do: released
 
   def is_stopped(session) do
-    GenServer.call(resolve_server!(session), :is_stopped)
+    case GenServer.whereis(session) do
+      nil ->
+        true
+
+      server ->
+        try do
+          GenServer.call(server, :is_stopped)
+        catch
+          :exit, {:noproc, _} -> true
+          :exit, {{:nodedown, _}, _} -> true
+        end
+    end
   end
 
   @doc """
@@ -279,6 +316,44 @@ defmodule SparkEx.Session do
   end
 
   @doc """
+  Like `execute_plan_reattachable_stream/3`, but applies the same Arrow
+  preflight `execute_collect/3` uses (duplicate-column renaming and the
+  JSON/STRING projection fallback).
+
+  Returns `{:ok, stream, json_schema}` where `json_schema` is non-nil when the
+  plan was rewritten to a JSON projection: rows decoded from the stream must
+  then be passed through `__decode_json_projection_rows__/2`.
+  """
+  @spec execute_plan_reattachable_stream_safe(GenServer.server(), term(), keyword()) ::
+          {:ok, Enumerable.t(), term() | nil} | {:error, term()}
+  def execute_plan_reattachable_stream_safe(session, plan, opts \\ []) do
+    if real_session_process?(session) do
+      case GenServer.call(
+             session,
+             {:prepare_safe_execute_plan_stream, plan, opts},
+             call_timeout(opts)
+           ) do
+        {:ok, stream_state, proto_plan, stream_opts, json_schema} ->
+          case Client.execute_plan_reattachable_response_stream(
+                 stream_state,
+                 proto_plan,
+                 stream_opts
+               ) do
+            {:ok, stream} -> {:ok, stream, json_schema}
+            {:error, _} = error -> error
+          end
+
+        {:error, _} = error ->
+          error
+      end
+    else
+      with {:ok, stream} <- execute_plan_reattachable_stream(session, plan, opts) do
+        {:ok, stream, nil}
+      end
+    end
+  end
+
+  @doc """
   Executes a plan and returns an `Explorer.DataFrame`.
 
   Pushes a LIMIT into the plan unless `unsafe: true`. Enforces row/byte bounds.
@@ -300,11 +375,16 @@ defmodule SparkEx.Session do
 
   @doc """
   Executes a plan wrapped in a count(*) aggregate and returns the count.
+
+  ## Options
+
+    * `:timeout` — gRPC call timeout in ms (default: 60_000)
+    * `:tags` — request tags merged with the session tags
   """
-  @spec execute_count(GenServer.server(), term()) ::
+  @spec execute_count(GenServer.server(), term(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def execute_count(session, plan) do
-    GenServer.call(session, {:execute_count, plan}, :timer.seconds(60))
+  def execute_count(session, plan, opts \\ []) do
+    GenServer.call(session, {:execute_count, plan, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -577,7 +657,14 @@ defmodule SparkEx.Session do
   @spec artifact_status(GenServer.server(), [String.t()]) ::
           {:ok, %{String.t() => boolean()}} | {:error, term()}
   def artifact_status(session, names) do
-    GenServer.call(session, {:artifact_status, names})
+    # Validate before entering the GenServer: protobuf encoding of a
+    # non-list / non-binary `names` would raise inside the shared Session
+    # process and take it down (T-01). Mirrors Client.add_artifacts.
+    if is_list(names) and Enum.all?(names, &is_binary/1) do
+      GenServer.call(session, {:artifact_status, names})
+    else
+      {:error, {:invalid_artifact_names, names}}
+    end
   end
 
   @doc """
@@ -659,6 +746,11 @@ defmodule SparkEx.Session do
   @doc """
   Creates a DataFrame from local data.
 
+  Accepted row shapes: an `Explorer.DataFrame`, a list of maps, a list of
+  keyword lists (treated like map rows), a list of tuples or lists
+  (positional; requires a schema or column names), or a list of scalars
+  (single-column rows).
+
   For small data (under the cache threshold), the data is embedded directly
   in the plan as a `LocalRelation`. For larger data, the Arrow IPC bytes
   are split into one or more chunks, each uploaded to the server via
@@ -669,13 +761,37 @@ defmodule SparkEx.Session do
 
   - `:schema` — DDL schema string (e.g. `"id INT, name STRING"`). If omitted,
     inferred from the Explorer.DataFrame or from the data.
-  - `:cache_threshold` — byte size threshold above which data is cached on the
-    server instead of inlined (default: 4 MB)
+  - `:cache_threshold` — byte size at or above which data is cached on the
+    server instead of inlined. Defaults to the server's
+    `spark.sql.session.localRelationCacheThreshold` (read once per session;
+    4 MiB when the server does not expose it).
   - `:cache_chunk_size` — maximum byte size of each Arrow IPC chunk uploaded as
-    a separate cache artifact when the payload exceeds `:cache_threshold`
-    (default: same as `:cache_threshold`). Mirrors PySpark's
-    `_chunk_local_relation` behaviour, which splits a large Arrow stream into
-    multiple per-chunk cache entries instead of uploading a single blob.
+    a separate cache artifact when the payload reaches `:cache_threshold`.
+    Defaults to the server's `spark.sql.session.localRelationChunkSizeBytes`
+    (16 MiB fallback), capped by
+    `spark.sql.session.localRelationBatchOfChunksSizeBytes`.
+  - `:cache_chunk_rows` — maximum number of rows per chunk. Defaults to the
+    server's `spark.sql.session.localRelationChunkSizeRows` (10 000
+    fallback). Chunks are bounded by rows *and* bytes, and uploaded in
+    batches no larger than the batch-of-chunks config, mirroring PySpark's
+    `_cache_local_relation`.
+
+  ## Schema inference
+
+  Without an explicit `:schema`, map / keyword-list rows infer their columns
+  from the **sorted** union of the row keys (keys are stringified first),
+  matching PySpark's `sorted(row.items())` dict inference. An explicit schema
+  — DDL string, `SparkEx.Types` struct schema, or column-name list — always
+  keeps its own order.
+
+  A column-name list shorter than the row width is padded with `"_N"`
+  (1-based, continuing after the supplied names), so
+  `create_dataframe(s, [{1, 2}], schema: ["a"])` yields columns `a` and `_2`.
+  A list longer than the row width is an error.
+
+  If a column is `nil` in every row, inference fails with
+  `{:error, {:cannot_determine_type, column_name}}` (PySpark's
+  `CANNOT_DETERMINE_TYPE`). Pass an explicit `:schema` for such columns.
   """
   @spec create_dataframe(GenServer.server(), term(), keyword()) ::
           {:ok, SparkEx.DataFrame.t()} | {:error, term()}
@@ -765,11 +881,16 @@ defmodule SparkEx.Session do
 
   @doc """
   Executes a ShowString plan and returns the formatted string.
+
+  ## Options
+
+    * `:timeout` — gRPC call timeout in ms (default: 60_000)
+    * `:tags` — request tags merged with the session tags
   """
-  @spec execute_show(GenServer.server(), term()) ::
+  @spec execute_show(GenServer.server(), term(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def execute_show(session, plan) do
-    GenServer.call(session, {:execute_show, plan}, :timer.seconds(60))
+  def execute_show(session, plan, opts \\ []) do
+    GenServer.call(session, {:execute_show, plan, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -791,7 +912,7 @@ defmodule SparkEx.Session do
   """
   @spec interrupt_all(GenServer.server()) :: {:ok, [String.t()]} | {:error, term()}
   def interrupt_all(session) do
-    GenServer.call(session, {:interrupt, :all})
+    interrupt(session, :all)
   end
 
   @doc """
@@ -801,7 +922,7 @@ defmodule SparkEx.Session do
   """
   @spec interrupt_tag(GenServer.server(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
   def interrupt_tag(session, tag) when is_binary(tag) do
-    GenServer.call(session, {:interrupt, {:tag, tag}})
+    interrupt(session, {:tag, tag})
   end
 
   @doc """
@@ -812,8 +933,44 @@ defmodule SparkEx.Session do
   @spec interrupt_operation(GenServer.server(), String.t()) ::
           {:ok, [String.t()]} | {:error, term()}
   def interrupt_operation(session, operation_id) when is_binary(operation_id) do
-    GenServer.call(session, {:interrupt, {:operation_id, operation_id}})
+    interrupt(session, {:operation_id, operation_id})
   end
+
+  # Interrupt must not queue behind a running execute on the Session
+  # GenServer (its whole purpose is to cancel one), so it runs from the
+  # caller's process against the published connection snapshot. Sessions
+  # without a snapshot (fake test sessions, released/closed sessions) fall
+  # back to the GenServer call and get its lifecycle error replies.
+  defp interrupt(session, type) do
+    case SparkEx.Internal.SessionSnapshot.fetch(session) do
+      {:ok, snapshot} ->
+        case Client.interrupt(snapshot, type) do
+          {:ok, interrupted_ids, server_side_session_id} ->
+            observe_server_session_id(session, server_side_session_id)
+            {:ok, interrupted_ids}
+
+          {:error, _} = error ->
+            # The snapshot path has no GenServer reply to route through
+            # reply_error/2, so hand the error to the Session: a
+            # session-changed signal closes it and drops the snapshot exactly
+            # like an in-band RPC failure would.
+            GenServer.cast(session, {:observe_rpc_error, error})
+            error
+        end
+
+      :error ->
+        GenServer.call(session, {:interrupt, type})
+    end
+  end
+
+  defp observe_server_session_id(_session, nil), do: :ok
+  defp observe_server_session_id(_session, ""), do: :ok
+
+  # Routed through maybe_update_server_session/2 (not the test-only raw
+  # setter) so the first id learned via an out-of-band interrupt republishes
+  # the ETS snapshot and a rotated id closes the session.
+  defp observe_server_session_id(session, id),
+    do: GenServer.cast(session, {:observe_server_session_id, id})
 
   @doc """
   Stops the session process. Calls `ReleaseSession` if not already released,
@@ -878,6 +1035,8 @@ defmodule SparkEx.Session do
         preferred_arrow_chunk_size: preferred_arrow_chunk_size,
         retry_policies: retry_policies
       }
+
+      publish_connection_snapshot(state)
 
       {:ok, state}
     else
@@ -987,6 +1146,8 @@ defmodule SparkEx.Session do
     if state.released do
       {:reply, :ok, state}
     else
+      SparkEx.Internal.SessionSnapshot.delete(self())
+
       case Client.release_session(state) do
         {:ok, server_side_session_id} ->
           state = maybe_update_server_session(state, server_side_session_id)
@@ -1070,7 +1231,7 @@ defmodule SparkEx.Session do
 
           case maybe_execute_collect_with_json_projection(state, plan, proto_plan, opts) do
             {:ok, result, state} ->
-              reply_collect_result(result, state)
+              reply_collect_result(result, state, opts, proto_plan)
 
             {:no_fallback, state} ->
               execute_collect_no_fallback(state, plan, proto_plan, opts)
@@ -1080,6 +1241,20 @@ defmodule SparkEx.Session do
           reply_error(error, state)
       end
     end)
+  end
+
+  def handle_call({:prepare_safe_execute_plan_stream, plan, opts}, _from, state) do
+    {safe_plan, json_schema, state} = prepare_safe_collect_plan(state, plan)
+
+    case safe_encode(safe_plan, state.plan_id_counter) do
+      {{proto_plan, counter}, nil} ->
+        state = %{state | plan_id_counter: counter}
+        opts = merge_session_tags(opts, state.tags)
+        {:reply, {:ok, state, proto_plan, opts, json_schema}, state}
+
+      {nil, error} ->
+        reply_error(error, state)
+    end
   end
 
   def handle_call({:prepare_execute_plan_stream, plan, opts}, _from, state) do
@@ -1099,15 +1274,28 @@ defmodule SparkEx.Session do
       max_rows = Keyword.get(opts, :max_rows, 10_000)
       unsafe = Keyword.get(opts, :unsafe, false)
 
-      {effective_plan, decoder_opts} =
-        if unsafe do
-          # Skip remote LIMIT injection only; local decoder limits stay active unless overridden.
-          {plan, opts}
-        else
-          {{:limit, plan, max_rows}, opts}
+      # Apply the same Arrow preflight collect uses: duplicate column names and
+      # nested/unsupported types otherwise panic the Explorer decoder (T-33).
+      {plan, _json_schema, state} = prepare_safe_collect_plan(state, plan, :explorer)
+
+      # `:infinity` is a decoder-only option (DataFrame.to_explorer docs): it
+      # must not be injected into the int32 LIMIT field. Any other
+      # non-integer/negative value is rejected instead of crashing on encode.
+      effective_plan =
+        cond do
+          max_rows != :infinity and not (is_integer(max_rows) and max_rows >= 0) ->
+            {:error, {:invalid_option, {:max_rows, max_rows}}}
+
+          unsafe or max_rows == :infinity ->
+            {:ok, plan}
+
+          true ->
+            {:ok, {:limit, plan, max_rows}}
         end
 
-      case safe_encode(effective_plan, state.plan_id_counter) do
+      decoder_opts = opts
+
+      case execute_explorer_encode(effective_plan, state.plan_id_counter) do
         {{proto_plan, counter}, nil} ->
           state = %{state | plan_id_counter: counter}
 
@@ -1165,15 +1353,23 @@ defmodule SparkEx.Session do
     end)
   end
 
-  def handle_call({:execute_count, plan}, _from, state) do
+  def handle_call({:execute_count, plan}, from, state) do
+    handle_call({:execute_count, plan, []}, from, state)
+  end
+
+  def handle_call({:execute_count, plan, opts}, _from, state) do
     operation_telemetry_span(:execute_count, state.session_id, fn ->
       case safe_encode_count(plan, state.plan_id_counter) do
         {{proto_plan, counter}, nil} ->
           state = %{state | plan_id_counter: counter}
+          opts = merge_session_tags(opts, state.tags)
 
-          case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
+          case Client.execute_plan(state, proto_plan, opts) do
             {:ok, result} ->
               reply_execute_count_result(result, state)
+
+            {:error, %SparkEx.Error.Remote{} = remote} = error ->
+              reply_count_with_legacy_fallback(state, plan, opts, remote, error)
 
             {:error, _} = error ->
               reply_error(error, state)
@@ -1194,6 +1390,9 @@ defmodule SparkEx.Session do
           {:ok, schema, server_side_session_id} ->
             state = maybe_update_server_session(state, server_side_session_id)
             {:reply, {:ok, schema}, state}
+
+          {:error, %SparkEx.Error.Remote{} = remote} = error ->
+            reply_analyze_schema_with_legacy_fallback(state, plan, remote, error)
 
           {:error, _} = error ->
             reply_error(error, state)
@@ -1226,7 +1425,11 @@ defmodule SparkEx.Session do
   def handle_call({:config_set, pairs}, _from, state) do
     case Client.config_set(state, pairs) do
       {:ok, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
+        state =
+          state
+          |> maybe_update_server_session(server_side_session_id)
+          |> invalidate_local_relation_configs()
+
         {:reply, :ok, state}
 
       {:error, _} = error ->
@@ -1281,7 +1484,11 @@ defmodule SparkEx.Session do
   def handle_call({:config_unset, keys}, _from, state) do
     case Client.config_unset(state, keys) do
       {:ok, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
+        state =
+          state
+          |> maybe_update_server_session(server_side_session_id)
+          |> invalidate_local_relation_configs()
+
         {:reply, :ok, state}
 
       {:error, _} = error ->
@@ -1524,33 +1731,28 @@ defmodule SparkEx.Session do
   def handle_call({:create_dataframe, data, opts}, from, state) do
     case safe_prepare_local_data(data, opts) do
       {:ok, {:local_relation, arrow_ipc, schema_ddl, source_df}} ->
-        cache_threshold = Keyword.get(opts, :cache_threshold, 4 * 1024 * 1024)
+        {configs, state} = ensure_local_relation_configs(state, opts)
 
-        cond do
-          not (is_integer(cache_threshold) and cache_threshold >= 0) ->
-            {:reply, {:error, {:invalid_option, {:cache_threshold, cache_threshold}}}, state}
+        case local_relation_chunk_params(opts, configs) do
+          {:error, _} = error ->
+            {:reply, error, state}
 
-          byte_size(arrow_ipc) <= cache_threshold ->
+          # PySpark: `if cache_threshold <= table.nbytes: cache`, so a payload
+          # exactly at the threshold is cached, not inlined.
+          {:ok, %{cache_threshold: cache_threshold}} when byte_size(arrow_ipc) < cache_threshold ->
             plan = {:local_relation, arrow_ipc, schema_ddl}
             df = SparkEx.DataFrame.new(self(), plan)
             {:reply, {:ok, df}, state}
 
-          true ->
-            chunk_size =
-              Keyword.get(opts, :cache_chunk_size, max(cache_threshold, 1))
-
-            if is_integer(chunk_size) and chunk_size > 0 do
-              # Drop arrow_ipc from this scope before re-encoding per chunk so
-              # peak memory stays close to the size of the source DataFrame
-              # rather than 2x that for very large payloads.
-              handle_call(
-                {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_size},
-                from,
-                state
-              )
-            else
-              {:reply, {:error, {:invalid_option, {:cache_chunk_size, chunk_size}}}, state}
-            end
+          {:ok, chunk_params} ->
+            # Drop arrow_ipc from this scope before re-encoding per chunk so
+            # peak memory stays close to the size of the source DataFrame
+            # rather than 2x that for very large payloads.
+            handle_call(
+              {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_params},
+              from,
+              state
+            )
         end
 
       {:ok, {:sql_relation, query, args}} ->
@@ -1563,11 +1765,17 @@ defmodule SparkEx.Session do
   end
 
   def handle_call(
-        {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_size},
+        {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_params},
         _from,
         state
       ) do
-    case split_explorer_dataframe_for_cache(source_df, chunk_size) do
+    %{
+      chunk_size_bytes: chunk_size_bytes,
+      chunk_size_rows: chunk_size_rows,
+      batch_of_chunks_size_bytes: batch_bytes
+    } = chunk_params
+
+    case split_explorer_dataframe_for_cache(source_df, chunk_size_bytes, chunk_size_rows) do
       {:ok, data_chunks} ->
         {data_hashes, data_artifacts} =
           data_chunks
@@ -1590,7 +1798,7 @@ defmodule SparkEx.Session do
           (data_artifacts ++ [schema_artifact])
           |> Enum.uniq_by(fn {name, _data} -> name end)
 
-        case upload_missing_cache_artifacts(state, artifacts) do
+        case upload_missing_cache_artifacts(state, artifacts, batch_bytes) do
           {:ok, state} ->
             plan = {:chunked_cached_local_relation, data_hashes, schema_hash}
             df = SparkEx.DataFrame.new(self(), plan)
@@ -1665,13 +1873,17 @@ defmodule SparkEx.Session do
     end
   end
 
-  def handle_call({:execute_show, plan}, _from, state) do
+  def handle_call({:execute_show, plan}, from, state) do
+    handle_call({:execute_show, plan, []}, from, state)
+  end
+
+  def handle_call({:execute_show, plan, opts}, _from, state) do
     operation_telemetry_span(:execute_show, state.session_id, fn ->
       case safe_encode(plan, state.plan_id_counter) do
         {{proto_plan, counter}, nil} ->
           state = %{state | plan_id_counter: counter}
 
-          case Client.execute_plan(state, proto_plan, merge_session_tags([], state.tags)) do
+          case Client.execute_plan(state, proto_plan, merge_session_tags(opts, state.tags)) do
             {:ok, result} ->
               reply_execute_show_result(result, state)
 
@@ -1703,7 +1915,7 @@ defmodule SparkEx.Session do
         {:ok, result, state} =
           maybe_retry_collect_with_json_projection(state, plan, proto_plan, opts, result)
 
-        reply_collect_result(result, state)
+        reply_collect_result(result, state, opts, proto_plan)
 
       {:error, {:arrow_decode_failed, _reason}} = error ->
         execute_collect_retry_unique_columns(state, plan, proto_plan, opts, error)
@@ -1721,7 +1933,9 @@ defmodule SparkEx.Session do
       {:ok, result, state} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
         {result, state} = maybe_decode_retry_result_rows(state, plan, proto_plan, result)
-        reply_collect_result(result, state)
+        # The retry renamed duplicate columns, so rows are keyed by the
+        # deduped names: convert map columns against the renamed schema.
+        reply_collect_result(result, state, opts, {:unique_columns, proto_plan})
 
       {:error, state} ->
         reply_error(error, state)
@@ -1732,18 +1946,83 @@ defmodule SparkEx.Session do
     case retry_collect_with_legacy_fallbacks(state, plan, opts, remote) do
       {:ok, result, state} ->
         state = maybe_update_server_session(state, result.server_side_session_id)
-        reply_collect_result(result, state)
+        # The original plan is what the server rejected, so analyze the
+        # rewritten plan that actually ran (tagged by execute_retry_plan/3).
+        reply_collect_result(result, state, opts, Map.get(result, :executed_proto_plan))
 
       :error ->
         reply_error(error, state)
+
+      {:error, {:unsupported_on_server, _, _}} = unsupported ->
+        reply_error(unsupported, state)
     end
   end
 
-  defp reply_collect_result(result, state) do
+  # `schema_source` tells the map_format: :map conversion which plan
+  # describes the returned rows: a proto plan to analyze (the original plan
+  # on the primary path; the rewritten plan on the legacy retry path),
+  # `{:unique_columns, proto_plan}` when the retry renamed duplicate columns,
+  # or nil to fall back to the response schema.
+  defp reply_collect_result(result, state, opts, schema_source) do
     state = %{state | last_execution_metrics: result.execution_metrics}
     SparkEx.Observation.store_observed_metrics(result.observed_metrics, state.session_id)
-    {:reply, {:ok, result.rows}, state}
+
+    rows =
+      case Keyword.get(opts, :map_format, :key_value_pairs) do
+        :map ->
+          # Analyze the plan for the logical schema (only when the caller
+          # opted in): ExecutePlanResponse.schema is optional AND may
+          # describe a JSON-projection fallback (map columns typed STRING)
+          # rather than the logical types.
+          schema = schema_for_map_format(state, schema_source) || result.schema
+          SparkEx.Connect.ResultDecoder.convert_map_columns(result.rows, schema)
+
+        _ ->
+          result.rows
+      end
+
+    {:reply, {:ok, rows}, state}
   end
+
+  defp schema_for_map_format(_state, nil), do: nil
+
+  defp schema_for_map_format(state, {:unique_columns, proto_plan}) do
+    state
+    |> schema_for_map_format(proto_plan)
+    |> __unique_columns_map_format_schema__()
+  end
+
+  defp schema_for_map_format(state, proto_plan) do
+    case Client.analyze_schema(state, proto_plan) do
+      {:ok, schema, _server_side_session_id} -> schema
+      _ -> nil
+    end
+  end
+
+  @doc false
+  # Schema used to convert MAP columns after the unique-column-name retry:
+  # converters are keyed by column name and the retried rows carry the
+  # deduped names, so rename the fields positionally. Only the renamed
+  # fields are returned: keeping the originals would bind a converter to a
+  # duplicate name whose row value belongs to a differently-typed sibling.
+  # Exposed for unit tests.
+  @spec __unique_columns_map_format_schema__(term()) :: term()
+  def __unique_columns_map_format_schema__(
+        %Spark.Connect.DataType{kind: {:struct, struct}} = schema
+      ) do
+    case unique_schema_column_names(schema) do
+      unique_names when is_list(unique_names) ->
+        renamed =
+          Enum.zip_with(struct.fields, unique_names, fn field, name -> %{field | name: name} end)
+
+        %{schema | kind: {:struct, %{struct | fields: renamed}}}
+
+      :no_duplicates ->
+        schema
+    end
+  end
+
+  def __unique_columns_map_format_schema__(other), do: other
 
   defp reply_execute_count_result(result, state) do
     state = maybe_update_server_session(state, result.server_side_session_id)
@@ -1759,7 +2038,7 @@ defmodule SparkEx.Session do
   @impl true
   def handle_cast({:add_tag, tag}, state) do
     Tag.validate!(tag)
-    {:noreply, %{state | tags: state.tags ++ [tag]}}
+    {:noreply, %{state | tags: Enum.uniq(state.tags ++ [tag])}}
   end
 
   @impl true
@@ -1775,6 +2054,28 @@ defmodule SparkEx.Session do
   @impl true
   def handle_cast({:update_server_side_session_id, id}, state) do
     {:noreply, %{state | server_side_session_id: id}}
+  end
+
+  # Late casts from an in-flight out-of-band interrupt must not resurrect
+  # the ETS snapshot of a closed/released session (the snapshot was deleted
+  # on close; after release it would carry channel: nil).
+  @impl true
+  def handle_cast({:observe_server_session_id, _id}, %{closed: true} = state),
+    do: {:noreply, state}
+
+  def handle_cast({:observe_server_session_id, _id}, %{released: true} = state),
+    do: {:noreply, state}
+
+  def handle_cast({:observe_server_session_id, id}, state) do
+    {:noreply, maybe_update_server_session(state, id)}
+  end
+
+  @impl true
+  def handle_cast({:observe_rpc_error, _error}, %{released: true} = state),
+    do: {:noreply, state}
+
+  def handle_cast({:observe_rpc_error, error}, state) do
+    {:noreply, maybe_close_on_error(state, error)}
   end
 
   # Silently discard gun messages that arrive after session release
@@ -1840,9 +2141,40 @@ defmodule SparkEx.Session do
   # and any observation rows this session accumulated (FABLE-29).
   defp cleanup_session_resources(state) do
     SparkEx.Internal.PlanIds.unregister_session(self())
+    SparkEx.Internal.SessionSnapshot.delete(self())
     SparkEx.Observation.clear_session(Map.get(state, :session_id))
     :ok
   end
+
+  @doc false
+  # Test seam for the DDL top-level field splitter (T-10).
+  def __split_top_level_schema_fields__(schema_ddl), do: split_top_level_schema_fields(schema_ddl)
+
+  @doc false
+  # Test seam for the parse-relation sibling walk (T-12): `rewriter` receives
+  # each `{:parse, ...}` node and must return {rewritten, changed?}.
+  def __rewrite_parse_walk__(term, rewriter) when is_function(rewriter, 1),
+    do: rewrite_parse_deep({:test_rewriter, rewriter}, term)
+
+  @doc false
+  # Test seam for local-relation type inference (T-04).
+  def __infer_value_type__(values), do: infer_value_type(values)
+
+  @doc false
+  # Test seam for local-relation schema preparation (T-47/T-48/T-49).
+  def __prepare_local_data__(data, opts \\ []), do: prepare_local_data(data, opts)
+
+  @doc false
+  # Test seam for the inferred column order (T-47).
+  def __collect_ordered_keys__(rows), do: collect_ordered_keys(rows)
+
+  @doc false
+  # Test seam for the all-null column check (T-48).
+  def __check_determinable_columns__(rows), do: check_determinable_columns(rows)
+
+  @doc false
+  # Test seam for JSON local-relation row normalization (T-04).
+  def __normalize_rows_for_schema__(rows), do: normalize_rows_for_schema(rows)
 
   @doc false
   @spec safe_disconnect(term()) :: :ok
@@ -1950,6 +2282,78 @@ defmodule SparkEx.Session do
         reraise e, __STACKTRACE__
     end
   end
+
+  # Shared Arrow preflight for the result paths that do not go through
+  # `execute_collect`'s retry cascade (`to_explorer` / `to_local_iterator`).
+  # Analyzes the plan schema and rewrites the plan the same way the collect
+  # preflight does — dedupe duplicate column names, cast complex/unsupported
+  # columns to JSON/STRING — so the Explorer decoder never sees a payload it
+  # panics on (T-33).
+  #
+  # Returns `{plan_to_execute, json_schema_or_nil, state}`; `json_schema` is the
+  # logical schema to decode a JSON-projected payload against (nil when no JSON
+  # projection was applied).
+  #
+  # `mode` is `:rows` (collect/to_local_iterator: any schema the row decoder
+  # cannot round-trip is JSON-projected and decoded back) or `:explorer`
+  # (to_explorer: only the shapes that make the Explorer decoder panic —
+  # nested maps and unsupported scalars — are projected; top-level struct/map/
+  # array columns stay native containers).
+  defp prepare_safe_collect_plan(state, plan, mode \\ :rows) do
+    with true <- maybe_preflight_collect_retry?(plan),
+         {{proto_plan, counter}, nil} <- safe_encode(plan, state.plan_id_counter),
+         state = %{state | plan_id_counter: counter},
+         {:ok, schema, server_side_session_id} <- Client.analyze_schema(state, proto_plan) do
+      state = maybe_update_server_session(state, server_side_session_id)
+      safe_collect_plan_for_schema(state, plan, schema, mode)
+    else
+      _ -> {plan, nil, state}
+    end
+  end
+
+  defp safe_collect_plan_for_schema(state, plan, schema, mode) do
+    case unique_schema_column_names(schema) do
+      unique_names when is_list(unique_names) ->
+        renamed_schema = __unique_columns_map_format_schema__(schema)
+
+        {safe_plan, json_schema} =
+          maybe_json_projection_plan({:to_df, plan, unique_names}, renamed_schema, mode)
+
+        {safe_plan, json_schema, state}
+
+      _ ->
+        {safe_plan, json_schema} = maybe_json_projection_plan(plan, schema, mode)
+        {safe_plan, json_schema, state}
+    end
+  end
+
+  defp maybe_json_projection_plan(plan, schema, mode) do
+    if json_projection_needed?(schema, mode) do
+      case json_fallback_projection_plan(plan, schema) do
+        nil -> {plan, nil}
+        projected -> {projected, schema}
+      end
+    else
+      {plan, nil}
+    end
+  end
+
+  defp json_projection_needed?(schema, :rows) do
+    schema_has_nested_map?(schema) or schema_has_struct_and_map?(schema) or
+      schema_has_unsupported_scalar?(schema)
+  end
+
+  defp json_projection_needed?(schema, :explorer) do
+    schema_has_nested_map?(schema) or schema_has_unsupported_scalar?(schema)
+  end
+
+  @doc false
+  # Decodes rows produced by the JSON-projection fallback against the logical
+  # schema. Exposed so streaming consumers (`DataFrame.to_local_iterator/2`)
+  # can decode batches as they arrive.
+  @spec __decode_json_projection_rows__([map()], term()) :: [map()]
+  def __decode_json_projection_rows__(rows, schema),
+    do: decode_rows_from_json_projection(rows, schema)
 
   defp maybe_execute_collect_with_json_projection(state, plan, proto_plan, opts) do
     if maybe_preflight_collect_retry?(plan) do
@@ -2183,12 +2587,21 @@ defmodule SparkEx.Session do
       {{retry_proto_plan, counter}, nil} ->
         state = %{state | plan_id_counter: counter}
 
+        {retry_plan, retry_proto_plan, state} =
+          preflight_retry_plan(state, retry_plan, retry_proto_plan)
+
         case Client.execute_plan(state, retry_proto_plan, opts) do
           {:ok, result} ->
-            {:ok, result, state}
+            {:ok, Map.put(result, :executed_proto_plan, retry_proto_plan), state}
 
           {:error, {:arrow_decode_failed, _reason}} ->
-            retry_collect_with_unique_columns(state, retry_plan, retry_proto_plan, opts)
+            # Outermost rewrite wins: nested fallbacks (unique columns /
+            # JSON projection) may not describe the logical row types.
+            with {:ok, result, state} <-
+                   retry_collect_with_unique_columns(state, retry_plan, retry_proto_plan, opts) do
+              {:ok, Map.put(result, :executed_proto_plan, {:unique_columns, retry_proto_plan}),
+               state}
+            end
 
           {:error, _} ->
             {:error, state}
@@ -2196,6 +2609,100 @@ defmodule SparkEx.Session do
 
       _ ->
         {:error, state}
+    end
+  end
+
+  # A rewritten fallback plan can legitimately produce duplicate column names
+  # (e.g. a Spark 3.5 lateral join downgraded to a cross join between two
+  # relations that both expose `id`). Decoding such a payload panics inside
+  # the Explorer/polars NIF before the unique-columns retry can recover, so
+  # rename duplicates up front, exactly like the primary collect preflight.
+  # Any analysis failure leaves the plan untouched; the retry then surfaces
+  # the server's own error.
+  defp preflight_retry_plan(state, retry_plan, retry_proto_plan) do
+    case safe_analyze_schema(state, retry_proto_plan) do
+      {:ok, schema, state} ->
+        case unique_schema_column_names(schema) do
+          unique_names when is_list(unique_names) ->
+            renamed = {:to_df, retry_plan, unique_names}
+
+            case safe_encode(renamed, state.plan_id_counter) do
+              {{renamed_proto, counter}, nil} ->
+                {renamed, renamed_proto, %{state | plan_id_counter: counter}}
+
+              _ ->
+                {retry_plan, retry_proto_plan, state}
+            end
+
+          _ ->
+            {retry_plan, retry_proto_plan, state}
+        end
+
+      :error ->
+        {retry_plan, retry_proto_plan, state}
+    end
+  end
+
+  defp safe_analyze_schema(state, proto_plan) do
+    case Client.analyze_schema(state, proto_plan) do
+      {:ok, schema, server_side_session_id} ->
+        {:ok, schema, maybe_update_server_session(state, server_side_session_id)}
+
+      _ ->
+        :error
+    end
+  end
+
+  # analyze_schema shares the UNPARSED legacy fallback with collect/count so
+  # DataFrame.schema/dtypes work on {:parse, ...} plans with string schemas on
+  # Spark 4.x (which rejects the Unparsed DataType), and the empty-relation
+  # fallback so Spark 3.5 can describe plans containing 4.x-only relations
+  # (T-34).
+  defp reply_analyze_schema_with_legacy_fallback(state, plan, remote, error) do
+    with {:ok, rewritten} <- rewrite_plan_for_legacy_strategy(state, plan, remote),
+         {{proto_plan, counter}, nil} <- safe_encode(rewritten, state.plan_id_counter),
+         state = %{state | plan_id_counter: counter},
+         {:ok, schema, server_side_session_id} <- Client.analyze_schema(state, proto_plan) do
+      {:reply, {:ok, schema}, maybe_update_server_session(state, server_side_session_id)}
+    else
+      {:error, {:unsupported_on_server, _, _}} = unsupported -> reply_error(unsupported, state)
+      _ -> reply_error(error, state)
+    end
+  end
+
+  defp reply_count_with_legacy_fallback(state, plan, opts, remote, error) do
+    case retry_count_with_legacy_parse_rewrite(state, plan, opts, remote) do
+      {:ok, result, state} -> reply_execute_count_result(result, state)
+      {:error, {:unsupported_on_server, _, _}} = unsupported -> reply_error(unsupported, state)
+      :error -> reply_error(error, state)
+    end
+  end
+
+  # count/1 shares the UNPARSED legacy fallback with collect: Spark 4.x
+  # rejects the Unparsed schema on {:parse, ...} plans, so rewrite the parse
+  # node into from_csv/from_json projections and retry the count. The same
+  # path handles Spark 3.5's empty-relation rejection of 4.x-only relation
+  # types anywhere in the tree (T-34).
+  defp retry_count_with_legacy_parse_rewrite(state, plan, opts, remote) do
+    with {:ok, rewritten} <- rewrite_plan_for_legacy_strategy(state, plan, remote),
+         {{proto_plan, counter}, nil} <- safe_encode_count(rewritten, state.plan_id_counter),
+         {:ok, result} <-
+           Client.execute_plan(%{state | plan_id_counter: counter}, proto_plan, opts) do
+      {:ok, result, %{state | plan_id_counter: counter}}
+    else
+      {:error, {:unsupported_on_server, _, _}} = unsupported -> unsupported
+      _ -> :error
+    end
+  end
+
+  # Shared by the count and analyze_schema fallbacks: pick the plan rewrite
+  # matching the server's rejection. Collect has its own dispatcher because it
+  # also handles grouping sets and subquery rewrites.
+  defp rewrite_plan_for_legacy_strategy(state, plan, remote) do
+    case classify_legacy_recovery_strategy(remote) do
+      :legacy_unparsed -> rewrite_parse_collect_plan(state, plan)
+      :empty_relation -> rewrite_empty_relation_collect_plan(plan)
+      _ -> :error
     end
   end
 
@@ -2274,9 +2781,7 @@ defmodule SparkEx.Session do
 
   defp retry_collect_for_empty_relation_errors(state, plan, opts) do
     rewriters = [
-      &rewrite_transpose_collect_plan/1,
-      &rewrite_table_function_collect_plan/1,
-      &rewrite_as_of_join_collect_plan/1,
+      &rewrite_empty_relation_collect_plan/1,
       &rewrite_subquery_collect_plan/1
     ]
 
@@ -2291,33 +2796,94 @@ defmodule SparkEx.Session do
 
         {:halt, {:ok, result, state}}
       else
+        {:error, {:unsupported_on_server, _, _}} = unsupported -> {:halt, unsupported}
         _ -> {:cont, :error}
       end
     end)
   end
 
-  defp rewrite_transpose_collect_plan({:transpose, child_plan, index_columns}) do
-    case transpose_emulation_plan(child_plan, index_columns) do
-      {:ok, rewritten} -> {:ok, rewritten}
-      :error -> :error
+  # Spark 3.5 servers reject relation types added in 4.x (Transpose,
+  # LateralJoin, AsOfJoin, TableValuedFunction with certain args) with
+  # "Expected Relation to be set, but is empty." — the unknown proto field is
+  # dropped and the parent sees an empty Relation. That can happen at any
+  # depth (`df |> lateral_join(...) |> select(...)`), so walk the whole plan
+  # tree (T-34) — modelled on rewrite_parse_deep/2 — and rewrite every such
+  # node. DataFrame plans carry a {:plan_id, n, inner} envelope which is kept
+  # in place; the node rewriters below match the bare plan shapes. Children
+  # are rewritten before the node itself so nested unsupported relations
+  # (a transpose feeding a lateral join) are handled in one pass. Returns
+  # :error when nothing in the tree needed rewriting, so the caller can move
+  # on to the next strategy.
+  defp rewrite_empty_relation_collect_plan(plan) do
+    if plan_contains_node?(plan, :as_of_join, 11) do
+      # An as-of join cannot be expressed as a plain join without losing its
+      # time-matching semantics (as-of columns, tolerance, direction, exact
+      # matches), so refuse instead of silently returning different rows.
+      {:error,
+       {:unsupported_on_server, :as_of_join,
+        "as-of joins require a Spark 4.0+ Connect server; this server rejected the " <>
+          "AsOfJoin relation and no semantics-preserving fallback exists"}}
+    else
+      case rewrite_empty_relation_deep(plan) do
+        {rewritten, true} -> {:ok, rewritten}
+        {_plan, false} -> :error
+      end
     end
   end
 
-  defp rewrite_transpose_collect_plan({:sort, child_plan, sort_orders}) do
-    with {:ok, rewritten_child} <- rewrite_transpose_collect_plan(child_plan) do
-      {:ok, {:sort, rewritten_child, sort_orders}}
+  defp plan_contains_node?(term, tag, size) when is_tuple(term) do
+    (tuple_size(term) == size and elem(term, 0) == tag) or
+      Enum.any?(Tuple.to_list(term), &plan_contains_node?(&1, tag, size))
+  end
+
+  defp plan_contains_node?(term, tag, size) when is_list(term),
+    do: Enum.any?(term, &plan_contains_node?(&1, tag, size))
+
+  defp plan_contains_node?(_term, _tag, _size), do: false
+
+  @doc false
+  def __rewrite_empty_relation_deep__(plan), do: rewrite_empty_relation_deep(plan)
+
+  @doc false
+  def __rewrite_empty_relation_collect_plan__(plan), do: rewrite_empty_relation_collect_plan(plan)
+
+  defp rewrite_empty_relation_deep(term) when is_tuple(term) do
+    {elements, children_changed?} = rewrite_empty_relation_walk_list(Tuple.to_list(term))
+    node = List.to_tuple(elements)
+
+    case rewrite_empty_relation_node(node) do
+      {:ok, rewritten} -> {rewritten, true}
+      :error -> {node, children_changed?}
     end
   end
 
-  defp rewrite_transpose_collect_plan({:sort, child_plan, sort_orders, is_global}) do
-    with {:ok, rewritten_child} <- rewrite_transpose_collect_plan(child_plan) do
-      {:ok, {:sort, rewritten_child, sort_orders, is_global}}
-    end
+  defp rewrite_empty_relation_deep(term) when is_list(term),
+    do: rewrite_empty_relation_walk_list(term)
+
+  defp rewrite_empty_relation_deep(term), do: {term, false}
+
+  defp rewrite_empty_relation_walk_list(elements) do
+    Enum.map_reduce(elements, false, fn element, changed? ->
+      {rewritten, element_changed?} = rewrite_empty_relation_deep(element)
+      {rewritten, changed? or element_changed?}
+    end)
   end
 
-  defp rewrite_transpose_collect_plan(_plan), do: :error
+  defp rewrite_empty_relation_node({:transpose, _, _} = node),
+    do: rewrite_transpose_node(node)
 
-  defp rewrite_table_function_collect_plan({:table_valued_function, function_name, arg_exprs})
+  defp rewrite_empty_relation_node({:table_valued_function, _, _} = node),
+    do: rewrite_table_function_node(node)
+
+  defp rewrite_empty_relation_node({:lateral_join, _, _, _, _} = node),
+    do: rewrite_lateral_join_node(node)
+
+  defp rewrite_empty_relation_node(_node), do: :error
+
+  defp rewrite_transpose_node({:transpose, child_plan, index_columns}),
+    do: transpose_emulation_plan(child_plan, index_columns)
+
+  defp rewrite_table_function_node({:table_valued_function, function_name, arg_exprs})
        when is_binary(function_name) and is_list(arg_exprs) do
     with {:ok, args_sql} <- expr_list_to_sql(arg_exprs) do
       sql =
@@ -2331,35 +2897,14 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp rewrite_table_function_collect_plan(_plan), do: :error
+  defp rewrite_table_function_node(_plan), do: :error
 
-  defp rewrite_as_of_join_collect_plan(
-         {:as_of_join, left_plan, right_plan, _left_as_of, _right_as_of, join_expr, using_columns,
-          join_type, _tolerance, _allow_exact_matches, _direction}
-       ) do
-    condition =
-      case join_expr do
-        {:lit, nil} -> nil
-        other -> other
-      end
-
-    {:ok,
-     {:join, left_plan, right_plan, condition, normalize_as_of_fallback_join_type(join_type),
-      using_columns || []}}
+  # Spark 3.5 servers don't know the LateralJoin relation ("Expected Relation
+  # to be set, but is empty."). Downgrade to a regular join — correct only for
+  # correlation-free right sides, which is all a 3.5 server can express anyway.
+  defp rewrite_lateral_join_node({:lateral_join, left_plan, right_plan, cond_expr, type}) do
+    {:ok, {:join, left_plan, right_plan, cond_expr, type, []}}
   end
-
-  defp rewrite_as_of_join_collect_plan(_plan), do: :error
-
-  defp normalize_as_of_fallback_join_type(nil), do: :inner
-  defp normalize_as_of_fallback_join_type("inner"), do: :inner
-  defp normalize_as_of_fallback_join_type("left"), do: :left
-  defp normalize_as_of_fallback_join_type("right"), do: :right
-  defp normalize_as_of_fallback_join_type("full"), do: :full
-  defp normalize_as_of_fallback_join_type(:inner), do: :inner
-  defp normalize_as_of_fallback_join_type(:left), do: :left
-  defp normalize_as_of_fallback_join_type(:right), do: :right
-  defp normalize_as_of_fallback_join_type(:full), do: :full
-  defp normalize_as_of_fallback_join_type(_), do: :inner
 
   defp transpose_emulation_plan(child_plan, [index_expr]) do
     with {:ok, index_name} <- extract_col_name(index_expr) do
@@ -2378,6 +2923,9 @@ defmodule SparkEx.Session do
   end
 
   defp transpose_emulation_plan(_child_plan, _index_columns), do: :error
+
+  defp rewrite_grouping_sets_collect_plan({:plan_id, _id, inner}),
+    do: rewrite_grouping_sets_collect_plan(inner)
 
   defp rewrite_grouping_sets_collect_plan({:sort, child_plan, sort_orders}) do
     with {:ok, rewritten_child} <- rewrite_grouping_sets_collect_plan(child_plan) do
@@ -2460,10 +3008,21 @@ defmodule SparkEx.Session do
     if changed?, do: {:ok, rewritten}, else: :error
   end
 
-  defp rewrite_parse_collect_plan(
-         state,
-         {:parse, child_plan, format, schema, options}
-       )
+  # Rewrites {:parse, ...} nodes anywhere in the plan tree (the parse
+  # relation may sit under filters/aggregates/joins, and every node is
+  # wrapped in a {:plan_id, n, inner} envelope). Returns :error when no
+  # parse node could be rewritten.
+  defp rewrite_parse_collect_plan(state, plan) do
+    case rewrite_parse_deep(state, plan) do
+      {rewritten, true} -> {:ok, rewritten}
+      {_plan, false} -> :error
+    end
+  end
+
+  defp rewrite_parse_deep({:test_rewriter, rewriter}, {:parse, _, _, _, _} = node),
+    do: rewriter.(node)
+
+  defp rewrite_parse_deep(state, {:parse, child_plan, format, schema, options} = node)
        when format in [:csv, :json] do
     with {:ok, source_column} <- first_schema_column_name(state, child_plan),
          {:ok, parsed_field_names} <- parse_schema_field_names(state, schema),
@@ -2477,11 +3036,33 @@ defmodule SparkEx.Session do
            field_name}
         end)
 
-      {:ok, {:project, parsed_plan, projected_fields}}
+      {{:project, parsed_plan, projected_fields}, true}
+    else
+      _ -> rewrite_parse_walk(state, node)
     end
   end
 
-  defp rewrite_parse_collect_plan(_state, _plan), do: :error
+  defp rewrite_parse_deep(state, term) when is_tuple(term) or is_list(term),
+    do: rewrite_parse_walk(state, term)
+
+  defp rewrite_parse_deep(_state, term), do: {term, false}
+
+  defp rewrite_parse_walk(state, term) when is_tuple(term) do
+    {elements, changed?} = rewrite_parse_walk_list(state, Tuple.to_list(term))
+    {List.to_tuple(elements), changed?}
+  end
+
+  defp rewrite_parse_walk(state, term) when is_list(term),
+    do: rewrite_parse_walk_list(state, term)
+
+  # Visit every sibling and OR the changed flags (T-12): a union/join of two
+  # parse relations must have both branches rewritten, not just the first.
+  defp rewrite_parse_walk_list(state, elements) do
+    Enum.map_reduce(elements, false, fn element, changed? ->
+      {rewritten, element_changed?} = rewrite_parse_deep(state, element)
+      {rewritten, changed? or element_changed?}
+    end)
+  end
 
   defp first_schema_column_name(state, plan) do
     with {{proto_plan, _counter}, nil} <- safe_encode(plan, 0),
@@ -3039,7 +3620,9 @@ defmodule SparkEx.Session do
   defp decode_complex_json_value(nil, _data_type), do: nil
 
   defp decode_complex_json_value(value, data_type) when is_binary(value) do
-    case Jason.decode(value) do
+    # `floats: :decimals` keeps DECIMAL digits exact (Spark's to_json emits
+    # decimals as unquoted numbers); DOUBLE/FLOAT leaves are converted back.
+    case Jason.decode(value, floats: :decimals) do
       {:ok, decoded} -> coerce_complex_decoded_value(decoded, data_type)
       _ -> value
     end
@@ -3086,7 +3669,92 @@ defmodule SparkEx.Session do
     end)
   end
 
+  # Scalar leaves inside a `to_json` fallback payload arrive as JSON scalars
+  # (strings/numbers). The Arrow path decodes the same values as Decimal /
+  # DateTime / NaiveDateTime / Date / raw binary, so mirror that here, guarded
+  # by the schema type so plain STRING columns are never mangled (T-32).
+  defp coerce_complex_decoded_value(%Decimal{} = value, %Spark.Connect.DataType{kind: {kind, _}})
+       when kind in [:double, :float],
+       do: Decimal.to_float(value)
+
+  defp coerce_complex_decoded_value(value, %Spark.Connect.DataType{kind: {:decimal, _}}) do
+    coerce_json_decimal(value)
+  end
+
+  defp coerce_complex_decoded_value(value, %Spark.Connect.DataType{kind: {:timestamp, _}})
+       when is_binary(value) do
+    coerce_json_timestamp(value)
+  end
+
+  defp coerce_complex_decoded_value(value, %Spark.Connect.DataType{kind: {:timestamp_ntz, _}})
+       when is_binary(value) do
+    coerce_json_timestamp_ntz(value)
+  end
+
+  defp coerce_complex_decoded_value(value, %Spark.Connect.DataType{kind: {:date, _}})
+       when is_binary(value) do
+    case Date.from_iso8601(value) do
+      {:ok, date} -> date
+      _ -> value
+    end
+  end
+
+  defp coerce_complex_decoded_value(value, %Spark.Connect.DataType{kind: {:binary, _}})
+       when is_binary(value) do
+    case Base.decode64(value) do
+      {:ok, decoded} -> decoded
+      :error -> value
+    end
+  end
+
   defp coerce_complex_decoded_value(value, _data_type), do: value
+
+  # Spark's `to_json` renders DECIMAL as an unquoted JSON number; Jason decodes
+  # that as integer/float. Strings are also accepted (some Spark configs quote
+  # decimals).
+  defp coerce_json_decimal(%Decimal{} = value), do: value
+  defp coerce_json_decimal(value) when is_integer(value), do: Decimal.new(value)
+  defp coerce_json_decimal(value) when is_float(value), do: Decimal.from_float(value)
+
+  defp coerce_json_decimal(value) when is_binary(value) do
+    case Decimal.parse(value) do
+      {decimal, ""} -> decimal
+      _ -> value
+    end
+  end
+
+  defp coerce_json_decimal(value), do: value
+
+  # TIMESTAMP renders as an ISO-8601 instant (millisecond precision, with the
+  # session time zone offset). Spark's to_json truncates to milliseconds, so
+  # JSON-projected timestamps lose sub-millisecond digits the Arrow path keeps.
+  defp coerce_json_timestamp(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} ->
+        datetime
+
+      _ ->
+        case NaiveDateTime.from_iso8601(value) do
+          {:ok, naive} -> DateTime.from_naive!(naive, "Etc/UTC")
+          _ -> value
+        end
+    end
+  end
+
+  # TIMESTAMP_NTZ renders without an offset; the Arrow path yields a
+  # NaiveDateTime.
+  defp coerce_json_timestamp_ntz(value) do
+    case NaiveDateTime.from_iso8601(value) do
+      {:ok, naive} ->
+        naive
+
+      _ ->
+        case DateTime.from_iso8601(value) do
+          {:ok, datetime, _offset} -> DateTime.to_naive(datetime)
+          _ -> value
+        end
+    end
+  end
 
   defp coerce_json_map_key(key, %Spark.Connect.DataType{kind: {tag, _}})
        when tag in [:byte, :short, :integer, :long] do
@@ -3209,6 +3877,11 @@ defmodule SparkEx.Session do
     safe_encode_with(&PlanEncoder.encode/2, plan, counter)
   end
 
+  # T-02: the explorer path validates `:max_rows` before encoding; a
+  # validation error skips encoding and is reported like an encode failure.
+  defp execute_explorer_encode({:ok, plan}, counter), do: safe_encode(plan, counter)
+  defp execute_explorer_encode({:error, _} = error, _counter), do: {nil, error}
+
   defp safe_encode_count(plan, counter) do
     safe_encode_with(&PlanEncoder.encode_count/2, plan, counter)
   end
@@ -3240,6 +3913,23 @@ defmodule SparkEx.Session do
       {nil, {:error, {:plan_encode_error, formatted}}}
   end
 
+  # Publishes the connection fields Interrupt needs so it can run from the
+  # caller's process while this GenServer is busy (see
+  # SparkEx.Internal.SessionSnapshot). Removed on release/close/terminate so
+  # the fast path falls back to the GenServer's lifecycle error replies.
+  defp publish_connection_snapshot(state) do
+    SparkEx.Internal.SessionSnapshot.put(self(), %{
+      channel: state.channel,
+      session_id: state.session_id,
+      server_side_session_id: state.server_side_session_id,
+      user_id: state.user_id,
+      client_type: state.client_type,
+      retry_policies: state.retry_policies
+    })
+
+    state
+  end
+
   defp maybe_update_server_session(state, nil), do: state
   defp maybe_update_server_session(state, ""), do: state
 
@@ -3248,8 +3938,11 @@ defmodule SparkEx.Session do
            id,
            state.server_side_session_id
          ) do
+      {:ok, ^id} when state.server_side_session_id == id ->
+        state
+
       {:ok, ^id} ->
-        %{state | server_side_session_id: id}
+        publish_connection_snapshot(%{state | server_side_session_id: id})
 
       {:ok, current} ->
         %{state | server_side_session_id: current}
@@ -3260,6 +3953,7 @@ defmodule SparkEx.Session do
             "(pinned=#{ctx.pinned}, got=#{ctx.got})"
         )
 
+        SparkEx.Internal.SessionSnapshot.delete(self())
         %{state | closed: true}
     end
   end
@@ -3277,6 +3971,7 @@ defmodule SparkEx.Session do
           "INVALID_HANDLE.SESSION_CHANGED (#{summarize_session_changed(error)})"
       )
 
+      SparkEx.Internal.SessionSnapshot.delete(self())
       %{state | closed: true}
     else
       state
@@ -3367,13 +4062,31 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp real_session_process?(session) do
-    case :sys.get_state(session) do
-      %__MODULE__{} -> true
-      _ -> false
+  # Non-blocking probe: a real Session publishes a connection snapshot, and
+  # its process dictionary carries `$initial_call` = {__MODULE__, :init, 1}.
+  # Never touches the GenServer mailbox (a `:sys.get_state/1` here would
+  # queue behind a running execute and defeat the out-of-band stream setup).
+  defp real_session_process?(session), do: __real_session_process__?(session)
+
+  @doc false
+  @spec __real_session_process__?(GenServer.server()) :: boolean()
+  def __real_session_process__?(session) do
+    case SparkEx.Internal.SessionSnapshot.fetch(session) do
+      {:ok, _snapshot} ->
+        true
+
+      :error ->
+        case GenServer.whereis(session) do
+          pid when is_pid(pid) and node(pid) == node() ->
+            case Process.info(pid, :dictionary) do
+              {:dictionary, dict} -> Keyword.get(dict, :"$initial_call") == {__MODULE__, :init, 1}
+              nil -> false
+            end
+
+          _ ->
+            false
+        end
     end
-  catch
-    :exit, _ -> false
   end
 
   # --- Local data preparation ---
@@ -3441,6 +4154,14 @@ defmodule SparkEx.Session do
 
         is_nil(normalized_schema) ->
           prepare_list_data_inferred(normalized_data, Keyword.delete(opts, :schema))
+
+        match?({:column_order, _}, normalized_schema) ->
+          {:column_order, names} = normalized_schema
+
+          prepare_list_data_inferred(
+            normalized_data,
+            opts |> Keyword.delete(:schema) |> Keyword.put(:column_order, names)
+          )
       end
     end
   end
@@ -3595,6 +4316,12 @@ defmodule SparkEx.Session do
       Enum.all?(data, &is_tuple/1) ->
         normalize_tuple_rows(data, schema)
 
+      # Keyword-list rows are the idiomatic Elixir analogue of PySpark dict
+      # rows; treat them as map rows (must come before the generic list arm,
+      # which would coerce them to tuples of `{key, value}` pairs).
+      Enum.all?(data, &keyword_row?/1) ->
+        normalize_list_data_and_schema(Enum.map(data, &Map.new/1), schema)
+
       # PySpark treats list rows like tuple rows (multi-column); coerce to tuples.
       Enum.all?(data, &is_list/1) ->
         tupled = Enum.map(data, &List.to_tuple/1)
@@ -3618,14 +4345,18 @@ defmodule SparkEx.Session do
     with {:ok, names} <- column_names_for_tuple_data(data, schema) do
       maps = Enum.map(data, fn tuple -> tuple_to_named_map(tuple, names) end)
 
+      # Tuple rows are positional: PySpark keeps their column order (only dict
+      # rows are key-sorted), so carry the resolved names into inference.
       case schema do
         binary when is_binary(binary) -> {:ok, maps, binary}
         {:json_schema, _, _} = json_schema -> {:ok, maps, json_schema}
-        {:column_names, _} -> {:ok, maps, nil}
-        nil -> {:ok, maps, nil}
+        {:column_names, _} -> {:ok, maps, {:column_order, names}}
+        nil -> {:ok, maps, {:column_order, names}}
       end
     end
   end
+
+  defp keyword_row?(row), do: row != [] and Keyword.keyword?(row)
 
   # Scalars that are not row-shaped (map / tuple / list). Struct values
   # also fall through here and are treated as single-column values.
@@ -3664,7 +4395,30 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp column_names_for_tuple_data(_data, {:column_names, names}), do: {:ok, names}
+  # PySpark pads a too-short column-name list for tuple/list rows with
+  # `_N` (1-based, continuing after the supplied names) —
+  # pyspark/sql/types.py:_infer_schema:
+  #   `names.extend("_%d" % i for i in range(len(names) + 1, len(row) + 1))`
+  # so `createDataFrame([(1, 2)], ["a"])` yields columns `a, _2`. A list
+  # longer than the row width stays an error (PySpark raises
+  # AXIS_LENGTH_MISMATCH from the `_num_cols != _table.shape[1]` check).
+  defp column_names_for_tuple_data(data, {:column_names, names}) do
+    arity = data |> Enum.map(&tuple_size/1) |> Enum.max(fn -> 0 end)
+    given = length(names)
+
+    cond do
+      given > arity ->
+        {:error,
+         {:invalid_schema,
+          "column-name list of length #{given} does not match data with #{arity} columns"}}
+
+      given < arity ->
+        {:ok, names ++ Enum.map((given + 1)..arity, fn i -> "_#{i}" end)}
+
+      true ->
+        {:ok, names}
+    end
+  end
 
   defp column_names_for_tuple_data(_data, schema_ddl) when is_binary(schema_ddl) do
     names =
@@ -3856,23 +4610,69 @@ defmodule SparkEx.Session do
   end
 
   defp prepare_list_data_inferred(data, opts) do
+    {column_order, opts} = Keyword.pop(opts, :column_order)
+
     if Enum.empty?(data) do
       {:error, {:invalid_data, "cannot infer schema from empty list"}}
     else
-      case safe_list_of_maps_to_explorer(data) do
-        {:ok, explorer_df} ->
-          prepare_local_data(explorer_df, opts)
+      case check_determinable_columns(data, column_order) do
+        {:error, _} = error ->
+          error
 
-        {:error, reason} ->
-          prepare_list_data_inferred_fallback(data, reason, opts)
+        :ok ->
+          case safe_list_of_maps_to_explorer(data, column_order) do
+            {:ok, explorer_df} ->
+              prepare_local_data(explorer_df, opts)
+
+            {:error, reason} ->
+              prepare_list_data_inferred_fallback(data, reason, opts, column_order)
+          end
       end
     end
   end
 
-  defp prepare_list_data_inferred_fallback(data, reason, opts) do
+  # Column order for inference: positional names for tuple rows, the sorted
+  # key union (T-47) for map/keyword rows.
+  defp ordered_keys(rows, nil), do: collect_ordered_keys(rows)
+  defp ordered_keys(_rows, names) when is_list(names), do: names
+
+  # PySpark refuses to infer a schema when any column is entirely null
+  # (`_has_nulltype(_schema)` -> CANNOT_DETERMINE_TYPE in
+  # pyspark/sql/connect/session.py:createDataFrame). Mirror that instead of
+  # silently defaulting such columns to STRING (T-48): the user must pass an
+  # explicit `:schema`. The check is recursive, matching `_has_nulltype`, so
+  # `[%{"a" => []}]` (ARRAY<NULL>) is rejected too.
+  defp check_determinable_columns(rows, column_order \\ nil) do
+    stringified = Enum.map(rows, fn row -> Map.new(row, fn {k, v} -> {to_string(k), v} end) end)
+
+    Enum.reduce_while(ordered_keys(stringified, column_order), :ok, fn key, :ok ->
+      values = Enum.map(stringified, &Map.get(&1, key))
+
+      if has_null_type?(infer_value_type(values)) do
+        {:halt, {:error, {:cannot_determine_type, key}}}
+      else
+        {:cont, :ok}
+      end
+    end)
+  rescue
+    # Heterogeneous inferred types raise here; leave that error to the
+    # existing inference paths so its message stays unchanged.
+    ArgumentError -> :ok
+  end
+
+  defp has_null_type?(:null), do: true
+  defp has_null_type?({:array, inner}), do: has_null_type?(inner)
+
+  defp has_null_type?({:struct, fields}),
+    do: Enum.any?(fields, fn {_n, t} -> has_null_type?(t) end)
+
+  defp has_null_type?(_), do: false
+
+  defp prepare_list_data_inferred_fallback(data, reason, opts, column_order) do
     if normalize_local_relation_arrow?(opts) do
       with {:ok, normalized_rows} <- normalize_rows_for_schema(data),
-           {:ok, inferred_schema_ddl} <- infer_schema_ddl_from_rows(normalized_rows),
+           {:ok, inferred_schema_ddl} <-
+             infer_schema_ddl_from_rows(normalized_rows, column_order),
            {:ok, validated_schema} <-
              validate_schema_ddl_for_sql_relation(inferred_schema_ddl),
            {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
@@ -3886,8 +4686,8 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp safe_list_of_maps_to_explorer(data) do
-    {:ok, list_of_maps_to_explorer(data)}
+  defp safe_list_of_maps_to_explorer(data, column_order \\ nil) do
+    {:ok, list_of_maps_to_explorer(data, column_order)}
   rescue
     e -> {:error, Exception.message(e)}
   end
@@ -3918,36 +4718,26 @@ defmodule SparkEx.Session do
        {:invalid_data, "column-oriented data keys must be strings or atoms, got: #{inspect(key)}"}}
   end
 
-  defp list_of_maps_to_explorer([]) do
+  defp list_of_maps_to_explorer([], _column_order) do
     Explorer.DataFrame.new(%{})
   end
 
-  defp list_of_maps_to_explorer([first | _] = data) when is_map(first) do
+  defp list_of_maps_to_explorer([first | _] = data, column_order) when is_map(first) do
     normalized_rows =
       Enum.map(data, fn row ->
         Map.new(row, fn {key, value} -> {to_string(key), value} end)
       end)
 
-    {_seen, ordered_keys_rev} =
-      Enum.reduce(normalized_rows, {MapSet.new(), []}, fn row, {seen, keys_rev} ->
-        Enum.reduce(row, {seen, keys_rev}, fn {key, _value}, {seen_acc, keys_acc} ->
-          if MapSet.member?(seen_acc, key) do
-            {seen_acc, keys_acc}
-          else
-            {MapSet.put(seen_acc, key), [key | keys_acc]}
-          end
-        end)
-      end)
-
-    ordered_keys = Enum.reverse(ordered_keys_rev)
-
+    # Sorted key union (T-47): mirrors PySpark's `sorted(row.items())` dict
+    # inference and keeps the column order independent of Erlang's map
+    # iteration order (unspecified above 32 keys).
     columns =
-      ordered_keys
+      normalized_rows
+      |> ordered_keys(column_order)
       |> Enum.map(fn key ->
         values = Enum.map(normalized_rows, fn row -> Map.get(row, key) end)
         {key, values}
       end)
-      |> Map.new()
 
     Explorer.DataFrame.new(columns)
   end
@@ -4128,30 +4918,59 @@ defmodule SparkEx.Session do
     |> Enum.join(", ")
   end
 
+  # Splits a DDL field list on top-level commas only. Tracks `<>` and `()`
+  # nesting (STRUCT<…>, DECIMAL(10, 2)) and never splits inside a
+  # backtick-quoted identifier or a single/double-quoted string literal
+  # (doubled-quote escapes are honoured) (T-10).
   defp split_top_level_schema_fields(schema_ddl) do
-    {parts, current, _depth} =
-      schema_ddl
-      |> String.graphemes()
-      |> Enum.reduce({[], "", 0}, fn
-        "<", {parts, current, depth} ->
-          {parts, current <> "<", depth + 1}
-
-        ">", {parts, current, depth} when depth > 0 ->
-          {parts, current <> ">", depth - 1}
-
-        ",", {parts, current, 0} ->
-          {[String.trim(current) | parts], "", 0}
-
-        ch, {parts, current, depth} ->
-          {parts, current <> ch, depth}
-      end)
-
+    {parts, current} = split_top_level_fields(schema_ddl, [], [], 0, nil)
     parts = [String.trim(current) | parts]
 
     parts
     |> Enum.reverse()
     |> Enum.reject(&(&1 == ""))
   end
+
+  # split_top_level_fields(rest, parts_rev, current_rev_iodata, depth, quote)
+  defp split_top_level_fields(<<>>, parts, current, _depth, _quote),
+    do: {parts, IO.iodata_to_binary(Enum.reverse(current))}
+
+  # Inside a quoted run: a backslash escapes the next char (Spark string
+  # literals accept \' and \"), a doubled quote char is an escape, a single
+  # one closes.
+  defp split_top_level_fields(<<"\\", ch::utf8, rest::binary>>, parts, current, depth, q)
+       when not is_nil(q),
+       do: split_top_level_fields(rest, parts, [<<"\\", ch::utf8>> | current], depth, q)
+
+  defp split_top_level_fields(<<q::utf8, q::utf8, rest::binary>>, parts, current, depth, q),
+    do: split_top_level_fields(rest, parts, [<<q::utf8, q::utf8>> | current], depth, q)
+
+  defp split_top_level_fields(<<q::utf8, rest::binary>>, parts, current, depth, q),
+    do: split_top_level_fields(rest, parts, [<<q::utf8>> | current], depth, nil)
+
+  defp split_top_level_fields(<<ch::utf8, rest::binary>>, parts, current, depth, q)
+       when not is_nil(q),
+       do: split_top_level_fields(rest, parts, [<<ch::utf8>> | current], depth, q)
+
+  defp split_top_level_fields(<<q::utf8, rest::binary>>, parts, current, depth, nil)
+       when q in [?`, ?', ?"],
+       do: split_top_level_fields(rest, parts, [<<q::utf8>> | current], depth, q)
+
+  defp split_top_level_fields(<<open::utf8, rest::binary>>, parts, current, depth, nil)
+       when open in [?<, ?(],
+       do: split_top_level_fields(rest, parts, [<<open::utf8>> | current], depth + 1, nil)
+
+  defp split_top_level_fields(<<close::utf8, rest::binary>>, parts, current, depth, nil)
+       when close in [?>, ?)] and depth > 0,
+       do: split_top_level_fields(rest, parts, [<<close::utf8>> | current], depth - 1, nil)
+
+  defp split_top_level_fields(<<",", rest::binary>>, parts, current, 0, nil) do
+    field = current |> Enum.reverse() |> IO.iodata_to_binary() |> String.trim()
+    split_top_level_fields(rest, [field | parts], [], 0, nil)
+  end
+
+  defp split_top_level_fields(<<ch::utf8, rest::binary>>, parts, current, depth, nil),
+    do: split_top_level_fields(rest, parts, [<<ch::utf8>> | current], depth, nil)
 
   defp parse_schema_field(field) do
     case String.trim_leading(field) do
@@ -4254,8 +5073,8 @@ defmodule SparkEx.Session do
   defp v_if_needed(v, false, _ch), do: v
   defp v_if_needed(v, true, ch), do: v <> ch
 
-  defp infer_schema_ddl_from_rows(rows) when is_list(rows) do
-    ordered_keys = collect_ordered_keys(rows)
+  defp infer_schema_ddl_from_rows(rows, column_order) when is_list(rows) do
+    ordered_keys = ordered_keys(rows, column_order)
 
     fields =
       Enum.map(ordered_keys, fn key ->
@@ -4267,19 +5086,22 @@ defmodule SparkEx.Session do
      Enum.map_join(fields, ", ", fn {name, type} -> "#{name} #{type_to_inferred_ddl(type)}" end)}
   end
 
+  # Column order for map/keyword rows without an explicit schema (T-47).
+  #
+  # Erlang map iteration order is only guaranteed for maps with <= 32 keys
+  # (and even then it is term order, which mixes atoms and binaries), so
+  # first-seen key order made the inferred column order depend on the number
+  # of keys. PySpark sorts dict keys when inferring
+  # (`items = sorted(row.items())` in pyspark/sql/types.py:_infer_schema and
+  # `dict(sorted(d.items()))` in connect/session.py:createDataFrame), so keys
+  # are stringified and sorted alphabetically here for the same deterministic
+  # result. An explicit schema (DDL string, struct schema, or column-name
+  # list) always keeps its own order.
   defp collect_ordered_keys(rows) do
-    {_seen, ordered_keys_rev} =
-      Enum.reduce(rows, {MapSet.new(), []}, fn row, {seen, keys_rev} ->
-        Enum.reduce(row, {seen, keys_rev}, fn {key, _value}, {seen_acc, keys_acc} ->
-          if MapSet.member?(seen_acc, key) do
-            {seen_acc, keys_acc}
-          else
-            {MapSet.put(seen_acc, key), [key | keys_acc]}
-          end
-        end)
-      end)
-
-    Enum.reverse(ordered_keys_rev)
+    rows
+    |> Enum.flat_map(fn row -> Enum.map(row, fn {key, _value} -> to_string(key) end) end)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   defp infer_value_type(values) do
@@ -4292,9 +5114,21 @@ defmodule SparkEx.Session do
   defp infer_single_type(v) when is_boolean(v), do: :boolean
   # PySpark infers Python int as LongType regardless of the value's bit-width
   # (python/pyspark/sql/types.py:_infer_type). Match that for parity even
-  # though Elixir integers can fit in narrower types.
+  # though Elixir integers can fit in narrower types. Values outside the
+  # 64-bit range would otherwise be shipped as-is and die server-side with an
+  # opaque MALFORMED_RECORD_IN_PARSING error.
+  defp infer_single_type(v)
+       when is_integer(v) and
+              (v < -9_223_372_036_854_775_808 or v > 9_223_372_036_854_775_807) do
+    raise ArgumentError,
+          "integer #{v} is out of range for Spark BIGINT (64-bit); " <>
+            "pass it as a Decimal (DECIMAL supports up to 38 digits) or a string"
+  end
+
   defp infer_single_type(v) when is_integer(v), do: :long
   defp infer_single_type(v) when is_float(v), do: :double
+  # Explorer represents non-finite floats as these atoms (T-04).
+  defp infer_single_type(v) when v in [:nan, :infinity, :neg_infinity], do: :double
 
   # PySpark infers decimal.Decimal as DecimalType(38, 18) regardless of the
   # individual value's precision/scale (python/pyspark/sql/types.py:_type_mappings
@@ -4417,6 +5251,14 @@ defmodule SparkEx.Session do
   # values to survive the JSON-relation path. Encode as base64 to match the
   # schema-aware normalize_binary_field_value path.
   defp normalize_json_value({:binary, v}) when is_binary(v), do: Base.encode64(v)
+
+  # Explorer's non-finite float sentinels. Jason would encode the atoms as the
+  # strings "nan"/"infinity"/"neg_infinity"; Spark's from_json accepts exactly
+  # "NaN" / "Infinity" / "-Infinity" for DOUBLE/FLOAT (JacksonParser, with the
+  # default allowNonNumericNumbers=true) (T-04).
+  defp normalize_json_value(:nan), do: "NaN"
+  defp normalize_json_value(:infinity), do: "Infinity"
+  defp normalize_json_value(:neg_infinity), do: "-Infinity"
 
   defp normalize_json_value(value), do: value
 
@@ -4642,11 +5484,23 @@ defmodule SparkEx.Session do
   # the source DataFrame avoids a full Arrow IPC decode + re-encode round-trip
   # on the hot path for multi-hundred-MB / GB payloads — only the per-chunk
   # encodes happen, plus one small head-sample to estimate bytes/row.
+  #
+  # `max_chunk_rows` additionally caps every chunk by row count (T-64), like
+  # PySpark's `_serialize_table_chunks(max_chunk_size_rows, max_chunk_size_bytes)`.
   @doc false
-  @spec split_explorer_dataframe_for_cache(Explorer.DataFrame.t(), pos_integer()) ::
+  @spec split_explorer_dataframe_for_cache(
+          Explorer.DataFrame.t(),
+          pos_integer(),
+          pos_integer() | nil
+        ) ::
           {:ok, [binary(), ...]} | {:error, term()}
-  def split_explorer_dataframe_for_cache(%Explorer.DataFrame{} = df, chunk_size_bytes)
-      when is_integer(chunk_size_bytes) and chunk_size_bytes > 0 do
+  def split_explorer_dataframe_for_cache(
+        %Explorer.DataFrame{} = df,
+        chunk_size_bytes,
+        max_chunk_rows \\ nil
+      )
+      when is_integer(chunk_size_bytes) and chunk_size_bytes > 0 and
+             (is_nil(max_chunk_rows) or (is_integer(max_chunk_rows) and max_chunk_rows > 0)) do
     total_rows = Explorer.DataFrame.n_rows(df)
 
     if total_rows <= 1 do
@@ -4656,11 +5510,195 @@ defmodule SparkEx.Session do
       end
     else
       with {:ok, rows_per_chunk} <-
-             estimate_rows_per_chunk(df, total_rows, chunk_size_bytes) do
+             estimate_rows_per_chunk(df, total_rows, chunk_size_bytes, max_chunk_rows) do
         do_split_dataframe(df, total_rows, rows_per_chunk, 0, [])
       end
     end
   end
+
+  # Fetches the local-relation server configs once per session (T-64). A
+  # failed config RPC falls back to the defaults and is cached too: a server
+  # that cannot answer a Config request is not going to answer differently a
+  # moment later, and create_dataframe must never fail because of it.
+  defp ensure_local_relation_configs(%{local_relation_configs: %{} = configs} = state, _opts),
+    do: {configs, state}
+
+  # A failed probe is remembered for @local_relation_config_retry_ms so a
+  # flaky server does not cost a bounded RPC timeout on every create_dataframe,
+  # yet the session recovers once the server answers again.
+  defp ensure_local_relation_configs(
+         %{local_relation_configs: {:unavailable, failed_at}} = state,
+         opts
+       ) do
+    if System.monotonic_time(:millisecond) - failed_at < @local_relation_config_retry_ms do
+      {@local_relation_config_defaults, state}
+    else
+      ensure_local_relation_configs(%{state | local_relation_configs: nil}, opts)
+    end
+  end
+
+  # Explicit `:cache_threshold` + `:cache_chunk_size` fully determine the upload
+  # strategy, so the Config RPC is skipped (the row cap keeps its default).
+  defp ensure_local_relation_configs(state, opts) do
+    if Keyword.has_key?(opts, :cache_threshold) and Keyword.has_key?(opts, :cache_chunk_size) do
+      {@local_relation_config_defaults, state}
+    else
+      fetch_local_relation_configs(state)
+    end
+  end
+
+  # Unit stubs drive `handle_call/3` with a bare map; only a connected session
+  # can issue the Config RPC.
+  defp fetch_local_relation_configs(%{channel: channel, session_id: id} = state)
+       when not is_nil(channel) and is_binary(id) do
+    keys = Enum.map(@local_relation_config_keys, fn {key, _atom} -> key end)
+
+    # Bounded timeout: this runs inside the Session GenServer on the first
+    # create_dataframe of a session. A failure is not cached, so a transient
+    # error is retried on the next call instead of pinning defaults.
+    case Client.config_get_option(state, keys, timeout: @local_relation_config_timeout) do
+      {:ok, pairs, server_side_session_id} ->
+        configs = parse_local_relation_configs(pairs)
+        state = maybe_update_server_session(state, server_side_session_id)
+        {configs, Map.put(state, :local_relation_configs, configs)}
+
+      {:error, reason} ->
+        Logger.debug(fn ->
+          "create_dataframe: could not read localRelation configs, using defaults: " <>
+            inspect(reason)
+        end)
+
+        failed_at = System.monotonic_time(:millisecond)
+
+        {@local_relation_config_defaults,
+         Map.put(state, :local_relation_configs, {:unavailable, failed_at})}
+    end
+  end
+
+  defp fetch_local_relation_configs(state), do: {@local_relation_config_defaults, state}
+
+  # `config_set`/`config_unset` may change the localRelation* settings, so the
+  # cached snapshot is dropped and re-read on the next create_dataframe.
+  defp invalidate_local_relation_configs(state),
+    do: Map.put(state, :local_relation_configs, nil)
+
+  @doc false
+  def __parse_local_relation_configs__(pairs), do: parse_local_relation_configs(pairs)
+
+  # `pairs` is the ConfigResponse key/value list; a value is `nil` when the
+  # server does not know the key (Spark 3.5 predates the chunking configs) and
+  # is a decimal string otherwise. Anything unparsable keeps the default.
+  defp parse_local_relation_configs(pairs) when is_list(pairs) do
+    parsed =
+      Enum.reduce(@local_relation_config_keys, %{}, fn {key, atom}, acc ->
+        case List.keyfind(pairs, key, 0) do
+          {_key, value} when is_binary(value) ->
+            case Integer.parse(String.trim(value)) do
+              {int, ""} when int >= 0 -> Map.put(acc, atom, int)
+              _ -> acc
+            end
+
+          _ ->
+            acc
+        end
+      end)
+
+    # `localRelationCacheThreshold` exists since Spark 3.5, but the chunked
+    # cached relation the cache path emits is 4.1+. Only a server that also
+    # reports the 4.1 chunking configs can accept it, so on older servers the
+    # legacy client-side threshold is kept and payloads stay inlined.
+    if Map.has_key?(parsed, :chunk_size_rows) do
+      Map.merge(@local_relation_config_defaults, parsed)
+    else
+      Map.merge(@local_relation_config_defaults, Map.delete(parsed, :cache_threshold))
+    end
+  end
+
+  defp parse_local_relation_configs(_pairs), do: @local_relation_config_defaults
+
+  @doc false
+  def __local_relation_chunk_params__(opts, configs),
+    do: local_relation_chunk_params(opts, configs)
+
+  # Resolves the effective threshold / chunk limits for one create_dataframe
+  # call: explicit options win, then the server configs (or their defaults).
+  # The byte cap is `min(chunkSizeBytes, batchOfChunksSizeBytes)` like PySpark,
+  # so a single chunk always fits in one upload batch.
+  defp local_relation_chunk_params(opts, configs) do
+    cache_threshold = Keyword.get(opts, :cache_threshold, configs.cache_threshold)
+
+    chunk_size_bytes =
+      Keyword.get(
+        opts,
+        :cache_chunk_size,
+        min(configs.chunk_size_bytes, configs.batch_of_chunks_size_bytes)
+      )
+
+    chunk_size_rows = Keyword.get(opts, :cache_chunk_rows, configs.chunk_size_rows)
+
+    cond do
+      not (is_integer(cache_threshold) and cache_threshold >= 0) ->
+        {:error, {:invalid_option, {:cache_threshold, cache_threshold}}}
+
+      not (is_integer(chunk_size_bytes) and chunk_size_bytes > 0) ->
+        {:error, {:invalid_option, {:cache_chunk_size, chunk_size_bytes}}}
+
+      not (is_integer(chunk_size_rows) and chunk_size_rows > 0) ->
+        {:error, {:invalid_option, {:cache_chunk_rows, chunk_size_rows}}}
+
+      true ->
+        {:ok,
+         %{
+           cache_threshold: cache_threshold,
+           chunk_size_bytes: chunk_size_bytes,
+           chunk_size_rows: chunk_size_rows,
+           batch_of_chunks_size_bytes: max(configs.batch_of_chunks_size_bytes, chunk_size_bytes)
+         }}
+    end
+  end
+
+  @doc false
+  def __local_relation_rows_per_chunk__(sample_bytes, sample_rows, chunk_size_bytes, max_rows),
+    do: local_relation_rows_per_chunk(sample_bytes, sample_rows, chunk_size_bytes, max_rows)
+
+  # Rows per chunk from a head-sample's IPC size: bounded by bytes (at least
+  # one row so a single oversized row still ships) and, when given, by rows.
+  defp local_relation_rows_per_chunk(sample_bytes, sample_rows, chunk_size_bytes, max_rows) do
+    bytes_per_row = max(1, div(sample_bytes, max(1, sample_rows)))
+    by_bytes = max(1, div(chunk_size_bytes, bytes_per_row))
+
+    case max_rows do
+      n when is_integer(n) and n > 0 -> min(by_bytes, n)
+      _ -> by_bytes
+    end
+  end
+
+  @doc false
+  def __batch_cache_artifacts__(artifacts, batch_bytes),
+    do: batch_cache_artifacts(artifacts, batch_bytes)
+
+  # Groups {name, bytes} artifacts into upload batches whose summed size stays
+  # within `batch_bytes` (PySpark's max_batch_of_chunks_size_bytes). A single
+  # artifact larger than the limit still forms its own batch.
+  defp batch_cache_artifacts(artifacts, batch_bytes)
+       when is_integer(batch_bytes) and batch_bytes > 0 do
+    {batches, current, _size} =
+      Enum.reduce(artifacts, {[], [], 0}, fn {_name, data} = artifact, {batches, current, size} ->
+        artifact_size = byte_size(data)
+
+        if current != [] and size + artifact_size > batch_bytes do
+          {[Enum.reverse(current) | batches], [artifact], artifact_size}
+        else
+          {batches, [artifact | current], size + artifact_size}
+        end
+      end)
+
+    batches = if current == [], do: batches, else: [Enum.reverse(current) | batches]
+    Enum.reverse(batches)
+  end
+
+  defp batch_cache_artifacts([], _batch_bytes), do: []
+  defp batch_cache_artifacts(artifacts, _batch_bytes), do: [artifacts]
 
   # Public bytes-based variant for callers that only have the encoded IPC
   # payload. Wraps `Explorer.DataFrame.load_ipc_stream/1` in try/rescue
@@ -4702,14 +5740,19 @@ defmodule SparkEx.Session do
     error -> {:error, {:arrow_encode_error, error}}
   end
 
-  defp estimate_rows_per_chunk(df, total_rows, chunk_size_bytes) do
+  defp estimate_rows_per_chunk(df, total_rows, chunk_size_bytes, max_chunk_rows) do
     sample_rows = min(total_rows, 256)
     sample_df = Explorer.DataFrame.head(df, sample_rows)
 
     case dump_ipc_stream_safe(sample_df) do
       {:ok, sample_ipc} ->
-        bytes_per_row = max(1, div(byte_size(sample_ipc), max(1, sample_rows)))
-        {:ok, max(1, div(chunk_size_bytes, bytes_per_row))}
+        {:ok,
+         local_relation_rows_per_chunk(
+           byte_size(sample_ipc),
+           sample_rows,
+           chunk_size_bytes,
+           max_chunk_rows
+         )}
 
       {:error, _} = error ->
         error
@@ -4734,14 +5777,25 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp upload_missing_cache_artifacts(state, artifacts) do
+  # Uploads the artifacts the server does not already hold, in batches of at
+  # most `batch_bytes` (PySpark's max_batch_of_chunks_size_bytes): one RPC per
+  # chunk is too chatty, one RPC for everything materialises the whole payload.
+  defp upload_missing_cache_artifacts(state, artifacts, batch_bytes) do
     names = Enum.map(artifacts, fn {name, _data} -> name end)
 
     case Client.artifact_status(state, names) do
       {:ok, statuses, server_side_session_id} ->
         state = maybe_update_server_session(state, server_side_session_id)
         missing = Enum.reject(artifacts, fn {name, _data} -> Map.get(statuses, name, false) end)
-        maybe_upload_cache_artifacts(state, missing)
+
+        missing
+        |> batch_cache_artifacts(batch_bytes)
+        |> Enum.reduce_while({:ok, state}, fn batch, {:ok, state} ->
+          case maybe_upload_cache_artifacts(state, batch) do
+            {:ok, state} -> {:cont, {:ok, state}}
+            {:error, _reason} = error -> {:halt, error}
+          end
+        end)
 
       {:error, _reason} = error ->
         error
@@ -4874,7 +5928,7 @@ defmodule SparkEx.Session do
 
   defp merge_session_tags(opts, session_tags) do
     request_tags = Keyword.get(opts, :tags, [])
-    combined = request_tags ++ session_tags
+    combined = Enum.uniq(request_tags ++ session_tags)
 
     if combined == [] do
       opts

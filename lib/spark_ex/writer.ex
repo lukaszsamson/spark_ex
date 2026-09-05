@@ -116,13 +116,16 @@ defmodule SparkEx.Writer do
   Sets a single writer option.
   """
   @spec option(t(), String.t(), term()) :: t()
-  def option(%__MODULE__{} = writer, key, nil) when is_binary(key) do
-    %{writer | options: Map.delete(writer.options, key)}
+  def option(%__MODULE__{} = writer, key, nil) when is_binary(key) or is_atom(key) do
+    %{writer | options: Map.delete(writer.options, normalize_option_key(key))}
   end
 
   def option(%__MODULE__{} = writer, key, value)
-      when is_binary(key) do
-    %{writer | options: Map.put(writer.options, key, normalize_option_value(value))}
+      when is_binary(key) or is_atom(key) do
+    %{
+      writer
+      | options: Map.put(writer.options, normalize_option_key(key), normalize_option_value(value))
+    }
   end
 
   @doc """
@@ -143,7 +146,7 @@ defmodule SparkEx.Writer do
   defp merge_options(writer, opts) do
     {drop_keys, set_pairs} =
       Enum.reduce(opts, {[], []}, fn {k, v}, {drops, sets} ->
-        key = to_string(k)
+        key = normalize_option_key(k)
         if is_nil(v), do: {[key | drops], sets}, else: {drops, [{key, v} | sets]}
       end)
 
@@ -167,11 +170,12 @@ defmodule SparkEx.Writer do
   end
 
   def partition_by(%__MODULE__{} = writer, columns) when is_list(columns) do
-    if columns == [] do
-      raise ArgumentError, "partition_by columns should not be empty"
-    end
-
     %{writer | partition_by: Enum.map(columns, &to_string/1)}
+  end
+
+  def partition_by(%__MODULE__{}, columns) do
+    raise ArgumentError,
+          "partition_by expects a column name or a list of column names, got: #{inspect(columns)}"
   end
 
   @doc """
@@ -179,11 +183,12 @@ defmodule SparkEx.Writer do
   """
   @spec sort_by(t(), [String.t()]) :: t()
   def sort_by(%__MODULE__{} = writer, columns) when is_list(columns) do
-    if columns == [] do
-      raise ArgumentError, "sort_by columns should not be empty"
-    end
-
     %{writer | sort_by: Enum.map(columns, &to_string/1)}
+  end
+
+  def sort_by(%__MODULE__{}, columns) do
+    raise ArgumentError,
+          "sort_by expects a list of column names, got: #{inspect(columns)}"
   end
 
   @doc """
@@ -192,11 +197,22 @@ defmodule SparkEx.Writer do
   @spec bucket_by(t(), pos_integer(), [String.t()]) :: t()
   def bucket_by(%__MODULE__{} = writer, num_buckets, columns)
       when is_integer(num_buckets) and num_buckets > 0 and is_list(columns) do
-    if columns == [] do
-      raise ArgumentError, "bucket_by columns should not be empty"
+    # An empty column list clears bucketing, mirroring the repeated-field reset
+    # semantics of the other builder collections.
+    case columns do
+      [] -> %{writer | bucket_by: nil}
+      _ -> %{writer | bucket_by: {num_buckets, Enum.map(columns, &to_string/1)}}
     end
+  end
 
-    %{writer | bucket_by: {num_buckets, Enum.map(columns, &to_string/1)}}
+  def bucket_by(%__MODULE__{}, num_buckets, columns) when is_list(columns) do
+    raise ArgumentError,
+          "bucket_by expects a positive number of buckets, got: #{inspect(num_buckets)}"
+  end
+
+  def bucket_by(%__MODULE__{}, _num_buckets, columns) do
+    raise ArgumentError,
+          "bucket_by expects a list of column names, got: #{inspect(columns)}"
   end
 
   @doc """
@@ -204,11 +220,12 @@ defmodule SparkEx.Writer do
   """
   @spec cluster_by(t(), [String.t()]) :: t()
   def cluster_by(%__MODULE__{} = writer, columns) when is_list(columns) do
-    if columns == [] do
-      raise ArgumentError, "cluster_by columns should not be empty"
-    end
-
     %{writer | cluster_by: Enum.map(columns, &to_string/1)}
+  end
+
+  def cluster_by(%__MODULE__{}, columns) do
+    raise ArgumentError,
+          "cluster_by expects a list of column names, got: #{inspect(columns)}"
   end
 
   @doc """
@@ -263,6 +280,12 @@ defmodule SparkEx.Writer do
 
   # --- Format-specific convenience functions ---
 
+  # Format shortcuts accept either a bare DataFrame or a Writer builder
+  # (PySpark: `df.write.mode("overwrite").parquet(path)`), so builder state
+  # like mode/partitioning composes with the shortcut.
+  defp seed_writer(%__MODULE__{} = writer, source), do: %{writer | source: source}
+  defp seed_writer(%SparkEx.DataFrame{} = df, source), do: %__MODULE__{df: df, source: source}
+
   @doc """
   Writes the DataFrame as Parquet.
 
@@ -272,13 +295,13 @@ defmodule SparkEx.Writer do
   - `:options` — map of Parquet writer options
   - `:partition_by` — partitioning columns
   """
-  @spec parquet(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec parquet(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def parquet(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
-      %__MODULE__{df: df, source: "parquet"}
+      seed_writer(df, "parquet")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -300,36 +323,19 @@ defmodule SparkEx.Writer do
   both `:sep` and `:separator` are present and disagree an `ArgumentError`
   is raised.
   """
-  @spec csv(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec csv(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def csv(df, path, opts \\ []) do
     {csv_opts, rest} = Keyword.split(opts, [:header, :separator, :sep])
 
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(rest, [:mode, :partition_by])
 
-    csv_opts = reconcile_csv_separator(csv_opts)
+    extra_options = csv_opts |> reconcile_csv_separator() |> stringify_options()
 
-    extra_options =
-      csv_opts
-      |> Enum.reduce(%{}, fn
-        {:header, v}, acc -> Map.put(acc, "header", to_string(v))
-        {:sep, v}, acc -> Map.put(acc, "sep", normalize_option_value(v))
-      end)
-
-    duplicates =
-      extra_options
-      |> Map.keys()
-      |> Enum.filter(&Map.has_key?(option_overrides, &1))
-
-    if duplicates != [] do
-      raise ArgumentError,
-            "got multiple values for keyword argument(s) " <>
-              Enum.map_join(duplicates, ", ", &inspect/1) <>
-              " — pass each option either as a top-level keyword OR inside :options, not both"
-    end
+    SparkEx.Internal.OptionUtils.merge_exclusive!(extra_options, option_overrides)
 
     writer =
-      %__MODULE__{df: df, source: "csv"}
+      seed_writer(df, "csv")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -349,13 +355,13 @@ defmodule SparkEx.Writer do
   - `:mode` — save mode (default: `:error_if_exists`)
   - `:options` — map of JSON writer options
   """
-  @spec json(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec json(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def json(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
-      %__MODULE__{df: df, source: "json"}
+      seed_writer(df, "json")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -371,13 +377,13 @@ defmodule SparkEx.Writer do
   - `:mode` — save mode (default: `:error_if_exists`)
   - `:options` — map of ORC writer options
   """
-  @spec orc(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec orc(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def orc(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
-      %__MODULE__{df: df, source: "orc"}
+      seed_writer(df, "orc")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -394,13 +400,13 @@ defmodule SparkEx.Writer do
   - `:options` — map of Avro writer options
   - `:partition_by` — partitioning columns
   """
-  @spec avro(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec avro(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def avro(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
-      %__MODULE__{df: df, source: "avro"}
+      seed_writer(df, "avro")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -417,13 +423,13 @@ defmodule SparkEx.Writer do
   - `:options` — map of XML writer options
   - `:partition_by` — partitioning columns
   """
-  @spec xml(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec xml(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def xml(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} =
       split_convenience_opts(opts, [:mode, :partition_by])
 
     writer =
-      %__MODULE__{df: df, source: "xml"}
+      seed_writer(df, "xml")
       |> maybe_set_mode(write_opts)
       |> maybe_set_partition_by(write_opts)
 
@@ -434,30 +440,54 @@ defmodule SparkEx.Writer do
   @doc """
   Writes the DataFrame via JDBC.
 
+  Accepts either a bare `DataFrame` or an existing `Writer` builder (in which
+  case builder state such as mode/options/partitioning is preserved).
+
   ## Options
 
   - `:mode` — save mode (default: `:error_if_exists`)
   - `:options` — map of JDBC writer options (e.g. `url`, `dbtable`)
   """
-  @spec jdbc(SparkEx.DataFrame.t(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec jdbc(t() | SparkEx.DataFrame.t(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, term()}
   def jdbc(df, url, table, opts \\ []) when is_binary(url) and is_binary(table) do
+    {properties, opts} = Keyword.pop(opts, :properties)
     {write_opts, option_overrides, exec_opts} = split_convenience_opts(opts, [:mode])
-    merged = option_overrides |> Map.put("url", url) |> Map.put("dbtable", table)
 
     writer =
-      %__MODULE__{df: df, source: "jdbc", options: merged}
+      seed_writer(df, "jdbc")
       |> maybe_set_mode(write_opts)
+
+    # Spark's DataFrameWriter.jdbc asserts the writer is not partitioned,
+    # bucketed, or clustered.
+    if writer.partition_by != [] or writer.sort_by != [] or writer.bucket_by != nil or
+         writer.cluster_by != [] do
+      raise ArgumentError,
+            "jdbc writes do not support partition_by/bucket_by/sort_by/cluster_by " <>
+              "(Spark rejects them); remove them from the writer before calling jdbc/4"
+    end
+
+    merged =
+      writer.options
+      |> Map.merge(option_overrides)
+      |> Map.merge(normalize_jdbc_properties(properties))
+      |> Map.put("url", url)
+      |> Map.put("dbtable", table)
+
+    writer = %{writer | options: merged}
 
     execute_write(writer.df, build_write_opts(writer, []), exec_opts)
   end
 
-  @spec jdbc(SparkEx.DataFrame.t(), keyword()) :: :ok | {:error, term()}
+  @spec jdbc(t() | SparkEx.DataFrame.t(), keyword()) :: :ok | {:error, term()}
   def jdbc(df, opts) when is_list(opts) do
     {write_opts, option_overrides, exec_opts} = split_convenience_opts(opts, [:mode])
 
     writer =
-      %__MODULE__{df: df, source: "jdbc", options: option_overrides}
+      seed_writer(df, "jdbc")
       |> maybe_set_mode(write_opts)
+
+    writer = %{writer | options: Map.merge(writer.options, option_overrides)}
 
     execute_write(writer.df, build_write_opts(writer, []), exec_opts)
   end
@@ -470,12 +500,12 @@ defmodule SparkEx.Writer do
   - `:mode` — save mode (default: `:error_if_exists`)
   - `:options` — map of text writer options
   """
-  @spec text(SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec text(t() | SparkEx.DataFrame.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def text(df, path, opts \\ []) do
     {write_opts, option_overrides, exec_opts} = split_convenience_opts(opts, [:mode])
 
     writer =
-      %__MODULE__{df: df, source: "text"}
+      seed_writer(df, "text")
       |> maybe_set_mode(write_opts)
 
     writer = %{writer | options: Map.merge(writer.options, option_overrides)}
@@ -562,27 +592,30 @@ defmodule SparkEx.Writer do
       |> Keyword.drop([:options | reserved_keys ++ @exec_opt_keys])
       |> stringify_options()
 
-    duplicates =
-      top_level_options
-      |> Map.keys()
-      |> Enum.filter(&Map.has_key?(nested_options, &1))
-
-    if duplicates != [] do
-      raise ArgumentError,
-            "got multiple values for keyword argument(s) " <>
-              Enum.map_join(duplicates, ", ", &inspect/1) <>
-              " — pass each option either as a top-level keyword OR inside :options, not both"
-    end
-
-    Map.merge(nested_options, top_level_options)
+    SparkEx.Internal.OptionUtils.merge_exclusive!(top_level_options, nested_options)
   end
 
-  defp stringify_options(opts) when is_map(opts) do
+  defp stringify_options(opts) do
     SparkEx.Internal.OptionUtils.stringify_options(opts)
   end
 
-  defp stringify_options(opts) when is_list(opts) do
-    SparkEx.Internal.OptionUtils.stringify_options(opts)
+  # JDBC connection properties reach the driver verbatim, so no camelization.
+  defp normalize_jdbc_properties(nil), do: %{}
+
+  defp normalize_jdbc_properties(props) when is_map(props) or is_list(props) do
+    SparkEx.Internal.OptionUtils.stringify_options(
+      props,
+      &SparkEx.Internal.OptionUtils.verbatim_option_key/1
+    )
+  end
+
+  defp normalize_jdbc_properties(other) do
+    raise ArgumentError,
+          "properties must be nil, a map, or a keyword list, got: #{inspect(other)}"
+  end
+
+  defp normalize_option_key(key) do
+    SparkEx.Internal.OptionUtils.normalize_option_key(key)
   end
 
   defp normalize_option_value(value) do
@@ -590,6 +623,8 @@ defmodule SparkEx.Writer do
   end
 
   defp reconcile_csv_separator(csv_opts) do
+    # nil means "not given" everywhere else in the API, so drop nils first.
+    csv_opts = Enum.reject(csv_opts, fn {_k, v} -> is_nil(v) end)
     sep = Keyword.get(csv_opts, :sep)
     separator = Keyword.get(csv_opts, :separator)
 

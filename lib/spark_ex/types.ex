@@ -521,7 +521,12 @@ defmodule SparkEx.Types do
   defp proto_kind_to_json(:char, value), do: "char(#{value.length})"
   defp proto_kind_to_json(:var_char, value), do: "varchar(#{value.length})"
   defp proto_kind_to_json(:time, value), do: time_proto_to_json(value)
-  defp proto_kind_to_json(:decimal, value), do: "decimal(#{value.precision},#{value.scale})"
+  # Unset precision/scale fall back to Spark's DecimalType defaults (10, 0),
+  # matching TypeMapper's DDL rendering (T-27).
+  defp proto_kind_to_json(:decimal, value) do
+    "decimal(#{value.precision || 10},#{value.scale || 0})"
+  end
+
   defp proto_kind_to_json(:day_time_interval, value), do: day_time_interval_proto_to_json(value)
 
   defp proto_kind_to_json(:year_month_interval, value),

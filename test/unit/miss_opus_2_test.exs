@@ -1244,9 +1244,10 @@ defmodule SparkEx.MissOpus2Test do
   # ── 14.28 uuid/uniform/randstr seed ──
 
   describe "14.28 uuid/uniform/randstr seed" do
-    test "uuid/0 uses zero-arg form" do
+    test "uuid/0 bakes a random long seed (PySpark connect/functions/builtin.py)" do
       result = Functions.uuid()
-      assert %Column{expr: {:fn, "uuid", [], false}} = result
+      assert %Column{expr: {:fn, "uuid", [{:lit, seed}], false}} = result
+      assert is_integer(seed)
     end
 
     test "uuid with explicit seed" do
@@ -1340,7 +1341,7 @@ defmodule SparkEx.MissOpus2Test do
       assert Enum.sort(aliases) == [{"age", "max"}, {"salary", "avg"}]
     end
 
-    test "raises on empty map" do
+    test "empty map yields an aggregate with no aggregate columns (T-26)" do
       df = make_df()
 
       gd = %SparkEx.GroupedData{
@@ -1350,9 +1351,10 @@ defmodule SparkEx.MissOpus2Test do
         grouping_exprs: []
       }
 
-      assert_raise ArgumentError, ~r/at least one/, fn ->
-        SparkEx.GroupedData.agg(gd, %{})
-      end
+      # PySpark allows an empty aggregate set: the server returns distinct
+      # grouping keys.
+      assert %SparkEx.DataFrame{plan: {:plan_id, _, {:aggregate, _, :groupby, [], []}}} =
+               SparkEx.GroupedData.agg(gd, %{})
     end
   end
 

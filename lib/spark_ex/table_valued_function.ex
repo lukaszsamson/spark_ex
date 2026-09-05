@@ -15,8 +15,13 @@ defmodule SparkEx.TableValuedFunction do
 
   @doc """
   Calls a table-valued function by name.
+
+  Args may be `SparkEx.Column` structs, strings (column references),
+  `SparkEx.TableArg` structs (table arguments, see `SparkEx.DataFrame.as_table/1`),
+  or literal values.
   """
-  @spec call(t(), String.t(), [SparkEx.Column.t() | term()]) :: SparkEx.DataFrame.t()
+  @spec call(t(), String.t(), [SparkEx.Column.t() | SparkEx.TableArg.t() | term()]) ::
+          SparkEx.DataFrame.t()
   def call(%__MODULE__{} = tvf, name, args \\ []) when is_binary(name) and is_list(args) do
     SparkEx.DataFrame.table_function(tvf.session, name, args)
   end

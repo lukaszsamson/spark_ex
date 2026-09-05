@@ -93,7 +93,7 @@ defmodule SparkEx.M13.NATest do
     end
 
     test "raises when subset is neither string nor list of strings" do
-      assert_raise ArgumentError, ~r/column name string or list/, fn ->
+      assert_raise ArgumentError, ~r/column name \(string or atom\) or a list/, fn ->
         NA.drop(make_df(), subset: 42)
       end
     end
@@ -187,7 +187,7 @@ defmodule SparkEx.M13.NATest do
     end
 
     test "replace raises when subset list contains non-string elements" do
-      assert_raise ArgumentError, ~r/list of column name strings/, fn ->
+      assert_raise ArgumentError, ~r/column name \(string or atom\) or a list/, fn ->
         DataFrame.replace(make_df(), 1, 2, subset: [123])
       end
     end

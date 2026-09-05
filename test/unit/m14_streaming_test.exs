@@ -234,7 +234,7 @@ defmodule SparkEx.M14.StreamingTest do
           assert write_op.trigger == {:once, true}
         end)
 
-      assert stderr =~ "Trigger.Once was removed in Spark 4"
+      assert stderr =~ "Trigger.Once is deprecated"
     end
 
     test "encodes with continuous trigger" do
@@ -726,7 +726,7 @@ defmodule SparkEx.M14.StreamingTest do
         )
 
       assert {:read_data_source_streaming, "json", ["/data/stream"], nil, opts} = unwrap_plan(df)
-      assert opts["multi_line"] == "true"
+      assert opts["multiLine"] == "true"
       assert opts["mode"] == "PERMISSIVE"
     end
 
@@ -895,11 +895,9 @@ defmodule SparkEx.M14.StreamingTest do
       assert writer.partition_by == ["year", "month"]
     end
 
-    test "partition_by raises on empty list" do
-      assert_raise ArgumentError, "partition_by columns should not be empty", fn ->
-        %SparkEx.StreamWriter{df: nil}
-        |> SparkEx.StreamWriter.partition_by([])
-      end
+    test "partition_by with an empty list clears the columns (T-51)" do
+      writer = %SparkEx.StreamWriter{df: nil, partition_by: ["a"]}
+      assert SparkEx.StreamWriter.partition_by(writer, []).partition_by == []
     end
 
     test "cluster_by sets columns" do
@@ -918,11 +916,9 @@ defmodule SparkEx.M14.StreamingTest do
       assert writer.cluster_by == ["region"]
     end
 
-    test "cluster_by raises on empty list" do
-      assert_raise ArgumentError, "cluster_by columns should not be empty", fn ->
-        %SparkEx.StreamWriter{df: nil}
-        |> SparkEx.StreamWriter.cluster_by([])
-      end
+    test "cluster_by with an empty list clears the columns (T-51)" do
+      writer = %SparkEx.StreamWriter{df: nil, cluster_by: ["a"]}
+      assert SparkEx.StreamWriter.cluster_by(writer, []).cluster_by == []
     end
 
     test "option with nil value is skipped" do
@@ -1255,7 +1251,8 @@ defmodule SparkEx.M14.StreamingTest do
 
       :ok = SparkEx.StreamingQueryListenerBus.add_listener(bus, StartedListener)
 
-      send(bus, {:listener_stream_ended, :normal})
+      token = :sys.get_state(bus).stream_token
+      send(bus, {:listener_stream_ended, token, :normal})
 
       assert_receive {:telemetry_reconnect, %{attempt: 1, delay_ms: delay}}, 500
       assert is_integer(delay) and delay > 0
@@ -1282,7 +1279,8 @@ defmodule SparkEx.M14.StreamingTest do
 
       :ok = SparkEx.StreamingQueryListenerBus.add_listener(bus, StartedListener)
 
-      send(bus, {:listener_stream_ended, {:error, :econnreset}})
+      token = :sys.get_state(bus).stream_token
+      send(bus, {:listener_stream_ended, token, {:error, :econnreset}})
 
       assert_receive {:telemetry_reconnect, %{attempt: 1, delay_ms: _}}, 500
     end
@@ -1308,8 +1306,9 @@ defmodule SparkEx.M14.StreamingTest do
 
       :ok = SparkEx.StreamingQueryListenerBus.add_listener(bus, StartedListener)
 
+      token = :sys.get_state(bus).stream_token
       :sys.replace_state(bus, fn state -> %{state | reconnect_attempts: 100} end)
-      send(bus, {:listener_stream_ended, :normal})
+      send(bus, {:listener_stream_ended, token, :normal})
 
       assert_receive {:telemetry_exhausted, %{attempts: 100}}, 500
     end

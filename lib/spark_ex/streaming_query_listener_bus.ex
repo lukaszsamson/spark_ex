@@ -17,10 +17,10 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
         @impl true
         def on_query_terminated(event), do: IO.inspect(event, label: "terminated")
-
-        @impl true
-        def on_query_idle(event), do: IO.inspect(event, label: "idle")
       end
+
+  `on_query_started` and `on_query_idle` are optional callbacks — a listener
+  that does not implement them simply does not receive those events.
 
   ## Usage
 
@@ -151,9 +151,17 @@ defmodule SparkEx.StreamingQueryListenerBus do
   @reconnect_backoff_base_ms 200
   @reconnect_backoff_cap_ms 30_000
 
+  # T-63: how long removing the last listener waits for the reader stream to
+  # end on its own (after the server-side remove command) before the reader
+  # task is killed. Override with
+  # `config :spark_ex, listener_bus_drain_timeout_ms: <ms>`.
+  @default_drain_timeout_ms 300
+
   defstruct [
     :session,
     :stream_task,
+    :stream_task_ref,
+    :stream_token,
     listeners: [],
     registered?: false,
     pending_register_waiters: [],
@@ -287,12 +295,14 @@ defmodule SparkEx.StreamingQueryListenerBus do
            }}
 
         true ->
-          task = start_reader_task(state.session)
+          {task, ref, token} = start_reader_task(state.session)
 
           {:noreply,
            %{
              state
              | stream_task: task,
+               stream_task_ref: ref,
+               stream_token: token,
                listeners: listeners,
                pending_register_waiters: [from | state.pending_register_waiters]
            }}
@@ -304,7 +314,11 @@ defmodule SparkEx.StreamingQueryListenerBus do
     listeners = List.delete(state.listeners, module)
 
     if listeners == [] and state.stream_task != nil do
-      {:reply, :ok, stop_event_stream(%{state | listeners: listeners})}
+      # T-63: drain events still in flight before the reader is killed. The
+      # listeners being removed still receive anything the server sent before
+      # it closed the stream (PySpark's bus keeps dispatching until the
+      # response iterator is exhausted).
+      {:reply, :ok, stop_event_stream(%{state | listeners: listeners}, state.listeners)}
     else
       {:reply, :ok, %{state | listeners: listeners}}
     end
@@ -328,13 +342,35 @@ defmodule SparkEx.StreamingQueryListenerBus do
     {:noreply, state}
   end
 
+  # Every reader -> bus message carries the reader's `token`. A message from a
+  # reader that is no longer the current one is stale (its task was killed or
+  # already replaced) and must be dropped, exactly like the stale :DOWN clause
+  # below: otherwise a queued EOF from reader1 can tear down reader2 (orphaning
+  # its gRPC stream and the server-side listener, so every listener sees
+  # duplicate events once a third reader connects), and a stale registration
+  # can flip `registered?` and answer reader2's waiter early.
   @impl true
-  def handle_info({:listener_event, event}, state) do
+  def handle_info({:listener_event, token, _event}, %{stream_token: current} = state)
+      when token != current do
+    {:noreply, state}
+  end
+
+  def handle_info({:listener_bus_registered, token}, %{stream_token: current} = state)
+      when token != current do
+    {:noreply, state}
+  end
+
+  def handle_info({:listener_stream_ended, token, _reason}, %{stream_token: current} = state)
+      when token != current do
+    {:noreply, state}
+  end
+
+  def handle_info({:listener_event, _token, event}, state) do
     dispatch_event(state.listeners, event)
     {:noreply, state}
   end
 
-  def handle_info(:listener_bus_registered, state) do
+  def handle_info({:listener_bus_registered, _token}, state) do
     Enum.each(state.pending_register_waiters, &GenServer.reply(&1, :ok))
 
     {:noreply,
@@ -347,7 +383,7 @@ defmodule SparkEx.StreamingQueryListenerBus do
      }}
   end
 
-  def handle_info({:listener_stream_ended, reason}, state) do
+  def handle_info({:listener_stream_ended, _token, reason}, state) do
     case reason do
       :normal ->
         maybe_reconnect(state, "graceful EOF")
@@ -367,6 +403,8 @@ defmodule SparkEx.StreamingQueryListenerBus do
          %{
            state
            | stream_task: nil,
+             stream_task_ref: nil,
+             stream_token: nil,
              registered?: false,
              pending_register_waiters: [],
              closing_stream?: false
@@ -383,8 +421,8 @@ defmodule SparkEx.StreamingQueryListenerBus do
         {:noreply, state}
 
       true ->
-        task = start_reader_task(state.session)
-        {:noreply, %{state | stream_task: task}}
+        {task, ref, token} = start_reader_task(state.session)
+        {:noreply, %{state | stream_task: task, stream_task_ref: ref, stream_token: token}}
     end
   end
 
@@ -402,32 +440,38 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   # From here on, `pid == state.stream_task`: this DOWN is authoritative.
   def handle_info({:DOWN, _ref, :process, _pid, :normal}, state) do
-    {:noreply, %{state | stream_task: nil}}
+    {:noreply, %{state | stream_task: nil, stream_task_ref: nil, stream_token: nil}}
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, :shutdown}, %{closing_stream?: true} = state) do
-    {:noreply, %{state | stream_task: nil, closing_stream?: false}}
-  end
-
-  def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
-    Enum.each(state.pending_register_waiters, &GenServer.reply(&1, {:error, reason}))
-
-    Logger.warning("StreamingQueryListenerBus stream task crashed: #{inspect(reason)}")
-
     {:noreply,
      %{
        state
        | stream_task: nil,
-         registered?: false,
-         pending_register_waiters: [],
-         closing_stream?: false
+         stream_task_ref: nil,
+         stream_token: nil,
+         closing_stream?: false,
+         reconnect_attempts: 0
      }}
+  end
+
+  # T-18: an abnormal DOWN from the *current* reader is the same failure mode as
+  # a transport error on the stream itself — reconnect with the shared backoff
+  # and telemetry instead of silently going inert.
+  def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
+    Logger.warning("StreamingQueryListenerBus stream task crashed: #{inspect(reason)}")
+
+    maybe_reconnect(
+      %{state | stream_task_ref: nil, stream_token: nil},
+      "reader crash"
+    )
   end
 
   @impl true
   def terminate(_reason, state) do
     unregister_bus(state.session, self())
-    _ = stop_event_stream(state)
+    # Drain in-flight events to the still-registered listeners before exit.
+    _ = stop_event_stream(state, state.listeners)
 
     :ok
   end
@@ -481,6 +525,8 @@ defmodule SparkEx.StreamingQueryListenerBus do
        %{
          state
          | stream_task: nil,
+           stream_task_ref: nil,
+           stream_token: nil,
            registered?: false,
            pending_register_waiters: [],
            closing_stream?: false
@@ -500,36 +546,37 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   defp start_reader_task(session) do
     parent = self()
+    token = make_ref()
 
-    {pid, _ref} =
+    {pid, ref} =
       spawn_monitor(fn ->
         case SparkEx.Session.execute_command_stream(
                session,
                {:streaming_query_listener_bus_command, :add}
              ) do
           {:ok, stream} ->
-            read_events(stream, parent)
+            read_events(stream, parent, token)
 
           {:error, reason} ->
-            send(parent, {:listener_stream_ended, reason})
+            send(parent, {:listener_stream_ended, token, reason})
         end
       end)
 
-    pid
+    {pid, ref, token}
   end
 
-  defp read_events(stream, parent) do
+  defp read_events(stream, parent, token) do
     result =
       Enum.reduce_while(stream, :normal, fn
         {:ok, %ExecutePlanResponse{} = resp}, _acc ->
           case resp.response_type do
             {:streaming_query_listener_events_result, result} ->
               if result.listener_bus_listener_added == true do
-                send(parent, :listener_bus_registered)
+                send(parent, {:listener_bus_registered, token})
               end
 
               Enum.each(result.events, fn event ->
-                send(parent, {:listener_event, parse_event(event)})
+                send(parent, {:listener_event, token, parse_event(event)})
               end)
 
             _ ->
@@ -543,12 +590,12 @@ defmodule SparkEx.StreamingQueryListenerBus do
           {:halt, {:error, reason}}
       end)
 
-    send(parent, {:listener_stream_ended, result})
+    send(parent, {:listener_stream_ended, token, result})
   end
 
-  defp stop_event_stream(%__MODULE__{stream_task: nil} = state), do: state
+  defp stop_event_stream(%__MODULE__{stream_task: nil} = state, _drain_listeners), do: state
 
-  defp stop_event_stream(state) do
+  defp stop_event_stream(state, drain_listeners) do
     # Match PySpark listener bus lifecycle: when the last listener is removed,
     # explicitly request server-side listener removal.
     try do
@@ -562,7 +609,26 @@ defmodule SparkEx.StreamingQueryListenerBus do
       _, _ -> :ok
     end
 
-    if state.stream_task do
+    # T-17: drop the monitor (flushing any DOWN already in flight) *before*
+    # killing the task, so no later DOWN can arrive for a pid we no longer
+    # track. Because nothing is left to observe, the closing window ends here:
+    # clear `closing_stream?` immediately and reset the reconnect budget, so a
+    # subsequent add_listener starts from a clean slate instead of being
+    # permanently answered with {:error, :stream_closed}.
+    # T-63: give the reader a bounded window to finish naturally. The server
+    # closes the stream in response to the remove command above; killing the
+    # task immediately would drop events already in flight and race the
+    # server-side listener removal. Messages are matched on the current
+    # `stream_token` only, so nothing stale is consumed, and once the state is
+    # reset (`stream_token: nil`) any late message is dropped by the
+    # stale-token clauses instead of triggering `maybe_reconnect/2`.
+    drain_reader_stream(state.stream_token, state.stream_task_ref, drain_listeners)
+
+    if state.stream_task_ref do
+      Process.demonitor(state.stream_task_ref, [:flush])
+    end
+
+    if state.stream_task && Process.alive?(state.stream_task) do
       Process.exit(state.stream_task, :shutdown)
     end
 
@@ -571,10 +637,50 @@ defmodule SparkEx.StreamingQueryListenerBus do
     %{
       state
       | stream_task: nil,
+        stream_task_ref: nil,
+        stream_token: nil,
         registered?: false,
         pending_register_waiters: [],
-        closing_stream?: true
+        closing_stream?: false,
+        reconnect_attempts: 0
     }
+  end
+
+  # Waits up to `drain_timeout_ms/0` for the reader task's stream to end,
+  # dispatching any events that arrive in the meantime to `listeners`.
+  # Returns `:ended` if the stream (or the task) finished, `:timeout` otherwise.
+  defp drain_reader_stream(nil, _ref, _listeners), do: :ended
+
+  defp drain_reader_stream(token, ref, listeners) do
+    deadline = System.monotonic_time(:millisecond) + drain_timeout_ms()
+    do_drain_reader_stream(token, ref, listeners, deadline)
+  end
+
+  defp do_drain_reader_stream(token, ref, listeners, deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:listener_event, ^token, event} ->
+        dispatch_event(listeners, event)
+        do_drain_reader_stream(token, ref, listeners, deadline)
+
+      {:listener_bus_registered, ^token} ->
+        do_drain_reader_stream(token, ref, listeners, deadline)
+
+      {:listener_stream_ended, ^token, _reason} ->
+        :ended
+
+      {:DOWN, ^ref, :process, _pid, _reason} ->
+        :ended
+    after
+      remaining -> :timeout
+    end
+  end
+
+  # Bounded so an unresponsive server cannot block `remove_listener/2` or
+  # `terminate/2` indefinitely.
+  defp drain_timeout_ms do
+    Application.get_env(:spark_ex, :listener_bus_drain_timeout_ms, @default_drain_timeout_ms)
   end
 
   defp parse_event(%StreamingQueryListenerEvent{} = event) do
@@ -622,7 +728,15 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   defp dispatch_event(listeners, %{type: :idle} = event) do
     Enum.each(listeners, fn module ->
-      safe_call(module, :on_query_idle, [event])
+      # `on_query_idle/1` is an optional callback (mirroring PySpark's
+      # `StreamingQueryListener.onQueryIdle` default no-op), so probe with
+      # `function_exported?/3` after forcing the module to load — a
+      # not-yet-loaded module would otherwise report false and silently
+      # skip the callback (same reasoning as the `on_query_started` dispatch
+      # above).
+      if Code.ensure_loaded?(module) and function_exported?(module, :on_query_idle, 1) do
+        safe_call(module, :on_query_idle, [event])
+      end
     end)
   end
 

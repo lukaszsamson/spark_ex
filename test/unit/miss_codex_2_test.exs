@@ -245,10 +245,13 @@ defmodule SparkEx.MissCodex2Test do
 
   describe "#38 Writer.cluster_by empty validation" do
     test "rejects empty columns" do
-      writer = %SparkEx.Writer{cluster_by: [], options: %{}}
+      writer = %SparkEx.Writer{cluster_by: ["a"], options: %{}}
 
-      assert_raise ArgumentError, ~r/should not be empty/, fn ->
-        SparkEx.Writer.cluster_by(writer, [])
+      # T-51: [] now clears the repeated field instead of raising.
+      assert SparkEx.Writer.cluster_by(writer, []).cluster_by == []
+
+      assert_raise ArgumentError, ~r/list of column names/, fn ->
+        SparkEx.Writer.cluster_by(writer, "a")
       end
     end
   end
@@ -257,18 +260,24 @@ defmodule SparkEx.MissCodex2Test do
 
   describe "#47 Writer.bucket_by/sort_by empty validation" do
     test "bucket_by rejects empty columns" do
-      writer = %SparkEx.Writer{bucket_by: nil, options: %{}}
+      writer = %SparkEx.Writer{bucket_by: {4, ["a"]}, options: %{}}
 
-      assert_raise ArgumentError, ~r/should not be empty/, fn ->
-        SparkEx.Writer.bucket_by(writer, 8, [])
+      # T-51: [] now clears bucketing instead of raising.
+      assert SparkEx.Writer.bucket_by(writer, 8, []).bucket_by == nil
+
+      assert_raise ArgumentError, ~r/positive number of buckets/, fn ->
+        SparkEx.Writer.bucket_by(writer, 0, ["a"])
       end
     end
 
     test "sort_by rejects empty columns" do
-      writer = %SparkEx.Writer{sort_by: [], options: %{}}
+      writer = %SparkEx.Writer{sort_by: ["a"], options: %{}}
 
-      assert_raise ArgumentError, ~r/should not be empty/, fn ->
-        SparkEx.Writer.sort_by(writer, [])
+      # T-51: [] now clears the repeated field instead of raising.
+      assert SparkEx.Writer.sort_by(writer, []).sort_by == []
+
+      assert_raise ArgumentError, ~r/list of column names/, fn ->
+        SparkEx.Writer.sort_by(writer, "a")
       end
     end
   end
@@ -286,7 +295,7 @@ defmodule SparkEx.MissCodex2Test do
 
   describe "#9 NA.drop subset type validation" do
     test "rejects non-string subset elements" do
-      assert_raise ArgumentError, ~r/column name strings/, fn ->
+      assert_raise ArgumentError, ~r/column name \(string or atom\)/, fn ->
         DataFrame.NA.drop(make_df(), subset: [1, 2])
       end
     end

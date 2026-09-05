@@ -74,6 +74,32 @@ defmodule SparkEx.Unit.BugsFableSessionTest do
     end
   end
 
+  describe "FAB-2: keyword-list rows are treated as map rows" do
+    test "list of keyword lists builds a local relation with named columns" do
+      session = start_fake_session()
+
+      assert {:ok, %SparkEx.DataFrame{plan: plan}} =
+               SparkEx.create_dataframe(session, [[a: 1, b: "x"], [a: 2, b: "y"]])
+
+      assert {:local_relation, _ipc, schema_ddl} = unwrap_plan(plan)
+      assert schema_ddl =~ "a"
+      assert schema_ddl =~ "b"
+    end
+
+    test "keyword rows honor an explicit DDL schema" do
+      session = start_fake_session()
+
+      assert {:ok, %SparkEx.DataFrame{plan: plan}} =
+               SparkEx.create_dataframe(session, [[id: 1]], schema: "id INT")
+
+      # Explicit-DDL map rows go through the from_json SQL plan; the row must
+      # have been converted to a JSON object (not a tuple of {key, value}).
+      assert {:sql, sql, nil} = unwrap_plan(plan)
+      assert sql =~ "id INT"
+      assert sql =~ ~s({"id":1})
+    end
+  end
+
   describe "FABLE-22: column-name-list schema for Explorer / column-map data" do
     test "Explorer.DataFrame with a column-name list renames columns" do
       session = start_fake_session()
@@ -233,12 +259,11 @@ defmodule SparkEx.Unit.BugsFableSessionTest do
       assert %Writer{partition_by: ["a", "b"]} = Writer.partition_by(writer, ["a", "b"])
     end
 
-    test "empty list still raises" do
+    test "empty list clears the partitioning (T-51)" do
       empty = Enum.filter(["x"], fn _ -> false end)
 
-      assert_raise ArgumentError, ~r/should not be empty/, fn ->
-        Writer.partition_by(%Writer{}, empty)
-      end
+      assert %Writer{partition_by: []} =
+               Writer.partition_by(%Writer{partition_by: ["a"]}, empty)
     end
   end
 
@@ -262,10 +287,8 @@ defmodule SparkEx.Unit.BugsFableSessionTest do
       assert :ok = SparkEx.clear_progress_handlers(name)
     end
 
-    test "is_stopped/1 raises a clear error for an unknown name" do
-      assert_raise ArgumentError, ~r/no process associated/, fn ->
-        SparkEx.is_stopped(:fable45_nonexistent_name)
-      end
+    test "is_stopped/1 reports an unknown name as stopped (T-45)" do
+      assert SparkEx.is_stopped(:fable45_nonexistent_name)
     end
   end
 

@@ -450,12 +450,12 @@ defmodule SparkEx.Unit.FunctionGenTest do
       assert Functions.mean("x") == Functions.avg("x")
     end
 
-    test "first_value is alias for first" do
-      assert Functions.first_value("x") == Functions.first("x")
-    end
+    test "first_value/last_value are their own functions, not aliases (T-25)" do
+      assert %SparkEx.Column{expr: {:fn, "first_value", [{:col, "x"}], false}} =
+               Functions.first_value("x")
 
-    test "last_value is alias for last" do
-      assert Functions.last_value("x") == Functions.last("x")
+      assert %SparkEx.Column{expr: {:fn, "last_value", [{:col, "x"}], false}} =
+               Functions.last_value("x")
     end
 
     test "array_agg is alias for collect_list" do

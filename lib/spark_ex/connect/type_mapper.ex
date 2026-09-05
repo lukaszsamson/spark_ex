@@ -6,10 +6,12 @@ defmodule SparkEx.Connect.TypeMapper do
   @doc """
   Converts a Spark Connect `DataType` to an Explorer dtype atom.
 
-  Returns `{:ok, nil}` for Spark types that have no native Explorer dtype
-  (map, variant, UDT, geometry/geography, year-month/calendar interval). Cells
-  for those columns decode as maps/lists/strings; callers building a frame
-  should omit the dtype and let Explorer infer it from the decoded values.
+  Spark types without a native Explorer dtype are mapped to the dtype of their
+  Arrow wire representation: MAP → `{:list, {:struct, [key, value]}}`, VARIANT
+  and GEOMETRY/GEOGRAPHY → their `{:struct, _}` layout, UDT → its `sql_type`.
+  Returns `{:ok, nil}` only for types with no Explorer representation at all
+  (year-month / calendar interval, unparsed, or a UDT without `sql_type`);
+  callers building a frame should omit those dtypes and let Explorer infer.
 
   ## Examples
 
@@ -153,24 +155,162 @@ defmodule SparkEx.Connect.TypeMapper do
     end
   end
 
-  defp map_kind(:struct, _dt), do: {:struct, []}
+  # A struct without a decoded field list cannot be represented safely: a
+  # polars struct cast to `{:struct, []}` would silently drop every field.
+  defp map_kind(:struct, _dt), do: nil
 
-  # Map: Explorer has no native map dtype. Cells decode as maps/lists from
-  # Arrow, so we cannot assign a scalar dtype without a mismatch — leave it
-  # unmapped (nil) and let the rebuild path infer the dtype from the values.
-  defp map_kind(:map, _dt), do: nil
+  # Map: Explorer has no native map dtype. Arrow encodes MAP<K, V> as
+  # `map<struct<key: K, value: V>>`, which polars/Explorer reads as a list of
+  # structs, so that is the structurally correct dtype for both empty and
+  # non-empty frames (T-30). Collapses to nil when a component has no dtype.
+  defp map_kind(:map, %DataType{kind: {:map, %DataType.Map{key_type: kt, value_type: vt}}}) do
+    with {:ok, key_dtype} when not is_nil(key_dtype) <- to_explorer_dtype(kt),
+         {:ok, value_dtype} when not is_nil(value_dtype) <- to_explorer_dtype(vt) do
+      {:list, {:struct, [{"key", key_dtype}, {"value", value_dtype}]}}
+    else
+      _ -> nil
+    end
+  end
 
-  # Other types with no native Explorer dtype. Variant/UDT/geometry/geography
-  # cells decode as maps/lists/binaries; dtyping them :string mismatches the
-  # decoded values and crashes the schema-policy rebuild. Leave unmapped (nil).
-  defp map_kind(:variant, _dt), do: nil
+  # Variant is shipped over Arrow as `struct<value: binary, metadata: binary>`
+  # (ArrowUtils.toArrowField), so mirror that structure.
+  defp map_kind(:variant, _dt), do: {:struct, [{"value", :binary}, {"metadata", :binary}]}
+
+  # A UDT travels as its `sql_type`; when the server omits it the column is
+  # left unmapped so the decoded cells drive dtype inference.
+  defp map_kind(:udt, %DataType{kind: {:udt, %DataType.UDT{sql_type: %DataType{} = sql_type}}}) do
+    {:ok, dtype} = to_explorer_dtype(sql_type)
+    dtype
+  end
+
   defp map_kind(:udt, _dt), do: nil
-  defp map_kind(:geometry, _dt), do: nil
-  defp map_kind(:geography, _dt), do: nil
+
+  # Geometry / geography arrive as `struct<srid: int, wkb: binary>`.
+  defp map_kind(:geometry, _dt), do: {:struct, [{"srid", {:s, 32}}, {"wkb", :binary}]}
+  defp map_kind(:geography, _dt), do: {:struct, [{"srid", {:s, 32}}, {"wkb", :binary}]}
+
+  # Unparsed types carry no structure we can map; leave them for inference.
   defp map_kind(:unparsed, _dt), do: nil
 
   # Catch-all for future types: leave unmapped so the rebuild infers from cells.
   defp map_kind(_unknown, _dt), do: nil
+
+  @doc """
+  Converts a Spark Connect `DataType` to PySpark's `simpleString` rendering.
+
+  This is the lowercase form `DataFrame.dtypes` reports in PySpark
+  (`pyspark/sql/types.py`): `bigint`, `array<string>`, `struct<a:int,b:string>`,
+  `decimal(10,2)`, `map<string,int>`, `void`, ...
+  """
+  @spec simple_string(DataType.t() | nil) :: String.t()
+  def simple_string(%DataType{kind: {tag, value}}), do: simple(tag, value)
+  def simple_string(%DataType{kind: nil}), do: "void"
+  def simple_string(nil), do: "void"
+
+  defp simple(:null, _), do: "void"
+  defp simple(:boolean, _), do: "boolean"
+  defp simple(:byte, _), do: "tinyint"
+  defp simple(:short, _), do: "smallint"
+  defp simple(:integer, _), do: "int"
+  defp simple(:long, _), do: "bigint"
+  defp simple(:float, _), do: "float"
+  defp simple(:double, _), do: "double"
+
+  # StringType.simpleString: "string" for the UTF8_BINARY default collation,
+  # "string collate <name>" otherwise.
+  defp simple(:string, %DataType.String{collation: c})
+       when is_binary(c) and c != "" and c != "UTF8_BINARY",
+       do: "string collate #{c}"
+
+  defp simple(:string, _), do: "string"
+
+  defp simple(:char, %DataType.Char{length: n}) when is_integer(n) and n > 0, do: "char(#{n})"
+  defp simple(:char, _), do: "string"
+
+  defp simple(:var_char, %DataType.VarChar{length: n}) when is_integer(n) and n > 0,
+    do: "varchar(#{n})"
+
+  defp simple(:var_char, _), do: "string"
+  defp simple(:binary, _), do: "binary"
+  defp simple(:date, _), do: "date"
+  defp simple(:timestamp, _), do: "timestamp"
+  defp simple(:timestamp_ntz, _), do: "timestamp_ntz"
+
+  defp simple(:time, %DataType.Time{precision: p}) when is_integer(p), do: "time(#{p})"
+  # TimeType default precision is 6.
+  defp simple(:time, _), do: "time(6)"
+
+  # DecimalType.simpleString has no space after the comma.
+  defp simple(:decimal, %DataType.Decimal{precision: p, scale: sc})
+       when not is_nil(p) and not is_nil(sc),
+       do: "decimal(#{p},#{sc})"
+
+  defp simple(:decimal, %DataType.Decimal{precision: p}) when not is_nil(p), do: "decimal(#{p},0)"
+  defp simple(:decimal, _), do: "decimal(10,0)"
+
+  defp simple(:calendar_interval, _), do: "interval"
+
+  defp simple(:year_month_interval, %DataType.YearMonthInterval{start_field: sf, end_field: ef}),
+    do: interval_simple("interval", &year_month_field/1, sf, ef, "year to month")
+
+  defp simple(:day_time_interval, %DataType.DayTimeInterval{start_field: sf, end_field: ef}),
+    do: interval_simple("interval", &day_time_field/1, sf, ef, "day to second")
+
+  defp simple(:year_month_interval, _), do: "interval year to month"
+  defp simple(:day_time_interval, _), do: "interval day to second"
+
+  defp simple(:variant, _), do: "variant"
+
+  defp simple(:geometry, %DataType.Geometry{srid: -1}), do: "geometry(any)"
+
+  defp simple(:geometry, %DataType.Geometry{srid: srid}) when is_integer(srid),
+    do: "geometry(#{srid})"
+
+  defp simple(:geometry, _), do: "geometry"
+  defp simple(:geography, %DataType.Geography{srid: -1}), do: "geography(any)"
+
+  defp simple(:geography, %DataType.Geography{srid: srid}) when is_integer(srid),
+    do: "geography(#{srid})"
+
+  defp simple(:geography, _), do: "geography"
+
+  defp simple(:array, %DataType.Array{element_type: et}), do: "array<#{simple_string(et)}>"
+
+  defp simple(:map, %DataType.Map{key_type: kt, value_type: vt}),
+    do: "map<#{simple_string(kt)},#{simple_string(vt)}>"
+
+  defp simple(:struct, %DataType.Struct{fields: fields}) do
+    inner =
+      Enum.map_join(fields, ",", fn %DataType.StructField{name: name, data_type: dt} ->
+        "#{name}:#{simple_string(dt)}"
+      end)
+
+    "struct<#{inner}>"
+  end
+
+  # PySpark's UserDefinedType.simpleString is unconditionally "udt".
+  defp simple(:udt, _), do: "udt"
+
+  defp simple(:unparsed, %DataType.Unparsed{data_type_string: str}) when is_binary(str),
+    do: String.downcase(str)
+
+  defp simple(_unknown, _), do: "string"
+
+  defp interval_simple(prefix, field_fun, sf, ef, default) do
+    cond do
+      is_integer(sf) and (is_nil(ef) or sf == ef) -> "#{prefix} #{field_fun.(sf)}"
+      is_integer(sf) and is_integer(ef) -> "#{prefix} #{field_fun.(sf)} to #{field_fun.(ef)}"
+      true -> "#{prefix} #{default}"
+    end
+  end
+
+  defp day_time_field(0), do: "day"
+  defp day_time_field(1), do: "hour"
+  defp day_time_field(2), do: "minute"
+  defp day_time_field(3), do: "second"
+
+  defp year_month_field(0), do: "year"
+  defp year_month_field(1), do: "month"
 
   # --- Direct DataType → DDL mapping (preserves precision) ---
 

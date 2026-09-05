@@ -88,23 +88,41 @@ defmodule SparkEx.StreamWriter do
     %{writer | path: path}
   end
 
-  @spec option(t(), String.t(), term()) :: t()
-  def option(%__MODULE__{} = writer, key, value) when is_binary(key) do
-    if is_nil(value) do
+  @doc """
+  Sets a single sink option. A `nil` value removes the key (mirroring
+  PySpark's `option(k, None)` behaviour).
+  """
+  @spec option(t(), String.t() | atom(), term()) :: t()
+  def option(%__MODULE__{} = writer, key, nil) when is_binary(key) or is_atom(key) do
+    %{writer | options: Map.delete(writer.options, normalize_option_key(key))}
+  end
+
+  def option(%__MODULE__{} = writer, key, value) when is_binary(key) or is_atom(key) do
+    %{
       writer
-    else
-      %{writer | options: Map.put(writer.options, key, normalize_option_value(value))}
-    end
+      | options: Map.put(writer.options, normalize_option_key(key), normalize_option_value(value))
+    }
   end
 
+  @doc """
+  Merges options into the writer. Entries whose value is `nil` remove the key.
+  """
   @spec options(t(), map() | keyword()) :: t()
-  def options(%__MODULE__{} = writer, opts) when is_map(opts) do
-    merged = Map.merge(writer.options, stringify_options(opts))
-    %{writer | options: merged}
-  end
+  def options(%__MODULE__{} = writer, opts) when is_map(opts) or is_list(opts) do
+    pairs = SparkEx.Internal.OptionUtils.to_option_map(opts)
 
-  def options(%__MODULE__{} = writer, opts) when is_list(opts) do
-    opts |> Enum.into(%{}) |> then(&options(writer, &1))
+    {drops, sets} =
+      Enum.reduce(pairs, {[], []}, fn {k, v}, {drops, sets} ->
+        key = normalize_option_key(k)
+        if is_nil(v), do: {[key | drops], sets}, else: {drops, [{key, v} | sets]}
+      end)
+
+    new_options =
+      writer.options
+      |> Map.drop(drops)
+      |> Map.merge(stringify_options(Map.new(sets)))
+
+    %{writer | options: new_options}
   end
 
   @spec query_name(t(), String.t()) :: t()
@@ -149,20 +167,22 @@ defmodule SparkEx.StreamWriter do
 
   @spec partition_by(t(), [String.t() | atom()]) :: t()
   def partition_by(%__MODULE__{} = writer, cols) when is_list(cols) do
-    if cols == [] do
-      raise ArgumentError, "partition_by columns should not be empty"
-    end
-
     %{writer | partition_by: Enum.map(cols, &to_string/1)}
+  end
+
+  def partition_by(%__MODULE__{}, cols) do
+    raise ArgumentError,
+          "partition_by expects a list of column names, got: #{inspect(cols)}"
   end
 
   @spec cluster_by(t(), [String.t() | atom()]) :: t()
   def cluster_by(%__MODULE__{} = writer, cols) when is_list(cols) do
-    if cols == [] do
-      raise ArgumentError, "cluster_by columns should not be empty"
-    end
-
     %{writer | cluster_by: Enum.map(cols, &to_string/1)}
+  end
+
+  def cluster_by(%__MODULE__{}, cols) do
+    raise ArgumentError,
+          "cluster_by expects a list of column names, got: #{inspect(cols)}"
   end
 
   @doc """
@@ -221,7 +241,8 @@ defmodule SparkEx.StreamWriter do
   end
 
   @doc """
-  Starts the streaming query, writing to the path set via `option("path", ...)`.
+  Starts the streaming query, writing to the path set via `path/2` (or the
+  `:path` option on `start/2`).
 
   Returns `{:ok, StreamingQuery.t()}` on success.
   """
@@ -394,7 +415,7 @@ defmodule SparkEx.StreamWriter do
       ])
       |> stringify_options()
 
-    Map.merge(top_level_options, nested_options)
+    SparkEx.Internal.OptionUtils.merge_exclusive!(top_level_options, nested_options)
   end
 
   defp execute_stream_start(df, write_opts, exec_opts) do
@@ -435,12 +456,12 @@ defmodule SparkEx.StreamWriter do
   defp extract_started_event_json(%{query_started_event_json: json}), do: json
   defp extract_started_event_json(_), do: nil
 
-  defp stringify_options(opts) when is_map(opts) do
+  defp stringify_options(opts) do
     SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
   end
 
-  defp stringify_options(opts) when is_list(opts) do
-    SparkEx.Internal.OptionUtils.stringify_options_reject_nil(opts)
+  defp normalize_option_key(key) do
+    SparkEx.Internal.OptionUtils.normalize_option_key(key)
   end
 
   defp normalize_columns(value) when is_binary(value), do: [value]

@@ -48,7 +48,7 @@ defmodule SparkEx.Integration.SchemaPreservationTest do
     assert cols == ["name", "id", "name_upper"]
 
     assert {:ok, dtypes} = DataFrame.dtypes(with_cols)
-    assert dtypes == [{"name", "STRING"}, {"id", "INT"}, {"name_upper", "STRING"}]
+    assert dtypes == [{"name", "string"}, {"id", "int"}, {"name_upper", "string"}]
   end
 
   test "schema/columns/dtypes preserved after filter and limit", %{session: session} do
@@ -62,7 +62,7 @@ defmodule SparkEx.Integration.SchemaPreservationTest do
     assert cols == ["id", "name"]
 
     assert {:ok, dtypes} = DataFrame.dtypes(filtered)
-    assert dtypes == [{"id", "INT"}, {"name", "STRING"}]
+    assert dtypes == [{"id", "int"}, {"name", "string"}]
   end
 
   test "schema preserved after join and aggregation", %{session: session} do
@@ -76,6 +76,6 @@ defmodule SparkEx.Integration.SchemaPreservationTest do
 
     grouped = joined |> DataFrame.group_by(["id"]) |> SparkEx.GroupedData.count()
     assert {:ok, dtypes} = DataFrame.dtypes(grouped)
-    assert {"id", "INT"} in dtypes
+    assert {"id", "int"} in dtypes
   end
 end

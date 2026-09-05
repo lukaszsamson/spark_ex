@@ -58,6 +58,7 @@ defmodule SparkEx.Unit.WriterV2Test do
 
     test "table_properties/2 accepts keyword options", %{writer: writer} do
       w = WriterV2.table_properties(writer, retention_days: 7, audited: true)
+      # Table properties are arbitrary, case-sensitive names: no camelization.
       assert w.table_properties == %{"retention_days" => "7", "audited" => "true"}
     end
 

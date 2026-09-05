@@ -22,6 +22,8 @@ defmodule SparkEx.Connect.ResultDecoder do
           dataframe: Explorer.DataFrame.t(),
           schema: term() | nil,
           server_side_session_id: String.t() | nil,
+          command_result: term() | nil,
+          command_results: [term()],
           observed_metrics: map(),
           execution_metrics: map()
         }
@@ -71,7 +73,8 @@ defmodule SparkEx.Connect.ResultDecoder do
       command_result: nil,
       command_results: [],
       observed_metrics: %{},
-      execution_metrics: %{}
+      execution_metrics: %{},
+      progress: initial_progress()
     }
 
     result =
@@ -79,28 +82,31 @@ defmodule SparkEx.Connect.ResultDecoder do
         {:ok, %ExecutePlanResponse{} = resp}, {:ok, state} ->
           case check_response_integrity(resp, session, state) do
             {:ok, state} ->
-              state = update_state_with_resp(state, resp)
+              state = update_state_with_resp(state, resp, session)
 
               case dispatch_response_type(resp.response_type, state, session) do
                 {:cont, state} -> {:cont, {:ok, state}}
                 {:halt, state} -> {:halt, {:ok, state}}
-                {:error, _} = error -> {:halt, error}
+                {:error, _} = error -> {:halt, progress_terminal_error(error, state, session)}
               end
 
             {:error, _} = error ->
-              {:halt, error}
+              {:halt, progress_terminal_error(error, state, session)}
           end
 
-        {:error, %GRPC.RPCError{} = error}, {:ok, _state} ->
-          err = if session, do: Errors.from_grpc_error(error, session), else: error
-          {:halt, {:error, err}}
+        {:error, %GRPC.RPCError{} = error}, {:ok, state} ->
+          # Cheap decode only: the retry loop above enriches the terminal error (T-35).
+          err = if session, do: Errors.decode_grpc_error(error), else: error
+          {:halt, progress_terminal_error({:error, err}, state, session)}
 
-        {:error, reason}, {:ok, _state} ->
-          {:halt, {:error, reason}}
+        {:error, reason}, {:ok, state} ->
+          {:halt, progress_terminal_error({:error, reason}, state, session)}
       end)
 
     case result do
       {:ok, state} ->
+        state = emit_progress_done(state, session)
+
         case state.current_chunked_batch do
           nil ->
             # Apply UDT deserializers (FABLE-15) so the collect path matches the
@@ -150,6 +156,10 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   ## Options
 
+    * `:map_format` — `:key_value_pairs` (default) keeps MAP columns as the
+      wire list of `%{"key" => k, "value" => v}` entries; `:map` converts
+      them to Elixir maps per batch using the wire schema (see
+      `SparkEx.DataFrame.collect/2`).
     * `:on_metrics` — 1-arity function invoked once when the stream is
       finalized with the merged observed/execution metrics map
       `%{observed_metrics: ..., execution_metrics: ...}`. Mirrors PySpark's
@@ -160,6 +170,7 @@ defmodule SparkEx.Connect.ResultDecoder do
   @spec rows_stream(Enumerable.t(), SparkEx.Session.t() | nil, keyword()) :: Enumerable.t()
   def rows_stream(stream, session \\ nil, opts \\ []) do
     on_metrics = Keyword.get(opts, :on_metrics)
+    map_format = Keyword.get(opts, :map_format, :key_value_pairs)
 
     Stream.transform(
       stream,
@@ -171,7 +182,8 @@ defmodule SparkEx.Connect.ResultDecoder do
           errored: false,
           schema: nil,
           observed_metrics: %{},
-          execution_metrics: %{}
+          execution_metrics: %{},
+          progress: initial_progress()
         }
       end,
       fn
@@ -185,10 +197,11 @@ defmodule SparkEx.Connect.ResultDecoder do
               # Track the wire schema so UDT deserializers (FABLE-15) can be
               # applied to each batch's rows on the to_local_iterator path.
               state = if resp.schema, do: %{state | schema: resp.schema}, else: state
-              handle_rows_stream_response(resp, state)
+              state = track_progress(state, resp, session)
+              handle_rows_stream_response(resp, state, map_format, session)
 
             {:error, reason} ->
-              emit_rows_stream_error(reason, state)
+              emit_rows_stream_error(reason, state, session)
           end
 
         {:error, %GRPC.RPCError{} = error}, state ->
@@ -202,17 +215,23 @@ defmodule SparkEx.Connect.ResultDecoder do
               _ -> error
             end
 
-          emit_rows_stream_error(err, state)
+          emit_rows_stream_error(err, state, session)
 
         {:error, reason}, state ->
-          emit_rows_stream_error(reason, state)
+          emit_rows_stream_error(reason, state, session)
       end,
       fn state ->
+        # Terminal progress event (done: true) for streams that ended without
+        # a result_complete frame; a no-op when one was already emitted.
+        emit_progress_done(state, session)
         deliver_rows_stream_metrics(state, on_metrics)
         :ok
       end
     )
   end
+
+  defp maybe_convert_map_columns(rows, schema, :map), do: convert_map_columns(rows, schema)
+  defp maybe_convert_map_columns(rows, _schema, _format), do: rows
 
   defp merge_metrics_from_response(state, %ExecutePlanResponse{} = resp) do
     %{
@@ -244,25 +263,29 @@ defmodule SparkEx.Connect.ResultDecoder do
     :ok
   end
 
-  defp handle_rows_stream_response(%ExecutePlanResponse{} = resp, state) do
+  defp handle_rows_stream_response(%ExecutePlanResponse{} = resp, state, map_format, session) do
     case resp.response_type do
       {:arrow_batch, %ExecutePlanResponse.ArrowBatch{} = batch} ->
         case handle_arrow_batch_rows_stream(state, batch) do
           {:ok, rows, next_state} ->
+            # `map_format: :map` (DataFrame.to_local_iterator/2) converts each
+            # batch against the tracked wire schema, mirroring collect/2.
+            rows = maybe_convert_map_columns(rows, next_state.schema, map_format)
             {Enum.map(rows, &{:ok, &1}), next_state}
 
           {:error, reason} ->
-            emit_rows_stream_error(reason, state)
+            emit_rows_stream_error(reason, state, session)
         end
 
       {:result_complete, _} ->
         if state.current_chunked_batch do
           emit_rows_stream_error(
             incomplete_arrow_batch_error(state.current_chunked_batch),
-            state
+            state,
+            session
           )
         else
-          {:halt, state}
+          {:halt, emit_progress_done(state, session)}
         end
 
       _ ->
@@ -270,7 +293,8 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
-  defp emit_rows_stream_error(reason, state) do
+  defp emit_rows_stream_error(reason, state, session) do
+    state = emit_progress_done(state, session)
     {[{:error, reason}], %{state | errored: true}}
   end
 
@@ -300,8 +324,11 @@ defmodule SparkEx.Connect.ResultDecoder do
       total_bytes: 0,
       max_rows: max_rows,
       max_bytes: max_bytes,
+      command_result: nil,
+      command_results: [],
       observed_metrics: %{},
-      execution_metrics: %{}
+      execution_metrics: %{},
+      progress: initial_progress()
     }
 
     result =
@@ -309,36 +336,43 @@ defmodule SparkEx.Connect.ResultDecoder do
         {:ok, %ExecutePlanResponse{} = resp}, {:ok, state} ->
           case check_response_integrity(resp, session, state) do
             {:ok, state} ->
-              state = update_state_with_resp(state, resp)
+              state = update_state_with_resp(state, resp, session)
 
               case dispatch_explorer_response(resp.response_type, state, session) do
-                {:cont, {:ok, state}} -> {:cont, {:ok, state}}
-                {:halt, {:ok, state}} -> {:halt, {:ok, state}}
-                {:halt, {:error, _} = err} -> {:halt, err}
+                {:cont, {:ok, state}} ->
+                  {:cont, {:ok, state}}
+
+                {:halt, {:ok, state}} ->
+                  {:halt, {:ok, state}}
+
+                {:halt, {:error, _} = err} ->
+                  {:halt, progress_terminal_error(err, state, session)}
               end
 
             {:error, _} = error ->
-              {:halt, error}
+              {:halt, progress_terminal_error(error, state, session)}
           end
 
-        {:error, %GRPC.RPCError{} = error}, {:ok, _state} ->
-          err = if session, do: Errors.from_grpc_error(error, session), else: error
-          {:halt, {:error, err}}
+        {:error, %GRPC.RPCError{} = error}, {:ok, state} ->
+          # Cheap decode only: the retry loop above enriches the terminal error (T-35).
+          err = if session, do: Errors.decode_grpc_error(error), else: error
+          {:halt, progress_terminal_error({:error, err}, state, session)}
 
-        {:error, reason}, {:ok, _state} ->
-          {:halt, {:error, reason}}
+        {:error, reason}, {:ok, state} ->
+          {:halt, progress_terminal_error({:error, reason}, state, session)}
       end)
 
-    finalize_explorer_stream_result(result)
+    finalize_explorer_stream_result(result, session)
   end
 
-  defp update_state_with_resp(state, resp) do
+  defp update_state_with_resp(state, resp, session) do
     state = if resp.schema, do: %{state | schema: resp.schema}, else: state
 
     observed_metrics = merge_observed_metrics(state.observed_metrics, resp.observed_metrics)
     execution_metrics = merge_execution_metrics(state.execution_metrics, resp.metrics)
 
     %{state | observed_metrics: observed_metrics, execution_metrics: execution_metrics}
+    |> track_progress(resp, session)
   end
 
   defp dispatch_explorer_response({:arrow_batch, batch}, state, _session) do
@@ -348,24 +382,21 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
-  defp dispatch_explorer_response({:execution_progress, progress}, state, session) do
-    emit_progress_telemetry(progress, session)
-    {:cont, {:ok, state}}
-  end
-
-  defp dispatch_explorer_response({:result_complete, _}, state, _session) do
-    {:halt, {:ok, state}}
+  defp dispatch_explorer_response({:result_complete, _}, state, session) do
+    {:halt, {:ok, emit_progress_done(state, session)}}
   end
 
   defp dispatch_explorer_response(nil, state, _session), do: {:cont, {:ok, state}}
 
-  defp dispatch_explorer_response({tag, _} = _other, state, _session) when is_atom(tag) do
-    require Logger
-    Logger.debug(fn -> "ignoring unknown ExecutePlanResponse response_type: #{inspect(tag)}" end)
-    {:cont, {:ok, state}}
+  # Command-result variants are shared with the rows/arrow decoders (T-61) so a
+  # `to_explorer` over a command plan surfaces the same `command_result(s)`.
+  defp dispatch_explorer_response({tag, _} = response_type, state, _session) when is_atom(tag) do
+    {:cont, {:ok, dispatch_command_result(response_type, state)}}
   end
 
-  defp finalize_explorer_stream_result({:ok, state}) do
+  defp finalize_explorer_stream_result({:ok, state}, session) do
+    state = emit_progress_done(state, session)
+
     case state.current_chunked_batch do
       nil ->
         finalize_explorer_result(state)
@@ -380,7 +411,7 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
-  defp finalize_explorer_stream_result({:error, _} = error), do: error
+  defp finalize_explorer_stream_result({:error, _} = error, _session), do: error
 
   @doc """
   Decodes an ExecutePlan response stream into an Arrow IPC payload.
@@ -415,7 +446,8 @@ defmodule SparkEx.Connect.ResultDecoder do
       command_result: nil,
       command_results: [],
       observed_metrics: %{},
-      execution_metrics: %{}
+      execution_metrics: %{},
+      progress: initial_progress()
     }
 
     result =
@@ -423,22 +455,30 @@ defmodule SparkEx.Connect.ResultDecoder do
         {:ok, %ExecutePlanResponse{} = resp}, {:ok, state} ->
           case check_response_integrity(resp, session, state) do
             {:ok, state} ->
-              state = update_state_with_resp(state, resp)
-              dispatch_arrow_response(resp.response_type, state, session)
+              state = update_state_with_resp(state, resp, session)
+
+              case dispatch_arrow_response(resp.response_type, state, session) do
+                {:halt, {:error, _} = err} ->
+                  {:halt, progress_terminal_error(err, state, session)}
+
+                other ->
+                  other
+              end
 
             {:error, _} = error ->
-              {:halt, error}
+              {:halt, progress_terminal_error(error, state, session)}
           end
 
-        {:error, %GRPC.RPCError{} = error}, {:ok, _state} ->
-          err = if session, do: Errors.from_grpc_error(error, session), else: error
-          {:halt, {:error, err}}
+        {:error, %GRPC.RPCError{} = error}, {:ok, state} ->
+          # Cheap decode only: the retry loop above enriches the terminal error (T-35).
+          err = if session, do: Errors.decode_grpc_error(error), else: error
+          {:halt, progress_terminal_error({:error, err}, state, session)}
 
-        {:error, reason}, {:ok, _state} ->
-          {:halt, {:error, reason}}
+        {:error, reason}, {:ok, state} ->
+          {:halt, progress_terminal_error({:error, reason}, state, session)}
       end)
 
-    finalize_arrow_stream_result(result)
+    finalize_arrow_stream_result(result, session)
   end
 
   defp dispatch_arrow_response(
@@ -452,67 +492,26 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
-  defp dispatch_arrow_response({:result_complete, _}, state, _session) do
+  defp dispatch_arrow_response({:result_complete, _}, state, session) do
     case state.current_chunked_batch do
-      nil -> {:halt, finalize_arrow_result(state)}
+      nil -> {:halt, finalize_arrow_result(emit_progress_done(state, session))}
       current -> {:halt, {:error, incomplete_arrow_batch_error(current)}}
     end
   end
 
-  defp dispatch_arrow_response({:sql_command_result, result}, state, _session) do
-    {:cont, {:ok, push_command_result(state, {:sql_command, result})}}
-  end
-
-  defp dispatch_arrow_response({:write_stream_operation_start_result, result}, state, _),
-    do: {:cont, {:ok, push_command_result(state, {:write_stream_start, result})}}
-
-  defp dispatch_arrow_response({:streaming_query_command_result, result}, state, _),
-    do: {:cont, {:ok, push_command_result(state, {:streaming_query, result})}}
-
-  defp dispatch_arrow_response({:streaming_query_manager_command_result, result}, state, _),
-    do: {:cont, {:ok, push_command_result(state, {:streaming_query_manager, result})}}
-
-  defp dispatch_arrow_response({:streaming_query_listener_events_result, result}, state, _),
-    do:
-      {:cont,
-       {:ok, push_command_result(state, {:listener_events, decode_listener_events(result)})}}
-
-  defp dispatch_arrow_response({:checkpoint_command_result, result}, state, _),
-    do: {:cont, {:ok, push_command_result(state, {:checkpoint, result})}}
-
-  defp dispatch_arrow_response({:create_resource_profile_command_result, result}, state, _),
-    do: {:cont, {:ok, push_command_result(state, {:create_resource_profile, result})}}
-
-  defp dispatch_arrow_response({:ml_command_result, result}, state, _),
-    do: {:cont, {:ok, push_command_result(state, {:ml, result})}}
-
-  defp dispatch_arrow_response({:get_resources_command_result, result}, state, _),
-    do: {:cont, {:ok, push_command_result(state, {:get_resources, result})}}
-
-  defp dispatch_arrow_response({:pipeline_command_result, result}, state, _),
-    do: {:cont, {:ok, push_command_result(state, {:pipeline, result})}}
-
-  defp dispatch_arrow_response({:pipeline_event_result, result}, state, _),
-    do: {:cont, {:ok, push_command_result(state, {:pipeline_event, result})}}
-
-  defp dispatch_arrow_response({:pipeline_query_function_execution_signal, result}, state, _),
-    do:
-      {:cont,
-       {:ok, push_command_result(state, {:pipeline_query_function_execution_signal, result})}}
-
   defp dispatch_arrow_response(nil, state, _session), do: {:cont, {:ok, state}}
 
-  defp dispatch_arrow_response({tag, _} = _other, state, _session) when is_atom(tag) do
-    require Logger
-    Logger.debug(fn -> "ignoring unknown ExecutePlanResponse response_type: #{inspect(tag)}" end)
-    {:cont, {:ok, state}}
+  defp dispatch_arrow_response({tag, _} = response_type, state, _session) when is_atom(tag) do
+    {:cont, {:ok, dispatch_command_result(response_type, state)}}
   end
 
-  defp finalize_arrow_stream_result({:ok, %{arrow: _} = arrow_result}), do: {:ok, arrow_result}
+  defp finalize_arrow_stream_result({:ok, %{arrow: _} = arrow_result}, _session),
+    do: {:ok, arrow_result}
 
-  defp finalize_arrow_stream_result({:ok, state}) do
+  defp finalize_arrow_stream_result({:ok, state}, session) do
     finalize_state =
       state
+      |> emit_progress_done(session)
       |> Map.put_new(:current_chunked_batch, nil)
       |> Map.put_new(:arrow_parts, [])
 
@@ -522,7 +521,7 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
-  defp finalize_arrow_stream_result({:error, _} = error), do: error
+  defp finalize_arrow_stream_result({:error, _} = error, _session), do: error
 
   # --- Response-type dispatch (rows mode) ---
   #
@@ -538,61 +537,59 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
-  defp dispatch_response_type({:result_complete, _}, state, _session), do: {:halt, state}
-
-  defp dispatch_response_type({:sql_command_result, result}, state, _session) do
-    {:cont, push_command_result(state, {:sql_command, result})}
-  end
-
-  defp dispatch_response_type({:write_stream_operation_start_result, result}, state, _),
-    do: {:cont, push_command_result(state, {:write_stream_start, result})}
-
-  defp dispatch_response_type({:streaming_query_command_result, result}, state, _),
-    do: {:cont, push_command_result(state, {:streaming_query, result})}
-
-  defp dispatch_response_type({:streaming_query_manager_command_result, result}, state, _),
-    do: {:cont, push_command_result(state, {:streaming_query_manager, result})}
-
-  defp dispatch_response_type({:streaming_query_listener_events_result, result}, state, _),
-    do: {:cont, push_command_result(state, {:listener_events, decode_listener_events(result)})}
-
-  defp dispatch_response_type({:checkpoint_command_result, result}, state, _),
-    do: {:cont, push_command_result(state, {:checkpoint, result})}
-
-  defp dispatch_response_type({:create_resource_profile_command_result, result}, state, _),
-    do: {:cont, push_command_result(state, {:create_resource_profile, result})}
-
-  defp dispatch_response_type({:ml_command_result, result}, state, _),
-    do: {:cont, push_command_result(state, {:ml, result})}
-
-  defp dispatch_response_type({:get_resources_command_result, result}, state, _),
-    do: {:cont, push_command_result(state, {:get_resources, result})}
-
-  defp dispatch_response_type({:pipeline_command_result, result}, state, _),
-    do: {:cont, push_command_result(state, {:pipeline, result})}
-
-  defp dispatch_response_type({:pipeline_event_result, result}, state, _),
-    do: {:cont, push_command_result(state, {:pipeline_event, result})}
-
-  defp dispatch_response_type({:pipeline_query_function_execution_signal, result}, state, _),
-    do: {:cont, push_command_result(state, {:pipeline_query_function_execution_signal, result})}
-
-  defp dispatch_response_type({:execution_progress, progress}, state, session) do
-    emit_progress_telemetry(progress, session)
-    {:cont, state}
-  end
+  defp dispatch_response_type({:result_complete, _}, state, session),
+    do: {:halt, emit_progress_done(state, session)}
 
   defp dispatch_response_type(nil, state, _session), do: {:cont, state}
 
-  # Forward-compat: unknown / future response_type variants (including
-  # `:extension`) are logged and skipped rather than halting the stream.
-  # This matches PySpark, which iterates responses and silently advances
-  # past types it doesn't recognize.
-  defp dispatch_response_type({tag, _}, state, _session) when is_atom(tag) do
-    require Logger
-    Logger.debug(fn -> "ignoring unknown ExecutePlanResponse response_type: #{inspect(tag)}" end)
-    {:cont, state}
+  defp dispatch_response_type({tag, _} = response_type, state, _session) when is_atom(tag) do
+    {:cont, dispatch_command_result(response_type, state)}
   end
+
+  # --- Command-result variants (shared by rows / explorer / arrow modes, T-61) ---
+  #
+  # `:execution_progress` is consumed by `track_progress/3` before dispatch, so
+  # it is a no-op here. Forward-compat: unknown / future response_type variants
+  # (including `:extension`) are logged and skipped rather than halting the
+  # stream. This matches PySpark, which iterates responses and silently
+  # advances past types it doesn't recognize.
+  defp dispatch_command_result({:execution_progress, _}, state), do: state
+
+  defp dispatch_command_result({tag, result}, state) do
+    case command_result_tag(tag) do
+      nil ->
+        require Logger
+
+        Logger.debug(fn ->
+          "ignoring unknown ExecutePlanResponse response_type: #{inspect(tag)}"
+        end)
+
+        state
+
+      :listener_events ->
+        push_command_result(state, {:listener_events, decode_listener_events(result)})
+
+      command_tag ->
+        push_command_result(state, {command_tag, result})
+    end
+  end
+
+  defp command_result_tag(:sql_command_result), do: :sql_command
+  defp command_result_tag(:write_stream_operation_start_result), do: :write_stream_start
+  defp command_result_tag(:streaming_query_command_result), do: :streaming_query
+  defp command_result_tag(:streaming_query_manager_command_result), do: :streaming_query_manager
+  defp command_result_tag(:streaming_query_listener_events_result), do: :listener_events
+  defp command_result_tag(:checkpoint_command_result), do: :checkpoint
+  defp command_result_tag(:create_resource_profile_command_result), do: :create_resource_profile
+  defp command_result_tag(:ml_command_result), do: :ml
+  defp command_result_tag(:get_resources_command_result), do: :get_resources
+  defp command_result_tag(:pipeline_command_result), do: :pipeline
+  defp command_result_tag(:pipeline_event_result), do: :pipeline_event
+
+  defp command_result_tag(:pipeline_query_function_execution_signal),
+    do: :pipeline_query_function_execution_signal
+
+  defp command_result_tag(_), do: nil
 
   defp push_command_result(state, tagged_tuple) do
     %{
@@ -635,25 +632,100 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   defp decode_listener_events(result), do: result
 
-  defp emit_progress_telemetry(progress, session) do
+  # --- Execution progress (T-36) ---
+  #
+  # Mirrors PySpark's `Progress` helper (shell/progress.py): every
+  # `execution_progress` frame updates the tracked stages / inflight count /
+  # operation id and notifies handlers with `done: false`, but only when the
+  # stages carry at least one task (an empty stage gate is not reported);
+  # a single terminal `done: true` event fires when the stream finishes
+  # (result_complete, stream exhaustion, or a terminal error).
+
+  defp initial_progress do
+    %{stages: [], num_inflight_tasks: 0, operation_id: nil, done_emitted: false}
+  end
+
+  defp track_progress(
+         state,
+         %ExecutePlanResponse{response_type: {:execution_progress, progress}} = resp,
+         session
+       ) do
+    current = Map.get(state, :progress) || initial_progress()
+    operation_id = current.operation_id || presence(resp.operation_id)
+    stages = Enum.map(progress.stages || [], &stage_info/1)
+    total_tasks = Enum.reduce(stages, 0, fn stage, acc -> acc + (stage.num_tasks || 0) end)
+
+    if total_tasks > 0 do
+      updated = %{
+        current
+        | stages: stages,
+          num_inflight_tasks: progress.num_inflight_tasks || 0,
+          operation_id: operation_id
+      }
+
+      emit_progress_telemetry(updated, session, false)
+      Map.put(state, :progress, updated)
+    else
+      Map.put(state, :progress, %{current | operation_id: operation_id})
+    end
+  end
+
+  defp track_progress(state, %ExecutePlanResponse{operation_id: operation_id}, _session) do
+    case Map.get(state, :progress) do
+      %{operation_id: nil} = current ->
+        Map.put(state, :progress, %{current | operation_id: presence(operation_id)})
+
+      _ ->
+        state
+    end
+  end
+
+  defp presence(""), do: nil
+  defp presence(value), do: value
+
+  defp stage_info(stage) do
+    %{
+      stage_id: stage.stage_id,
+      num_tasks: stage.num_tasks,
+      num_completed_tasks: stage.num_completed_tasks,
+      input_bytes_read: stage.input_bytes_read,
+      done: stage.done
+    }
+  end
+
+  # Emits the terminal `done: true` event once per stream and marks the state
+  # so later finalization steps do not repeat it.
+  defp emit_progress_done(state, session) do
+    case Map.get(state, :progress) do
+      %{done_emitted: false} = progress ->
+        emit_progress_telemetry(progress, session, true)
+        Map.put(state, :progress, %{progress | done_emitted: true})
+
+      _ ->
+        state
+    end
+  end
+
+  defp progress_terminal_error({:error, _} = error, state, session) do
+    _ = emit_progress_done(state, session)
+    error
+  end
+
+  defp emit_progress_telemetry(progress, session, done) do
     :telemetry.execute(
       [:spark_ex, :result, :progress],
-      %{num_inflight_tasks: progress.num_inflight_tasks || 0},
+      %{num_inflight_tasks: progress.num_inflight_tasks},
       %{
-        session_id: session && session.session_id,
-        stages:
-          Enum.map(progress.stages || [], fn stage ->
-            %{
-              stage_id: stage.stage_id,
-              num_tasks: stage.num_tasks,
-              num_completed_tasks: stage.num_completed_tasks,
-              input_bytes_read: stage.input_bytes_read,
-              done: stage.done
-            }
-          end)
+        session_id: progress_session_id(session),
+        operation_id: progress.operation_id,
+        stages: progress.stages,
+        done: done
       }
     )
   end
+
+  defp progress_session_id(%{session_id: id}), do: id
+  defp progress_session_id(_), do: nil
 
   # --- Arrow batch handling (rows mode) ---
 
@@ -1190,27 +1262,11 @@ defmodule SparkEx.Connect.ResultDecoder do
   defp finalize_explorer_result(%{dataframes: []} = state) do
     empty_df = build_empty_dataframe_from_schema(state.schema)
 
-    {:ok,
-     %{
-       dataframe: empty_df,
-       schema: state.schema,
-       server_side_session_id: state.server_side_session_id,
-       observed_metrics: state.observed_metrics,
-       execution_metrics: state.execution_metrics
-     }}
+    {:ok, explorer_result(state, empty_df)}
   end
 
   defp finalize_explorer_result(%{dataframes: [single]} = state) do
-    dataframe = apply_schema_policy(single, state.schema)
-
-    {:ok,
-     %{
-       dataframe: dataframe,
-       schema: state.schema,
-       server_side_session_id: state.server_side_session_id,
-       observed_metrics: state.observed_metrics,
-       execution_metrics: state.execution_metrics
-     }}
+    {:ok, explorer_result(state, apply_schema_policy(single, state.schema))}
   end
 
   defp finalize_explorer_result(%{dataframes: dfs} = state) do
@@ -1231,16 +1287,19 @@ defmodule SparkEx.Connect.ResultDecoder do
       end
 
     combined = Explorer.DataFrame.concat_rows(aligned)
-    dataframe = apply_schema_policy(combined, state.schema)
+    {:ok, explorer_result(state, apply_schema_policy(combined, state.schema))}
+  end
 
-    {:ok,
-     %{
-       dataframe: dataframe,
-       schema: state.schema,
-       server_side_session_id: state.server_side_session_id,
-       observed_metrics: state.observed_metrics,
-       execution_metrics: state.execution_metrics
-     }}
+  defp explorer_result(state, dataframe) do
+    %{
+      dataframe: dataframe,
+      schema: state.schema,
+      server_side_session_id: state.server_side_session_id,
+      command_result: state.command_result,
+      command_results: Enum.reverse(state.command_results),
+      observed_metrics: state.observed_metrics,
+      execution_metrics: state.execution_metrics
+    }
   end
 
   defp exceeds_limit?(_actual, :infinity), do: false
@@ -1250,74 +1309,92 @@ defmodule SparkEx.Connect.ResultDecoder do
     {:ok, dtypes} = TypeMapper.schema_to_dtypes(struct)
     # Ordered list (not map) so column order survives wide schemas.
     columns = Enum.map(dtypes, fn {name, _dtype} -> {name, []} end)
-    # Columns whose Spark type has no native Explorer dtype (map/variant/UDT/
-    # geometry/year-month interval) come back with a nil dtype; drop those so
-    # Explorer infers from the (empty) cells instead of being handed an invalid
-    # dtype that would raise in check_dtypes!.
+    # Map/variant/UDT/geometry columns are seeded with the dtype of their Arrow
+    # wire layout (T-30) so empty and non-empty frames agree. Columns with no
+    # Explorer representation at all (year-month / calendar interval, unparsed)
+    # map to nil; drop those so Explorer infers `:null` from the empty cells
+    # instead of being handed an invalid dtype that would raise in
+    # check_dtypes!. Known limitation: those columns come back as `:null`.
     Explorer.DataFrame.new(columns, dtypes: drop_nil_dtypes(dtypes))
   end
 
   defp build_empty_dataframe_from_schema(_), do: Explorer.DataFrame.new([])
 
+  # Schema policy (T-30): reconciles the decoded frame with the wire schema.
+  #
+  # 1. UDT columns (top-level or nested in array/map/struct, T-31) with a
+  #    registered deserializer are rewritten cell-by-cell and left to dtype
+  #    inference, since the deserialized values no longer match the wire dtype.
+  # 2. Every other column whose dtype differs from `TypeMapper` is cast to the
+  #    mapped dtype. In practice this normalizes TIMESTAMP columns — which Arrow
+  #    ships in the session time zone — to `{:datetime, :microsecond, "Etc/UTC"}`
+  #    so a non-empty frame carries the same dtypes as an empty one built from
+  #    the schema. A cast that Explorer rejects leaves the column untouched.
   defp apply_schema_policy(df, %Spark.Connect.DataType{kind: {:struct, struct}}) do
-    column_transforms =
-      struct.fields
-      |> Enum.flat_map(fn %Spark.Connect.DataType.StructField{name: name, data_type: dt} ->
-        case column_value_transform(dt) do
-          nil -> []
-          fun -> [{name, fun}]
-        end
-      end)
-      |> Map.new()
+    names = Explorer.DataFrame.names(df)
+    transforms = column_transforms(struct)
+    {:ok, mapped_dtypes} = TypeMapper.schema_to_dtypes(struct)
 
-    if map_size(column_transforms) == 0 do
-      df
-    else
-      names = Explorer.DataFrame.names(df)
-      row_count = Explorer.DataFrame.n_rows(df)
+    df = Enum.reduce(transforms, df, &apply_column_transform(&2, &1, names))
 
-      # Use an ordered keyword list of `{name, values}` pairs (not a map)
-      # so wide schemas (>32 cols) preserve column order through
-      # `Explorer.DataFrame.new/2`. Maps would re-bucket by hash and shuffle.
-      columns =
-        Enum.map(names, fn name ->
-          series = Explorer.DataFrame.pull(df, name)
-          values = Explorer.Series.to_list(series)
-
-          normalized =
-            case Map.fetch(column_transforms, name) do
-              {:ok, fun} -> Enum.map(values, fun)
-              :error -> values
-            end
-
-          {name, normalized}
-        end)
-
-      {:ok, mapped_dtypes} = TypeMapper.schema_to_dtypes(struct)
-
-      # Keep only dtypes for columns still present, and drop those with no
-      # native Explorer dtype (nil) — e.g. map/variant/UDT/geometry/year-month
-      # interval columns decode as maps/lists/strings, so handing Explorer the
-      # mapped dtype would mismatch the cells and raise. Let Explorer infer
-      # those from the decoded values instead.
-      dtypes =
-        mapped_dtypes
-        |> Enum.filter(fn {name, _} -> name in names end)
-        |> drop_nil_dtypes()
-
-      if columns == [] and row_count == 0 do
-        build_empty_dataframe_from_schema(%Spark.Connect.DataType{kind: {:struct, struct}})
-      else
-        Explorer.DataFrame.new(columns, dtypes: dtypes)
-      end
-    end
+    mapped_dtypes
+    |> Enum.filter(fn {name, _} -> name in names and not Map.has_key?(transforms, name) end)
+    |> drop_nil_dtypes()
+    |> Enum.reduce(df, &cast_column(&2, &1))
   end
 
   defp apply_schema_policy(df, _), do: df
 
-  # Drops `{name, nil}` pairs: a nil dtype means the Spark type has no native
-  # Explorer dtype (map/variant/UDT/geometry/year-month or calendar interval),
-  # so the column must be inferred from its decoded cells rather than dtyped.
+  defp column_transforms(%Spark.Connect.DataType.Struct{fields: fields}) do
+    fields
+    |> Enum.flat_map(fn %Spark.Connect.DataType.StructField{name: name, data_type: dt} ->
+      case column_value_transform(dt) do
+        nil -> []
+        fun -> [{name, fun}]
+      end
+    end)
+    |> Map.new()
+  end
+
+  defp apply_column_transform(df, {name, fun}, names) do
+    if name in names do
+      values =
+        df
+        |> Explorer.DataFrame.pull(name)
+        |> Explorer.Series.to_list()
+        |> Enum.map(fun)
+
+      Explorer.DataFrame.put(df, name, Explorer.Series.from_list(values))
+    else
+      df
+    end
+  end
+
+  defp cast_column(df, {name, dtype}) do
+    series = Explorer.DataFrame.pull(df, name)
+
+    if Explorer.Series.dtype(series) == dtype do
+      df
+    else
+      try do
+        Explorer.DataFrame.put(df, name, Explorer.Series.cast(series, dtype))
+      rescue
+        error ->
+          require Logger
+
+          Logger.debug(fn ->
+            "schema policy: cannot cast column #{inspect(name)} to #{inspect(dtype)}: " <>
+              Exception.message(error)
+          end)
+
+          df
+      end
+    end
+  end
+
+  # Drops `{name, nil}` pairs: a nil dtype means the Spark type has no Explorer
+  # representation (year-month / calendar interval, unparsed, UDT without
+  # sql_type), so the column must be inferred from its decoded cells.
   defp drop_nil_dtypes(dtypes) do
     Enum.reject(dtypes, fn {_name, dtype} -> is_nil(dtype) end)
   end
@@ -1329,6 +1406,10 @@ defmodule SparkEx.Connect.ResultDecoder do
   #   callback is registered for the UDT class, it is invoked per cell
   #   (matching PySpark's `udt.deserialize` on all collection paths,
   #   conversion.py:721-742); otherwise the column needs no rewrite (nil).
+  # - array / map / struct: recurse (T-31) so UDTs nested inside containers
+  #   are deserialized too; nil when no nested component needs a rewrite.
+  #   Map cells are handled both in wire form (a list of `"key"`/`"value"`
+  #   entries) and after `convert_map_columns/2` (an Elixir map).
   #
   # CHAR columns are intentionally NOT trimmed: PySpark returns server-padded
   # CHAR values unchanged, and trimming here would diverge between the Explorer
@@ -1347,7 +1428,75 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
+  def column_value_transform(%Spark.Connect.DataType{
+        kind: {:array, %Spark.Connect.DataType.Array{element_type: et}}
+      }) do
+    case column_value_transform(et) do
+      nil -> nil
+      fun -> lift_over_list(fun)
+    end
+  end
+
+  def column_value_transform(%Spark.Connect.DataType{
+        kind: {:map, %Spark.Connect.DataType.Map{key_type: kt, value_type: vt}}
+      }) do
+    case {column_value_transform(kt), column_value_transform(vt)} do
+      {nil, nil} ->
+        nil
+
+      {key_fun, value_fun} ->
+        key_fun = key_fun || (&Function.identity/1)
+        value_fun = value_fun || (&Function.identity/1)
+
+        fn
+          entries when is_list(entries) ->
+            Enum.map(entries, fn
+              %{"key" => k, "value" => v} -> %{"key" => key_fun.(k), "value" => value_fun.(v)}
+              other -> other
+            end)
+
+          %{} = map ->
+            Map.new(map, fn {k, v} -> {key_fun.(k), value_fun.(v)} end)
+
+          other ->
+            other
+        end
+    end
+  end
+
+  def column_value_transform(%Spark.Connect.DataType{
+        kind: {:struct, %Spark.Connect.DataType.Struct{fields: fields}}
+      }) do
+    field_funs =
+      Enum.flat_map(fields, fn %Spark.Connect.DataType.StructField{name: name, data_type: dt} ->
+        case column_value_transform(dt) do
+          nil -> []
+          fun -> [{name, fun}]
+        end
+      end)
+
+    case field_funs do
+      [] ->
+        nil
+
+      funs ->
+        funs = Map.new(funs)
+
+        fn
+          %{} = struct_value -> apply_transforms_to_row(struct_value, funs)
+          other -> other
+        end
+    end
+  end
+
   def column_value_transform(_), do: nil
+
+  defp lift_over_list(fun) do
+    fn
+      list when is_list(list) -> Enum.map(list, fun)
+      other -> other
+    end
+  end
 
   # Applies the per-column UDT deserializers (FABLE-15) to a list of row maps
   # decoded via `to_rows`. Used by the rows-mode collect path so UDT columns are
@@ -1356,15 +1505,7 @@ defmodule SparkEx.Connect.ResultDecoder do
   @doc false
   @spec apply_row_transforms([map()], Spark.Connect.DataType.t() | term()) :: [map()]
   def apply_row_transforms(rows, %Spark.Connect.DataType{kind: {:struct, struct}}) do
-    transforms =
-      struct.fields
-      |> Enum.flat_map(fn %Spark.Connect.DataType.StructField{name: name, data_type: dt} ->
-        case column_value_transform(dt) do
-          nil -> []
-          fun -> [{name, fun}]
-        end
-      end)
-      |> Map.new()
+    transforms = column_transforms(struct)
 
     if map_size(transforms) == 0 do
       rows
@@ -1383,6 +1524,94 @@ defmodule SparkEx.Connect.ResultDecoder do
       end
     end)
   end
+
+  # Converts MAP-typed column values from the wire representation (a list of
+  # `%{"key" => k, "value" => v}` entries — polars/Arrow has no map type) into
+  # Elixir maps, recursively through arrays and structs. Used by collect's
+  # opt-in `map_format: :map`. Duplicate map keys collapse (last entry wins),
+  # matching PySpark's dict semantics.
+  @doc false
+  @spec convert_map_columns([map()], Spark.Connect.DataType.t() | term()) :: [map()]
+  def convert_map_columns(rows, %Spark.Connect.DataType{kind: {:struct, struct}}) do
+    converters =
+      struct.fields
+      |> Enum.flat_map(fn %Spark.Connect.DataType.StructField{name: name, data_type: dt} ->
+        case map_value_converter(dt) do
+          nil -> []
+          fun -> [{name, fun}]
+        end
+      end)
+      |> Map.new()
+
+    if map_size(converters) == 0 do
+      rows
+    else
+      Enum.map(rows, &apply_transforms_to_row(&1, converters))
+    end
+  end
+
+  def convert_map_columns(rows, _schema), do: rows
+
+  defp map_value_converter(%Spark.Connect.DataType{
+         kind: {:map, %Spark.Connect.DataType.Map{key_type: kt, value_type: vt}}
+       }) do
+    key_fun = map_value_converter(kt) || (&Function.identity/1)
+    value_fun = map_value_converter(vt) || (&Function.identity/1)
+
+    fn
+      entries when is_list(entries) ->
+        # Only convert a genuine wire map; a schema/value mismatch (e.g. a
+        # duplicate-named column of another type) degrades to the raw value.
+        if Enum.all?(entries, &match?(%{"key" => _, "value" => _}, &1)) do
+          Map.new(entries, fn %{"key" => k, "value" => v} -> {key_fun.(k), value_fun.(v)} end)
+        else
+          entries
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp map_value_converter(%Spark.Connect.DataType{
+         kind: {:array, %Spark.Connect.DataType.Array{element_type: et}}
+       }) do
+    case map_value_converter(et) do
+      nil ->
+        nil
+
+      fun ->
+        fn
+          list when is_list(list) -> Enum.map(list, fun)
+          other -> other
+        end
+    end
+  end
+
+  defp map_value_converter(%Spark.Connect.DataType{
+         kind: {:struct, %Spark.Connect.DataType.Struct{fields: fields}}
+       }) do
+    field_funs =
+      Enum.flat_map(fields, fn %Spark.Connect.DataType.StructField{name: name, data_type: dt} ->
+        case map_value_converter(dt) do
+          nil -> []
+          fun -> [{name, fun}]
+        end
+      end)
+
+    case field_funs do
+      [] ->
+        nil
+
+      funs ->
+        fn
+          %{} = struct_value -> apply_transforms_to_row(struct_value, Map.new(funs))
+          other -> other
+        end
+    end
+  end
+
+  defp map_value_converter(_), do: nil
 
   defp merge_observed_metrics(acc, nil), do: acc
 

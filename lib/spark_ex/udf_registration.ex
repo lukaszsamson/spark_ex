@@ -74,6 +74,11 @@ defmodule SparkEx.UDFRegistration do
   derive them from Elixir, so the caller is responsible for supplying
   them. There is no default.
 
+  Registration is lazy on the server: `:ok` means the command was accepted,
+  not that the payload is valid. Invalid `python_command` bytes only fail at
+  first use of the function (as a `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON`
+  error carrying the Python traceback).
+
   ## Parameters
 
   - `session` — the SparkEx session (GenServer reference).
@@ -86,7 +91,9 @@ defmodule SparkEx.UDFRegistration do
       `SQL_TABLE_UDF`). Required.
     - `:python_ver` — Python version string of the worker that produced
       `python_command` (e.g. `"3.11"`). Required.
-    - `:deterministic` — boolean (default: `true`).
+    - `:deterministic` — boolean (default: `false`, matching PySpark's
+      `UserDefinedTableFunction` default — UDTFs are assumed
+      non-deterministic unless declared otherwise).
 
   ## Examples
 
@@ -105,7 +112,7 @@ defmodule SparkEx.UDFRegistration do
     return_type = Keyword.get(opts, :return_type, nil)
     eval_type = require_opt!(opts, :eval_type, :register_udtf)
     python_ver = require_opt!(opts, :python_ver, :register_udtf)
-    deterministic = Keyword.get(opts, :deterministic, true)
+    deterministic = Keyword.get(opts, :deterministic, false)
 
     with {:ok, normalized_return_type} <- normalize_return_type(session, return_type),
          {:ok, normalized_eval_type} <- normalize_eval_type(eval_type),
@@ -128,6 +135,10 @@ defmodule SparkEx.UDFRegistration do
   `:python_ver` must match the runtime that produced the bytes in
   `python_command` — there is no portable way to derive it from Elixir,
   so the caller is responsible for supplying it. There is no default.
+
+  Registration is lazy on the server: `:ok` means the command was accepted,
+  not that the payload is valid. Invalid `python_command` bytes only fail at
+  first use of the data source (as a `PYTHON_DATA_SOURCE_ERROR`).
 
   ## Parameters
 
