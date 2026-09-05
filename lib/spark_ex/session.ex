@@ -742,6 +742,23 @@ defmodule SparkEx.Session do
     (default: same as `:cache_threshold`). Mirrors PySpark's
     `_chunk_local_relation` behaviour, which splits a large Arrow stream into
     multiple per-chunk cache entries instead of uploading a single blob.
+
+  ## Schema inference
+
+  Without an explicit `:schema`, map / keyword-list rows infer their columns
+  from the **sorted** union of the row keys (keys are stringified first),
+  matching PySpark's `sorted(row.items())` dict inference. An explicit schema
+  — DDL string, `SparkEx.Types` struct schema, or column-name list — always
+  keeps its own order.
+
+  A column-name list shorter than the row width is padded with `"_N"`
+  (1-based, continuing after the supplied names), so
+  `create_dataframe(s, [{1, 2}], schema: ["a"])` yields columns `a` and `_2`.
+  A list longer than the row width is an error.
+
+  If a column is `nil` in every row, inference fails with
+  `{:error, {:cannot_determine_type, column_name}}` (PySpark's
+  `CANNOT_DETERMINE_TYPE`). Pass an explicit `:schema` for such columns.
   """
   @spec create_dataframe(GenServer.server(), term(), keyword()) ::
           {:ok, SparkEx.DataFrame.t()} | {:error, term()}
@@ -2097,6 +2114,18 @@ defmodule SparkEx.Session do
   @doc false
   # Test seam for local-relation type inference (T-04).
   def __infer_value_type__(values), do: infer_value_type(values)
+
+  @doc false
+  # Test seam for local-relation schema preparation (T-47/T-48/T-49).
+  def __prepare_local_data__(data, opts \\ []), do: prepare_local_data(data, opts)
+
+  @doc false
+  # Test seam for the inferred column order (T-47).
+  def __collect_ordered_keys__(rows), do: collect_ordered_keys(rows)
+
+  @doc false
+  # Test seam for the all-null column check (T-48).
+  def __check_determinable_columns__(rows), do: check_determinable_columns(rows)
 
   @doc false
   # Test seam for JSON local-relation row normalization (T-04).
@@ -4007,6 +4036,14 @@ defmodule SparkEx.Session do
 
         is_nil(normalized_schema) ->
           prepare_list_data_inferred(normalized_data, Keyword.delete(opts, :schema))
+
+        match?({:column_order, _}, normalized_schema) ->
+          {:column_order, names} = normalized_schema
+
+          prepare_list_data_inferred(
+            normalized_data,
+            opts |> Keyword.delete(:schema) |> Keyword.put(:column_order, names)
+          )
       end
     end
   end
@@ -4190,11 +4227,13 @@ defmodule SparkEx.Session do
     with {:ok, names} <- column_names_for_tuple_data(data, schema) do
       maps = Enum.map(data, fn tuple -> tuple_to_named_map(tuple, names) end)
 
+      # Tuple rows are positional: PySpark keeps their column order (only dict
+      # rows are key-sorted), so carry the resolved names into inference.
       case schema do
         binary when is_binary(binary) -> {:ok, maps, binary}
         {:json_schema, _, _} = json_schema -> {:ok, maps, json_schema}
-        {:column_names, _} -> {:ok, maps, nil}
-        nil -> {:ok, maps, nil}
+        {:column_names, _} -> {:ok, maps, {:column_order, names}}
+        nil -> {:ok, maps, {:column_order, names}}
       end
     end
   end
@@ -4238,7 +4277,30 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp column_names_for_tuple_data(_data, {:column_names, names}), do: {:ok, names}
+  # PySpark pads a too-short column-name list for tuple/list rows with
+  # `_N` (1-based, continuing after the supplied names) —
+  # pyspark/sql/types.py:_infer_schema:
+  #   `names.extend("_%d" % i for i in range(len(names) + 1, len(row) + 1))`
+  # so `createDataFrame([(1, 2)], ["a"])` yields columns `a, _2`. A list
+  # longer than the row width stays an error (PySpark raises
+  # AXIS_LENGTH_MISMATCH from the `_num_cols != _table.shape[1]` check).
+  defp column_names_for_tuple_data(data, {:column_names, names}) do
+    arity = data |> Enum.map(&tuple_size/1) |> Enum.max(fn -> 0 end)
+    given = length(names)
+
+    cond do
+      given > arity ->
+        {:error,
+         {:invalid_schema,
+          "column-name list of length #{given} does not match data with #{arity} columns"}}
+
+      given < arity ->
+        {:ok, names ++ Enum.map((given + 1)..arity, fn i -> "_#{i}" end)}
+
+      true ->
+        {:ok, names}
+    end
+  end
 
   defp column_names_for_tuple_data(_data, schema_ddl) when is_binary(schema_ddl) do
     names =
@@ -4430,23 +4492,69 @@ defmodule SparkEx.Session do
   end
 
   defp prepare_list_data_inferred(data, opts) do
+    {column_order, opts} = Keyword.pop(opts, :column_order)
+
     if Enum.empty?(data) do
       {:error, {:invalid_data, "cannot infer schema from empty list"}}
     else
-      case safe_list_of_maps_to_explorer(data) do
-        {:ok, explorer_df} ->
-          prepare_local_data(explorer_df, opts)
+      case check_determinable_columns(data, column_order) do
+        {:error, _} = error ->
+          error
 
-        {:error, reason} ->
-          prepare_list_data_inferred_fallback(data, reason, opts)
+        :ok ->
+          case safe_list_of_maps_to_explorer(data, column_order) do
+            {:ok, explorer_df} ->
+              prepare_local_data(explorer_df, opts)
+
+            {:error, reason} ->
+              prepare_list_data_inferred_fallback(data, reason, opts, column_order)
+          end
       end
     end
   end
 
-  defp prepare_list_data_inferred_fallback(data, reason, opts) do
+  # Column order for inference: positional names for tuple rows, the sorted
+  # key union (T-47) for map/keyword rows.
+  defp ordered_keys(rows, nil), do: collect_ordered_keys(rows)
+  defp ordered_keys(_rows, names) when is_list(names), do: names
+
+  # PySpark refuses to infer a schema when any column is entirely null
+  # (`_has_nulltype(_schema)` -> CANNOT_DETERMINE_TYPE in
+  # pyspark/sql/connect/session.py:createDataFrame). Mirror that instead of
+  # silently defaulting such columns to STRING (T-48): the user must pass an
+  # explicit `:schema`. The check is recursive, matching `_has_nulltype`, so
+  # `[%{"a" => []}]` (ARRAY<NULL>) is rejected too.
+  defp check_determinable_columns(rows, column_order \\ nil) do
+    stringified = Enum.map(rows, fn row -> Map.new(row, fn {k, v} -> {to_string(k), v} end) end)
+
+    Enum.reduce_while(ordered_keys(stringified, column_order), :ok, fn key, :ok ->
+      values = Enum.map(stringified, &Map.get(&1, key))
+
+      if has_null_type?(infer_value_type(values)) do
+        {:halt, {:error, {:cannot_determine_type, key}}}
+      else
+        {:cont, :ok}
+      end
+    end)
+  rescue
+    # Heterogeneous inferred types raise here; leave that error to the
+    # existing inference paths so its message stays unchanged.
+    ArgumentError -> :ok
+  end
+
+  defp has_null_type?(:null), do: true
+  defp has_null_type?({:array, inner}), do: has_null_type?(inner)
+
+  defp has_null_type?({:struct, fields}),
+    do: Enum.any?(fields, fn {_n, t} -> has_null_type?(t) end)
+
+  defp has_null_type?(_), do: false
+
+  defp prepare_list_data_inferred_fallback(data, reason, opts, column_order) do
     if normalize_local_relation_arrow?(opts) do
       with {:ok, normalized_rows} <- normalize_rows_for_schema(data),
-           {:ok, inferred_schema_ddl} <- infer_schema_ddl_from_rows(normalized_rows),
+           {:ok, inferred_schema_ddl} <-
+             infer_schema_ddl_from_rows(normalized_rows, column_order),
            {:ok, validated_schema} <-
              validate_schema_ddl_for_sql_relation(inferred_schema_ddl),
            {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
@@ -4460,8 +4568,8 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp safe_list_of_maps_to_explorer(data) do
-    {:ok, list_of_maps_to_explorer(data)}
+  defp safe_list_of_maps_to_explorer(data, column_order \\ nil) do
+    {:ok, list_of_maps_to_explorer(data, column_order)}
   rescue
     e -> {:error, Exception.message(e)}
   end
@@ -4492,36 +4600,26 @@ defmodule SparkEx.Session do
        {:invalid_data, "column-oriented data keys must be strings or atoms, got: #{inspect(key)}"}}
   end
 
-  defp list_of_maps_to_explorer([]) do
+  defp list_of_maps_to_explorer([], _column_order) do
     Explorer.DataFrame.new(%{})
   end
 
-  defp list_of_maps_to_explorer([first | _] = data) when is_map(first) do
+  defp list_of_maps_to_explorer([first | _] = data, column_order) when is_map(first) do
     normalized_rows =
       Enum.map(data, fn row ->
         Map.new(row, fn {key, value} -> {to_string(key), value} end)
       end)
 
-    {_seen, ordered_keys_rev} =
-      Enum.reduce(normalized_rows, {MapSet.new(), []}, fn row, {seen, keys_rev} ->
-        Enum.reduce(row, {seen, keys_rev}, fn {key, _value}, {seen_acc, keys_acc} ->
-          if MapSet.member?(seen_acc, key) do
-            {seen_acc, keys_acc}
-          else
-            {MapSet.put(seen_acc, key), [key | keys_acc]}
-          end
-        end)
-      end)
-
-    ordered_keys = Enum.reverse(ordered_keys_rev)
-
+    # Sorted key union (T-47): mirrors PySpark's `sorted(row.items())` dict
+    # inference and keeps the column order independent of Erlang's map
+    # iteration order (unspecified above 32 keys).
     columns =
-      ordered_keys
+      normalized_rows
+      |> ordered_keys(column_order)
       |> Enum.map(fn key ->
         values = Enum.map(normalized_rows, fn row -> Map.get(row, key) end)
         {key, values}
       end)
-      |> Map.new()
 
     Explorer.DataFrame.new(columns)
   end
@@ -4857,8 +4955,8 @@ defmodule SparkEx.Session do
   defp v_if_needed(v, false, _ch), do: v
   defp v_if_needed(v, true, ch), do: v <> ch
 
-  defp infer_schema_ddl_from_rows(rows) when is_list(rows) do
-    ordered_keys = collect_ordered_keys(rows)
+  defp infer_schema_ddl_from_rows(rows, column_order) when is_list(rows) do
+    ordered_keys = ordered_keys(rows, column_order)
 
     fields =
       Enum.map(ordered_keys, fn key ->
@@ -4870,19 +4968,22 @@ defmodule SparkEx.Session do
      Enum.map_join(fields, ", ", fn {name, type} -> "#{name} #{type_to_inferred_ddl(type)}" end)}
   end
 
+  # Column order for map/keyword rows without an explicit schema (T-47).
+  #
+  # Erlang map iteration order is only guaranteed for maps with <= 32 keys
+  # (and even then it is term order, which mixes atoms and binaries), so
+  # first-seen key order made the inferred column order depend on the number
+  # of keys. PySpark sorts dict keys when inferring
+  # (`items = sorted(row.items())` in pyspark/sql/types.py:_infer_schema and
+  # `dict(sorted(d.items()))` in connect/session.py:createDataFrame), so keys
+  # are stringified and sorted alphabetically here for the same deterministic
+  # result. An explicit schema (DDL string, struct schema, or column-name
+  # list) always keeps its own order.
   defp collect_ordered_keys(rows) do
-    {_seen, ordered_keys_rev} =
-      Enum.reduce(rows, {MapSet.new(), []}, fn row, {seen, keys_rev} ->
-        Enum.reduce(row, {seen, keys_rev}, fn {key, _value}, {seen_acc, keys_acc} ->
-          if MapSet.member?(seen_acc, key) do
-            {seen_acc, keys_acc}
-          else
-            {MapSet.put(seen_acc, key), [key | keys_acc]}
-          end
-        end)
-      end)
-
-    Enum.reverse(ordered_keys_rev)
+    rows
+    |> Enum.flat_map(fn row -> Enum.map(row, fn {key, _value} -> to_string(key) end) end)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   defp infer_value_type(values) do

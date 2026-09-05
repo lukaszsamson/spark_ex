@@ -14,6 +14,7 @@ defmodule SparkEx.GroupedData do
 
   alias SparkEx.Column
   alias SparkEx.DataFrame
+  alias SparkEx.Internal.ColumnName
 
   defstruct [
     :session,
@@ -144,16 +145,7 @@ defmodule SparkEx.GroupedData do
   # Mirror of SparkEx.Functions.col/1 string handling so dict-agg names like
   # "*" / "x.*" become UnresolvedStar (matching PySpark's F.col routing) instead
   # of an UnresolvedAttribute the server rejects with UNRESOLVED_COLUMN.
-  defp name_to_col_expr("*"), do: {:star}
-  defp name_to_col_expr(".*"), do: {:star}
-
-  defp name_to_col_expr(name) when is_binary(name) do
-    if String.ends_with?(name, ".*") do
-      {:star, name}
-    else
-      {:col, name}
-    end
-  end
+  defp name_to_col_expr(name), do: ColumnName.to_col_expr(name)
 
   # ── Convenience aggregation methods ──
 
@@ -168,7 +160,11 @@ defmodule SparkEx.GroupedData do
 
   for {name, spark_fn, doc} <- @grouped_agg_shortcuts do
     @doc doc
-    @spec unquote(name)(t(), Column.t() | String.t() | [Column.t() | String.t()]) :: DataFrame.t()
+    @spec unquote(name)(
+            t(),
+            Column.t() | String.t() | atom() | [Column.t() | String.t() | atom()]
+          ) ::
+            DataFrame.t()
     def unquote(name)(gd, cols \\ [])
 
     if name == :count do
@@ -178,20 +174,25 @@ defmodule SparkEx.GroupedData do
             [] ->
               [%Column{expr: {:alias, {:fn, "count", [{:lit, 1}], false}, "count"}}]
 
-            col when is_binary(col) ->
+            col when is_binary(col) or (is_atom(col) and col not in [nil, true, false]) ->
               [%Column{expr: {:fn, "count", [name_to_col_expr(col)], false}}]
 
             %Column{} = c ->
               [%Column{expr: {:fn, "count", [c.expr], false}}]
 
-            cols ->
+            cols when is_list(cols) ->
               Enum.map(cols, fn
                 %Column{} = c ->
                   %Column{expr: {:fn, "count", [c.expr], false}}
 
-                name when is_binary(name) ->
+                name ->
                   %Column{expr: {:fn, "count", [name_to_col_expr(name)], false}}
               end)
+
+            other ->
+              raise ArgumentError,
+                    "expected a column name (string or atom), Column, or list, got: " <>
+                      inspect(other)
           end
 
         agg(gd, agg_exprs)
@@ -247,6 +248,9 @@ defmodule SparkEx.GroupedData do
   defp explicit_numeric_names([]), do: nil
   defp explicit_numeric_names(col) when is_binary(col), do: [col]
 
+  defp explicit_numeric_names(col) when is_atom(col) and col not in [nil, true, false],
+    do: [ColumnName.normalize!(col)]
+
   defp explicit_numeric_names(%Column{expr: {:col, name}}) when is_binary(name), do: [name]
 
   defp explicit_numeric_names(%Column{}) do
@@ -268,8 +272,8 @@ defmodule SparkEx.GroupedData do
       %Column{} ->
         raise ArgumentError, "expected column names when aggregating numeric columns"
 
-      name when is_binary(name) ->
-        name
+      name ->
+        ColumnName.normalize!(name)
     end)
   end
 

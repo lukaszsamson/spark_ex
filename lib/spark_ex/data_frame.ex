@@ -30,6 +30,7 @@ defmodule SparkEx.DataFrame do
   """
 
   alias SparkEx.Column
+  alias SparkEx.Internal.ColumnName
   alias SparkEx.Internal.PlanIds
   alias SparkEx.Internal.Random
   alias SparkEx.Internal.Tag
@@ -112,7 +113,7 @@ defmodule SparkEx.DataFrame do
   end
 
   def col(%__MODULE__{} = df, name) when is_atom(name) do
-    col(df, Atom.to_string(name))
+    col(df, SparkEx.Internal.ColumnName.normalize!(name))
   end
 
   def col(%__MODULE__{plan: plan}, _name) do
@@ -186,9 +187,9 @@ defmodule SparkEx.DataFrame do
 
       df |> SparkEx.DataFrame.with_column("doubled", col("value") |> SparkEx.Column.multiply(lit(2)))
   """
-  @spec with_column(t(), String.t(), Column.t()) :: t()
-  def with_column(%__MODULE__{} = df, name, %Column{} = col) when is_binary(name) do
-    update_plan(df, {:with_columns, df.plan, [{:alias, col.expr, name}]})
+  @spec with_column(t(), String.t() | atom(), Column.t()) :: t()
+  def with_column(%__MODULE__{} = df, name, %Column{} = col) do
+    update_plan(df, {:with_columns, df.plan, [{:alias, col.expr, ColumnName.normalize!(name)}]})
   end
 
   @doc """
@@ -216,7 +217,7 @@ defmodule SparkEx.DataFrame do
         name, {names, exprs} when is_binary(name) ->
           {[name | names], exprs}
 
-        name, {names, exprs} when is_atom(name) ->
+        name, {names, exprs} when is_atom(name) and not is_nil(name) and not is_boolean(name) ->
           {[Atom.to_string(name) | names], exprs}
 
         other, _acc ->
@@ -647,9 +648,9 @@ defmodule SparkEx.DataFrame do
   def with_columns(%__MODULE__{} = df, columns) when is_list(columns) do
     aliases =
       Enum.map(columns, fn
-        {name, %Column{} = col} when is_binary(name) -> {:alias, col.expr, name}
-        {name, value} when is_binary(name) -> {:alias, {:lit, value}, name}
+        {name, %Column{} = col} -> {:alias, col.expr, ColumnName.normalize!(name)}
         %Column{expr: {:alias, _, _} = expr} -> expr
+        {name, value} -> {:alias, {:lit, value}, ColumnName.normalize!(name)}
       end)
 
     update_plan(df, {:with_columns, df.plan, aliases})
@@ -659,8 +660,8 @@ defmodule SparkEx.DataFrame do
     aliases =
       columns
       |> Enum.map(fn
-        {name, %Column{} = col} when is_binary(name) -> {:alias, col.expr, name}
-        {name, value} when is_binary(name) -> {:alias, {:lit, value}, name}
+        {name, %Column{} = col} -> {:alias, col.expr, ColumnName.normalize!(name)}
+        {name, value} -> {:alias, {:lit, value}, ColumnName.normalize!(name)}
       end)
 
     update_plan(df, {:with_columns, df.plan, aliases})
@@ -927,6 +928,11 @@ defmodule SparkEx.DataFrame do
 
   def sample(%__MODULE__{} = df, with_replacement, fraction, opts)
       when is_boolean(with_replacement) and is_number(fraction) and is_list(opts) do
+    unless Keyword.keyword?(opts) do
+      raise ArgumentError,
+            "expected sample options to be a keyword list, got: #{inspect(opts)}"
+    end
+
     fraction = fraction * 1.0
     validate_sample_fraction!(fraction, with_replacement)
     seed = normalize_sample_seed!(Keyword.get(opts, :seed, nil))
@@ -936,6 +942,11 @@ defmodule SparkEx.DataFrame do
 
   def sample(%__MODULE__{} = df, fraction, opts, _ignored)
       when is_number(fraction) and is_list(opts) do
+    unless Keyword.keyword?(opts) do
+      raise ArgumentError,
+            "expected sample options to be a keyword list, got: #{inspect(opts)}"
+    end
+
     fraction = fraction * 1.0
     with_replacement = normalize_with_replacement!(Keyword.get(opts, :with_replacement, false))
     validate_sample_fraction!(fraction, with_replacement)
@@ -1350,7 +1361,7 @@ defmodule SparkEx.DataFrame do
 
   ## Examples
 
-      df |> DataFrame.alias("t")
+      df |> DataFrame.alias_("t")
   """
   @spec alias_(t(), String.t()) :: t()
   def alias_(%__MODULE__{} = df, name) when is_binary(name) do
@@ -1468,6 +1479,10 @@ defmodule SparkEx.DataFrame do
   @doc "Alias for `order_by/2` (PySpark `sort`)."
   @spec sort(t(), [Column.t() | String.t() | atom()]) :: t()
   def sort(%__MODULE__{} = df, columns), do: order_by(df, columns)
+
+  @doc "Alias for `order_by/3` (PySpark `sort`), accepting the same options."
+  @spec sort(t(), [Column.t() | String.t() | atom()], keyword()) :: t()
+  def sort(%__MODULE__{} = df, columns, opts), do: order_by(df, columns, opts)
 
   @doc "Alias for `union/2`."
   @spec union_all(t(), t()) :: t()
@@ -2197,7 +2212,7 @@ defmodule SparkEx.DataFrame do
     with {:ok, struct} <- unwrap_schema(df) do
       dtypes =
         Enum.map(struct.fields, fn field ->
-          {field.name, SparkEx.Connect.TypeMapper.data_type_to_ddl(field.data_type)}
+          {field.name, SparkEx.Connect.TypeMapper.simple_string(field.data_type)}
         end)
 
       {:ok, dtypes}
@@ -2611,8 +2626,7 @@ defmodule SparkEx.DataFrame do
   # the server rejects with UNRESOLVED_COLUMN). Mirrors col/1 exactly.
   defp normalize_column_expr(name) when is_binary(name), do: name_to_col_expr(name)
 
-  defp normalize_column_expr(name) when is_atom(name),
-    do: name_to_col_expr(Atom.to_string(name))
+  defp normalize_column_expr(name) when is_atom(name), do: name_to_col_expr(name)
 
   # {name, alias} tuple form (documented for unpivot/5 values): produce an
   # aliased expression instead of silently dropping the alias.
@@ -2620,7 +2634,7 @@ defmodule SparkEx.DataFrame do
     do: {:alias, name_to_col_expr(name), alias}
 
   defp normalize_column_expr({name, alias}) when is_atom(name) and is_binary(alias),
-    do: {:alias, name_to_col_expr(Atom.to_string(name)), alias}
+    do: {:alias, name_to_col_expr(name), alias}
 
   # PySpark treats integer args as 1-based schema ordinals (self[c - 1]), which
   # requires a schema-resolving RPC; resolve locally by raising, consistent with
@@ -2640,16 +2654,7 @@ defmodule SparkEx.DataFrame do
   defp normalize_column_expr({:metadata_col, _, _} = expr), do: expr
 
   # Mirror of SparkEx.Functions.col/1 string handling.
-  defp name_to_col_expr("*"), do: {:star}
-  defp name_to_col_expr(".*"), do: {:star}
-
-  defp name_to_col_expr(name) when is_binary(name) do
-    if String.ends_with?(name, ".*") do
-      {:star, name}
-    else
-      {:col, name}
-    end
-  end
+  defp name_to_col_expr(name), do: ColumnName.to_col_expr(name)
 
   defp normalize_dedup_column(%Column{expr: {:col, name}}), do: name
 
@@ -2658,7 +2663,7 @@ defmodule SparkEx.DataFrame do
   end
 
   defp normalize_dedup_column(name) when is_binary(name), do: name
-  defp normalize_dedup_column(name) when is_atom(name), do: Atom.to_string(name)
+  defp normalize_dedup_column(name) when is_atom(name), do: ColumnName.normalize!(name)
 
   defp normalize_sort_expr(%Column{expr: {:sort_order, _, _, _}} = col), do: col.expr
 
@@ -2671,7 +2676,7 @@ defmodule SparkEx.DataFrame do
   end
 
   defp normalize_sort_expr(name) when is_atom(name) do
-    {:sort_order, {:col, Atom.to_string(name)}, :asc, :nulls_first}
+    {:sort_order, {:col, ColumnName.normalize!(name)}, :asc, :nulls_first}
   end
 
   defp normalize_sort_expr(idx) when is_integer(idx) do
@@ -2724,7 +2729,7 @@ defmodule SparkEx.DataFrame do
   defp sort_inner_expr(%Column{expr: {:sort_order, inner, _, _}}), do: inner
   defp sort_inner_expr(%Column{expr: e}), do: e
   defp sort_inner_expr(name) when is_binary(name), do: name_to_col_expr(name)
-  defp sort_inner_expr(name) when is_atom(name), do: name_to_col_expr(Atom.to_string(name))
+  defp sort_inner_expr(name) when is_atom(name), do: name_to_col_expr(name)
 
   defp sort_inner_expr(idx) when is_integer(idx) do
     raise ArgumentError,

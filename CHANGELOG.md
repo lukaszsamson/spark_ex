@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Wave 5 behaviour changes** (see `BUGS_TRIAGED.txt` T-28, T-38, T-47..T-49,
+  T-56, T-58, T-59):
+  - `DataFrame.dtypes/1` returns PySpark `simpleString` (lowercase, no spaces:
+    `bigint`, `array<string>`, `map<string,int>`, `struct<a:int,b:string>`,
+    `decimal(10,2)`, `void`) instead of uppercase DDL. New
+    `TypeMapper.simple_string/1`; `data_type_to_ddl/1` is unchanged (T-59).
+  - `UDFRegistration.register_udtf/4` defaults `:deterministic` to `false`,
+    matching PySpark's `UserDefinedTableFunction`. Pass `deterministic: true`
+    to keep the previous behaviour (T-28).
+  - `create_dataframe/3` with list rows and no `:schema` returns
+    `{:error, {:cannot_determine_type, column}}` when a column (or nested
+    element type) is `nil` in every row, matching PySpark's
+    `CANNOT_DETERMINE_TYPE`, instead of silently inferring STRING (T-48).
+  - `create_dataframe/3` map rows without an explicit schema order columns by
+    the sorted union of row keys (PySpark parity); previously first-seen order,
+    which was non-deterministic for more than 32 keys or mixed key types
+    (T-47). A `:schema` column-name list shorter than the tuple width is padded
+    with `_N` (1-based, continuing after the supplied names) instead of being
+    rejected; longer lists remain an error (T-49).
+  - `Functions.col/1`, `DataFrame.col/2`, `with_column(s)`, `drop/2`, `NA`
+    subsets and fill keys, `GroupedData` shortcuts and window specs accept atom
+    column names through a shared normaliser (`SparkEx.Internal.ColumnName`)
+    and raise `ArgumentError` for `nil`/`true`/`false` instead of producing a
+    column named `"nil"` (T-38). Other name-taking helpers (`Stat`, `TableArg`,
+    `WriterV2.partitioned_by`) still stringify any atom. `Window.partition_by/2` on an existing `WindowSpec`
+    and `DataFrame.sort/3` (options like `order_by/3`) were added.
+  - `Functions.uuid/0` bakes a random seed (`uuid(<seed>)`) like PySpark, so
+    plans are no longer byte-identical across calls (T-58).
+  - `DataFrame.sample/4` raises for a non-keyword option list instead of
+    silently ignoring it (T-56).
+
 ### Added
 
 - **`map_format: :map` option on `DataFrame.collect/2`** (FAB-16): opt-in
@@ -19,6 +52,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the Session GenServer (first slice of the NO_SERIALIZED_RPC plan).
 
 ### Fixed
+
+- **Wave 5 triage fixes** (see `BUGS_TRIAGED.txt` T-55, T-57, T-60, T-62):
+  - Window frame bounds clamp only in the direction they face:
+    `rows_between(MAX_INT64, 0)` no longer becomes an unbounded-following lower
+    bound (T-57).
+  - `Stat.freq_items/3` validates `support` client-side (at least `1.0e-4`,
+    at most `1.0`, the server's own bounds) with a clear `ArgumentError`
+    instead of an opaque server error (T-55).
+  - `on_query_idle/1` is an optional `StreamingQueryListener` callback; the bus
+    dispatches it only to listeners that implement it and no longer warns
+    (T-60).
+  - Docs: `DataFrame.alias_/2` example and the `StreamWriter.start/2` path note
+    (T-62).
 
 - **Wave 4 triage fixes — decoder and result-shape correctness** (see
   `BUGS_TRIAGED.txt` T-30..T-33, T-35, T-36, T-61):

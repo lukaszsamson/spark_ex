@@ -241,7 +241,8 @@ defmodule SparkEx.StreamWriter do
   end
 
   @doc """
-  Starts the streaming query, writing to the path set via `option("path", ...)`.
+  Starts the streaming query, writing to the path set via `path/2` (or the
+  `:path` option on `start/2`).
 
   Returns `{:ok, StreamingQuery.t()}` on success.
   """

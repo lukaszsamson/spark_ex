@@ -1244,9 +1244,10 @@ defmodule SparkEx.MissOpus2Test do
   # ── 14.28 uuid/uniform/randstr seed ──
 
   describe "14.28 uuid/uniform/randstr seed" do
-    test "uuid/0 uses zero-arg form" do
+    test "uuid/0 bakes a random long seed (PySpark connect/functions/builtin.py)" do
       result = Functions.uuid()
-      assert %Column{expr: {:fn, "uuid", [], false}} = result
+      assert %Column{expr: {:fn, "uuid", [{:lit, seed}], false}} = result
+      assert is_integer(seed)
     end
 
     test "uuid with explicit seed" do

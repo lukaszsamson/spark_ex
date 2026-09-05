@@ -257,9 +257,9 @@ defmodule SparkEx.Integration.CreateDataframeAdditionalTest do
              )
 
     assert {:ok, dtypes} = DataFrame.dtypes(df)
-    assert {"tags", "ARRAY<STRING>"} in dtypes
-    assert {"meta", "MAP<STRING, STRING>"} in dtypes
-    assert {"info", "STRUCT<name: STRING>"} in dtypes
+    assert {"tags", "array<string>"} in dtypes
+    assert {"meta", "map<string,string>"} in dtypes
+    assert {"info", "struct<name:string>"} in dtypes
   end
 
   test "create_dataframe supports binary payloads", %{session: session} do

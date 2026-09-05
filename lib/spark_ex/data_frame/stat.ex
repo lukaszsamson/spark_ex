@@ -76,6 +76,10 @@ defmodule SparkEx.DataFrame.Stat do
   @doc """
   Finds all items which have a frequency greater than or equal to `support`.
 
+  `support` must be at least `1.0e-4` and at most `1.0` (the server's own
+  bounds); anything outside raises `ArgumentError` instead of being sent to the
+  server, which otherwise rejects it with an opaque error.
+
   ## Examples
 
       DataFrame.Stat.freq_items(df, ["category", "status"])
@@ -320,9 +324,23 @@ defmodule SparkEx.DataFrame.Stat do
     end
   end
 
+  # PySpark's freqItems docs (dataframe.py) state "The support must be
+  # greater than 1e-4." — anything at or below that threshold produces
+  # results the server otherwise rejects with an opaque error, so we
+  # validate it client-side instead.
+  @min_support 1.0e-4
+
   defp validate_support!(support) when is_number(support) do
-    if support < 0.0 or support > 1.0 do
-      raise ArgumentError, "support must be between 0 and 1, got: #{inspect(support)}"
+    cond do
+      support < @min_support ->
+        raise ArgumentError,
+              "support must be at least #{@min_support}, got: #{inspect(support)}"
+
+      support > 1.0 ->
+        raise ArgumentError, "support must be between 0 and 1, got: #{inspect(support)}"
+
+      true ->
+        :ok
     end
   end
 

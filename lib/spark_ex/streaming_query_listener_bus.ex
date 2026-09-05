@@ -17,10 +17,10 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
         @impl true
         def on_query_terminated(event), do: IO.inspect(event, label: "terminated")
-
-        @impl true
-        def on_query_idle(event), do: IO.inspect(event, label: "idle")
       end
+
+  `on_query_started` and `on_query_idle` are optional callbacks — a listener
+  that does not implement them simply does not receive those events.
 
   ## Usage
 
@@ -671,7 +671,15 @@ defmodule SparkEx.StreamingQueryListenerBus do
 
   defp dispatch_event(listeners, %{type: :idle} = event) do
     Enum.each(listeners, fn module ->
-      safe_call(module, :on_query_idle, [event])
+      # `on_query_idle/1` is an optional callback (mirroring PySpark's
+      # `StreamingQueryListener.onQueryIdle` default no-op), so probe with
+      # `function_exported?/3` after forcing the module to load — a
+      # not-yet-loaded module would otherwise report false and silently
+      # skip the callback (same reasoning as the `on_query_started` dispatch
+      # above).
+      if Code.ensure_loaded?(module) and function_exported?(module, :on_query_idle, 1) do
+        safe_call(module, :on_query_idle, [event])
+      end
     end)
   end
 

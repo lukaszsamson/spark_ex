@@ -48,9 +48,7 @@ defmodule SparkEx.DataFrame.NA do
     cols = Map.keys(value)
     values = Map.values(value)
 
-    unless Enum.all?(cols, &is_binary/1) do
-      raise ArgumentError, "expected map keys to be column name strings"
-    end
+    cols = Enum.map(cols, &normalize_fill_key!/1)
 
     validate_fill_values!(values)
     DataFrame.update_plan(df, {:na_fill, df.plan, cols, values})
@@ -60,25 +58,7 @@ defmodule SparkEx.DataFrame.NA do
       when is_number(value) or is_binary(value) or is_boolean(value) do
     subset = Keyword.get(opts, :subset, nil)
 
-    cols =
-      case subset do
-        nil ->
-          []
-
-        col when is_binary(col) ->
-          [col]
-
-        cols when is_list(cols) ->
-          unless Enum.all?(cols, &is_binary/1) do
-            raise ArgumentError, "expected subset to be a list of column name strings"
-          end
-
-          cols
-
-        other ->
-          raise ArgumentError,
-                "expected subset to be a column name string or list of column name strings, got: #{inspect(other)}"
-      end
+    cols = normalize_subset(subset)
 
     # PySpark encodes a single literal value regardless of subset size
     DataFrame.update_plan(df, {:na_fill, df.plan, cols, [value]})
@@ -111,25 +91,7 @@ defmodule SparkEx.DataFrame.NA do
     thresh = Keyword.get(opts, :thresh, nil)
     subset = Keyword.get(opts, :subset, nil)
 
-    cols =
-      case subset do
-        nil ->
-          []
-
-        col when is_binary(col) ->
-          [col]
-
-        cols when is_list(cols) ->
-          unless Enum.all?(cols, &is_binary/1) do
-            raise ArgumentError, "expected subset to be a list of column name strings"
-          end
-
-          cols
-
-        other ->
-          raise ArgumentError,
-                "expected subset to be a column name string or list of column name strings, got: #{inspect(other)}"
-      end
+    cols = normalize_subset(subset)
 
     # PySpark validates `how` before applying `thresh` (connect/dataframe.py:
     # 1321-1345); `thresh` only overrides the resulting min_non_nulls afterward,
@@ -223,14 +185,28 @@ defmodule SparkEx.DataFrame.NA do
   defp require_replace_value!(value), do: value
 
   defp normalize_subset(nil), do: []
-  defp normalize_subset(col) when is_binary(col), do: [col]
+  defp normalize_subset(cols) when is_list(cols), do: Enum.map(cols, &normalize_subset_name!/1)
+  defp normalize_subset(col), do: [normalize_subset_name!(col)]
 
-  defp normalize_subset(cols) when is_list(cols) do
-    unless Enum.all?(cols, &is_binary/1) do
-      raise ArgumentError, "expected subset to be a list of column name strings"
-    end
+  defp normalize_subset_name!(name) when is_binary(name), do: name
 
-    cols
+  defp normalize_subset_name!(name) when is_atom(name) and name not in [nil, true, false],
+    do: Atom.to_string(name)
+
+  defp normalize_subset_name!(name) do
+    raise ArgumentError,
+          "expected subset to be a column name (string or atom) or a list of " <>
+            "column names, got: #{inspect(name)}"
+  end
+
+  defp normalize_fill_key!(name) when is_binary(name), do: name
+
+  defp normalize_fill_key!(name) when is_atom(name) and name not in [nil, true, false],
+    do: Atom.to_string(name)
+
+  defp normalize_fill_key!(name) do
+    raise ArgumentError,
+          "expected map keys to be column names (string or atom), got: #{inspect(name)}"
   end
 
   defp extract_replace_value_and_opts(value_or_opts, opts) do

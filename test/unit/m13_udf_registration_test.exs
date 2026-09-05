@@ -124,9 +124,11 @@ defmodule SparkEx.M13.UDFRegistrationTest do
 
       assert_receive {:analyze_ddl_parse_called, "id INT"}
 
+      # T-28: register_udtf/4 defaults :deterministic to false, matching
+      # PySpark's UserDefinedTableFunction default.
       assert_receive {:execute_command_called,
                       {:register_udtf, "my_udtf", @python_command_bytes,
-                       %Spark.Connect.DataType{}, 300, "3.11", true}}
+                       %Spark.Connect.DataType{}, 300, "3.11", false}}
     end
 
     test "register_udtf returns error for invalid deterministic value" do

@@ -91,7 +91,9 @@ defmodule SparkEx.UDFRegistration do
       `SQL_TABLE_UDF`). Required.
     - `:python_ver` — Python version string of the worker that produced
       `python_command` (e.g. `"3.11"`). Required.
-    - `:deterministic` — boolean (default: `true`).
+    - `:deterministic` — boolean (default: `false`, matching PySpark's
+      `UserDefinedTableFunction` default — UDTFs are assumed
+      non-deterministic unless declared otherwise).
 
   ## Examples
 
@@ -110,7 +112,7 @@ defmodule SparkEx.UDFRegistration do
     return_type = Keyword.get(opts, :return_type, nil)
     eval_type = require_opt!(opts, :eval_type, :register_udtf)
     python_ver = require_opt!(opts, :python_ver, :register_udtf)
-    deterministic = Keyword.get(opts, :deterministic, true)
+    deterministic = Keyword.get(opts, :deterministic, false)
 
     with {:ok, normalized_return_type} <- normalize_return_type(session, return_type),
          {:ok, normalized_eval_type} <- normalize_eval_type(eval_type),

@@ -19,12 +19,12 @@ defmodule SparkEx.StreamingQueryListener do
         def on_query_terminated(event) do
           IO.puts("Query terminated: \#{inspect(event.data)}")
         end
-
-        @impl true
-        def on_query_idle(event) do
-          IO.puts("Query idle: \#{inspect(event.data)}")
-        end
       end
+
+  `on_query_started` and `on_query_idle` are optional callbacks (mirroring
+  PySpark's `StreamingQueryListener.onQueryIdle`, which has a default no-op
+  implementation) — a listener that omits them simply does not receive
+  those events.
 
   ## Event Structure
 
@@ -52,5 +52,5 @@ defmodule SparkEx.StreamingQueryListener do
   @callback on_query_terminated(event()) :: any()
   @callback on_query_idle(event()) :: any()
 
-  @optional_callbacks on_query_started: 1
+  @optional_callbacks on_query_started: 1, on_query_idle: 1
 end

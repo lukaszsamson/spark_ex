@@ -22,6 +22,7 @@ defmodule SparkEx.Functions do
   import Kernel, except: [abs: 1, ceil: 1, floor: 1, round: 1, length: 1, struct: 1, struct: 2]
 
   alias SparkEx.Column
+  alias SparkEx.Internal.ColumnName
   alias SparkEx.Internal.Random
   require SparkEx.Macros.FunctionGen
 
@@ -35,19 +36,13 @@ defmodule SparkEx.Functions do
       col("age")
       col("users.name")
   """
-  @spec col(String.t()) :: Column.t()
-  def col("*"), do: %Column{expr: {:star}}
-  def col(".*"), do: %Column{expr: {:star}}
-
-  def col(name) when is_binary(name) do
-    if String.ends_with?(name, ".*") do
-      # PySpark requires UnresolvedStar.unparsed_target to end with ".*"
-      # (see python/pyspark/sql/connect/expressions.py UnresolvedStar.__init__).
-      # The target keeps the full qualified name including the trailing ".*".
-      %Column{expr: {:star, name}}
-    else
-      %Column{expr: {:col, name}}
-    end
+  @spec col(String.t() | atom()) :: Column.t()
+  def col(name) when is_binary(name) or is_atom(name) do
+    # Star routing lives in SparkEx.Internal.ColumnName: PySpark requires
+    # UnresolvedStar.unparsed_target to end with ".*" (see
+    # python/pyspark/sql/connect/expressions.py UnresolvedStar.__init__), so the
+    # target keeps the full qualified name including the trailing ".*".
+    %Column{expr: ColumnName.to_col_expr(name)}
   end
 
   @doc """
@@ -2130,10 +2125,15 @@ defmodule SparkEx.Functions do
     percentile_approx(col, percentage, 10_000)
   end
 
-  @doc "Generates a random UUID string."
+  @doc """
+  Generates a random UUID string.
+
+  Mirrors PySpark's `uuid()` (connect/functions/builtin.py), which bakes a
+  random long seed into the expression rather than sending a seedless call.
+  """
   @spec uuid() :: Column.t()
   def uuid do
-    %Column{expr: {:fn, "uuid", [], false}}
+    uuid(Random.long_seed())
   end
 
   @doc """

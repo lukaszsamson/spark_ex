@@ -24,6 +24,12 @@ defmodule SparkEx.Window do
     WindowSpec.partition_by(%WindowSpec{}, cols)
   end
 
+  @doc "Adds partition-by columns to an existing window spec."
+  @spec partition_by(WindowSpec.t(), [SparkEx.Column.t() | String.t() | atom()]) :: WindowSpec.t()
+  def partition_by(%WindowSpec{} = spec, cols) when is_list(cols) do
+    WindowSpec.partition_by(spec, cols)
+  end
+
   @doc "Creates a window spec ordered by the given columns."
   @spec order_by([SparkEx.Column.t() | String.t()]) :: WindowSpec.t()
   def order_by(cols) when is_list(cols) do

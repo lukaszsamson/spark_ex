@@ -295,7 +295,7 @@ defmodule SparkEx.MissCodex2Test do
 
   describe "#9 NA.drop subset type validation" do
     test "rejects non-string subset elements" do
-      assert_raise ArgumentError, ~r/column name strings/, fn ->
+      assert_raise ArgumentError, ~r/column name \(string or atom\)/, fn ->
         DataFrame.NA.drop(make_df(), subset: [1, 2])
       end
     end

@@ -195,6 +195,123 @@ defmodule SparkEx.Connect.TypeMapper do
   # Catch-all for future types: leave unmapped so the rebuild infers from cells.
   defp map_kind(_unknown, _dt), do: nil
 
+  @doc """
+  Converts a Spark Connect `DataType` to PySpark's `simpleString` rendering.
+
+  This is the lowercase form `DataFrame.dtypes` reports in PySpark
+  (`pyspark/sql/types.py`): `bigint`, `array<string>`, `struct<a:int,b:string>`,
+  `decimal(10,2)`, `map<string,int>`, `void`, ...
+  """
+  @spec simple_string(DataType.t() | nil) :: String.t()
+  def simple_string(%DataType{kind: {tag, value}}), do: simple(tag, value)
+  def simple_string(%DataType{kind: nil}), do: "void"
+  def simple_string(nil), do: "void"
+
+  defp simple(:null, _), do: "void"
+  defp simple(:boolean, _), do: "boolean"
+  defp simple(:byte, _), do: "tinyint"
+  defp simple(:short, _), do: "smallint"
+  defp simple(:integer, _), do: "int"
+  defp simple(:long, _), do: "bigint"
+  defp simple(:float, _), do: "float"
+  defp simple(:double, _), do: "double"
+
+  # StringType.simpleString: "string" for the UTF8_BINARY default collation,
+  # "string collate <name>" otherwise.
+  defp simple(:string, %DataType.String{collation: c})
+       when is_binary(c) and c != "" and c != "UTF8_BINARY",
+       do: "string collate #{c}"
+
+  defp simple(:string, _), do: "string"
+
+  defp simple(:char, %DataType.Char{length: n}) when is_integer(n) and n > 0, do: "char(#{n})"
+  defp simple(:char, _), do: "string"
+
+  defp simple(:var_char, %DataType.VarChar{length: n}) when is_integer(n) and n > 0,
+    do: "varchar(#{n})"
+
+  defp simple(:var_char, _), do: "string"
+  defp simple(:binary, _), do: "binary"
+  defp simple(:date, _), do: "date"
+  defp simple(:timestamp, _), do: "timestamp"
+  defp simple(:timestamp_ntz, _), do: "timestamp_ntz"
+
+  defp simple(:time, %DataType.Time{precision: p}) when is_integer(p), do: "time(#{p})"
+  # TimeType default precision is 6.
+  defp simple(:time, _), do: "time(6)"
+
+  # DecimalType.simpleString has no space after the comma.
+  defp simple(:decimal, %DataType.Decimal{precision: p, scale: sc})
+       when not is_nil(p) and not is_nil(sc),
+       do: "decimal(#{p},#{sc})"
+
+  defp simple(:decimal, %DataType.Decimal{precision: p}) when not is_nil(p), do: "decimal(#{p},0)"
+  defp simple(:decimal, _), do: "decimal(10,0)"
+
+  defp simple(:calendar_interval, _), do: "interval"
+
+  defp simple(:year_month_interval, %DataType.YearMonthInterval{start_field: sf, end_field: ef}),
+    do: interval_simple("interval", &year_month_field/1, sf, ef, "year to month")
+
+  defp simple(:day_time_interval, %DataType.DayTimeInterval{start_field: sf, end_field: ef}),
+    do: interval_simple("interval", &day_time_field/1, sf, ef, "day to second")
+
+  defp simple(:year_month_interval, _), do: "interval year to month"
+  defp simple(:day_time_interval, _), do: "interval day to second"
+
+  defp simple(:variant, _), do: "variant"
+
+  defp simple(:geometry, %DataType.Geometry{srid: -1}), do: "geometry(any)"
+
+  defp simple(:geometry, %DataType.Geometry{srid: srid}) when is_integer(srid),
+    do: "geometry(#{srid})"
+
+  defp simple(:geometry, _), do: "geometry"
+  defp simple(:geography, %DataType.Geography{srid: -1}), do: "geography(any)"
+
+  defp simple(:geography, %DataType.Geography{srid: srid}) when is_integer(srid),
+    do: "geography(#{srid})"
+
+  defp simple(:geography, _), do: "geography"
+
+  defp simple(:array, %DataType.Array{element_type: et}), do: "array<#{simple_string(et)}>"
+
+  defp simple(:map, %DataType.Map{key_type: kt, value_type: vt}),
+    do: "map<#{simple_string(kt)},#{simple_string(vt)}>"
+
+  defp simple(:struct, %DataType.Struct{fields: fields}) do
+    inner =
+      Enum.map_join(fields, ",", fn %DataType.StructField{name: name, data_type: dt} ->
+        "#{name}:#{simple_string(dt)}"
+      end)
+
+    "struct<#{inner}>"
+  end
+
+  # PySpark's UserDefinedType.simpleString is unconditionally "udt".
+  defp simple(:udt, _), do: "udt"
+
+  defp simple(:unparsed, %DataType.Unparsed{data_type_string: str}) when is_binary(str),
+    do: String.downcase(str)
+
+  defp simple(_unknown, _), do: "string"
+
+  defp interval_simple(prefix, field_fun, sf, ef, default) do
+    cond do
+      is_integer(sf) and (is_nil(ef) or sf == ef) -> "#{prefix} #{field_fun.(sf)}"
+      is_integer(sf) and is_integer(ef) -> "#{prefix} #{field_fun.(sf)} to #{field_fun.(ef)}"
+      true -> "#{prefix} #{default}"
+    end
+  end
+
+  defp day_time_field(0), do: "day"
+  defp day_time_field(1), do: "hour"
+  defp day_time_field(2), do: "minute"
+  defp day_time_field(3), do: "second"
+
+  defp year_month_field(0), do: "year"
+  defp year_month_field(1), do: "month"
+
   # --- Direct DataType → DDL mapping (preserves precision) ---
 
   defp direct_ddl(:null, _), do: "VOID"

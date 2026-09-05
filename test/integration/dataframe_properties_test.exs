@@ -25,8 +25,8 @@ defmodule SparkEx.Integration.DataframePropertiesTest do
     assert columns == ["id", "name"]
 
     assert {:ok, dtypes} = DataFrame.dtypes(df)
-    assert {"id", "INT"} in dtypes
-    assert {"name", "STRING"} in dtypes
+    assert {"id", "int"} in dtypes
+    assert {"name", "string"} in dtypes
   end
 
   test "columns/dtypes after select preserve order", %{session: session} do
@@ -37,6 +37,6 @@ defmodule SparkEx.Integration.DataframePropertiesTest do
     assert columns == ["name", "id"]
 
     assert {:ok, dtypes} = DataFrame.dtypes(projected)
-    assert dtypes == [{"name", "STRING"}, {"id", "INT"}]
+    assert dtypes == [{"name", "string"}, {"id", "int"}]
   end
 end
