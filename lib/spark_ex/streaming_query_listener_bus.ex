@@ -151,6 +151,12 @@ defmodule SparkEx.StreamingQueryListenerBus do
   @reconnect_backoff_base_ms 200
   @reconnect_backoff_cap_ms 30_000
 
+  # T-63: how long removing the last listener waits for the reader stream to
+  # end on its own (after the server-side remove command) before the reader
+  # task is killed. Override with
+  # `config :spark_ex, listener_bus_drain_timeout_ms: <ms>`.
+  @default_drain_timeout_ms 300
+
   defstruct [
     :session,
     :stream_task,
@@ -308,7 +314,11 @@ defmodule SparkEx.StreamingQueryListenerBus do
     listeners = List.delete(state.listeners, module)
 
     if listeners == [] and state.stream_task != nil do
-      {:reply, :ok, stop_event_stream(%{state | listeners: listeners})}
+      # T-63: drain events still in flight before the reader is killed. The
+      # listeners being removed still receive anything the server sent before
+      # it closed the stream (PySpark's bus keeps dispatching until the
+      # response iterator is exhausted).
+      {:reply, :ok, stop_event_stream(%{state | listeners: listeners}, state.listeners)}
     else
       {:reply, :ok, %{state | listeners: listeners}}
     end
@@ -460,7 +470,8 @@ defmodule SparkEx.StreamingQueryListenerBus do
   @impl true
   def terminate(_reason, state) do
     unregister_bus(state.session, self())
-    _ = stop_event_stream(state)
+    # Drain in-flight events to the still-registered listeners before exit.
+    _ = stop_event_stream(state, state.listeners)
 
     :ok
   end
@@ -582,9 +593,9 @@ defmodule SparkEx.StreamingQueryListenerBus do
     send(parent, {:listener_stream_ended, token, result})
   end
 
-  defp stop_event_stream(%__MODULE__{stream_task: nil} = state), do: state
+  defp stop_event_stream(%__MODULE__{stream_task: nil} = state, _drain_listeners), do: state
 
-  defp stop_event_stream(state) do
+  defp stop_event_stream(state, drain_listeners) do
     # Match PySpark listener bus lifecycle: when the last listener is removed,
     # explicitly request server-side listener removal.
     try do
@@ -604,11 +615,20 @@ defmodule SparkEx.StreamingQueryListenerBus do
     # clear `closing_stream?` immediately and reset the reconnect budget, so a
     # subsequent add_listener starts from a clean slate instead of being
     # permanently answered with {:error, :stream_closed}.
+    # T-63: give the reader a bounded window to finish naturally. The server
+    # closes the stream in response to the remove command above; killing the
+    # task immediately would drop events already in flight and race the
+    # server-side listener removal. Messages are matched on the current
+    # `stream_token` only, so nothing stale is consumed, and once the state is
+    # reset (`stream_token: nil`) any late message is dropped by the
+    # stale-token clauses instead of triggering `maybe_reconnect/2`.
+    drain_reader_stream(state.stream_token, state.stream_task_ref, drain_listeners)
+
     if state.stream_task_ref do
       Process.demonitor(state.stream_task_ref, [:flush])
     end
 
-    if state.stream_task do
+    if state.stream_task && Process.alive?(state.stream_task) do
       Process.exit(state.stream_task, :shutdown)
     end
 
@@ -624,6 +644,43 @@ defmodule SparkEx.StreamingQueryListenerBus do
         closing_stream?: false,
         reconnect_attempts: 0
     }
+  end
+
+  # Waits up to `drain_timeout_ms/0` for the reader task's stream to end,
+  # dispatching any events that arrive in the meantime to `listeners`.
+  # Returns `:ended` if the stream (or the task) finished, `:timeout` otherwise.
+  defp drain_reader_stream(nil, _ref, _listeners), do: :ended
+
+  defp drain_reader_stream(token, ref, listeners) do
+    deadline = System.monotonic_time(:millisecond) + drain_timeout_ms()
+    do_drain_reader_stream(token, ref, listeners, deadline)
+  end
+
+  defp do_drain_reader_stream(token, ref, listeners, deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:listener_event, ^token, event} ->
+        dispatch_event(listeners, event)
+        do_drain_reader_stream(token, ref, listeners, deadline)
+
+      {:listener_bus_registered, ^token} ->
+        do_drain_reader_stream(token, ref, listeners, deadline)
+
+      {:listener_stream_ended, ^token, _reason} ->
+        :ended
+
+      {:DOWN, ^ref, :process, _pid, _reason} ->
+        :ended
+    after
+      remaining -> :timeout
+    end
+  end
+
+  # Bounded so an unresponsive server cannot block `remove_listener/2` or
+  # `terminate/2` indefinitely.
+  defp drain_timeout_ms do
+    Application.get_env(:spark_ex, :listener_bus_drain_timeout_ms, @default_drain_timeout_ms)
   end
 
   defp parse_event(%StreamingQueryListenerEvent{} = event) do

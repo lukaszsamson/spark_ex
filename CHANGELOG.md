@@ -53,6 +53,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wave 6 triage fixes — Spark 3.5 compatibility and parity polish** (see
+  `BUGS_TRIAGED.txt` T-29, T-34, T-63, T-64):
+  - Spark 3.5 fallbacks for 4.x-only relations (lateral join, as-of join,
+    transpose, table-valued functions) rewrite the unsupported node at any
+    depth of the plan (for example under `select/2` or `filter/2`) and apply to
+    `count/1` and `schema/1` as well as `collect/1` (T-34). Table-valued
+    functions anywhere in such a plan are rendered as SQL during the rewrite.
+  - Cross-DataFrame column references inside `direct_shuffle_partition_id/2`
+    are hoisted into `with_relations.references` instead of failing with
+    "plan not found"; `SparkEx.sql/3` arguments accept every supported
+    expression form (`call_function`, named arguments, `outer`,
+    `update_fields`, aliases with metadata) instead of mis-encoding them as
+    literals (T-29).
+  - Removing the last streaming query listener drains events still in flight
+    and waits (default 300 ms, `config :spark_ex, listener_bus_drain_timeout_ms:`)
+    for the server to close the stream before killing the reader task; the bus
+    drains to remaining listeners on shutdown too (T-63).
+  - `create_dataframe/3` reads `spark.sql.session.localRelationCacheThreshold`,
+    `localRelationChunkSizeRows`, `localRelationChunkSizeBytes` and
+    `localRelationBatchOfChunksSizeBytes` once per session (bounded 5 s RPC,
+    not cached on failure; skipped when `:cache_threshold` and
+    `:cache_chunk_size` are both given). On Spark 4.1+ the default threshold
+    therefore drops from the client's 4 MiB to the server's 1 MiB, payloads at
+    or above it are cached (PySpark `>=` boundary), chunks are capped by rows
+    and bytes, and uploads are batched. Servers without the 4.1 chunking
+    configs (Spark 3.5) keep the 4 MiB client default so payloads stay inlined.
+    New `:cache_chunk_rows` option (T-64).
+
+### Fixed
+
 - **Wave 5 triage fixes** (see `BUGS_TRIAGED.txt` T-55, T-57, T-60, T-62):
   - Window frame bounds clamp only in the direction they face:
     `rows_between(MAX_INT64, 0)` no longer becomes an unbounded-following lower

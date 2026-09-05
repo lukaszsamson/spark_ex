@@ -818,7 +818,7 @@ defmodule SparkEx.Connect.Client do
   """
   @spec config_get_option(SparkEx.Session.t(), [config_value()]) ::
           {:ok, [{String.t(), String.t() | nil}], String.t() | nil} | {:error, term()}
-  def config_get_option(session, keys) do
+  def config_get_option(session, keys, opts \\ []) do
     request =
       build_config_request(session,
         operation: %ConfigRequest.Operation{
@@ -827,7 +827,9 @@ defmodule SparkEx.Connect.Client do
         }
       )
 
-    case dispatch_unary_rpc(:config, session, request, extra_metadata: %{operation: :get_option}) do
+    rpc_opts = Keyword.take(opts, [:timeout]) ++ [extra_metadata: %{operation: :get_option}]
+
+    case dispatch_unary_rpc(:config, session, request, rpc_opts) do
       {:ok, %ConfigResponse{pairs: resp_pairs} = resp} ->
         log_config_warnings(resp)
         result = Enum.map(resp_pairs, fn %KeyValue{key: k, value: v} -> {k, v} end)

@@ -30,8 +30,31 @@ defmodule SparkEx.Session do
     tags: [],
     released: false,
     closed: false,
-    retry_policies: nil
+    retry_policies: nil,
+    local_relation_configs: nil
   ]
+
+  # Server configs that drive `create_dataframe/3` (T-64), mirroring PySpark's
+  # `SparkSession.createDataFrame` which reads them via `get_config_dict`.
+  # They are fetched lazily on the first local-relation build and cached in
+  # `:local_relation_configs`. Servers that predate a key (Spark 3.5 knows
+  # only the cache threshold) report `nil` for it and the default applies.
+  @local_relation_config_keys [
+    {"spark.sql.session.localRelationCacheThreshold", :cache_threshold},
+    {"spark.sql.session.localRelationChunkSizeRows", :chunk_size_rows},
+    {"spark.sql.session.localRelationChunkSizeBytes", :chunk_size_bytes},
+    {"spark.sql.session.localRelationBatchOfChunksSizeBytes", :batch_of_chunks_size_bytes}
+  ]
+
+  # Fallbacks match the pre-T-64 client default for the threshold (4 MiB) and
+  # Spark's SQLConf defaults for the chunking knobs.
+  @local_relation_config_timeout 5_000
+  @local_relation_config_defaults %{
+    cache_threshold: 4 * 1024 * 1024,
+    chunk_size_rows: 10_000,
+    chunk_size_bytes: 16 * 1024 * 1024,
+    batch_of_chunks_size_bytes: 1024 * 1024 * 1024
+  }
 
   @type t :: %__MODULE__{
           channel: GRPC.Channel.t() | nil,
@@ -47,6 +70,7 @@ defmodule SparkEx.Session do
           tags: [String.t()],
           released: boolean(),
           closed: boolean(),
+          local_relation_configs: %{atom() => non_neg_integer()} | nil,
           retry_policies: %{atom() => map()} | nil
         }
 
@@ -735,13 +759,20 @@ defmodule SparkEx.Session do
 
   - `:schema` — DDL schema string (e.g. `"id INT, name STRING"`). If omitted,
     inferred from the Explorer.DataFrame or from the data.
-  - `:cache_threshold` — byte size threshold above which data is cached on the
-    server instead of inlined (default: 4 MB)
+  - `:cache_threshold` — byte size at or above which data is cached on the
+    server instead of inlined. Defaults to the server's
+    `spark.sql.session.localRelationCacheThreshold` (read once per session;
+    4 MiB when the server does not expose it).
   - `:cache_chunk_size` — maximum byte size of each Arrow IPC chunk uploaded as
-    a separate cache artifact when the payload exceeds `:cache_threshold`
-    (default: same as `:cache_threshold`). Mirrors PySpark's
-    `_chunk_local_relation` behaviour, which splits a large Arrow stream into
-    multiple per-chunk cache entries instead of uploading a single blob.
+    a separate cache artifact when the payload reaches `:cache_threshold`.
+    Defaults to the server's `spark.sql.session.localRelationChunkSizeBytes`
+    (16 MiB fallback), capped by
+    `spark.sql.session.localRelationBatchOfChunksSizeBytes`.
+  - `:cache_chunk_rows` — maximum number of rows per chunk. Defaults to the
+    server's `spark.sql.session.localRelationChunkSizeRows` (10 000
+    fallback). Chunks are bounded by rows *and* bytes, and uploaded in
+    batches no larger than the batch-of-chunks config, mirroring PySpark's
+    `_cache_local_relation`.
 
   ## Schema inference
 
@@ -1690,33 +1721,28 @@ defmodule SparkEx.Session do
   def handle_call({:create_dataframe, data, opts}, from, state) do
     case safe_prepare_local_data(data, opts) do
       {:ok, {:local_relation, arrow_ipc, schema_ddl, source_df}} ->
-        cache_threshold = Keyword.get(opts, :cache_threshold, 4 * 1024 * 1024)
+        {configs, state} = ensure_local_relation_configs(state, opts)
 
-        cond do
-          not (is_integer(cache_threshold) and cache_threshold >= 0) ->
-            {:reply, {:error, {:invalid_option, {:cache_threshold, cache_threshold}}}, state}
+        case local_relation_chunk_params(opts, configs) do
+          {:error, _} = error ->
+            {:reply, error, state}
 
-          byte_size(arrow_ipc) <= cache_threshold ->
+          # PySpark: `if cache_threshold <= table.nbytes: cache`, so a payload
+          # exactly at the threshold is cached, not inlined.
+          {:ok, %{cache_threshold: cache_threshold}} when byte_size(arrow_ipc) < cache_threshold ->
             plan = {:local_relation, arrow_ipc, schema_ddl}
             df = SparkEx.DataFrame.new(self(), plan)
             {:reply, {:ok, df}, state}
 
-          true ->
-            chunk_size =
-              Keyword.get(opts, :cache_chunk_size, max(cache_threshold, 1))
-
-            if is_integer(chunk_size) and chunk_size > 0 do
-              # Drop arrow_ipc from this scope before re-encoding per chunk so
-              # peak memory stays close to the size of the source DataFrame
-              # rather than 2x that for very large payloads.
-              handle_call(
-                {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_size},
-                from,
-                state
-              )
-            else
-              {:reply, {:error, {:invalid_option, {:cache_chunk_size, chunk_size}}}, state}
-            end
+          {:ok, chunk_params} ->
+            # Drop arrow_ipc from this scope before re-encoding per chunk so
+            # peak memory stays close to the size of the source DataFrame
+            # rather than 2x that for very large payloads.
+            handle_call(
+              {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_params},
+              from,
+              state
+            )
         end
 
       {:ok, {:sql_relation, query, args}} ->
@@ -1729,11 +1755,17 @@ defmodule SparkEx.Session do
   end
 
   def handle_call(
-        {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_size},
+        {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_params},
         _from,
         state
       ) do
-    case split_explorer_dataframe_for_cache(source_df, chunk_size) do
+    %{
+      chunk_size_bytes: chunk_size_bytes,
+      chunk_size_rows: chunk_size_rows,
+      batch_of_chunks_size_bytes: batch_bytes
+    } = chunk_params
+
+    case split_explorer_dataframe_for_cache(source_df, chunk_size_bytes, chunk_size_rows) do
       {:ok, data_chunks} ->
         {data_hashes, data_artifacts} =
           data_chunks
@@ -1756,7 +1788,7 @@ defmodule SparkEx.Session do
           (data_artifacts ++ [schema_artifact])
           |> Enum.uniq_by(fn {name, _data} -> name end)
 
-        case upload_missing_cache_artifacts(state, artifacts) do
+        case upload_missing_cache_artifacts(state, artifacts, batch_bytes) do
           {:ok, state} ->
             plan = {:chunked_cached_local_relation, data_hashes, schema_hash}
             df = SparkEx.DataFrame.new(self(), plan)
@@ -2566,10 +2598,11 @@ defmodule SparkEx.Session do
 
   # analyze_schema shares the UNPARSED legacy fallback with collect/count so
   # DataFrame.schema/dtypes work on {:parse, ...} plans with string schemas on
-  # Spark 4.x (which rejects the Unparsed DataType).
+  # Spark 4.x (which rejects the Unparsed DataType), and the empty-relation
+  # fallback so Spark 3.5 can describe plans containing 4.x-only relations
+  # (T-34).
   defp reply_analyze_schema_with_legacy_fallback(state, plan, remote, error) do
-    with :legacy_unparsed <- classify_legacy_recovery_strategy(remote),
-         {:ok, rewritten} <- rewrite_parse_collect_plan(state, plan),
+    with {:ok, rewritten} <- rewrite_plan_for_legacy_strategy(state, plan, remote),
          {{proto_plan, counter}, nil} <- safe_encode(rewritten, state.plan_id_counter),
          state = %{state | plan_id_counter: counter},
          {:ok, schema, server_side_session_id} <- Client.analyze_schema(state, proto_plan) do
@@ -2588,15 +2621,27 @@ defmodule SparkEx.Session do
 
   # count/1 shares the UNPARSED legacy fallback with collect: Spark 4.x
   # rejects the Unparsed schema on {:parse, ...} plans, so rewrite the parse
-  # node into from_csv/from_json projections and retry the count.
+  # node into from_csv/from_json projections and retry the count. The same
+  # path handles Spark 3.5's empty-relation rejection of 4.x-only relation
+  # types anywhere in the tree (T-34).
   defp retry_count_with_legacy_parse_rewrite(state, plan, opts, remote) do
-    with :legacy_unparsed <- classify_legacy_recovery_strategy(remote),
-         {:ok, rewritten} <- rewrite_parse_collect_plan(state, plan),
+    with {:ok, rewritten} <- rewrite_plan_for_legacy_strategy(state, plan, remote),
          {{proto_plan, counter}, nil} <- safe_encode_count(rewritten, state.plan_id_counter),
          {:ok, result} <-
            Client.execute_plan(%{state | plan_id_counter: counter}, proto_plan, opts) do
       {:ok, result, %{state | plan_id_counter: counter}}
     else
+      _ -> :error
+    end
+  end
+
+  # Shared by the count and analyze_schema fallbacks: pick the plan rewrite
+  # matching the server's rejection. Collect has its own dispatcher because it
+  # also handles grouping sets and subquery rewrites.
+  defp rewrite_plan_for_legacy_strategy(state, plan, remote) do
+    case classify_legacy_recovery_strategy(remote) do
+      :legacy_unparsed -> rewrite_parse_collect_plan(state, plan)
+      :empty_relation -> rewrite_empty_relation_collect_plan(plan)
       _ -> :error
     end
   end
@@ -2676,10 +2721,7 @@ defmodule SparkEx.Session do
 
   defp retry_collect_for_empty_relation_errors(state, plan, opts) do
     rewriters = [
-      &rewrite_transpose_collect_plan/1,
-      &rewrite_table_function_collect_plan/1,
-      &rewrite_as_of_join_collect_plan/1,
-      &rewrite_lateral_join_collect_plan/1,
+      &rewrite_empty_relation_collect_plan/1,
       &rewrite_subquery_collect_plan/1
     ]
 
@@ -2699,37 +2741,68 @@ defmodule SparkEx.Session do
     end)
   end
 
-  # DataFrame plans carry a {:plan_id, n, inner} envelope (added for
-  # dataframe-column resolution); the legacy rewriters below match on the
-  # bare plan shapes, so unwrap at every nesting level before matching.
-  defp rewrite_transpose_collect_plan({:plan_id, _id, inner}),
-    do: rewrite_transpose_collect_plan(inner)
-
-  defp rewrite_transpose_collect_plan({:transpose, child_plan, index_columns}) do
-    case transpose_emulation_plan(child_plan, index_columns) do
-      {:ok, rewritten} -> {:ok, rewritten}
-      :error -> :error
+  # Spark 3.5 servers reject relation types added in 4.x (Transpose,
+  # LateralJoin, AsOfJoin, TableValuedFunction with certain args) with
+  # "Expected Relation to be set, but is empty." — the unknown proto field is
+  # dropped and the parent sees an empty Relation. That can happen at any
+  # depth (`df |> lateral_join(...) |> select(...)`), so walk the whole plan
+  # tree (T-34) — modelled on rewrite_parse_deep/2 — and rewrite every such
+  # node. DataFrame plans carry a {:plan_id, n, inner} envelope which is kept
+  # in place; the node rewriters below match the bare plan shapes. Children
+  # are rewritten before the node itself so nested unsupported relations
+  # (a transpose feeding a lateral join) are handled in one pass. Returns
+  # :error when nothing in the tree needed rewriting, so the caller can move
+  # on to the next strategy.
+  defp rewrite_empty_relation_collect_plan(plan) do
+    case rewrite_empty_relation_deep(plan) do
+      {rewritten, true} -> {:ok, rewritten}
+      {_plan, false} -> :error
     end
   end
 
-  defp rewrite_transpose_collect_plan({:sort, child_plan, sort_orders}) do
-    with {:ok, rewritten_child} <- rewrite_transpose_collect_plan(child_plan) do
-      {:ok, {:sort, rewritten_child, sort_orders}}
+  @doc false
+  def __rewrite_empty_relation_deep__(plan), do: rewrite_empty_relation_deep(plan)
+
+  defp rewrite_empty_relation_deep(term) when is_tuple(term) do
+    {elements, children_changed?} = rewrite_empty_relation_walk_list(Tuple.to_list(term))
+    node = List.to_tuple(elements)
+
+    case rewrite_empty_relation_node(node) do
+      {:ok, rewritten} -> {rewritten, true}
+      :error -> {node, children_changed?}
     end
   end
 
-  defp rewrite_transpose_collect_plan({:sort, child_plan, sort_orders, is_global}) do
-    with {:ok, rewritten_child} <- rewrite_transpose_collect_plan(child_plan) do
-      {:ok, {:sort, rewritten_child, sort_orders, is_global}}
-    end
+  defp rewrite_empty_relation_deep(term) when is_list(term),
+    do: rewrite_empty_relation_walk_list(term)
+
+  defp rewrite_empty_relation_deep(term), do: {term, false}
+
+  defp rewrite_empty_relation_walk_list(elements) do
+    Enum.map_reduce(elements, false, fn element, changed? ->
+      {rewritten, element_changed?} = rewrite_empty_relation_deep(element)
+      {rewritten, changed? or element_changed?}
+    end)
   end
 
-  defp rewrite_transpose_collect_plan(_plan), do: :error
+  defp rewrite_empty_relation_node({:transpose, _, _} = node),
+    do: rewrite_transpose_node(node)
 
-  defp rewrite_table_function_collect_plan({:plan_id, _id, inner}),
-    do: rewrite_table_function_collect_plan(inner)
+  defp rewrite_empty_relation_node({:table_valued_function, _, _} = node),
+    do: rewrite_table_function_node(node)
 
-  defp rewrite_table_function_collect_plan({:table_valued_function, function_name, arg_exprs})
+  defp rewrite_empty_relation_node({:lateral_join, _, _, _, _} = node),
+    do: rewrite_lateral_join_node(node)
+
+  defp rewrite_empty_relation_node({:as_of_join, _, _, _, _, _, _, _, _, _, _} = node),
+    do: rewrite_as_of_join_node(node)
+
+  defp rewrite_empty_relation_node(_node), do: :error
+
+  defp rewrite_transpose_node({:transpose, child_plan, index_columns}),
+    do: transpose_emulation_plan(child_plan, index_columns)
+
+  defp rewrite_table_function_node({:table_valued_function, function_name, arg_exprs})
        when is_binary(function_name) and is_list(arg_exprs) do
     with {:ok, args_sql} <- expr_list_to_sql(arg_exprs) do
       sql =
@@ -2743,24 +2816,16 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp rewrite_table_function_collect_plan(_plan), do: :error
+  defp rewrite_table_function_node(_plan), do: :error
 
   # Spark 3.5 servers don't know the LateralJoin relation ("Expected Relation
   # to be set, but is empty."). Downgrade to a regular join — correct only for
   # correlation-free right sides, which is all a 3.5 server can express anyway.
-  defp rewrite_lateral_join_collect_plan({:plan_id, _id, inner}),
-    do: rewrite_lateral_join_collect_plan(inner)
-
-  defp rewrite_lateral_join_collect_plan({:lateral_join, left_plan, right_plan, cond_expr, type}) do
+  defp rewrite_lateral_join_node({:lateral_join, left_plan, right_plan, cond_expr, type}) do
     {:ok, {:join, left_plan, right_plan, cond_expr, type, []}}
   end
 
-  defp rewrite_lateral_join_collect_plan(_plan), do: :error
-
-  defp rewrite_as_of_join_collect_plan({:plan_id, _id, inner}),
-    do: rewrite_as_of_join_collect_plan(inner)
-
-  defp rewrite_as_of_join_collect_plan(
+  defp rewrite_as_of_join_node(
          {:as_of_join, left_plan, right_plan, _left_as_of, _right_as_of, join_expr, using_columns,
           join_type, _tolerance, _allow_exact_matches, _direction}
        ) do
@@ -2774,8 +2839,6 @@ defmodule SparkEx.Session do
      {:join, left_plan, right_plan, condition, normalize_as_of_fallback_join_type(join_type),
       using_columns || []}}
   end
-
-  defp rewrite_as_of_join_collect_plan(_plan), do: :error
 
   defp normalize_as_of_fallback_join_type(nil), do: :inner
   defp normalize_as_of_fallback_join_type("inner"), do: :inner
@@ -5366,11 +5429,23 @@ defmodule SparkEx.Session do
   # the source DataFrame avoids a full Arrow IPC decode + re-encode round-trip
   # on the hot path for multi-hundred-MB / GB payloads — only the per-chunk
   # encodes happen, plus one small head-sample to estimate bytes/row.
+  #
+  # `max_chunk_rows` additionally caps every chunk by row count (T-64), like
+  # PySpark's `_serialize_table_chunks(max_chunk_size_rows, max_chunk_size_bytes)`.
   @doc false
-  @spec split_explorer_dataframe_for_cache(Explorer.DataFrame.t(), pos_integer()) ::
+  @spec split_explorer_dataframe_for_cache(
+          Explorer.DataFrame.t(),
+          pos_integer(),
+          pos_integer() | nil
+        ) ::
           {:ok, [binary(), ...]} | {:error, term()}
-  def split_explorer_dataframe_for_cache(%Explorer.DataFrame{} = df, chunk_size_bytes)
-      when is_integer(chunk_size_bytes) and chunk_size_bytes > 0 do
+  def split_explorer_dataframe_for_cache(
+        %Explorer.DataFrame{} = df,
+        chunk_size_bytes,
+        max_chunk_rows \\ nil
+      )
+      when is_integer(chunk_size_bytes) and chunk_size_bytes > 0 and
+             (is_nil(max_chunk_rows) or (is_integer(max_chunk_rows) and max_chunk_rows > 0)) do
     total_rows = Explorer.DataFrame.n_rows(df)
 
     if total_rows <= 1 do
@@ -5380,11 +5455,173 @@ defmodule SparkEx.Session do
       end
     else
       with {:ok, rows_per_chunk} <-
-             estimate_rows_per_chunk(df, total_rows, chunk_size_bytes) do
+             estimate_rows_per_chunk(df, total_rows, chunk_size_bytes, max_chunk_rows) do
         do_split_dataframe(df, total_rows, rows_per_chunk, 0, [])
       end
     end
   end
+
+  # Fetches the local-relation server configs once per session (T-64). A
+  # failed config RPC falls back to the defaults and is cached too: a server
+  # that cannot answer a Config request is not going to answer differently a
+  # moment later, and create_dataframe must never fail because of it.
+  defp ensure_local_relation_configs(%{local_relation_configs: %{} = configs} = state, _opts),
+    do: {configs, state}
+
+  # Explicit `:cache_threshold` + `:cache_chunk_size` fully determine the upload
+  # strategy, so the Config RPC is skipped (the row cap keeps its default).
+  defp ensure_local_relation_configs(state, opts) do
+    if Keyword.has_key?(opts, :cache_threshold) and Keyword.has_key?(opts, :cache_chunk_size) do
+      {@local_relation_config_defaults, state}
+    else
+      fetch_local_relation_configs(state)
+    end
+  end
+
+  # Unit stubs drive `handle_call/3` with a bare map; only a connected session
+  # can issue the Config RPC.
+  defp fetch_local_relation_configs(%{channel: channel, session_id: id} = state)
+       when not is_nil(channel) and is_binary(id) do
+    keys = Enum.map(@local_relation_config_keys, fn {key, _atom} -> key end)
+
+    # Bounded timeout: this runs inside the Session GenServer on the first
+    # create_dataframe of a session. A failure is not cached, so a transient
+    # error is retried on the next call instead of pinning defaults.
+    case Client.config_get_option(state, keys, timeout: @local_relation_config_timeout) do
+      {:ok, pairs, server_side_session_id} ->
+        configs = parse_local_relation_configs(pairs)
+        state = maybe_update_server_session(state, server_side_session_id)
+        {configs, Map.put(state, :local_relation_configs, configs)}
+
+      {:error, reason} ->
+        Logger.debug(fn ->
+          "create_dataframe: could not read localRelation configs, using defaults: " <>
+            inspect(reason)
+        end)
+
+        {@local_relation_config_defaults, state}
+    end
+  end
+
+  defp fetch_local_relation_configs(state), do: {@local_relation_config_defaults, state}
+
+  @doc false
+  def __parse_local_relation_configs__(pairs), do: parse_local_relation_configs(pairs)
+
+  # `pairs` is the ConfigResponse key/value list; a value is `nil` when the
+  # server does not know the key (Spark 3.5 predates the chunking configs) and
+  # is a decimal string otherwise. Anything unparsable keeps the default.
+  defp parse_local_relation_configs(pairs) when is_list(pairs) do
+    parsed =
+      Enum.reduce(@local_relation_config_keys, %{}, fn {key, atom}, acc ->
+        case List.keyfind(pairs, key, 0) do
+          {_key, value} when is_binary(value) ->
+            case Integer.parse(String.trim(value)) do
+              {int, ""} when int >= 0 -> Map.put(acc, atom, int)
+              _ -> acc
+            end
+
+          _ ->
+            acc
+        end
+      end)
+
+    # `localRelationCacheThreshold` exists since Spark 3.5, but the chunked
+    # cached relation the cache path emits is 4.1+. Only a server that also
+    # reports the 4.1 chunking configs can accept it, so on older servers the
+    # legacy client-side threshold is kept and payloads stay inlined.
+    if Map.has_key?(parsed, :chunk_size_rows) do
+      Map.merge(@local_relation_config_defaults, parsed)
+    else
+      Map.merge(@local_relation_config_defaults, Map.delete(parsed, :cache_threshold))
+    end
+  end
+
+  defp parse_local_relation_configs(_pairs), do: @local_relation_config_defaults
+
+  @doc false
+  def __local_relation_chunk_params__(opts, configs),
+    do: local_relation_chunk_params(opts, configs)
+
+  # Resolves the effective threshold / chunk limits for one create_dataframe
+  # call: explicit options win, then the server configs (or their defaults).
+  # The byte cap is `min(chunkSizeBytes, batchOfChunksSizeBytes)` like PySpark,
+  # so a single chunk always fits in one upload batch.
+  defp local_relation_chunk_params(opts, configs) do
+    cache_threshold = Keyword.get(opts, :cache_threshold, configs.cache_threshold)
+
+    chunk_size_bytes =
+      Keyword.get(
+        opts,
+        :cache_chunk_size,
+        min(configs.chunk_size_bytes, configs.batch_of_chunks_size_bytes)
+      )
+
+    chunk_size_rows = Keyword.get(opts, :cache_chunk_rows, configs.chunk_size_rows)
+
+    cond do
+      not (is_integer(cache_threshold) and cache_threshold >= 0) ->
+        {:error, {:invalid_option, {:cache_threshold, cache_threshold}}}
+
+      not (is_integer(chunk_size_bytes) and chunk_size_bytes > 0) ->
+        {:error, {:invalid_option, {:cache_chunk_size, chunk_size_bytes}}}
+
+      not (is_integer(chunk_size_rows) and chunk_size_rows > 0) ->
+        {:error, {:invalid_option, {:cache_chunk_rows, chunk_size_rows}}}
+
+      true ->
+        {:ok,
+         %{
+           cache_threshold: cache_threshold,
+           chunk_size_bytes: chunk_size_bytes,
+           chunk_size_rows: chunk_size_rows,
+           batch_of_chunks_size_bytes: max(configs.batch_of_chunks_size_bytes, chunk_size_bytes)
+         }}
+    end
+  end
+
+  @doc false
+  def __local_relation_rows_per_chunk__(sample_bytes, sample_rows, chunk_size_bytes, max_rows),
+    do: local_relation_rows_per_chunk(sample_bytes, sample_rows, chunk_size_bytes, max_rows)
+
+  # Rows per chunk from a head-sample's IPC size: bounded by bytes (at least
+  # one row so a single oversized row still ships) and, when given, by rows.
+  defp local_relation_rows_per_chunk(sample_bytes, sample_rows, chunk_size_bytes, max_rows) do
+    bytes_per_row = max(1, div(sample_bytes, max(1, sample_rows)))
+    by_bytes = max(1, div(chunk_size_bytes, bytes_per_row))
+
+    case max_rows do
+      n when is_integer(n) and n > 0 -> min(by_bytes, n)
+      _ -> by_bytes
+    end
+  end
+
+  @doc false
+  def __batch_cache_artifacts__(artifacts, batch_bytes),
+    do: batch_cache_artifacts(artifacts, batch_bytes)
+
+  # Groups {name, bytes} artifacts into upload batches whose summed size stays
+  # within `batch_bytes` (PySpark's max_batch_of_chunks_size_bytes). A single
+  # artifact larger than the limit still forms its own batch.
+  defp batch_cache_artifacts(artifacts, batch_bytes)
+       when is_integer(batch_bytes) and batch_bytes > 0 do
+    {batches, current, _size} =
+      Enum.reduce(artifacts, {[], [], 0}, fn {_name, data} = artifact, {batches, current, size} ->
+        artifact_size = byte_size(data)
+
+        if current != [] and size + artifact_size > batch_bytes do
+          {[Enum.reverse(current) | batches], [artifact], artifact_size}
+        else
+          {batches, [artifact | current], size + artifact_size}
+        end
+      end)
+
+    batches = if current == [], do: batches, else: [Enum.reverse(current) | batches]
+    Enum.reverse(batches)
+  end
+
+  defp batch_cache_artifacts([], _batch_bytes), do: []
+  defp batch_cache_artifacts(artifacts, _batch_bytes), do: [artifacts]
 
   # Public bytes-based variant for callers that only have the encoded IPC
   # payload. Wraps `Explorer.DataFrame.load_ipc_stream/1` in try/rescue
@@ -5426,14 +5663,19 @@ defmodule SparkEx.Session do
     error -> {:error, {:arrow_encode_error, error}}
   end
 
-  defp estimate_rows_per_chunk(df, total_rows, chunk_size_bytes) do
+  defp estimate_rows_per_chunk(df, total_rows, chunk_size_bytes, max_chunk_rows) do
     sample_rows = min(total_rows, 256)
     sample_df = Explorer.DataFrame.head(df, sample_rows)
 
     case dump_ipc_stream_safe(sample_df) do
       {:ok, sample_ipc} ->
-        bytes_per_row = max(1, div(byte_size(sample_ipc), max(1, sample_rows)))
-        {:ok, max(1, div(chunk_size_bytes, bytes_per_row))}
+        {:ok,
+         local_relation_rows_per_chunk(
+           byte_size(sample_ipc),
+           sample_rows,
+           chunk_size_bytes,
+           max_chunk_rows
+         )}
 
       {:error, _} = error ->
         error
@@ -5458,14 +5700,25 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp upload_missing_cache_artifacts(state, artifacts) do
+  # Uploads the artifacts the server does not already hold, in batches of at
+  # most `batch_bytes` (PySpark's max_batch_of_chunks_size_bytes): one RPC per
+  # chunk is too chatty, one RPC for everything materialises the whole payload.
+  defp upload_missing_cache_artifacts(state, artifacts, batch_bytes) do
     names = Enum.map(artifacts, fn {name, _data} -> name end)
 
     case Client.artifact_status(state, names) do
       {:ok, statuses, server_side_session_id} ->
         state = maybe_update_server_session(state, server_side_session_id)
         missing = Enum.reject(artifacts, fn {name, _data} -> Map.get(statuses, name, false) end)
-        maybe_upload_cache_artifacts(state, missing)
+
+        missing
+        |> batch_cache_artifacts(batch_bytes)
+        |> Enum.reduce_while({:ok, state}, fn batch, {:ok, state} ->
+          case maybe_upload_cache_artifacts(state, batch) do
+            {:ok, state} -> {:cont, {:ok, state}}
+            {:error, _reason} = error -> {:halt, error}
+          end
+        end)
 
       {:error, _reason} = error ->
         error

@@ -2826,6 +2826,15 @@ defmodule SparkEx.Connect.PlanEncoder do
     rewrite_expr(child, plan_ids, refs, counter)
   end
 
+  # T-29(a): `DataFrame.direct_shuffle_partition_id/2` wraps an arbitrary column
+  # expression, which may reference a column of *another* DataFrame. Without this
+  # clause the child was left untouched, so the referenced plan was never hoisted
+  # into `with_relations.references` and the server reported "plan not found".
+  defp rewrite_expr({:direct_shuffle_partition_id, child}, plan_ids, refs, counter) do
+    {child, plan_ids, refs, counter} = rewrite_expr(child, plan_ids, refs, counter)
+    {{:direct_shuffle_partition_id, child}, plan_ids, refs, counter}
+  end
+
   # Idempotency clause: when a subquery has already been rewritten (its third
   # element is an integer plan_id), leave it alone. Re-entrance happens via
   # `attach_with_relations/2` inside `encode_relation({:plan_id, _, _})`.
@@ -2973,31 +2982,50 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp encode_cast_to_type(type) when is_binary(type), do: {:type_str, type}
   defp encode_cast_to_type(%DataType{} = type), do: {:type, type}
 
+  # T-29(b): SQL arguments accept anything `encode_expression/1` understands.
+  # Enumerating a subset here silently reinterpreted valid expression tuples
+  # (e.g. `{:call_function, ...}`, `{:named_arg, ...}`, `{:outer, ...}`,
+  # `{:direct_shuffle_partition_id, ...}`, `{:update_fields, ...}`,
+  # `{:alias, expr, name, metadata}`) as opaque *literals*. Mirrors PySpark,
+  # where any `Column`/`Expression` argument is serialized via its own
+  # `to_plan` and only non-expressions become literals (plan.py SQL command).
+  @sql_argument_expression_tags %{
+    col: [2, 3],
+    metadata_col: [2, 3],
+    col_regex: [2, 3],
+    lit: [2],
+    expr: [2],
+    fn: [4],
+    call_function: [3],
+    named_arg: [3],
+    alias: [3, 4],
+    cast: [3, 4],
+    window: [5],
+    unresolved_extract_value: [3],
+    update_fields: [4],
+    lambda: [3],
+    lambda_var: [2],
+    sort_order: [4],
+    star: [1, 2, 3],
+    direct_shuffle_partition_id: [2],
+    outer: [2],
+    subquery: [4]
+  }
+
   defp encode_sql_argument(%Column{expr: expr}) do
     encode_expression(expr)
   end
 
-  defp encode_sql_argument({:col, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:col, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:lit, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:expr, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:col_regex, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:col_regex, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:metadata_col, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:metadata_col, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:fn, _, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:alias, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:sort_order, _, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:cast, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:cast, _, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:star} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:star, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:star, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:window, _, _, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:unresolved_extract_value, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:lambda, _, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:lambda_var, _} = expr), do: encode_expression(expr)
-  defp encode_sql_argument({:subquery, _, _, _} = expr), do: encode_expression(expr)
+  defp encode_sql_argument(expr) when is_tuple(expr) and tuple_size(expr) > 0 do
+    tag = elem(expr, 0)
+
+    if is_atom(tag) and tuple_size(expr) in Map.get(@sql_argument_expression_tags, tag, []) do
+      encode_expression(expr)
+    else
+      encode_literal_expression(expr)
+    end
+  end
+
   defp encode_sql_argument(value), do: encode_literal_expression(value)
 
   # PySpark keeps positional (`args`) and named (`named_args`) parameter channels
