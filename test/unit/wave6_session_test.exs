@@ -28,7 +28,7 @@ defmodule SparkEx.Unit.Wave6SessionTest do
                Session.__rewrite_empty_relation_deep__(plan)
     end
 
-    test "as-of join under a filter becomes a join on the condition" do
+    test "as-of join is never downgraded to a plain join (semantics would be lost)" do
       as_of =
         {:plan_id, 2,
          {:as_of_join, @left, @right, {:col, "t1"}, {:col, "t2"}, @cond, [], "left", {:lit, nil},
@@ -36,19 +36,12 @@ defmodule SparkEx.Unit.Wave6SessionTest do
 
       plan = {:plan_id, 3, {:filter, as_of, {:lit, true}}}
 
-      assert {{:plan_id, 3,
-               {:filter, {:plan_id, 2, {:join, @left, @right, @cond, :left, []}}, _}}, true} =
-               Session.__rewrite_empty_relation_deep__(plan)
-    end
+      assert {^plan, false} = Session.__rewrite_empty_relation_deep__(plan)
 
-    test "as-of join with using columns and no condition keeps the using list" do
-      as_of =
-        {:plan_id, 2,
-         {:as_of_join, @left, @right, {:col, "t1"}, {:col, "t2"}, {:lit, nil}, ["id"], "inner",
-          {:lit, nil}, true, "backward"}}
+      assert {:error, {:unsupported_on_server, :as_of_join, message}} =
+               Session.__rewrite_empty_relation_collect_plan__(plan)
 
-      assert {{:plan_id, 2, {:join, @left, @right, nil, :inner, ["id"]}}, true} =
-               Session.__rewrite_empty_relation_deep__(as_of)
+      assert message =~ "Spark 4.0+"
     end
 
     test "transpose under sort and project is emulated with unpivot + pivot" do

@@ -334,7 +334,35 @@ defmodule SparkEx.Unit.Wave2ClientTest do
         {:error, not_found_remote()}
       end
 
+      # The reattach is retry 1 and the fresh ExecutePlan retry 2, so a
+      # budget of 2 is needed for the recovery to be allowed.
       assert {:ok, %{rows: []}} =
+               Client.execute_plan(session(), %Plan{},
+                 reattach_retries: 2,
+                 execute_stream_fun: execute_stream_fun,
+                 reattach_stream_fun: reattach_stream_fun,
+                 release_execute_fun: fn _ -> {:ok, nil} end
+               )
+
+      assert :counters.get(calls, 1) == 2
+      assert :counters.get(reattaches, 1) == 1
+    end
+
+    test "a budget of 1 allows the reattach but not a fresh ExecutePlan" do
+      calls = :counters.new(1, [:atomics])
+      reattaches = :counters.new(1, [:atomics])
+
+      execute_stream_fun = fn _request, _timeout ->
+        :counters.add(calls, 1, 1)
+        {:error, unavailable_rpc_error()}
+      end
+
+      reattach_stream_fun = fn nil ->
+        :counters.add(reattaches, 1, 1)
+        {:error, not_found_remote()}
+      end
+
+      assert {:error, {:reattach_incomplete_result, %{retries_attempted: 1}}} =
                Client.execute_plan(session(), %Plan{},
                  reattach_retries: 1,
                  execute_stream_fun: execute_stream_fun,
@@ -342,7 +370,7 @@ defmodule SparkEx.Unit.Wave2ClientTest do
                  release_execute_fun: fn _ -> {:ok, nil} end
                )
 
-      assert :counters.get(calls, 1) == 2
+      assert :counters.get(calls, 1) == 1
       assert :counters.get(reattaches, 1) == 1
     end
 
@@ -362,14 +390,15 @@ defmodule SparkEx.Unit.Wave2ClientTest do
 
       assert {:error, {:reattach_incomplete_result, %{responses_received: 0}}} =
                Client.execute_plan(session(), %Plan{},
-                 reattach_retries: 1,
+                 reattach_retries: 2,
                  execute_stream_fun: execute_stream_fun,
                  reattach_stream_fun: reattach_stream_fun,
                  release_execute_fun: fn _ -> {:ok, nil} end
                )
 
-      # initial ExecutePlan -> reattach -> not found -> one fresh ExecutePlan
-      # (the single allowed retry) -> budget exhausted.
+      # initial ExecutePlan -> reattach (retry 1) -> not found -> one fresh
+      # ExecutePlan (retry 2) fails -> budget of 2 exhausted, no further
+      # reattach is attempted.
       assert :counters.get(calls, 1) == 2
       assert :counters.get(reattaches, 1) == 1
     end
@@ -410,7 +439,7 @@ defmodule SparkEx.Unit.Wave2ClientTest do
         {:error, not_found_remote()}
       end
 
-      assert {:error, {:reattach_incomplete_result, %{retries_attempted: 3}}} =
+      assert {:error, {:reattach_incomplete_result, %{retries_attempted: 2}}} =
                Client.execute_plan(session(), %Plan{},
                  reattach_retries: 2,
                  execute_stream_fun: execute_stream_fun,
@@ -418,11 +447,11 @@ defmodule SparkEx.Unit.Wave2ClientTest do
                  release_execute_fun: fn _ -> {:ok, nil} end
                )
 
-      # Each fresh ExecutePlan is one charged retry; it is allowed while the
-      # charged count does not exceed max_retries (`>`), so: initial + 3
-      # re-executions, then the 4th reattach failure trips the guard.
-      assert :counters.get(executes, 1) == 4
-      assert :counters.get(reattaches, 1) == 4
+      # Each fresh ExecutePlan is one charged retry; the configured budget of
+      # 2 is honoured: initial + 2 re-executions, then the 3rd reattach
+      # failure trips the guard (`>=`).
+      assert :counters.get(executes, 1) == 3
+      assert :counters.get(reattaches, 1) == 3
     end
   end
 

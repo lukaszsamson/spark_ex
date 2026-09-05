@@ -49,6 +49,7 @@ defmodule SparkEx.Session do
   # Fallbacks match the pre-T-64 client default for the threshold (4 MiB) and
   # Spark's SQLConf defaults for the chunking knobs.
   @local_relation_config_timeout 5_000
+  @local_relation_config_retry_ms 60_000
   @local_relation_config_defaults %{
     cache_threshold: 4 * 1024 * 1024,
     chunk_size_rows: 10_000,
@@ -70,7 +71,8 @@ defmodule SparkEx.Session do
           tags: [String.t()],
           released: boolean(),
           closed: boolean(),
-          local_relation_configs: %{atom() => non_neg_integer()} | nil,
+          local_relation_configs:
+            %{atom() => non_neg_integer()} | {:unavailable, integer()} | nil,
           retry_policies: %{atom() => map()} | nil
         }
 
@@ -1423,7 +1425,11 @@ defmodule SparkEx.Session do
   def handle_call({:config_set, pairs}, _from, state) do
     case Client.config_set(state, pairs) do
       {:ok, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
+        state =
+          state
+          |> maybe_update_server_session(server_side_session_id)
+          |> invalidate_local_relation_configs()
+
         {:reply, :ok, state}
 
       {:error, _} = error ->
@@ -1478,7 +1484,11 @@ defmodule SparkEx.Session do
   def handle_call({:config_unset, keys}, _from, state) do
     case Client.config_unset(state, keys) do
       {:ok, server_side_session_id} ->
-        state = maybe_update_server_session(state, server_side_session_id)
+        state =
+          state
+          |> maybe_update_server_session(server_side_session_id)
+          |> invalidate_local_relation_configs()
+
         {:reply, :ok, state}
 
       {:error, _} = error ->
@@ -1942,6 +1952,9 @@ defmodule SparkEx.Session do
 
       :error ->
         reply_error(error, state)
+
+      {:error, {:unsupported_on_server, _, _}} = unsupported ->
+        reply_error(unsupported, state)
     end
   end
 
@@ -2608,6 +2621,7 @@ defmodule SparkEx.Session do
          {:ok, schema, server_side_session_id} <- Client.analyze_schema(state, proto_plan) do
       {:reply, {:ok, schema}, maybe_update_server_session(state, server_side_session_id)}
     else
+      {:error, {:unsupported_on_server, _, _}} = unsupported -> reply_error(unsupported, state)
       _ -> reply_error(error, state)
     end
   end
@@ -2615,6 +2629,7 @@ defmodule SparkEx.Session do
   defp reply_count_with_legacy_fallback(state, plan, opts, remote, error) do
     case retry_count_with_legacy_parse_rewrite(state, plan, opts, remote) do
       {:ok, result, state} -> reply_execute_count_result(result, state)
+      {:error, {:unsupported_on_server, _, _}} = unsupported -> reply_error(unsupported, state)
       :error -> reply_error(error, state)
     end
   end
@@ -2631,6 +2646,7 @@ defmodule SparkEx.Session do
            Client.execute_plan(%{state | plan_id_counter: counter}, proto_plan, opts) do
       {:ok, result, %{state | plan_id_counter: counter}}
     else
+      {:error, {:unsupported_on_server, _, _}} = unsupported -> unsupported
       _ -> :error
     end
   end
@@ -2736,6 +2752,7 @@ defmodule SparkEx.Session do
 
         {:halt, {:ok, result, state}}
       else
+        {:error, {:unsupported_on_server, _, _}} = unsupported -> {:halt, unsupported}
         _ -> {:cont, :error}
       end
     end)
@@ -2754,14 +2771,37 @@ defmodule SparkEx.Session do
   # :error when nothing in the tree needed rewriting, so the caller can move
   # on to the next strategy.
   defp rewrite_empty_relation_collect_plan(plan) do
-    case rewrite_empty_relation_deep(plan) do
-      {rewritten, true} -> {:ok, rewritten}
-      {_plan, false} -> :error
+    if plan_contains_node?(plan, :as_of_join, 11) do
+      # An as-of join cannot be expressed as a plain join without losing its
+      # time-matching semantics (as-of columns, tolerance, direction, exact
+      # matches), so refuse instead of silently returning different rows.
+      {:error,
+       {:unsupported_on_server, :as_of_join,
+        "as-of joins require a Spark 4.0+ Connect server; this server rejected the " <>
+          "AsOfJoin relation and no semantics-preserving fallback exists"}}
+    else
+      case rewrite_empty_relation_deep(plan) do
+        {rewritten, true} -> {:ok, rewritten}
+        {_plan, false} -> :error
+      end
     end
   end
 
+  defp plan_contains_node?(term, tag, size) when is_tuple(term) do
+    (tuple_size(term) == size and elem(term, 0) == tag) or
+      Enum.any?(Tuple.to_list(term), &plan_contains_node?(&1, tag, size))
+  end
+
+  defp plan_contains_node?(term, tag, size) when is_list(term),
+    do: Enum.any?(term, &plan_contains_node?(&1, tag, size))
+
+  defp plan_contains_node?(_term, _tag, _size), do: false
+
   @doc false
   def __rewrite_empty_relation_deep__(plan), do: rewrite_empty_relation_deep(plan)
+
+  @doc false
+  def __rewrite_empty_relation_collect_plan__(plan), do: rewrite_empty_relation_collect_plan(plan)
 
   defp rewrite_empty_relation_deep(term) when is_tuple(term) do
     {elements, children_changed?} = rewrite_empty_relation_walk_list(Tuple.to_list(term))
@@ -2794,9 +2834,6 @@ defmodule SparkEx.Session do
   defp rewrite_empty_relation_node({:lateral_join, _, _, _, _} = node),
     do: rewrite_lateral_join_node(node)
 
-  defp rewrite_empty_relation_node({:as_of_join, _, _, _, _, _, _, _, _, _, _} = node),
-    do: rewrite_as_of_join_node(node)
-
   defp rewrite_empty_relation_node(_node), do: :error
 
   defp rewrite_transpose_node({:transpose, child_plan, index_columns}),
@@ -2824,32 +2861,6 @@ defmodule SparkEx.Session do
   defp rewrite_lateral_join_node({:lateral_join, left_plan, right_plan, cond_expr, type}) do
     {:ok, {:join, left_plan, right_plan, cond_expr, type, []}}
   end
-
-  defp rewrite_as_of_join_node(
-         {:as_of_join, left_plan, right_plan, _left_as_of, _right_as_of, join_expr, using_columns,
-          join_type, _tolerance, _allow_exact_matches, _direction}
-       ) do
-    condition =
-      case join_expr do
-        {:lit, nil} -> nil
-        other -> other
-      end
-
-    {:ok,
-     {:join, left_plan, right_plan, condition, normalize_as_of_fallback_join_type(join_type),
-      using_columns || []}}
-  end
-
-  defp normalize_as_of_fallback_join_type(nil), do: :inner
-  defp normalize_as_of_fallback_join_type("inner"), do: :inner
-  defp normalize_as_of_fallback_join_type("left"), do: :left
-  defp normalize_as_of_fallback_join_type("right"), do: :right
-  defp normalize_as_of_fallback_join_type("full"), do: :full
-  defp normalize_as_of_fallback_join_type(:inner), do: :inner
-  defp normalize_as_of_fallback_join_type(:left), do: :left
-  defp normalize_as_of_fallback_join_type(:right), do: :right
-  defp normalize_as_of_fallback_join_type(:full), do: :full
-  defp normalize_as_of_fallback_join_type(_), do: :inner
 
   defp transpose_emulation_plan(child_plan, [index_expr]) do
     with {:ok, index_name} <- extract_col_name(index_expr) do
@@ -5468,6 +5479,20 @@ defmodule SparkEx.Session do
   defp ensure_local_relation_configs(%{local_relation_configs: %{} = configs} = state, _opts),
     do: {configs, state}
 
+  # A failed probe is remembered for @local_relation_config_retry_ms so a
+  # flaky server does not cost a bounded RPC timeout on every create_dataframe,
+  # yet the session recovers once the server answers again.
+  defp ensure_local_relation_configs(
+         %{local_relation_configs: {:unavailable, failed_at}} = state,
+         opts
+       ) do
+    if System.monotonic_time(:millisecond) - failed_at < @local_relation_config_retry_ms do
+      {@local_relation_config_defaults, state}
+    else
+      ensure_local_relation_configs(%{state | local_relation_configs: nil}, opts)
+    end
+  end
+
   # Explicit `:cache_threshold` + `:cache_chunk_size` fully determine the upload
   # strategy, so the Config RPC is skipped (the row cap keeps its default).
   defp ensure_local_relation_configs(state, opts) do
@@ -5499,11 +5524,19 @@ defmodule SparkEx.Session do
             inspect(reason)
         end)
 
-        {@local_relation_config_defaults, state}
+        failed_at = System.monotonic_time(:millisecond)
+
+        {@local_relation_config_defaults,
+         Map.put(state, :local_relation_configs, {:unavailable, failed_at})}
     end
   end
 
   defp fetch_local_relation_configs(state), do: {@local_relation_config_defaults, state}
+
+  # `config_set`/`config_unset` may change the localRelation* settings, so the
+  # cached snapshot is dropped and re-read on the next create_dataframe.
+  defp invalidate_local_relation_configs(state),
+    do: Map.put(state, :local_relation_configs, nil)
 
   @doc false
   def __parse_local_relation_configs__(pairs), do: parse_local_relation_configs(pairs)

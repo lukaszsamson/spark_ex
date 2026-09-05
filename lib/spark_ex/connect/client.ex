@@ -1905,15 +1905,15 @@ defmodule SparkEx.Connect.Client do
     # graceful-EOF -> OPERATION_NOT_FOUND cycle (graceful EOF never charges the
     # budget) would reissue the plan forever.
     # `next_attempt` already includes the reattach that just failed; the
-    # fresh ExecutePlan is itself a retry, so it is allowed while the budget
-    # is not yet exceeded (`>`), and charged (+1) once issued. With
-    # `reattach_retries: 1` this still permits: transient error -> reattach ->
-    # OPERATION_NOT_FOUND -> one fresh ExecutePlan.
+    # fresh ExecutePlan is itself a retry and is charged (+1) once issued, so
+    # it is only allowed while the configured budget still has room
+    # (`next_attempt < max_retries`). `reattach_retries: N` therefore never
+    # issues more than N retries in total (reattaches plus fresh executes).
     cond do
       ctx.stream_closed_fun.() ->
         {:halt, state}
 
-      next_attempt > ctx.policy.max_retries ->
+      next_attempt >= ctx.policy.max_retries ->
         reattach_max_retries_error(%{state | attempt: next_attempt})
 
       true ->

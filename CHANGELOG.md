@@ -9,67 +9,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Wave 5 behaviour changes** (see `BUGS_TRIAGED.txt` T-28, T-38, T-47..T-49,
-  T-56, T-58, T-59):
+- **API consistency and behaviour-changing defaults**:
   - `DataFrame.dtypes/1` returns PySpark `simpleString` (lowercase, no spaces:
     `bigint`, `array<string>`, `map<string,int>`, `struct<a:int,b:string>`,
     `decimal(10,2)`, `void`) instead of uppercase DDL. New
-    `TypeMapper.simple_string/1`; `data_type_to_ddl/1` is unchanged (T-59).
+    `TypeMapper.simple_string/1`; `data_type_to_ddl/1` is unchanged.
   - `UDFRegistration.register_udtf/4` defaults `:deterministic` to `false`,
     matching PySpark's `UserDefinedTableFunction`. Pass `deterministic: true`
-    to keep the previous behaviour (T-28).
+    to keep the previous behaviour.
   - `create_dataframe/3` with list rows and no `:schema` returns
     `{:error, {:cannot_determine_type, column}}` when a column (or nested
     element type) is `nil` in every row, matching PySpark's
-    `CANNOT_DETERMINE_TYPE`, instead of silently inferring STRING (T-48).
+    `CANNOT_DETERMINE_TYPE`, instead of silently inferring STRING.
   - `create_dataframe/3` map rows without an explicit schema order columns by
     the sorted union of row keys (PySpark parity); previously first-seen order,
-    which was non-deterministic for more than 32 keys or mixed key types
-    (T-47). A `:schema` column-name list shorter than the tuple width is padded
+    which was non-deterministic for more than 32 keys or mixed key types.
+    A `:schema` column-name list shorter than the tuple width is padded
     with `_N` (1-based, continuing after the supplied names) instead of being
-    rejected; longer lists remain an error (T-49).
+    rejected; longer lists remain an error.
   - `Functions.col/1`, `DataFrame.col/2`, `with_column(s)`, `drop/2`, `NA`
     subsets and fill keys, `GroupedData` shortcuts and window specs accept atom
     column names through a shared normaliser (`SparkEx.Internal.ColumnName`)
     and raise `ArgumentError` for `nil`/`true`/`false` instead of producing a
-    column named `"nil"` (T-38). Other name-taking helpers (`Stat`, `TableArg`,
+    column named `"nil"`. Other name-taking helpers (`Stat`, `TableArg`,
     `WriterV2.partitioned_by`) still stringify any atom. `Window.partition_by/2` on an existing `WindowSpec`
     and `DataFrame.sort/3` (options like `order_by/3`) were added.
   - `Functions.uuid/0` bakes a random seed (`uuid(<seed>)`) like PySpark, so
-    plans are no longer byte-identical across calls (T-58).
+    plans are no longer byte-identical across calls.
   - `DataFrame.sample/4` raises for a non-keyword option list instead of
-    silently ignoring it (T-56).
+    silently ignoring it.
 
 ### Added
 
-- **`map_format: :map` option on `DataFrame.collect/2`** (FAB-16): opt-in
+- **`map_format: :map` option on `DataFrame.collect/2`**: opt-in
   decoding of MAP-typed columns into Elixir maps (recursively through
   arrays/structs), mirroring PySpark's dicts. The default wire representation
   (list of `%{"key" => k, "value" => v}` entries) is unchanged.
-- **Out-of-band interrupts** (FAB-15): `interrupt_all/tag/operation` now run
+- **Out-of-band interrupts**: `interrupt_all/tag/operation` now run
   from the caller's process against an ETS-published connection snapshot, so
   they can actually cancel a running operation instead of queueing behind it
-  on the Session GenServer (first slice of the NO_SERIALIZED_RPC plan).
+  on the Session GenServer.
 
 ### Fixed
 
-- **Wave 6 triage fixes — Spark 3.5 compatibility and parity polish** (see
-  `BUGS_TRIAGED.txt` T-29, T-34, T-63, T-64):
+- **Spark 3.5 compatibility**:
+  - As-of joins are no longer downgraded to a plain join on Spark 3.5 servers
+    (that dropped the as-of columns, tolerance, direction and exact-match
+    policy and could return different rows). `collect/1`, `count/1` and
+    `schema/1` now return
+    `{:error, {:unsupported_on_server, :as_of_join, message}}` on servers that
+    reject the AsOfJoin relation.
+  - The cached localRelation* configs are dropped after `config_set/2` and
+    `config_unset/2`, and a failed probe is remembered for 60 s instead of
+    being retried on every `create_dataframe/3`.
+  - `reattach_retries: N` is honoured strictly: reattaches and fresh
+    ExecutePlan re-issues together never exceed N retries (previously one
+    extra fresh ExecutePlan could be issued).
   - Spark 3.5 fallbacks for 4.x-only relations (lateral join, as-of join,
     transpose, table-valued functions) rewrite the unsupported node at any
     depth of the plan (for example under `select/2` or `filter/2`) and apply to
-    `count/1` and `schema/1` as well as `collect/1` (T-34). Table-valued
+    `count/1` and `schema/1` as well as `collect/1`. Table-valued
     functions anywhere in such a plan are rendered as SQL during the rewrite.
   - Cross-DataFrame column references inside `direct_shuffle_partition_id/2`
     are hoisted into `with_relations.references` instead of failing with
     "plan not found"; `SparkEx.sql/3` arguments accept every supported
     expression form (`call_function`, named arguments, `outer`,
     `update_fields`, aliases with metadata) instead of mis-encoding them as
-    literals (T-29).
+    literals.
   - Removing the last streaming query listener drains events still in flight
     and waits (default 300 ms, `config :spark_ex, listener_bus_drain_timeout_ms:`)
     for the server to close the stream before killing the reader task; the bus
-    drains to remaining listeners on shutdown too (T-63).
+    drains to remaining listeners on shutdown too.
   - `create_dataframe/3` reads `spark.sql.session.localRelationCacheThreshold`,
     `localRelationChunkSizeRows`, `localRelationChunkSizeBytes` and
     `localRelationBatchOfChunksSizeBytes` once per session (bounded 5 s RPC,
@@ -79,201 +89,187 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     or above it are cached (PySpark `>=` boundary), chunks are capped by rows
     and bytes, and uploads are batched. Servers without the 4.1 chunking
     configs (Spark 3.5) keep the 4 MiB client default so payloads stay inlined.
-    New `:cache_chunk_rows` option (T-64).
-
-### Fixed
-
-- **Wave 5 triage fixes** (see `BUGS_TRIAGED.txt` T-55, T-57, T-60, T-62):
+    New `:cache_chunk_rows` option.
   - Window frame bounds clamp only in the direction they face:
     `rows_between(MAX_INT64, 0)` no longer becomes an unbounded-following lower
-    bound (T-57).
+    bound.
   - `Stat.freq_items/3` validates `support` client-side (at least `1.0e-4`,
     at most `1.0`, the server's own bounds) with a clear `ArgumentError`
-    instead of an opaque server error (T-55).
+    instead of an opaque server error.
   - `on_query_idle/1` is an optional `StreamingQueryListener` callback; the bus
-    dispatches it only to listeners that implement it and no longer warns
-    (T-60).
-  - Docs: `DataFrame.alias_/2` example and the `StreamWriter.start/2` path note
-    (T-62).
+    dispatches it only to listeners that implement it and no longer warns.
+  - Docs: `DataFrame.alias_/2` example and the `StreamWriter.start/2` path note.
 
-- **Wave 4 triage fixes — decoder and result-shape correctness** (see
-  `BUGS_TRIAGED.txt` T-30..T-33, T-35, T-36, T-61):
+- **Decoder and result-shape correctness**:
   - `to_explorer/2` now applies the TIMESTAMP schema policy on non-empty
     frames: TIMESTAMP columns are always `{:datetime, :microsecond, "Etc/UTC"}`
     (previously the session time zone on non-empty frames and UTC on empty
     ones), and empty MAP/VARIANT/GEOMETRY/GEOGRAPHY/UDT columns get
-    structurally correct dtypes instead of `:null` (T-30).
+    structurally correct dtypes instead of `:null`.
     `TypeMapper.to_explorer_dtype/1` returns those structural dtypes instead of
     `nil`. Year-month/calendar interval columns still map to `nil` (Explorer
     has no interval dtype).
   - UDT deserialisers now apply to UDTs nested in arrays, maps and structs on
-    the collect, `to_local_iterator` and `to_explorer` paths (T-31).
+    the collect, `to_local_iterator` and `to_explorer` paths.
   - The JSON-projection fallback decodes nested DECIMAL (exact digits, via
     `Jason` `floats: :decimals`), TIMESTAMP (`DateTime`), TIMESTAMP_NTZ
     (`NaiveDateTime`), DATE (`Date`) and BINARY (raw bytes) leaves instead of
     leaving JSON scalars. Spark's `to_json` truncates timestamps to
-    milliseconds on this path (T-32).
+    milliseconds on this path.
   - `to_explorer/2` and `to_local_iterator/2` apply collect's Arrow preflight
     (duplicate-column renaming; JSON/STRING projection for shapes the decoder
     cannot handle) instead of surfacing `arrow_decode_failed`. The Explorer
     path projects only nested maps and unsupported scalars, so top-level
     struct/map/array columns stay native containers. `to_local_iterator`
     honours `map_format: :map` on projected plans. This adds one AnalyzePlan
-    round trip for SQL/read plans on those two paths (T-33).
+    round trip for SQL/read plans on those two paths.
   - Explorer-mode decoding no longer drops command-result response variants;
-    results gain `command_result`/`command_results` (T-61).
+    results gain `command_result`/`command_results`.
   - Progress handlers: payloads gain `stages`, `inflight_tasks`,
     `operation_id` and `done`; handlers are not invoked for zero-task frames,
     and exactly one `done: true` event fires at the end of every execution
     (including failures), mirroring PySpark. Handlers that counted invocations
-    see one extra call per execution (T-36).
+    see one extra call per execution.
   - `FetchErrorDetails` enrichment is lazy: retried RPC attempts no longer pay
     the up-to-5 s round trip; only the terminal error is enriched, once.
-    `%SparkEx.Error.Remote{}` gains `error_id` and `enriched?` (T-35).
+    `%SparkEx.Error.Remote{}` gains `error_id` and `enriched?`.
 
-### Fixed
-
-- **Wave 3 triage fixes — Session plumbing and option handling** (see
-  `BUGS_TRIAGED.txt` T-11, T-13, T-14, T-22, T-23, T-39, T-44..T-46,
-  T-50..T-54):
+- **Session plumbing and option handling**:
   - Out-of-band interrupts observe the server-side session id through the
     same integrity check as every other RPC: the first id learned via
     `Interrupt` republishes the connection snapshot and a rotated id closes
-    the session (T-11).
+    the session.
   - `map_format: :map` survives the unique-column and legacy collect retry
-    paths (T-13), is validated (`{:error, {:invalid_option, {:map_format, _}}}`
-    for typos) and is honoured by `to_local_iterator/2` (T-39).
+    paths, is validated (`{:error, {:invalid_option, {:map_format, _}}}`
+    for typos) and is honoured by `to_local_iterator/2`.
   - `DataFrame.count/2`, `show/2` and `html_string/2` forward DataFrame tags
-    and accept `:timeout` (T-14).
+    and accept `:timeout`.
   - Stream APIs no longer block behind a running execute when probing the
-    Session process (T-44); `Session.is_stopped/1` returns `true` for a
-    stopped session instead of exiting (T-45); tags are deduplicated (T-46).
+    Session process; `Session.is_stopped/1` returns `true` for a
+    stopped session instead of exiting; tags are deduplicated.
   - Reader/Writer/StreamReader/StreamWriter share one option-normalization
     path: keyword-list `:options` no longer crash `Reader.csv/3` and
     `StreamReader.rate/2`, equal `sep`/`separator` aliases are accepted,
     duplicate top-level/nested options raise consistently in all four
     builders (spelling-insensitively, so `multi_line:` and `"multiLine"`
     collide), and lowercase snake_case atom keys such as `multi_line:` are
-    sent as Spark's camelCase names instead of being silently ignored
-    (T-22, T-23, T-52). Dotted, uppercase or otherwise non-snake_case atoms,
+    sent as Spark's camelCase names instead of being silently ignored.
+    Dotted, uppercase or otherwise non-snake_case atoms,
     JDBC connection `properties` and `WriterV2` table properties are sent
     verbatim. Singular `option/3` accepts atom keys; `Writer.jdbc/4` accepts
     `properties:` like the reader.
   - Explicit `format: nil` / `schema: nil` on `load/3` keep the builder's
-    value (T-50); `StreamWriter.option(key, nil)` clears the option and `[]`
-    clears partition/bucket/cluster configuration (T-51).
+    value; `StreamWriter.option(key, nil)` clears the option and `[]`
+    clears partition/bucket/cluster configuration.
   - `StreamReader.schema/2` accepts a protobuf `DataType`; the
     non-partitioned `Reader.jdbc/4` accepts a `properties` map;
     `Reader.table/3` rejects a `%Reader{}` passed as the session with a clear
-    error (T-52, T-53).
+    error.
   - Catalog database DDL quotes dotted names per component and alter
-    builders accept keyword-list properties (T-54).
+    builders accept keyword-list properties.
 
-- **Wave 2 triage fixes — transport, retry and stream lifecycle** (see
-  `BUGS_TRIAGED.txt` T-03, T-08, T-09, T-15..T-19, T-37, T-41..T-43):
+- **Transport, retry and stream lifecycle**:
   - Managed streams (streaming listener event streams) now release their
     server-side execution when the owner process exits abnormally: the
-    controller is started unlinked and relies on the owner monitor (T-03).
+    controller is started unlinked and relies on the owner monitor.
     They also go through the reattachable execution machinery, so a graceful
-    EOF or transient transport loss reattaches instead of truncating (T-09).
+    EOF or transient transport loss reattaches instead of truncating.
   - The initial reattachable `ExecutePlan` RPC is retried with the reattach
-    policy like every other RPC (T-08); a fresh `ExecutePlan` after
-    `OPERATION_NOT_FOUND` now honours the retry budget instead of looping
-    (T-15); jitter is applied after the server-provided `RetryInfo` floor so
-    throttled clients no longer retry in lockstep (T-16).
+    policy like every other RPC; a fresh `ExecutePlan` after
+    `OPERATION_NOT_FOUND` now honours the retry budget instead of looping;
+    jitter is applied after the server-provided `RetryInfo` floor so
+    throttled clients no longer retry in lockstep.
   - Streaming listener bus: stopping the event stream no longer leaves the
-    bus permanently in a "closing" state (T-17), and a crashed reader task
-    reconnects with the same backoff as a transport error (T-18).
+    bus permanently in a "closing" state, and a crashed reader task
+    reconnects with the same backoff as a transport error.
   - Best-effort release and error-enrichment tasks tolerate
     `SparkEx.TaskSupervisor` being down during shutdown instead of taking a
-    successful result down with them (T-19).
+    successful result down with them.
   - TLS connections without `ssl_cacert` now explicitly request
     `verify_peer` with the OS CA store and HTTPS hostname checking, rather
     than relying on OTP/gun defaults (which only verify on OTP 26+);
-    `ssl_verify=none` remains an explicit opt-out (T-37).
-  - `DataFrame.to_arrow/2` forwards `max_rows`/`max_bytes` (T-41); the raw
-    reattachable stream halts at `ResultComplete` (T-42);
+    `ssl_verify=none` remains an explicit opt-out.
+  - `DataFrame.to_arrow/2` forwards `max_rows`/`max_bytes`; the raw
+    reattachable stream halts at `ResultComplete`;
     `SparkEx.Error.Remote` messages prefer the full server-side error text
-    over the truncated gRPC status message (T-43).
+    over the truncated gRPC status message.
 
-- **Wave 1 triage fixes** (see `BUGS_TRIAGED.txt` T-01..T-27, T-40):
+- **Crash and wrong-result fixes**:
   - `Session.artifact_status/2` validates its `names` argument instead of
-    crashing the shared Session process on protobuf encode (T-01).
+    crashing the shared Session process on protobuf encode.
   - `DataFrame.to_explorer(max_rows: :infinity)` no longer injects the atom
     into the remote int32 `LIMIT`; invalid `max_rows` values return
-    `{:error, {:invalid_option, _}}` even with `unsafe: true` (T-02).
+    `{:error, {:invalid_option, _}}` even with `unsafe: true`.
   - Explorer's non-finite float sentinels (`:nan`, `:infinity`,
     `:neg_infinity`) encode as DOUBLE literals and infer DOUBLE in
-    `create_dataframe`, instead of silently becoming strings (T-04).
+    `create_dataframe`, instead of silently becoming strings.
   - `count("*")`, `count_distinct("*")`, `GroupedData.count/2` and
     `DataFrame.col("*")`/`col("t.*")` route to star expressions; the
     `count(*)` -> `count(1)` rewrite now applies to every star form, and the
-    dict-agg star key is no longer aliased as `count(*)` (T-05, T-40).
+    dict-agg star key is no longer aliased as `count(*)`.
   - Integers outside the int64 range inside array/map literals infer a
-    DECIMAL element type consistently with their children (T-06).
+    DECIMAL element type consistently with their children.
   - `instr/2` treats its second argument as a literal substring, not a
-    column (T-07). `first_value`/`last_value` emit their own Spark functions
-    instead of `first`/`last` (T-25).
+    column. `first_value`/`last_value` emit their own Spark functions
+    instead of `first`/`last`.
   - The DDL top-level field splitter honours parentheses, backtick/single/
     double-quoted runs and escapes, so `DECIMAL(10, 2)` and comma-containing
-    comments no longer produce phantom fields (T-10).
+    comments no longer produce phantom fields.
   - The Spark 4.x parse-schema fallback rewrites every sibling parse
-    relation, not just the first changed one (T-12).
+    relation, not just the first changed one.
   - `Writer.jdbc/2,4` compose with an existing Writer builder and reject
-    partitioning/bucketing/clustering like Spark's `DataFrameWriter.jdbc`
-    (T-20). `Catalog.create_function` emits grammatical SQL for
-    `IF NOT EXISTS`, multiple resources and empty resource lists (T-21).
+    partitioning/bucketing/clustering like Spark's `DataFrameWriter.jdbc`.
+    `Catalog.create_function` emits grammatical SQL for
+    `IF NOT EXISTS`, multiple resources and empty resource lists.
   - `NA.replace` / `DataFrame.replace` raise when the replacement value is
-    omitted for a non-map `to_replace`, instead of replacing with `nil`
-    (T-24). `GroupedData.agg(%{})` and the numeric shortcuts accept an empty
-    aggregate set (distinct grouping keys), matching PySpark (T-26).
+    omitted for a non-map `to_replace`, instead of replacing with `nil`.
+    `GroupedData.agg(%{})` and the numeric shortcuts accept an empty
+    aggregate set (distinct grouping keys), matching PySpark.
   - Decimal types with unset precision/scale serialize as `decimal(10,0)`
-    rather than `decimal(,)` (T-27).
-
-- **`lateral_join/4` kept TVF right-sides correlated** (FAB-13): TVF plans were
-  silently downgraded to a regular join, so outer column references
-  (`tvf.explode(col("arr"))` against the left side) always failed with
-  `UNRESOLVED_COLUMN`. LateralJoin is now always encoded (PySpark parity); the
-  Spark 3.5 regular-join downgrade moved into the empty-relation legacy
-  fallback. `DataFrame.schema/dtypes` on `parse` plans also gained the UNPARSED
-  fallback (FAB-14), completing the FAB-11 fix.
-
-- **Legacy collect-retry rewrites were dead code** (FAB-11): the `{:plan_id, n, _}`
-  plan envelope broke pattern matching in every legacy fallback rewriter
-  (UNPARSED `parse` rewrite, grouping-sets, transpose/table-function/as-of-join
-  empty-relation rewrites). `DataFrame.parse/3,4` with a DDL string schema now
-  works again on Spark 4.x, including under filters/aggregates and via
-  `DataFrame.count/1` (the parse rewrite is now a deep tree rewrite).
-- **Timed `await_termination` returned a transport error instead of
-  `{:ok, false}`** (FAB-7): the client gRPC deadline equalled the server-side
-  wait, so the reply lost the race. The call deadline now carries 30s headroom.
-  Affects `StreamingQuery.await_termination/2` and
-  `StreamingQueryManager.await_any_termination/2`.
-- **Writer format shortcuts compose with the builder** (FAB-10):
-  `df |> DataFrame.write() |> Writer.mode(:overwrite) |> Writer.parquet(path)`
-  (the README idiom) crashed with a `KeyError`; `parquet/csv/json/orc/avro/xml/
-  text` now accept either a DataFrame or a Writer builder.
-- **`Column.asc/desc` (and `*_nulls_*` variants) accept column-name strings and
-  atoms** (FAB-12, V02_BLOCKERS L1) — PySpark parity; the README quick-start
-  `order_by([desc("salary")])` no longer raises.
-- **Reader option-collision handling matches Writer** (FAB-3): passing the same
-  option both top-level and inside `:options` now raises `ArgumentError`
-  (previously the generic reader path silently let `:options` win and
-  `Reader.csv/3` silently let top-level win).
-- **`create_dataframe` accepts keyword-list rows** (FAB-2) as the idiomatic
-  analogue of PySpark dict rows (previously a leaked `Jason.Encoder` error),
-  and rejects integers outside the 64-bit range with a clear message instead
-  of an opaque server-side `MALFORMED_RECORD_IN_PARSING` failure (FAB-6).
-- **`collect_as_map/2` errors on duplicate column names** (FAB-1) instead of
-  silently returning `key => key` pairs.
-- **`TableValuedFunction` accepts `%SparkEx.TableArg{}` arguments** (FAB-4)
-  directly (previously required hand-wrapping in a subquery expression).
-- **`lit/1` encodes atoms as strings and raises a descriptive `ArgumentError`
-  for unsupported literal shapes** (FAB-5) instead of leaking a
-  `FunctionClauseError` from the plan encoder.
-- **`trigger(once: true)` warning corrected** (FAB-8): Spark 4.x still accepts
-  `:once`; the warning now marks it deprecated rather than removed. Documented
-  the per-event-type `:data` shape of streaming listener events (FAB-9).
+    rather than `decimal(,)`.
+  - **`lateral_join/4` kept TVF right-sides correlated**: TVF plans were
+    silently downgraded to a regular join, so outer column references
+    (`tvf.explode(col("arr"))` against the left side) always failed with
+    `UNRESOLVED_COLUMN`. LateralJoin is now always encoded (PySpark parity); the
+    Spark 3.5 regular-join downgrade moved into the empty-relation legacy
+    fallback. `DataFrame.schema/dtypes` on `parse` plans also gained the UNPARSED
+    fallback.
+  - **Legacy collect-retry rewrites were dead code**: the `{:plan_id, n, _}`
+    plan envelope broke pattern matching in every legacy fallback rewriter
+    (UNPARSED `parse` rewrite, grouping-sets, transpose/table-function/as-of-join
+    empty-relation rewrites). `DataFrame.parse/3,4` with a DDL string schema now
+    works again on Spark 4.x, including under filters/aggregates and via
+    `DataFrame.count/1` (the parse rewrite is now a deep tree rewrite).
+  - **Timed `await_termination` returned a transport error instead of
+    `{:ok, false}`**: the client gRPC deadline equalled the server-side
+    wait, so the reply lost the race. The call deadline now carries 30s headroom.
+    Affects `StreamingQuery.await_termination/2` and
+    `StreamingQueryManager.await_any_termination/2`.
+  - **Writer format shortcuts compose with the builder**:
+    `df |> DataFrame.write() |> Writer.mode(:overwrite) |> Writer.parquet(path)`
+    (the README idiom) crashed with a `KeyError`; `parquet/csv/json/orc/avro/xml/
+    text` now accept either a DataFrame or a Writer builder.
+  - **`Column.asc/desc` (and `*_nulls_*` variants) accept column-name strings and
+    atoms** — PySpark parity; the README quick-start
+    `order_by([desc("salary")])` no longer raises.
+  - **Reader option-collision handling matches Writer**: passing the same
+    option both top-level and inside `:options` now raises `ArgumentError`
+    (previously the generic reader path silently let `:options` win and
+    `Reader.csv/3` silently let top-level win).
+  - **`create_dataframe` accepts keyword-list rows** as the idiomatic
+    analogue of PySpark dict rows (previously a leaked `Jason.Encoder` error),
+    and rejects integers outside the 64-bit range with a clear message instead
+    of an opaque server-side `MALFORMED_RECORD_IN_PARSING` failure.
+  - **`collect_as_map/2` errors on duplicate column names** instead of
+    silently returning `key => key` pairs.
+  - **`TableValuedFunction` accepts `%SparkEx.TableArg{}` arguments**
+    directly (previously required hand-wrapping in a subquery expression).
+  - **`lit/1` encodes atoms as strings and raises a descriptive `ArgumentError`
+    for unsupported literal shapes** instead of leaking a
+    `FunctionClauseError` from the plan encoder.
+  - **`trigger(once: true)` warning corrected**: Spark 4.x still accepts
+    `:once`; the warning now marks it deprecated rather than removed. Documented
+    the per-event-type `:data` shape of streaming listener events.
 
 ## [0.2.0] - 2026-06-20
 
@@ -308,7 +304,7 @@ streaming surfaces.
 
 ### Changed
 
-- Type rendering and `SqlCommand` encoding aligned with PySpark (F2).
+- Type rendering and `SqlCommand` encoding aligned with PySpark.
 - `config_is_modifiable` now returns a boolean.
 - `order_by` rejects integer (ordinal) sort keys in its ascending branches.
 - The `:once` streaming trigger now warns instead of raising (forward-compat
@@ -331,7 +327,7 @@ streaming surfaces.
   (test fixtures using `self()`) fall back to a per-process `:counters`
   ref. `DataFrame.col/2`, `col_regex/2`, and `metadata_column/2` capture
   the wrapped plan so column references carry their source DataFrame's id
-  end-to-end. This resolves the BUGS_PLAN_5 Stream A "known limitation"
+  end-to-end. This resolves a previously known limitation
   (same DataFrame as join child + subquery reference) — both sites
   resolve through the same id, no synthetic remap.
 - **Self-join wire format.** `df.join(df, …)` now produces
@@ -347,7 +343,7 @@ streaming surfaces.
 
 ### Fixed
 
-- **57 PySpark-parity issues** from the BUGS_FABLE audit, including: swapped
+- **57 PySpark-parity issues**, including: swapped
   `ltrim`/`rtrim` trim-string argument order; `mask/2` NULL defaults leaving
   text unmasked; Explorer `collect` crashes on interval/UDT/map/timezone and
   `:time` columns; window-frame boundary `0` mapping to `current_row`;

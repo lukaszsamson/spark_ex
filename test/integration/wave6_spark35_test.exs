@@ -40,15 +40,6 @@ defmodule SparkEx.Integration.Wave6Spark35Test do
     DataFrame.lateral_join(left, right, Column.eq(Functions.col("id"), Functions.col("rid")))
   end
 
-  defp as_of(session) do
-    left = SparkEx.sql(session, "SELECT * FROM VALUES (1, 10), (2, 20), (3, 30) AS t(id_l, t1)")
-    right = SparkEx.sql(session, "SELECT * FROM VALUES (1, 9), (2, 19), (3, 29) AS t(id_r, t2)")
-
-    DataFrame.as_of_join(left, right, Functions.col("t1"), Functions.col("t2"),
-      on: Column.eq(Functions.col("id_l"), Functions.col("id_r"))
-    )
-  end
-
   describe "T-34: lateral join below other operators" do
     test "under select", %{session: session} do
       df =
@@ -82,17 +73,37 @@ defmodule SparkEx.Integration.Wave6Spark35Test do
     end
   end
 
-  describe "T-34: as-of join below other operators" do
-    test "under select and filter", %{session: session} do
+  describe "as-of join below other operators" do
+    # Rows where a plain equi-join and a backward as-of join disagree: id 2 has
+    # two right candidates (19 and 25); the as-of match for t1=20 is 19 only.
+    test "keeps as-of semantics on 4.x and refuses clearly on 3.5", %{session: session} do
+      left = SparkEx.sql(session, "SELECT * FROM VALUES (1, 10), (2, 20), (3, 30) AS t(id_l, t1)")
+
+      right =
+        SparkEx.sql(
+          session,
+          "SELECT * FROM VALUES (1, 9), (2, 19), (2, 25), (3, 29) AS t(id_r, t2)"
+        )
+
       df =
-        as_of(session)
+        DataFrame.as_of_join(left, right, Functions.col("t1"), Functions.col("t2"),
+          on: Column.eq(Functions.col("id_l"), Functions.col("id_r"))
+        )
         |> DataFrame.select(["id_l", "t1", "t2"])
         |> DataFrame.filter(Column.gte(Functions.col("id_l"), Functions.lit(2)))
         |> DataFrame.order_by(["id_l"])
 
-      assert {:ok, rows} = DataFrame.collect(df)
-      assert Enum.map(rows, &{&1["id_l"], &1["t1"], &1["t2"]}) == [{2, 20, 19}, {3, 30, 29}]
-      assert {:ok, 2} = DataFrame.count(df)
+      {:ok, version} = SparkEx.spark_version(session)
+
+      if String.starts_with?(version, "3.") do
+        assert {:error, {:unsupported_on_server, :as_of_join, _}} = DataFrame.collect(df)
+        assert {:error, {:unsupported_on_server, :as_of_join, _}} = DataFrame.count(df)
+        assert {:error, {:unsupported_on_server, :as_of_join, _}} = DataFrame.schema(df)
+      else
+        assert {:ok, rows} = DataFrame.collect(df)
+        assert Enum.map(rows, &{&1["id_l"], &1["t1"], &1["t2"]}) == [{2, 20, 19}, {3, 30, 29}]
+        assert {:ok, 2} = DataFrame.count(df)
+      end
     end
   end
 
