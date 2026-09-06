@@ -228,14 +228,16 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
       df =
         SparkEx.sql(
           session,
-          "SELECT count(*) AS c FROM range(0, 20000000) a CROSS JOIN range(0, 20000000) b"
+          # A range aggregate keeps only the aggregate state in memory while still requiring
+          # enough work for the control session to observe and cancel it. The old Cartesian
+          # product could exhaust the Connect driver's heap before cancellation completed.
+          "SELECT sum(sin(id)) AS c FROM range(0, 1000000000)"
         )
         |> SparkEx.DataFrame.tag(tag)
 
-      task = Task.async(fn -> SparkEx.DataFrame.collect(df, timeout: 120_000) end)
-
       # Use a second session handle with the same session_id so we can interrupt while
-      # the original session process is busy servicing the long-running execute call.
+      # the original session process is busy servicing the long-running execute call. Set it
+      # up before the task starts so the blocking collect cannot delay this state lookup.
       state = SparkEx.Session.get_state(session)
 
       {:ok, control_session} =
@@ -252,6 +254,8 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
         if Process.alive?(control_session), do: SparkEx.Session.stop(control_session)
       end)
 
+      task = Task.async(fn -> SparkEx.DataFrame.collect(df, timeout: 120_000) end)
+
       assert {:ok, _interrupted_ids} = wait_for_interrupt(control_session, tag, 150)
 
       assert {:error, %SparkEx.Error.Remote{} = error} = Task.await(task, 60_000)
@@ -266,6 +270,12 @@ defmodule SparkEx.Integration.SessionLifecycleTest do
                  "INVALID_HANDLE.SESSION_NOT_FOUND"
                ] or
                error.grpc_status in [4, 13, 14]
+
+      # Cancellation is scoped to the operation; it must not stop the shared SparkContext.
+      assert {:ok, [%{"still_alive" => 1}]} =
+               session
+               |> SparkEx.sql("SELECT 1 AS still_alive")
+               |> SparkEx.DataFrame.collect()
     end
   end
 

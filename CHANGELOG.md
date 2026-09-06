@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extend CI to Elixir 1.20 / OTP 29 and Spark 4.2, including 4.2 test exclusions
   on older servers; pin the PySpark function inventory so parity also runs in
   clean CI checkouts, with no missing-function allowance.
+- Bound the cancellation integration test's memory use and verify the session
+  remains usable afterward. Print Spark server diagnostics when CI fails.
 
 
 ### Changed

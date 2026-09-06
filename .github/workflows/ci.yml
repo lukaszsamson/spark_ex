@@ -185,9 +185,14 @@ jobs:
           exit 1
 
       - name: Run integration tests
+        timeout-minutes: 20
         run: mix test
         env:
           SPARK_REMOTE: sc://localhost:15002
+
+      - name: Print Spark diagnostics on failure
+        if: failure() || cancelled()
+        run: tail -n 300 "$SPARK_HOME"/logs/*.out 2>/dev/null || true
 
       - name: Stop Spark Connect server
         if: always()
@@ -295,6 +300,10 @@ jobs:
         run: tools/run_checklist.sh
         env:
           SPARK_REMOTE: sc://localhost:15002
+
+      - name: Print Spark diagnostics on failure
+        if: failure() || cancelled()
+        run: tail -n 300 "$SPARK_HOME"/logs/*.out 2>/dev/null || true
 
       - name: Stop Spark Connect server
         if: always()
