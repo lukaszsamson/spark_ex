@@ -29,6 +29,8 @@ defmodule SparkEx do
   - `:session_id` — custom session UUID (default: auto-generated)
   - `:allow_arrow_batch_chunking` — allow server-side Arrow chunk splitting (default: `true`)
   - `:preferred_arrow_chunk_size` — preferred chunk size in bytes (default: `nil`)
+  - `:plan_compression` — negotiate optional ZSTD plan compression (default: `false`);
+    requires OTP with the `:zstd` module (OTP 28+)
 
   URI parameters `use_ssl=true` and `token=<value>` are supported in the connection string
   (e.g. `"sc://host:port/;use_ssl=true;token=abc123"`). Providing a `token` automatically

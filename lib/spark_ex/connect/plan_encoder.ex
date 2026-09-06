@@ -9,6 +9,7 @@ defmodule SparkEx.Connect.PlanEncoder do
     DataType,
     Expression,
     LocalRelation,
+    NearestByJoin,
     Plan,
     Relation,
     RelationCommon,
@@ -916,6 +917,33 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   def encode_relation(
+        {:nearest_by_join, left_plan, right_plan, ranking_expression, num_results, join_type,
+         mode, direction},
+        counter
+      ) do
+    {plan_id, counter} = next_id(counter)
+    {left, counter} = encode_relation(left_plan, counter)
+    {right, counter} = encode_relation(right_plan, counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:nearest_by_join,
+         %NearestByJoin{
+           left: left,
+           right: right,
+           ranking_expression: encode_expression(ranking_expression),
+           num_results: num_results,
+           join_type: join_type,
+           mode: mode,
+           direction: direction
+         }}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation(
         {:as_of_join, left_plan, right_plan, left_as_of, right_as_of, join_expr, using_columns,
          join_type, tolerance, allow_exact_matches, direction},
         counter
@@ -1686,7 +1714,7 @@ defmodule SparkEx.Connect.PlanEncoder do
            function: encode_expression(body),
            arguments:
              Enum.map(variables, fn {:lambda_var, name} ->
-               %Expression.UnresolvedNamedLambdaVariable{name_parts: [name]}
+               named_lambda_variable(name)
              end)
          }}
     }
@@ -1694,9 +1722,7 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   def encode_expression({:lambda_var, name}) do
     %Expression{
-      expr_type:
-        {:unresolved_named_lambda_variable,
-         %Expression.UnresolvedNamedLambdaVariable{name_parts: [name]}}
+      expr_type: {:unresolved_named_lambda_variable, named_lambda_variable(name)}
     }
   end
 
@@ -2413,6 +2439,23 @@ defmodule SparkEx.Connect.PlanEncoder do
   defp rewrite_plan({:subquery_alias, child_plan, alias_name}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
     {{:subquery_alias, child_plan, alias_name}, plan_ids, refs, counter}
+  end
+
+  defp rewrite_plan(
+         {:nearest_by_join, left_plan, right_plan, ranking_expression, num_results, join_type,
+          mode, direction},
+         plan_ids,
+         refs,
+         counter
+       ) do
+    {left_plan, plan_ids, refs, counter} = rewrite_plan(left_plan, plan_ids, refs, counter)
+    {right_plan, plan_ids, refs, counter} = rewrite_plan(right_plan, plan_ids, refs, counter)
+
+    {ranking_expression, plan_ids, refs, counter} =
+      rewrite_expr(ranking_expression, plan_ids, refs, counter)
+
+    {{:nearest_by_join, left_plan, right_plan, ranking_expression, num_results, join_type, mode,
+      direction}, plan_ids, refs, counter}
   end
 
   defp rewrite_plan(
@@ -4097,5 +4140,13 @@ defmodule SparkEx.Connect.PlanEncoder do
         precision = max(int_digits + scale, 1)
         {precision, scale}
     end
+  end
+
+  defp named_lambda_variable(name) when is_binary(name) and byte_size(name) > 0 do
+    %Expression.UnresolvedNamedLambdaVariable{name_parts: [name]}
+  end
+
+  defp named_lambda_variable(name) do
+    raise ArgumentError, "lambda variable name must be a nonempty string, got: #{inspect(name)}"
   end
 end

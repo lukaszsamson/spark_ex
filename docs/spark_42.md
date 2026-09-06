@@ -17,6 +17,13 @@ Spark's distributed sequence expression. It is tested on Spark 4.1.1 and 4.2.0.
 Assignments are not guaranteed stable after repartitioning or recomputation.
 `SparkEx.empty_dataframe/2` accepts an explicit DDL or Types struct schema.
 
+Zero columns do not imply zero rows. Local lists of empty maps, tuples, or lists
+preserve their length; collection and iteration return that many empty maps.
+Arrow results retain their cardinality, and single-batch Explorer results keep
+their native height. When Explorer's zero-column batch concatenation would drop
+rows, `to_explorer` returns `{:unsupported_zero_column_explorer, %{row_count: n}}`
+inside an error tuple. Use row collection or raw Arrow for those results.
+
 `Reader.json/csv/xml` accept a DataFrame containing one string column, as well as
 their existing file inputs. Reader options and schemas carry through to Parse;
 input and reader must belong to the same session. DDL normalization uses a
@@ -94,3 +101,49 @@ DataFrame.agg(df, [Functions.expr("collect_list(value) IGNORE NULLS AS values")]
 The same clauses apply to `collect_set`. Aggregate element order is unspecified.
 Binary gRPC metadata values ending in `-bin` are raw bytes; the installed adapter
 performs base64 encoding once. Do not pre-encode those values.
+
+## SQL vector functions
+
+Spark 4.2 adds server-side vector SQL functions that have no PySpark wrapper:
+`vector_cosine_similarity`, `vector_inner_product`, `vector_l2_distance`,
+`vector_norm`, `vector_normalize`, `vector_avg`, and `vector_sum`. SparkEx exposes
+them through `SparkEx.Functions`. Vectors must be `ARRAY<FLOAT>`; cast ordinary
+numeric arrays explicitly, for example `expr("CAST(array(3.0, 4.0) AS ARRAY<FLOAT>)")`.
+`vector_norm/1` and `vector_normalize/1` encode the default L2 degree as a FLOAT;
+their optional literal degree must be an Elixir float, while a `Column` can supply
+a dynamically typed degree. Spark evaluates all vector operations, including
+dimension and degree errors.
+
+## Nearest-by joins
+
+`DataFrame.nearest_by_join(left, right, ranking, k, opts)` ranks right-hand rows
+separately for each left-hand row. Both inputs must use the same session.
+Specify `mode: :exact` or `:approx` and `direction: :distance` (smallest first)
+or `:similarity` (largest first). `k` is between 1 and 100,000;
+`join_type: :left_outer` retains left-hand rows without a match.
+
+For vector search, build a ranking expression with
+`Functions.vector_l2_distance(DataFrame.col(left, "embedding"),
+DataFrame.col(right, "embedding"))`. Alias reused DataFrames to distinguish
+their column references. Approximate execution depends on Spark's supported
+ranking expressions and may return different matches from exact execution.
+Ties do not promise stable ordering; exact mode also permits nondeterministic
+ranking expressions.
+
+## Client call-site diagnostics
+
+Set `config :spark_ex, :debug_client_call_stack, true`, or the environment
+variable `SPARK_CONNECT_DEBUG_CLIENT_CALL_STACK=true`, to attach available
+Elixir caller frames to ExecutePlan, AnalyzePlan, and Config requests.
+This is disabled by default because the metadata includes local filenames and
+line numbers. Frames are captured before the Session process boundary, with
+SparkEx internals filtered out; BEAM tail-call optimization can remove frames.
+
+The extension uses Spark's `FetchErrorDetailsResponse.Error` message and is
+available to server instrumentation. Stock Spark does not automatically log
+this extension. This option does not change server-side error stack traces.
+
+Artifact helpers continue to accept native filesystem paths, with literal
+spaces and percent characters. They do not decode `file://` URIs or expand
+Windows drive/UNC paths using POSIX rules; native path interpretation belongs
+to the host filesystem.

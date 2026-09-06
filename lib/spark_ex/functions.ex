@@ -2339,6 +2339,23 @@ defmodule SparkEx.Functions do
           "expected a Column, string/atom column name, or integer literal, got: #{inspect(other)}"
   end
 
+  # Spark's vector functions require FLOAT degrees. Elixir float literals are
+  # encoded as Spark DOUBLE literals, so preserve explicit Column expressions
+  # and cast literal floats before sending them to the server.
+  defp to_expr_or_lit_float(%Column{expr: e}), do: e
+  defp to_expr_or_lit_float(name) when is_binary(name), do: {:col, name}
+
+  defp to_expr_or_lit_float(name)
+       when is_atom(name) and not is_nil(name) and not is_boolean(name),
+       do: {:col, Atom.to_string(name)}
+
+  defp to_expr_or_lit_float(value) when is_float(value), do: {:cast, {:lit, value}, "float"}
+
+  defp to_expr_or_lit_float(other) do
+    raise ArgumentError,
+          "expected a Column, string/atom column name, or float literal, got: #{inspect(other)}"
+  end
+
   defp normalize_uniform_bound(%Column{expr: expr}), do: expr
   defp normalize_uniform_bound(name) when is_binary(name), do: {:col, name}
   defp normalize_uniform_bound(value), do: {:lit, value}

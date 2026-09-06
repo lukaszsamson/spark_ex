@@ -45,6 +45,7 @@ defmodule SparkEx.Connect.ResultDecoder do
           | {:invalid_arrow_batch, String.t()}
           | {:invalid_arrow_batch_row_count,
              %{expected: non_neg_integer(), got: non_neg_integer()}}
+          | {:unsupported_zero_column_explorer, %{row_count: pos_integer()}}
           | {:arrow_decode_failed, term()}
           | {:unsupported_response_type, atom()}
 
@@ -735,7 +736,8 @@ defmodule SparkEx.Connect.ResultDecoder do
 
     case state.current_chunked_batch do
       nil ->
-        with :ok <- validate_batch_start_offset(state, batch),
+        with :ok <- validate_nonnegative_row_count(batch.row_count),
+             :ok <- validate_batch_start_offset(state, batch),
              :ok <- validate_new_batch_chunk_index(chunk_index) do
           if num_chunks > 1 do
             {:ok,
@@ -755,7 +757,8 @@ defmodule SparkEx.Connect.ResultDecoder do
         end
 
       current ->
-        with :ok <- validate_continuation_chunk_index(current, chunk_index),
+        with :ok <- validate_nonnegative_row_count(batch.row_count),
+             :ok <- validate_continuation_chunk_index(current, chunk_index),
              :ok <- validate_continuation_num_chunks(current, num_chunks),
              :ok <- validate_continuation_row_count(current, batch.row_count),
              :ok <- validate_continuation_start_offset(current, batch.start_offset) do
@@ -782,7 +785,8 @@ defmodule SparkEx.Connect.ResultDecoder do
 
     case state.current_chunked_batch do
       nil ->
-        with :ok <- validate_batch_start_offset(state, batch),
+        with :ok <- validate_nonnegative_row_count(batch.row_count),
+             :ok <- validate_batch_start_offset(state, batch),
              :ok <- validate_new_batch_chunk_index(chunk_index) do
           if num_chunks > 1 do
             {:ok, [],
@@ -802,7 +806,8 @@ defmodule SparkEx.Connect.ResultDecoder do
         end
 
       current ->
-        with :ok <- validate_continuation_chunk_index(current, chunk_index),
+        with :ok <- validate_nonnegative_row_count(batch.row_count),
+             :ok <- validate_continuation_chunk_index(current, chunk_index),
              :ok <- validate_continuation_num_chunks(current, num_chunks),
              :ok <- validate_continuation_row_count(current, batch.row_count),
              :ok <- validate_continuation_start_offset(current, batch.start_offset) do
@@ -824,7 +829,7 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp decode_batch_for_rows_stream(state, ipc_data, expected_row_count) do
-    with {:ok, rows} <- decode_single_batch(ipc_data),
+    with {:ok, rows} <- decode_single_batch(ipc_data, expected_row_count, state.schema),
          :ok <- validate_row_count(rows, expected_row_count) do
       num_rows = length(rows)
 
@@ -848,7 +853,8 @@ defmodule SparkEx.Connect.ResultDecoder do
 
     case state.current_chunked_batch do
       nil ->
-        with :ok <- validate_batch_start_offset(state, batch),
+        with :ok <- validate_nonnegative_row_count(batch.row_count),
+             :ok <- validate_batch_start_offset(state, batch),
              :ok <- validate_new_batch_chunk_index(chunk_index) do
           if num_chunks > 1 do
             {:ok,
@@ -868,7 +874,8 @@ defmodule SparkEx.Connect.ResultDecoder do
         end
 
       current ->
-        with :ok <- validate_continuation_chunk_index(current, chunk_index),
+        with :ok <- validate_nonnegative_row_count(batch.row_count),
+             :ok <- validate_continuation_chunk_index(current, chunk_index),
              :ok <- validate_continuation_num_chunks(current, num_chunks),
              :ok <- validate_continuation_row_count(current, batch.row_count),
              :ok <- validate_continuation_start_offset(current, batch.start_offset) do
@@ -1038,6 +1045,13 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
+  defp validate_nonnegative_row_count(row_count) when is_integer(row_count) and row_count >= 0,
+    do: :ok
+
+  defp validate_nonnegative_row_count(row_count) do
+    {:error, {:invalid_arrow_batch, "row_count must be non-negative, got #{inspect(row_count)}"}}
+  end
+
   defp validate_continuation_start_offset(_current, nil), do: :ok
 
   defp validate_continuation_start_offset(current, start_offset) do
@@ -1051,7 +1065,7 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   defp decode_and_append_batch(state, ipc_data, expected_row_count) do
-    with {:ok, rows} <- decode_single_batch(ipc_data),
+    with {:ok, rows} <- decode_single_batch(ipc_data, expected_row_count, state.schema),
          :ok <- validate_row_count(rows, expected_row_count) do
       num_rows = length(rows)
 
@@ -1084,20 +1098,20 @@ defmodule SparkEx.Connect.ResultDecoder do
   # Each Arrow batch from Spark is a standalone IPC stream (schema + record batch).
   # Decode each batch into rows.
 
-  defp decode_single_batch(ipc_data) do
+  defp decode_single_batch(ipc_data, expected_row_count, wire_schema) do
     case safe_load_ipc_stream(ipc_data) do
       {:ok, df} ->
-        safe_dataframe_to_rows(df)
+        dataframe_to_rows(df, expected_row_count, wire_schema)
 
       {:error, err_stream} ->
-        decode_with_fallback(ipc_data, err_stream)
+        decode_with_fallback(ipc_data, err_stream, expected_row_count, wire_schema)
     end
   end
 
-  defp decode_with_fallback(ipc_data, err_stream) do
+  defp decode_with_fallback(ipc_data, err_stream, expected_row_count, wire_schema) do
     case safe_load_ipc(ipc_data) do
       {:ok, df} ->
-        safe_dataframe_to_rows(df)
+        dataframe_to_rows(df, expected_row_count, wire_schema)
 
       {:error, _} ->
         {:error, {:arrow_decode_failed, err_stream}}
@@ -1112,7 +1126,8 @@ defmodule SparkEx.Connect.ResultDecoder do
 
     case state.current_chunked_batch do
       nil ->
-        with :ok <- validate_batch_start_offset(state, batch),
+        with :ok <- validate_nonnegative_row_count(batch.row_count),
+             :ok <- validate_batch_start_offset(state, batch),
              :ok <- validate_new_batch_chunk_index(chunk_index) do
           if num_chunks > 1 do
             {:ok,
@@ -1132,7 +1147,8 @@ defmodule SparkEx.Connect.ResultDecoder do
         end
 
       current ->
-        with :ok <- validate_continuation_chunk_index(current, chunk_index),
+        with :ok <- validate_nonnegative_row_count(batch.row_count),
+             :ok <- validate_continuation_chunk_index(current, chunk_index),
              :ok <- validate_continuation_num_chunks(current, num_chunks),
              :ok <- validate_continuation_row_count(current, batch.row_count),
              :ok <- validate_continuation_start_offset(current, batch.start_offset) do
@@ -1168,15 +1184,16 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   defp append_explorer_df(state, df, batch_bytes, new_total_bytes, expected_row_count) do
     num_rows = Explorer.DataFrame.n_rows(df)
+    wire_num_records = state.num_records + expected_row_count
 
-    if num_rows != expected_row_count do
-      {:error, {:invalid_arrow_batch_row_count, %{expected: expected_row_count, got: num_rows}}}
-    else
-      new_num_records = state.num_records + num_rows
+    cond do
+      exceeds_limit?(wire_num_records, state.max_rows) ->
+        rows_limit_error(state.max_rows, wire_num_records)
 
-      if exceeds_limit?(new_num_records, state.max_rows) do
-        rows_limit_error(state.max_rows, new_num_records)
-      else
+      num_rows != expected_row_count ->
+        {:error, {:invalid_arrow_batch_row_count, %{expected: expected_row_count, got: num_rows}}}
+
+      true ->
         :telemetry.execute(
           [:spark_ex, :result, :batch],
           %{row_count: num_rows, bytes: batch_bytes},
@@ -1187,10 +1204,9 @@ defmodule SparkEx.Connect.ResultDecoder do
          %{
            state
            | dataframes: [df | state.dataframes],
-             num_records: new_num_records,
+             num_records: wire_num_records,
              total_bytes: new_total_bytes
          }}
-      end
     end
   end
 
@@ -1259,6 +1275,25 @@ defmodule SparkEx.Connect.ResultDecoder do
     end
   end
 
+  # `Explorer.DataFrame.to_rows/1` returns `[]` for a positive-height,
+  # zero-column DataFrame even though the native frame retains its height.
+  # Reconstruct the only possible row value (`%{}`) from that independently
+  # decoded height; the caller then validates it against ArrowBatch.row_count.
+  defp dataframe_to_rows(df, expected_row_count, wire_schema) do
+    zero_columns? = Explorer.DataFrame.n_columns(df) == 0
+    decoded_row_count = Explorer.DataFrame.n_rows(df)
+
+    if zero_columns? and expected_row_count > 0 and zero_column_wire_schema?(wire_schema) do
+      {:ok, List.duplicate(%{}, decoded_row_count)}
+    else
+      safe_dataframe_to_rows(df)
+    end
+  end
+
+  defp zero_column_wire_schema?(nil), do: true
+  defp zero_column_wire_schema?(%Spark.Connect.DataType{kind: {:struct, %{fields: []}}}), do: true
+  defp zero_column_wire_schema?(_schema), do: false
+
   defp finalize_explorer_result(%{dataframes: []} = state) do
     empty_df = build_empty_dataframe_from_schema(state.schema)
 
@@ -1271,23 +1306,36 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   defp finalize_explorer_result(%{dataframes: dfs} = state) do
     ordered = Enum.reverse(dfs)
-    # Re-project each batch to the first batch's column order before
-    # `concat_rows`. Without this, two batches whose names match but
-    # whose orderings differ would produce a silently permuted frame.
-    # When a wire schema is present, `apply_schema_policy/2` enforces
-    # the authoritative order afterwards.
-    aligned =
-      case ordered do
-        [first | _] ->
-          target_names = Explorer.DataFrame.names(first)
-          Enum.map(ordered, fn df -> Explorer.DataFrame.select(df, target_names) end)
+    [first | _] = ordered
+    target_names = Explorer.DataFrame.names(first)
 
-        [] ->
-          []
+    if target_names == [] do
+      finalize_zero_column_explorer_result(ordered, state)
+    else
+      # Re-project each batch to the first batch's column order before
+      # `concat_rows`. Without this, two batches whose names match but
+      # whose orderings differ would produce a silently permuted frame.
+      # When a wire schema is present, `apply_schema_policy/2` enforces
+      # the authoritative order afterwards.
+      aligned = Enum.map(ordered, fn df -> Explorer.DataFrame.select(df, target_names) end)
+
+      combined = Explorer.DataFrame.concat_rows(aligned)
+      {:ok, explorer_result(state, apply_schema_policy(combined, state.schema))}
+    end
+  end
+
+  defp finalize_zero_column_explorer_result(dataframes, state) do
+    if Enum.any?(dataframes, &(Explorer.DataFrame.n_columns(&1) != 0)) do
+      {:error, {:invalid_arrow_batch, "inconsistent column schemas across Arrow batches"}}
+    else
+      case Enum.find(dataframes, &(Explorer.DataFrame.n_rows(&1) == state.num_records)) do
+        nil ->
+          {:error, {:unsupported_zero_column_explorer, %{row_count: state.num_records}}}
+
+        dataframe ->
+          {:ok, explorer_result(state, apply_schema_policy(dataframe, state.schema))}
       end
-
-    combined = Explorer.DataFrame.concat_rows(aligned)
-    {:ok, explorer_result(state, apply_schema_policy(combined, state.schema))}
+    end
   end
 
   defp explorer_result(state, dataframe) do

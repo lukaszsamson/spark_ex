@@ -3,6 +3,7 @@ defmodule SparkEx.Unit.Spark42FunctionsTest do
 
   alias SparkEx.Column
   alias SparkEx.Functions, as: F
+  alias SparkEx.Macros.FunctionRegistry
 
   test "new scalar functions preserve column argument order" do
     assert %Column{expr: {:fn, "is_valid_variant", [{:col, "v"}], false}} =
@@ -73,6 +74,32 @@ defmodule SparkEx.Unit.Spark42FunctionsTest do
              F.kll_merge_agg_float("s", 200)
   end
 
+  test "registry includes the complete tuple and KLL merge inventories" do
+    names = FunctionRegistry.registry() |> Enum.map(&elem(&1, 0))
+
+    for type <- [:double, :integer],
+        prefix <- [
+          :tuple_sketch_agg,
+          :tuple_union_agg,
+          :tuple_intersection_agg,
+          :tuple_sketch_estimate,
+          :tuple_sketch_summary,
+          :tuple_sketch_theta,
+          :tuple_union,
+          :tuple_intersection,
+          :tuple_difference,
+          :tuple_difference_theta,
+          :tuple_intersection_theta,
+          :tuple_union_theta
+        ] do
+      assert String.to_atom("#{prefix}_#{type}") in names
+    end
+
+    for type <- [:bigint, :float, :double] do
+      assert String.to_atom("kll_merge_agg_#{type}") in names
+    end
+  end
+
   test "geospatial overloads follow PySpark literal and expression coercion" do
     assert %Column{expr: {:fn, "ST_AsBinary", [{:col, "geo"}, {:lit, "little-endian"}], false}} =
              F.st_asbinary("geo", "little-endian")
@@ -85,5 +112,39 @@ defmodule SparkEx.Unit.Spark42FunctionsTest do
 
     assert F.st_geomfromwkb("wkb", nil) == F.st_geomfromwkb("wkb")
     assert F.st_geomfromwkb("wkb", srid: nil) == F.st_geomfromwkb("wkb")
+  end
+
+  test "SQL-only vector functions preserve vector arguments and cast literal degrees to FLOAT" do
+    for {name, spark_name} <- [
+          {:vector_cosine_similarity, "vector_cosine_similarity"},
+          {:vector_inner_product, "vector_inner_product"},
+          {:vector_l2_distance, "vector_l2_distance"}
+        ] do
+      assert %Column{expr: {:fn, ^spark_name, [{:col, "left"}, {:col, "right"}], false}} =
+               apply(F, name, ["left", "right"])
+    end
+
+    for name <- [:vector_norm, :vector_normalize] do
+      assert %Column{
+               expr: {:fn, _, [{:col, "vector"}, {:cast, {:lit, 2.0}, "float"}], false}
+             } = apply(F, name, ["vector"])
+
+      assert %Column{
+               expr: {:fn, _, [{:col, "vector"}, {:cast, {:lit, 1.0}, "float"}], false}
+             } = apply(F, name, ["vector", 1.0])
+
+      degree = F.col("degree")
+
+      assert %Column{expr: {:fn, _, [{:col, "vector"}, degree_expr], false}} =
+               apply(F, name, ["vector", degree])
+
+      assert degree_expr == degree.expr
+
+      assert_raise ArgumentError, ~r/float literal/, fn -> apply(F, name, ["vector", 2]) end
+    end
+
+    for name <- [:vector_avg, :vector_sum] do
+      assert %Column{expr: {:fn, _, [{:col, "vector"}], false}} = apply(F, name, ["vector"])
+    end
   end
 end

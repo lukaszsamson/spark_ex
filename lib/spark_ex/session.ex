@@ -31,7 +31,9 @@ defmodule SparkEx.Session do
     released: false,
     closed: false,
     retry_policies: nil,
-    local_relation_configs: nil
+    local_relation_configs: nil,
+    plan_compression_enabled: false,
+    plan_compression: nil
   ]
 
   # Server configs that drive `create_dataframe/3` (T-64), mirroring PySpark's
@@ -68,6 +70,8 @@ defmodule SparkEx.Session do
           client_type: String.t(),
           allow_arrow_batch_chunking: boolean(),
           preferred_arrow_chunk_size: non_neg_integer() | nil,
+          plan_compression_enabled: boolean(),
+          plan_compression: nil | :disabled | {non_neg_integer(), atom()},
           plan_id_counter: non_neg_integer(),
           last_execution_metrics: map(),
           tags: [String.t()],
@@ -77,6 +81,16 @@ defmodule SparkEx.Session do
             %{atom() => non_neg_integer() | nil} | {:unavailable, integer()} | nil,
           retry_policies: %{atom() => map()} | nil
         }
+
+  defp session_call(session, message, timeout \\ 5_000) do
+    message =
+      case SparkEx.CallSite.capture() do
+        nil -> message
+        trace -> {:with_call_site, trace, message}
+      end
+
+    GenServer.call(session, message, timeout)
+  end
 
   # --- Public API ---
 
@@ -109,7 +123,7 @@ defmodule SparkEx.Session do
   """
   @spec get_state(GenServer.server()) :: t()
   def get_state(session) do
-    GenServer.call(session, :get_state)
+    session_call(session, :get_state)
   end
 
   @doc """
@@ -117,7 +131,7 @@ defmodule SparkEx.Session do
   """
   @spec execute_arrow(GenServer.server(), term(), keyword()) :: {:ok, term()} | {:error, term()}
   def execute_arrow(session, plan, opts \\ []) do
-    GenServer.call(session, {:execute_arrow, plan, opts}, call_timeout(opts))
+    session_call(session, {:execute_arrow, plan, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -125,7 +139,7 @@ defmodule SparkEx.Session do
   """
   @spec next_plan_id(GenServer.server()) :: non_neg_integer() | {:error, :session_released}
   def next_plan_id(session) do
-    GenServer.call(session, :next_plan_id)
+    session_call(session, :next_plan_id)
   end
 
   @doc false
@@ -163,7 +177,7 @@ defmodule SparkEx.Session do
   """
   @spec get_tags(GenServer.server()) :: [String.t()]
   def get_tags(session) do
-    GenServer.call(session, :get_tags)
+    session_call(session, :get_tags)
   end
 
   @doc """
@@ -216,7 +230,7 @@ defmodule SparkEx.Session do
 
       server ->
         try do
-          GenServer.call(server, :is_stopped)
+          session_call(server, :is_stopped)
         catch
           :exit, {:noproc, _} -> true
           :exit, {{:nodedown, _}, _} -> true
@@ -234,11 +248,11 @@ defmodule SparkEx.Session do
   def clone(session, new_session_id \\ nil)
 
   def clone(session, nil) do
-    GenServer.call(session, {:clone_session, nil})
+    session_call(session, {:clone_session, nil})
   end
 
   def clone(session, new_session_id) when is_binary(new_session_id) do
-    GenServer.call(session, {:clone_session, new_session_id})
+    session_call(session, {:clone_session, new_session_id})
   end
 
   def clone(_session, new_session_id) do
@@ -250,7 +264,7 @@ defmodule SparkEx.Session do
   """
   @spec spark_version(GenServer.server()) :: {:ok, String.t()} | {:error, term()}
   def spark_version(session) do
-    GenServer.call(session, :spark_version)
+    session_call(session, :spark_version)
   end
 
   @doc """
@@ -259,7 +273,7 @@ defmodule SparkEx.Session do
   @spec execute_collect(GenServer.server(), term(), keyword()) ::
           {:ok, [map()]} | {:error, term()}
   def execute_collect(session, plan, opts \\ []) do
-    GenServer.call(session, {:execute_collect, plan, opts}, call_timeout(opts))
+    session_call(session, {:execute_collect, plan, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -273,7 +287,7 @@ defmodule SparkEx.Session do
           {:ok, Enumerable.t()} | {:error, term()}
   def execute_plan_stream(session, plan, opts \\ []) do
     if real_session_process?(session) do
-      case GenServer.call(
+      case session_call(
              session,
              {:prepare_execute_plan_stream, plan, opts},
              call_timeout(opts)
@@ -285,7 +299,7 @@ defmodule SparkEx.Session do
           error
       end
     else
-      GenServer.call(session, {:execute_plan_stream, plan, opts}, call_timeout(opts))
+      session_call(session, {:execute_plan_stream, plan, opts}, call_timeout(opts))
     end
   end
 
@@ -301,7 +315,7 @@ defmodule SparkEx.Session do
           {:ok, Enumerable.t()} | {:error, term()}
   def execute_plan_reattachable_stream(session, plan, opts \\ []) do
     if real_session_process?(session) do
-      case GenServer.call(
+      case session_call(
              session,
              {:prepare_execute_plan_stream, plan, opts},
              call_timeout(opts)
@@ -313,7 +327,7 @@ defmodule SparkEx.Session do
           error
       end
     else
-      GenServer.call(session, {:execute_plan_reattachable_stream, plan, opts}, call_timeout(opts))
+      session_call(session, {:execute_plan_reattachable_stream, plan, opts}, call_timeout(opts))
     end
   end
 
@@ -330,7 +344,7 @@ defmodule SparkEx.Session do
           {:ok, Enumerable.t(), term() | nil} | {:error, term()}
   def execute_plan_reattachable_stream_safe(session, plan, opts \\ []) do
     if real_session_process?(session) do
-      case GenServer.call(
+      case session_call(
              session,
              {:prepare_safe_execute_plan_stream, plan, opts},
              call_timeout(opts)
@@ -372,7 +386,7 @@ defmodule SparkEx.Session do
   @spec execute_explorer(GenServer.server(), term(), keyword()) ::
           {:ok, Explorer.DataFrame.t()} | {:error, term()}
   def execute_explorer(session, plan, opts \\ []) do
-    GenServer.call(session, {:execute_explorer, plan, opts}, call_timeout(opts))
+    session_call(session, {:execute_explorer, plan, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -386,7 +400,7 @@ defmodule SparkEx.Session do
   @spec execute_count(GenServer.server(), term(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def execute_count(session, plan, opts \\ []) do
-    GenServer.call(session, {:execute_count, plan, opts}, call_timeout(opts))
+    session_call(session, {:execute_count, plan, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -394,7 +408,7 @@ defmodule SparkEx.Session do
   """
   @spec last_execution_metrics(GenServer.server()) :: {:ok, map()} | {:error, term()}
   def last_execution_metrics(session) do
-    GenServer.call(session, :last_execution_metrics)
+    session_call(session, :last_execution_metrics)
   end
 
   @doc """
@@ -402,7 +416,7 @@ defmodule SparkEx.Session do
   """
   @spec analyze_schema(GenServer.server(), term()) :: {:ok, term()} | {:error, term()}
   def analyze_schema(session, plan) do
-    GenServer.call(session, {:analyze_schema, plan})
+    session_call(session, {:analyze_schema, plan})
   end
 
   @doc """
@@ -411,7 +425,7 @@ defmodule SparkEx.Session do
   @spec analyze_explain(GenServer.server(), term(), atom()) ::
           {:ok, String.t()} | {:error, term()}
   def analyze_explain(session, plan, mode \\ :simple) do
-    GenServer.call(session, {:analyze_explain, plan, mode})
+    session_call(session, {:analyze_explain, plan, mode})
   end
 
   @doc """
@@ -421,7 +435,7 @@ defmodule SparkEx.Session do
           :ok | {:error, term()}
   def config_set(session, pairs) do
     validate_config_pairs!(pairs, "config_set/2")
-    GenServer.call(session, {:config_set, pairs})
+    session_call(session, {:config_set, pairs})
   end
 
   @doc """
@@ -431,7 +445,7 @@ defmodule SparkEx.Session do
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get(session, keys) do
     validate_config_keys!(keys, "config_get/2")
-    GenServer.call(session, {:config_get, keys})
+    session_call(session, {:config_get, keys})
   end
 
   @doc """
@@ -441,7 +455,7 @@ defmodule SparkEx.Session do
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get_with_default(session, pairs) do
     validate_config_default_pairs!(pairs)
-    GenServer.call(session, {:config_get_with_default, pairs})
+    session_call(session, {:config_get_with_default, pairs})
   end
 
   @doc """
@@ -451,7 +465,7 @@ defmodule SparkEx.Session do
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get_option(session, keys) do
     validate_config_keys!(keys, "config_get_option/2")
-    GenServer.call(session, {:config_get_option, keys})
+    session_call(session, {:config_get_option, keys})
   end
 
   @doc """
@@ -461,7 +475,7 @@ defmodule SparkEx.Session do
           {:ok, [{String.t(), String.t() | nil}]} | {:error, term()}
   def config_get_all(session, prefix \\ nil) do
     validate_config_prefix!(prefix)
-    GenServer.call(session, {:config_get_all, prefix})
+    session_call(session, {:config_get_all, prefix})
   end
 
   @doc """
@@ -470,7 +484,7 @@ defmodule SparkEx.Session do
   @spec config_unset(GenServer.server(), [String.t()]) :: :ok | {:error, term()}
   def config_unset(session, keys) do
     validate_config_keys!(keys, "config_unset/2")
-    GenServer.call(session, {:config_unset, keys})
+    session_call(session, {:config_unset, keys})
   end
 
   @doc """
@@ -487,7 +501,7 @@ defmodule SparkEx.Session do
       raise ArgumentError, "keys must be a list of strings"
     end
 
-    GenServer.call(session, {:config_is_modifiable, keys})
+    session_call(session, {:config_is_modifiable, keys})
   end
 
   defp validate_config_default_pairs!(pairs) when is_list(pairs) do
@@ -563,7 +577,7 @@ defmodule SparkEx.Session do
   @spec analyze_tree_string(GenServer.server(), term(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def analyze_tree_string(session, plan, opts \\ []) do
-    GenServer.call(session, {:analyze_tree_string, plan, opts})
+    session_call(session, {:analyze_tree_string, plan, opts})
   end
 
   @doc """
@@ -571,7 +585,7 @@ defmodule SparkEx.Session do
   """
   @spec analyze_is_local(GenServer.server(), term()) :: {:ok, boolean()} | {:error, term()}
   def analyze_is_local(session, plan) do
-    GenServer.call(session, {:analyze_is_local, plan})
+    session_call(session, {:analyze_is_local, plan})
   end
 
   @doc """
@@ -579,7 +593,7 @@ defmodule SparkEx.Session do
   """
   @spec analyze_is_streaming(GenServer.server(), term()) :: {:ok, boolean()} | {:error, term()}
   def analyze_is_streaming(session, plan) do
-    GenServer.call(session, {:analyze_is_streaming, plan})
+    session_call(session, {:analyze_is_streaming, plan})
   end
 
   @doc """
@@ -588,7 +602,7 @@ defmodule SparkEx.Session do
   @spec analyze_input_files(GenServer.server(), term()) ::
           {:ok, [String.t()]} | {:error, term()}
   def analyze_input_files(session, plan) do
-    GenServer.call(session, {:analyze_input_files, plan})
+    session_call(session, {:analyze_input_files, plan})
   end
 
   @doc """
@@ -596,7 +610,7 @@ defmodule SparkEx.Session do
   """
   @spec analyze_ddl_parse(GenServer.server(), String.t()) :: {:ok, term()} | {:error, term()}
   def analyze_ddl_parse(session, ddl_string) do
-    GenServer.call(session, {:analyze_ddl_parse, ddl_string})
+    session_call(session, {:analyze_ddl_parse, ddl_string})
   end
 
   @doc """
@@ -605,7 +619,7 @@ defmodule SparkEx.Session do
   @spec analyze_json_to_ddl(GenServer.server(), String.t()) ::
           {:ok, String.t()} | {:error, term()}
   def analyze_json_to_ddl(session, json_string) do
-    GenServer.call(session, {:analyze_json_to_ddl, json_string})
+    session_call(session, {:analyze_json_to_ddl, json_string})
   end
 
   @doc """
@@ -614,7 +628,7 @@ defmodule SparkEx.Session do
   @spec analyze_same_semantics(GenServer.server(), term(), term()) ::
           {:ok, boolean()} | {:error, term()}
   def analyze_same_semantics(session, plan1, plan2) do
-    GenServer.call(session, {:analyze_same_semantics, plan1, plan2})
+    session_call(session, {:analyze_same_semantics, plan1, plan2})
   end
 
   @doc """
@@ -623,7 +637,7 @@ defmodule SparkEx.Session do
   @spec analyze_semantic_hash(GenServer.server(), term()) ::
           {:ok, integer()} | {:error, term()}
   def analyze_semantic_hash(session, plan) do
-    GenServer.call(session, {:analyze_semantic_hash, plan})
+    session_call(session, {:analyze_semantic_hash, plan})
   end
 
   @doc """
@@ -631,7 +645,7 @@ defmodule SparkEx.Session do
   """
   @spec analyze_persist(GenServer.server(), term(), keyword()) :: :ok | {:error, term()}
   def analyze_persist(session, plan, opts \\ []) do
-    GenServer.call(session, {:analyze_persist, plan, opts})
+    session_call(session, {:analyze_persist, plan, opts})
   end
 
   @doc """
@@ -639,7 +653,7 @@ defmodule SparkEx.Session do
   """
   @spec analyze_unpersist(GenServer.server(), term(), keyword()) :: :ok | {:error, term()}
   def analyze_unpersist(session, plan, opts \\ []) do
-    GenServer.call(session, {:analyze_unpersist, plan, opts})
+    session_call(session, {:analyze_unpersist, plan, opts})
   end
 
   @doc """
@@ -648,7 +662,7 @@ defmodule SparkEx.Session do
   @spec analyze_get_storage_level(GenServer.server(), term()) ::
           {:ok, SparkEx.Types.storage_level()} | {:error, term()}
   def analyze_get_storage_level(session, plan) do
-    GenServer.call(session, {:analyze_get_storage_level, plan})
+    session_call(session, {:analyze_get_storage_level, plan})
   end
 
   @doc """
@@ -663,7 +677,7 @@ defmodule SparkEx.Session do
     # non-list / non-binary `names` would raise inside the shared Session
     # process and take it down (T-01). Mirrors Client.add_artifacts.
     if is_list(names) and Enum.all?(names, &is_binary/1) do
-      GenServer.call(session, {:artifact_status, names})
+      session_call(session, {:artifact_status, names})
     else
       {:error, {:invalid_artifact_names, names}}
     end
@@ -686,7 +700,7 @@ defmodule SparkEx.Session do
           [{String.t(), binary() | {:file, Path.t(), non_neg_integer()}}]
         ) :: {:ok, [{String.t(), boolean()}]} | {:error, term()}
   def add_artifacts(session, artifacts) do
-    GenServer.call(session, {:add_artifacts, artifacts})
+    session_call(session, {:add_artifacts, artifacts})
   end
 
   @doc """
@@ -816,7 +830,7 @@ defmodule SparkEx.Session do
   @spec create_dataframe(GenServer.server(), term(), keyword()) ::
           {:ok, SparkEx.DataFrame.t()} | {:error, term()}
   def create_dataframe(session, data, opts \\ []) do
-    GenServer.call(session, {:create_dataframe, data, opts}, call_timeout(opts))
+    session_call(session, {:create_dataframe, data, opts}, call_timeout(opts))
   end
 
   @doc "Creates an empty DataFrame with a DDL or `SparkEx.Types` struct schema."
@@ -831,7 +845,7 @@ defmodule SparkEx.Session do
   """
   @spec execute_command(GenServer.server(), term(), keyword()) :: :ok | {:error, term()}
   def execute_command(session, command, opts \\ []) do
-    GenServer.call(session, {:execute_command, command, opts}, call_timeout(opts))
+    session_call(session, {:execute_command, command, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -844,7 +858,7 @@ defmodule SparkEx.Session do
   @spec execute_command_with_result(GenServer.server(), term(), keyword()) ::
           {:ok, term()} | {:error, term()}
   def execute_command_with_result(session, command, opts \\ []) do
-    GenServer.call(session, {:execute_command_with_result, command, opts}, call_timeout(opts))
+    session_call(session, {:execute_command_with_result, command, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -857,7 +871,7 @@ defmodule SparkEx.Session do
           {:ok, SparkEx.ManagedStream.t()} | {:error, term()}
   def execute_command_stream(session, command, opts \\ []) do
     if real_session_process?(session) do
-      case GenServer.call(
+      case session_call(
              session,
              {:prepare_execute_command_stream, command, opts},
              call_timeout(opts)
@@ -873,7 +887,7 @@ defmodule SparkEx.Session do
           error
       end
     else
-      GenServer.call(session, {:execute_command_stream, command, opts}, call_timeout(opts))
+      session_call(session, {:execute_command_stream, command, opts}, call_timeout(opts))
     end
   end
 
@@ -915,7 +929,7 @@ defmodule SparkEx.Session do
   @spec execute_show(GenServer.server(), term(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def execute_show(session, plan, opts \\ []) do
-    GenServer.call(session, {:execute_show, plan, opts}, call_timeout(opts))
+    session_call(session, {:execute_show, plan, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -927,7 +941,7 @@ defmodule SparkEx.Session do
   """
   @spec release(GenServer.server()) :: :ok | {:error, term()}
   def release(session) do
-    GenServer.call(session, :release_session)
+    session_call(session, :release_session)
   end
 
   @doc """
@@ -991,7 +1005,7 @@ defmodule SparkEx.Session do
         end
 
       :error ->
-        GenServer.call(
+        session_call(
           session,
           {:get_operation_statuses, operation_ids, opts},
           call_timeout(opts)
@@ -1022,7 +1036,7 @@ defmodule SparkEx.Session do
         end
 
       :error ->
-        GenServer.call(session, {:interrupt, type})
+        session_call(session, {:interrupt, type})
     end
   end
 
@@ -1088,6 +1102,12 @@ defmodule SparkEx.Session do
       SparkEx.Internal.PlanIds.register_session(self())
 
       state = %__MODULE__{
+        plan_compression_enabled:
+          Keyword.get(
+            opts,
+            :plan_compression,
+            Application.get_env(:spark_ex, :plan_compression, false)
+          ),
         channel: channel,
         connect_opts: connect_opts,
         session_id: session_identity.session_id,
@@ -1120,6 +1140,10 @@ defmodule SparkEx.Session do
   end
 
   @impl true
+  def handle_call({:with_call_site, trace, message}, from, state) do
+    SparkEx.CallSite.with_trace(trace, fn -> handle_call(message, from, state) end)
+  end
+
   def handle_call(:get_state, _from, state) do
     {:reply, state, state}
   end
@@ -1164,7 +1188,8 @@ defmodule SparkEx.Session do
           server_side_session_id: clone_info.new_server_side_session_id,
           allow_arrow_batch_chunking: state.allow_arrow_batch_chunking,
           preferred_arrow_chunk_size: state.preferred_arrow_chunk_size,
-          retry_policies: state.retry_policies
+          retry_policies: state.retry_policies,
+          plan_compression: state.plan_compression_enabled
         ]
 
         case __MODULE__.start_link(clone_opts) do
@@ -1296,6 +1321,34 @@ defmodule SparkEx.Session do
   #    error message patterns (grouping sets, UNPARSED types, empty relations).
   # 6. Empty relation errors: cascade through transpose, table function,
   #    as-of join, and subquery plan rewrites.
+  def handle_call(message, from, %{plan_compression_enabled: true, plan_compression: nil} = state)
+      when is_tuple(message) and
+             elem(message, 0) in [
+               :execute_collect,
+               :prepare_safe_execute_plan_stream,
+               :prepare_execute_plan_stream,
+               :execute_explorer,
+               :execute_arrow,
+               :execute_count,
+               :analyze_schema,
+               :analyze_explain,
+               :analyze_tree_string,
+               :analyze_is_local,
+               :analyze_is_streaming,
+               :analyze_input_files,
+               :analyze_same_semantics,
+               :analyze_semantic_hash,
+               :execute_command,
+               :execute_command_with_result,
+               :prepare_execute_command_stream,
+               :execute_show
+             ] do
+    case SparkEx.Connect.PlanCompression.prepare_session(state, enabled: true) do
+      {:ok, state} -> handle_call(message, from, state)
+      {:error, _} = error -> {:reply, error, maybe_close_on_error(state, error)}
+    end
+  end
+
   def handle_call({:execute_collect, plan, opts}, _from, state) do
     operation_telemetry_span(:execute_collect, state.session_id, fn ->
       case safe_encode(plan, state.plan_id_counter) do
@@ -4173,6 +4226,13 @@ defmodule SparkEx.Session do
 
   # Empty typed relation: no Arrow payload, the schema alone defines the
   # columns (PySpark's `LocalRelation(table=None, schema=schema.json())`).
+  defp create_dataframe_from_prepared({:zero_column_relation, count}, _opts, _from, state) do
+    # Explorer's zero-width frame cannot retain the cardinality of empty maps.
+    # A lazy range with an empty projection carries that cardinality explicitly.
+    df = SparkEx.DataFrame.new(self(), {:project, {:range, 0, count, 1, 1}, []})
+    {:reply, {:ok, df}, state}
+  end
+
   defp create_dataframe_from_prepared(
          {:local_relation, nil, schema, _source_df},
          _opts,
@@ -4227,14 +4287,19 @@ defmodule SparkEx.Session do
   end
 
   defp prepare_explorer_arrow_relation(data, schema, opts) do
-    if Keyword.get(opts, :defer_arrow_encoding, false) do
-      {:ok, {:local_relation, :deferred, schema, data}}
-    else
-      # The diagnostic preparation helper retains its materialized form.
-      case dump_ipc_stream_safe(data) do
-        {:ok, bytes} -> {:ok, {:local_relation, bytes, schema, data}}
-        {:error, _} = error -> error
-      end
+    cond do
+      Explorer.DataFrame.n_columns(data) == 0 and empty_local_schema?(schema) ->
+        {:ok, {:zero_column_relation, Explorer.DataFrame.n_rows(data)}}
+
+      Keyword.get(opts, :defer_arrow_encoding, false) ->
+        {:ok, {:local_relation, :deferred, schema, data}}
+
+      true ->
+        # The diagnostic preparation helper retains its materialized form.
+        case dump_ipc_stream_safe(data) do
+          {:ok, bytes} -> {:ok, {:local_relation, bytes, schema, data}}
+          {:error, _} = error -> error
+        end
     end
   end
 
@@ -4286,6 +4351,9 @@ defmodule SparkEx.Session do
           # round-trip without inferring anything from the (absent) rows.
           normalized_data == [] and match?({:struct, _}, struct_schema) ->
             {:ok, {:local_relation, nil, SparkEx.Types.to_json(struct_schema), nil}}
+
+          zero_column_rows?(normalized_data, normalized_schema) ->
+            {:ok, {:zero_column_relation, length(normalized_data)}}
 
           is_binary(normalized_schema) ->
             prepare_list_data_with_schema(
@@ -4350,6 +4418,23 @@ defmodule SparkEx.Session do
   defp prepare_local_data(_data, _opts) do
     {:error, {:invalid_data, "expected Explorer.DataFrame, list of maps, or column map"}}
   end
+
+  defp zero_column_rows?(rows, schema) do
+    rows != [] and empty_local_schema?(schema) and
+      Enum.all?(rows, &empty_local_row?/1)
+  end
+
+  defp empty_local_row?(row) when is_map(row), do: map_size(row) == 0
+  defp empty_local_row?(row) when is_tuple(row), do: tuple_size(row) == 0
+  defp empty_local_row?(row), do: row == []
+
+  defp empty_local_schema?(nil), do: true
+  defp empty_local_schema?({:column_order, []}), do: true
+
+  defp empty_local_schema?(schema) when is_binary(schema),
+    do: Regex.match?(~r/\A\s*(?:STRUCT\s*<\s*>)?\s*\z/i, schema)
+
+  defp empty_local_schema?(_), do: false
 
   defp with_restored_column_names(result, nil), do: result
 
@@ -4460,6 +4545,9 @@ defmodule SparkEx.Session do
 
   defp normalize_list_data_and_schema(data, schema) when is_list(data) do
     cond do
+      zero_column_rows?(data, schema) ->
+        {:ok, List.duplicate(%{}, length(data)), schema, nil}
+
       Enum.all?(data, &(is_map(&1) and not is_struct(&1))) ->
         case schema do
           {:column_names, names} ->
@@ -6130,7 +6218,7 @@ defmodule SparkEx.Session do
   # `config_set`/`config_unset` may change the localRelation* settings, so the
   # cached snapshot is dropped and re-read on the next create_dataframe.
   defp invalidate_local_relation_configs(state),
-    do: Map.put(state, :local_relation_configs, nil)
+    do: %{state | local_relation_configs: nil, plan_compression: nil}
 
   @doc false
   def __parse_local_relation_configs__(pairs), do: parse_local_relation_configs(pairs)
@@ -6459,7 +6547,7 @@ defmodule SparkEx.Session do
   defp session_id_for(%__MODULE__{session_id: session_id}), do: session_id
 
   defp session_id_for(session) do
-    GenServer.call(resolve_server!(session), :get_session_id)
+    session_call(resolve_server!(session), :get_session_id)
   end
 
   # Resolves any GenServer.server() reference (pid, registered name, or

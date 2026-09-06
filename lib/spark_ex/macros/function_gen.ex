@@ -102,6 +102,22 @@ defmodule SparkEx.Macros.FunctionGen do
     end
   end
 
+  defp generate_function(name, spark_name, :vector_col_degree, is_distinct, doc) do
+    quote do
+      @doc unquote(doc)
+      @spec unquote(name)(Column.t() | String.t()) :: Column.t()
+      @spec unquote(name)(Column.t() | String.t(), Column.t() | String.t() | float()) ::
+              Column.t()
+      def unquote(name)(vector, degree \\ 2.0) do
+        %Column{
+          expr:
+            {:fn, unquote(spark_name), [to_expr(vector), to_expr_or_lit_float(degree)],
+             unquote(is_distinct)}
+        }
+      end
+    end
+  end
+
   defp generate_function(name, spark_name, :three_col, is_distinct, doc) do
     quote do
       @doc unquote(doc)
