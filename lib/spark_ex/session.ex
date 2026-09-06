@@ -43,7 +43,8 @@ defmodule SparkEx.Session do
     {"spark.sql.session.localRelationCacheThreshold", :cache_threshold},
     {"spark.sql.session.localRelationChunkSizeRows", :chunk_size_rows},
     {"spark.sql.session.localRelationChunkSizeBytes", :chunk_size_bytes},
-    {"spark.sql.session.localRelationBatchOfChunksSizeBytes", :batch_of_chunks_size_bytes}
+    {"spark.sql.session.localRelationBatchOfChunksSizeBytes", :batch_of_chunks_size_bytes},
+    {"spark.sql.session.localRelationSizeLimit", :size_limit}
   ]
 
   # Fallbacks match the pre-T-64 client default for the threshold (4 MiB) and
@@ -54,7 +55,8 @@ defmodule SparkEx.Session do
     cache_threshold: 4 * 1024 * 1024,
     chunk_size_rows: 10_000,
     chunk_size_bytes: 16 * 1024 * 1024,
-    batch_of_chunks_size_bytes: 1024 * 1024 * 1024
+    batch_of_chunks_size_bytes: 1024 * 1024 * 1024,
+    size_limit: nil
   }
 
   @type t :: %__MODULE__{
@@ -72,7 +74,7 @@ defmodule SparkEx.Session do
           released: boolean(),
           closed: boolean(),
           local_relation_configs:
-            %{atom() => non_neg_integer()} | {:unavailable, integer()} | nil,
+            %{atom() => non_neg_integer() | nil} | {:unavailable, integer()} | nil,
           retry_policies: %{atom() => map()} | nil
         }
 
@@ -1776,39 +1778,46 @@ defmodule SparkEx.Session do
       batch_of_chunks_size_bytes: batch_bytes
     } = chunk_params
 
-    case split_explorer_dataframe_for_cache(source_df, chunk_size_bytes, chunk_size_rows) do
-      {:ok, data_chunks} ->
-        {data_hashes, data_artifacts} =
-          data_chunks
-          |> Enum.map(fn chunk ->
-            hash = :crypto.hash(:sha256, chunk) |> Base.encode16(case: :lower)
-            {hash, {"cache/#{hash}", chunk}}
-          end)
-          |> Enum.unzip()
+    with :ok <- validate_cache_configuration(state),
+         {:ok, data_chunks} <-
+           split_explorer_dataframe_for_cache(source_df, chunk_size_bytes, chunk_size_rows),
+         :ok <-
+           validate_local_relation_size(
+             data_chunks,
+             schema_ddl,
+             Map.get(chunk_params, :size_limit)
+           ) do
+      {data_hashes, data_artifacts} =
+        data_chunks
+        |> Enum.map(fn chunk ->
+          hash = :crypto.hash(:sha256, chunk) |> Base.encode16(case: :lower)
+          {hash, {"cache/#{hash}", chunk}}
+        end)
+        |> Enum.unzip()
 
-        # Upload schema DDL as separate cache artifact (no "schema_" prefix —
-        # the server looks up schemaHash directly in the cache key space)
-        schema_bytes = if schema_ddl, do: schema_ddl, else: ""
-        schema_hash = :crypto.hash(:sha256, schema_bytes) |> Base.encode16(case: :lower)
-        schema_artifact = {"cache/#{schema_hash}", schema_bytes}
+      # Upload schema DDL as separate cache artifact (no "schema_" prefix —
+      # the server looks up schemaHash directly in the cache key space)
+      schema_bytes = if schema_ddl, do: schema_ddl, else: ""
+      schema_hash = :crypto.hash(:sha256, schema_bytes) |> Base.encode16(case: :lower)
+      schema_artifact = {"cache/#{schema_hash}", schema_bytes}
 
-        # Dedupe by artifact name so identical chunks (or chunk == schema bytes
-        # by coincidence) only get uploaded once. The plan still references
-        # each hash in original order via `data_hashes`.
-        artifacts =
-          (data_artifacts ++ [schema_artifact])
-          |> Enum.uniq_by(fn {name, _data} -> name end)
+      # Dedupe by artifact name so identical chunks (or chunk == schema bytes
+      # by coincidence) only get uploaded once. The plan still references
+      # each hash in original order via `data_hashes`.
+      artifacts =
+        (data_artifacts ++ [schema_artifact])
+        |> Enum.uniq_by(fn {name, _data} -> name end)
 
-        case upload_missing_cache_artifacts(state, artifacts, batch_bytes) do
-          {:ok, state} ->
-            plan = {:chunked_cached_local_relation, data_hashes, schema_hash}
-            df = SparkEx.DataFrame.new(self(), plan)
-            {:reply, {:ok, df}, state}
+      case upload_missing_cache_artifacts(state, artifacts, batch_bytes) do
+        {:ok, state} ->
+          plan = {:chunked_cached_local_relation, data_hashes, schema_hash}
+          df = SparkEx.DataFrame.new(self(), plan)
+          {:reply, {:ok, df}, state}
 
-          {:error, _reason} = error ->
-            {:reply, error, state}
-        end
-
+        {:error, _reason} = error ->
+          {:reply, error, state}
+      end
+    else
       {:error, _reason} = error ->
         reply_error(error, state)
     end
@@ -1826,6 +1835,12 @@ defmodule SparkEx.Session do
             {:ok, result} ->
               state = maybe_update_server_session(state, result.server_side_session_id)
               state = %{state | last_execution_metrics: result.execution_metrics}
+
+              SparkEx.Observation.store_observed_metrics(
+                result.observed_metrics,
+                state.session_id
+              )
+
               {:reply, :ok, state}
 
             {:error, _} = error ->
@@ -1850,6 +1865,12 @@ defmodule SparkEx.Session do
             {:ok, result} ->
               state = maybe_update_server_session(state, result.server_side_session_id)
               state = %{state | last_execution_metrics: result.execution_metrics}
+
+              SparkEx.Observation.store_observed_metrics(
+                result.observed_metrics,
+                state.session_id
+              )
+
               {:reply, {:ok, result.command_result}, state}
 
             {:error, _} = error ->
@@ -1901,6 +1922,7 @@ defmodule SparkEx.Session do
   defp reply_execute_show_result(result, state) do
     state = maybe_update_server_session(state, result.server_side_session_id)
     state = %{state | last_execution_metrics: result.execution_metrics}
+    SparkEx.Observation.store_observed_metrics(result.observed_metrics, state.session_id)
 
     case extract_show_string(result.rows) do
       {:ok, str} -> {:reply, {:ok, str}, state}
@@ -6008,9 +6030,9 @@ defmodule SparkEx.Session do
   end
 
   # Fetches the local-relation server configs once per session (T-64). A
-  # failed config RPC falls back to the defaults and is cached too: a server
-  # that cannot answer a Config request is not going to answer differently a
-  # moment later, and create_dataframe must never fail because of it.
+  # failed config RPC keeps default inline behavior, but cached uploads fail
+  # closed until the configuration can be read. A missing key on a successful
+  # old-server response is different from an unknown limit after an RPC error.
   defp ensure_local_relation_configs(%{local_relation_configs: %{} = configs} = state, _opts),
     do: {configs, state}
 
@@ -6028,15 +6050,8 @@ defmodule SparkEx.Session do
     end
   end
 
-  # Explicit `:cache_threshold` + `:cache_chunk_size` fully determine the upload
-  # strategy, so the Config RPC is skipped (the row cap keeps its default).
-  defp ensure_local_relation_configs(state, opts) do
-    if Keyword.has_key?(opts, :cache_threshold) and Keyword.has_key?(opts, :cache_chunk_size) do
-      {@local_relation_config_defaults, state}
-    else
-      fetch_local_relation_configs(state)
-    end
-  end
+  # Upload strategy overrides must not bypass the server's total size limit.
+  defp ensure_local_relation_configs(state, _opts), do: fetch_local_relation_configs(state)
 
   # Unit stubs drive `handle_call/3` with a bare map; only a connected session
   # can issue the Config RPC.
@@ -6045,8 +6060,8 @@ defmodule SparkEx.Session do
     keys = Enum.map(@local_relation_config_keys, fn {key, _atom} -> key end)
 
     # Bounded timeout: this runs inside the Session GenServer on the first
-    # create_dataframe of a session. A failure is not cached, so a transient
-    # error is retried on the next call instead of pinning defaults.
+    # create_dataframe of a session. Failures are retried after the bounded
+    # cooldown; cached uploads must not bypass a potentially unknown limit.
     case Client.config_get_option(state, keys, timeout: @local_relation_config_timeout) do
       {:ok, pairs, server_side_session_id} ->
         configs = parse_local_relation_configs(pairs)
@@ -6143,8 +6158,40 @@ defmodule SparkEx.Session do
            cache_threshold: cache_threshold,
            chunk_size_bytes: chunk_size_bytes,
            chunk_size_rows: chunk_size_rows,
-           batch_of_chunks_size_bytes: max(configs.batch_of_chunks_size_bytes, chunk_size_bytes)
+           batch_of_chunks_size_bytes: max(configs.batch_of_chunks_size_bytes, chunk_size_bytes),
+           size_limit: Map.get(configs, :size_limit)
          }}
+    end
+  end
+
+  defp validate_cache_configuration(%{local_relation_configs: {:unavailable, _}}),
+    do: {:error, :local_relation_config_unavailable}
+
+  defp validate_cache_configuration(_state), do: :ok
+
+  @doc false
+  def __validate_local_relation_size__(chunks, schema, limit),
+    do: validate_local_relation_size(chunks, schema, limit)
+
+  defp validate_local_relation_size(_chunks, _schema, nil), do: :ok
+
+  defp validate_local_relation_size(chunks, schema, limit) do
+    # Count the logical serialized relation, before artifact deduplication.
+    # Repeated hashes still represent repeated rows, and schema bytes count too.
+    size = Enum.reduce(chunks, byte_size(schema || ""), &(byte_size(&1) + &2))
+
+    if size > limit do
+      {:error,
+       %SparkEx.Error.Remote{
+         error_class: "LOCAL_RELATION_SIZE_LIMIT_EXCEEDED",
+         message: "Local relation size #{size} exceeds limit #{limit}",
+         message_parameters: %{
+           "actualSize" => Integer.to_string(size),
+           "sizeLimit" => Integer.to_string(limit)
+         }
+       }}
+    else
+      :ok
     end
   end
 

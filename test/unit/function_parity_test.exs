@@ -1,14 +1,11 @@
 defmodule SparkEx.Unit.FunctionParityTest do
   @moduledoc """
-  Compares SparkEx function registry against PySpark builtin.py source
+  Compares SparkEx function registry against the pinned PySpark 4.2 inventory
   to detect missing functions (drift prevention).
   """
   use ExUnit.Case, async: true
 
-  @pyspark_builtin_path Path.expand(
-                          "../../../spark/python/pyspark/sql/connect/functions/builtin.py",
-                          __DIR__
-                        )
+  @pyspark_inventory Path.expand("../fixtures/pyspark_4_2_functions.txt", __DIR__)
 
   # Functions that we intentionally exclude from parity checking.
   # Each has a documented reason.
@@ -149,9 +146,8 @@ defmodule SparkEx.Unit.FunctionParityTest do
                     ])
 
   @tag :parity
-  @tag skip: unless(File.exists?(@pyspark_builtin_path), do: "missing PySpark source")
   test "registry covers PySpark builtin functions" do
-    pyspark_fns = parse_pyspark_function_names(@pyspark_builtin_path)
+    pyspark_fns = parse_pyspark_function_names(@pyspark_inventory)
 
     registry_names =
       SparkEx.Macros.FunctionRegistry.registry()
@@ -249,7 +245,13 @@ defmodule SparkEx.Unit.FunctionParityTest do
         "slice",
         "width_bucket",
         # Hand-written: always sends all 5 args with PySpark defaults (FABLE-02)
-        "mask"
+        "mask",
+        # Existing hand-written wrappers omitted from the old parity inventory
+        "approx_percentile",
+        "ceil",
+        "ceiling",
+        "floor",
+        "regexp_extract_all"
       ])
 
     all_names = MapSet.union(registry_names, hand_written)
@@ -276,7 +278,7 @@ defmodule SparkEx.Unit.FunctionParityTest do
     end
 
     missing_count = MapSet.size(actual_missing)
-    max_allowed = 5
+    max_allowed = 0
 
     assert missing_count <= max_allowed,
            "Too many missing functions (#{missing_count} > #{max_allowed}): #{inspect(MapSet.to_list(actual_missing) |> Enum.sort())}"
@@ -307,15 +309,10 @@ defmodule SparkEx.Unit.FunctionParityTest do
   # ── Helpers ──
 
   defp parse_pyspark_function_names(path) do
-    content = File.read!(path)
-
-    # Match Python function definitions: def function_name(
-    Regex.scan(~r/^def\s+([a-z_][a-z0-9_]*)\s*\(/m, content)
-    |> Enum.map(fn [_, name] -> name end)
-    |> Enum.reject(fn name ->
-      # Skip private/internal Python functions
-      String.starts_with?(name, "_")
-    end)
+    path
+    |> File.read!()
+    |> String.split("\n", trim: true)
+    |> Enum.reject(&String.starts_with?(&1, "#"))
     |> MapSet.new()
   end
 end

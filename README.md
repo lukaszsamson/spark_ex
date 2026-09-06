@@ -10,7 +10,10 @@ protobuf contract, giving Elixir and Livebook first-class access to
 distributed Spark SQL, DataFrames, streaming, and the catalog &mdash; without
 a JVM in your application.
 
-Targets **Spark 3.5 - 4.1**.
+Targets **Spark 3.5 - 4.2**. The Spark 4.2 protocol is vendored; newer
+server APIs are added incrementally. Newly added SQL functions require the
+server version that implements them (most require Spark 4.2; KLL merge
+aggregates are available in Spark 4.1.2).
 
 ## Features
 
@@ -407,7 +410,7 @@ lib/
       type_mapper.ex              # Spark DataType <-> Explorer dtype
     proto/spark/connect/*.pb.ex   # Generated protobuf modules
 
-priv/proto/spark/connect/         # Vendored Spark Connect protos (v4.1.1)
+priv/proto/spark/connect/         # Vendored Spark Connect protos (v4.2.0)
 notebooks/spark_ex_demo.livemd    # Interactive Livebook demo
 test/unit/                        # Unit tests (~1090 tests)
 test/integration/                 # Integration tests (~625 tests)

@@ -75,7 +75,9 @@ defmodule SparkEx.Observation do
   end
 
   @doc """
-  Returns the observed metrics map for this observation.
+  Returns the observed metrics map for this observation, or
+  `{:error, %SparkEx.Error.Remote{}}` if metric collection failed. Query data
+  remains available when only an observation fails.
 
   Matches PySpark Connect (`observation.py`): after the observation has been
   attached via `DataFrame.observe/3` but before any action has run, returns
@@ -83,7 +85,7 @@ defmodule SparkEx.Observation do
   `[NO_OBSERVE_BEFORE_GET]` only when the observation was *never* attached
   (PySpark raises when `_result is None`).
   """
-  @spec get(t()) :: map()
+  @spec get(t()) :: map() | {:error, SparkEx.Error.Remote.t()}
   def get(%__MODULE__{id: id, name: name}) do
     case :ets.lookup(@table, {:obs, id}) do
       [{{:obs, ^id}, metrics}] ->
@@ -244,6 +246,16 @@ defmodule SparkEx.Observation do
     end
 
     :ok
+  end
+
+  defp store_one({name, {:error, %SparkEx.Error.Remote{}} = error}, session_id) do
+    case :ets.lookup(@table, {:obs_route, session_id, name}) do
+      [{{:obs_route, ^session_id, ^name}, id}] ->
+        :ets.insert(@table, {{:obs, id}, error})
+
+      _ ->
+        :ets.insert(@table, {{:metric_legacy, session_id, name}, error})
+    end
   end
 
   defp store_one({name, metrics}, session_id) do

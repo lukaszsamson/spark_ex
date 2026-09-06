@@ -13,11 +13,10 @@ if System.get_env("SPARK_REMOTE") do
   with {:ok, session} <- SparkEx.connect(url: spark_remote),
        {:ok, vsn} <- SparkEx.spark_version(session) do
     SparkEx.Session.stop(session)
-    spark_ver = vsn |> String.split(".") |> Enum.take(2) |> Enum.join(".")
 
     excludes =
-      for v <- ["4.0", "4.1"],
-          Version.compare(Version.parse!("#{spark_ver}.0"), Version.parse!("#{v}.0")) == :lt,
+      for v <- ["4.0", "4.1", "4.2"],
+          Version.compare(Version.parse!(vsn), Version.parse!("#{v}.0")) == :lt,
           do: {:min_spark, v}
 
     # Replace the exclude list: :integration is removed so integration tests

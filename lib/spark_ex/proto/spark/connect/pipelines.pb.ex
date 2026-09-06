@@ -14,6 +14,19 @@ defmodule Spark.Connect.OutputType do
   field(:SINK, 4)
 end
 
+defmodule Spark.Connect.PipelineCommand.DefineFlow.SCDType do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "spark.connect.PipelineCommand.DefineFlow.SCDType",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:SCD_TYPE_UNSPECIFIED, 0)
+  field(:SCD_TYPE_1, 1)
+end
+
 defmodule Spark.Connect.PipelineCommand.CreateDataflowGraph.SqlConfEntry do
   @moduledoc false
 
@@ -191,6 +204,62 @@ defmodule Spark.Connect.PipelineCommand.DefineFlow.WriteRelationFlowDetails do
   field(:relation, 1, proto3_optional: true, type: Spark.Connect.Relation)
 end
 
+defmodule Spark.Connect.PipelineCommand.DefineFlow.AutoCdcFlowDetails do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.PipelineCommand.DefineFlow.AutoCdcFlowDetails",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:source, 1, proto3_optional: true, type: :string)
+  field(:keys, 2, repeated: true, type: Spark.Connect.Expression)
+
+  field(:sequence_by, 3,
+    proto3_optional: true,
+    type: Spark.Connect.Expression,
+    json_name: "sequenceBy"
+  )
+
+  field(:apply_as_deletes, 6,
+    proto3_optional: true,
+    type: Spark.Connect.Expression,
+    json_name: "applyAsDeletes"
+  )
+
+  field(:apply_as_truncates, 7,
+    proto3_optional: true,
+    type: Spark.Connect.Expression,
+    json_name: "applyAsTruncates"
+  )
+
+  field(:column_list, 8, repeated: true, type: Spark.Connect.Expression, json_name: "columnList")
+
+  field(:except_column_list, 9,
+    repeated: true,
+    type: Spark.Connect.Expression,
+    json_name: "exceptColumnList"
+  )
+
+  field(:stored_as_scd_type, 10,
+    type: Spark.Connect.PipelineCommand.DefineFlow.SCDType,
+    json_name: "storedAsScdType",
+    enum: true
+  )
+
+  field(:ignore_null_updates_column_list, 14,
+    repeated: true,
+    type: Spark.Connect.Expression,
+    json_name: "ignoreNullUpdatesColumnList"
+  )
+
+  field(:ignore_null_updates_except_column_list, 15,
+    repeated: true,
+    type: Spark.Connect.Expression,
+    json_name: "ignoreNullUpdatesExceptColumnList"
+  )
+end
+
 defmodule Spark.Connect.PipelineCommand.DefineFlow.Response do
   @moduledoc false
 
@@ -242,8 +311,39 @@ defmodule Spark.Connect.PipelineCommand.DefineFlow do
     oneof: 0
   )
 
+  field(:auto_cdc_flow_details, 10,
+    type: Spark.Connect.PipelineCommand.DefineFlow.AutoCdcFlowDetails,
+    json_name: "autoCdcFlowDetails",
+    oneof: 0
+  )
+
   field(:extension, 999, type: Google.Protobuf.Any, oneof: 0)
   field(:once, 8, proto3_optional: true, type: :bool)
+end
+
+defmodule Spark.Connect.PipelineCommand.ExecuteOutputFlows do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.PipelineCommand.ExecuteOutputFlows",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:define_output, 1,
+    proto3_optional: true,
+    type: Spark.Connect.PipelineCommand.DefineOutput,
+    json_name: "defineOutput"
+  )
+
+  field(:define_flows, 2,
+    repeated: true,
+    type: Spark.Connect.PipelineCommand.DefineFlow,
+    json_name: "defineFlows"
+  )
+
+  field(:full_refresh, 3, proto3_optional: true, type: :bool, json_name: "fullRefresh")
+  field(:storage, 4, proto3_optional: true, type: :string)
+  field(:extension, 999, repeated: true, type: Google.Protobuf.Any)
 end
 
 defmodule Spark.Connect.PipelineCommand.StartRun do
@@ -301,7 +401,19 @@ defmodule Spark.Connect.PipelineCommand.DefineFlowQueryFunctionResult do
     protoc_gen_elixir_version: "0.16.0",
     syntax: :proto3
 
-  field(:flow_name, 1, proto3_optional: true, type: :string, json_name: "flowName")
+  field(:flow_name, 1,
+    proto3_optional: true,
+    type: :string,
+    json_name: "flowName",
+    deprecated: true
+  )
+
+  field(:flow_identifier, 4,
+    proto3_optional: true,
+    type: Spark.Connect.ResolvedIdentifier,
+    json_name: "flowIdentifier"
+  )
+
   field(:dataflow_graph_id, 2, proto3_optional: true, type: :string, json_name: "dataflowGraphId")
   field(:relation, 3, proto3_optional: true, type: Spark.Connect.Relation)
 end
@@ -361,6 +473,12 @@ defmodule Spark.Connect.PipelineCommand do
   field(:define_flow_query_function_result, 8,
     type: Spark.Connect.PipelineCommand.DefineFlowQueryFunctionResult,
     json_name: "defineFlowQueryFunctionResult",
+    oneof: 0
+  )
+
+  field(:execute_output_flows, 9,
+    type: Spark.Connect.PipelineCommand.ExecuteOutputFlows,
+    json_name: "executeOutputFlows",
     oneof: 0
   )
 
@@ -482,7 +600,13 @@ defmodule Spark.Connect.PipelineQueryFunctionExecutionSignal do
     protoc_gen_elixir_version: "0.16.0",
     syntax: :proto3
 
-  field(:flow_names, 1, repeated: true, type: :string, json_name: "flowNames")
+  field(:flow_names, 1, repeated: true, type: :string, json_name: "flowNames", deprecated: true)
+
+  field(:flow_identifiers, 2,
+    repeated: true,
+    type: Spark.Connect.ResolvedIdentifier,
+    json_name: "flowIdentifiers"
+  )
 end
 
 defmodule Spark.Connect.PipelineAnalysisContext do
@@ -495,6 +619,19 @@ defmodule Spark.Connect.PipelineAnalysisContext do
 
   field(:dataflow_graph_id, 1, proto3_optional: true, type: :string, json_name: "dataflowGraphId")
   field(:definition_path, 2, proto3_optional: true, type: :string, json_name: "definitionPath")
-  field(:flow_name, 3, proto3_optional: true, type: :string, json_name: "flowName")
+
+  field(:flow_name, 3,
+    proto3_optional: true,
+    type: :string,
+    json_name: "flowName",
+    deprecated: true
+  )
+
+  field(:flow_identifier, 4,
+    proto3_optional: true,
+    type: Spark.Connect.ResolvedIdentifier,
+    json_name: "flowIdentifier"
+  )
+
   field(:extension, 999, repeated: true, type: Google.Protobuf.Any)
 end
