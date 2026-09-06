@@ -1424,7 +1424,7 @@ defmodule SparkEx.Connect.ResultDecoder do
       }) do
     case SparkEx.Connect.UDTRegistry.lookup_deserializer(udt) do
       nil -> nil
-      fun when is_function(fun, 1) -> fun
+      fun when is_function(fun, 1) -> nil_passthrough(fun)
     end
   end
 
@@ -1490,6 +1490,17 @@ defmodule SparkEx.Connect.ResultDecoder do
   end
 
   def column_value_transform(_), do: nil
+
+  # A null cell is the absence of a UDT instance, so the registered
+  # deserializer is never invoked for it — matching PySpark, which returns
+  # None before calling `udt.deserialize`. Applies at every nesting level,
+  # since nested array/map/struct transforms compose over this leaf.
+  defp nil_passthrough(fun) do
+    fn
+      nil -> nil
+      value -> fun.(value)
+    end
+  end
 
   defp lift_over_list(fun) do
     fn

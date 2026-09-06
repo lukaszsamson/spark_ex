@@ -52,6 +52,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`create_dataframe/3` local-data correctness**:
+  - An explicit struct schema carrying field metadata no longer assigns
+    values to the wrong columns; rows are projected onto the schema's fields in
+    schema order, extra keys are dropped and missing fields become null.
+  - Positional rows with duplicate requested column names
+    (`schema: ["x", "x"]`) keep both values; the relation is built under unique
+    internal names and renamed afterwards, like PySpark.
+  - Binary values nested in structs, arrays and maps, and Explorer binary
+    columns sitting next to complex columns, are sent correctly instead of being
+    reinterpreted as base64.
+  - `:nan`, `:infinity` and `:neg_infinity` round-trip when the input also has
+    array, struct or map columns.
+  - Explicit schemas with non-string map keys (for example `MAP<INT, STRING>`)
+    now work when nested inside structs or arrays, and with quoted field names
+    such as `` `a b` ``.
+  - An explicit column-name list is applied to map and keyword rows in the
+    given order instead of being re-sorted.
+  - `nullable: false` (and `contains_null` / `value_contains_null: false`) in
+    an explicit schema is enforced: nil input returns
+    `{:error, {:invalid_data, message}}`. Because Arrow payloads are always
+    nullable on the wire, the transmitted schema is relaxed and the constraint
+    is checked locally; non-nullable schemas with metadata therefore no longer
+    fail on the server.
+  - An empty list with an explicit struct schema returns an empty typed
+    DataFrame preserving nullability, container flags and metadata.
+  - `Decimal` values in local rows infer `decimal(38,18)` like PySpark,
+    regardless of the value's scale; values with more than 20 integer or 18
+    fractional digits are rejected instead of being rounded or nulled.
+  - Duplicate column names with a DDL or struct schema return
+    `{:error, {:invalid_schema, message}}` instead of silently dropping values.
+  - Because Arrow payloads are nullable on the wire, `DataFrame.schema/1`
+    reports `nullable: true` for non-empty local data even when the explicit
+    schema said `nullable: false` (previously such schemas with metadata failed
+    on the server); the empty-list relation keeps the exact flags.
+- Non-finite doubles inside JSON-projected complex columns collect as `:nan`,
+  `:infinity` and `:neg_infinity` instead of the strings `"NaN"`, `"Infinity"`
+  and `"-Infinity"`.
+- UDT deserializer callbacks are no longer invoked for null values, including
+  nulls nested inside arrays, maps and structs.
+- `regexp_instr/2,3`, `regexp_substr/2` and `regexp_extract_all/2,3` treat a
+  bare string pattern as a column name, matching PySpark and the rest of the
+  `regexp_*` family. Pass `lit("pattern")` for a literal regex. Callers that
+  relied on bare strings being literal patterns must update.
+
 - **Spark 3.5 compatibility**:
   - Rewritten Spark 3.5 fallback plans are checked for duplicate column names
     before decoding (a lateral join over a table-valued function that also

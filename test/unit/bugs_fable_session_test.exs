@@ -155,11 +155,15 @@ defmodule SparkEx.Unit.BugsFableSessionTest do
 
       assert {:local_relation, _ipc, schema_str} = unwrap_plan(plan)
       # The JSON form (not the DDL form) must reach the local relation so
-      # field metadata and nullability round-trip to the server.
+      # field metadata round-trips to the server. Nullability is relaxed in
+      # the transmitted schema: Explorer writes every Arrow field as nullable
+      # and the server rejects a nullable column for a non-nullable field
+      # (NULLABLE_COLUMN_OR_FIELD); the constraint is enforced locally instead
+      # (see SparkEx.Unit.AstraSessionTest).
       assert {:ok, decoded} = Jason.decode(schema_str)
       assert [field] = decoded["fields"]
       assert field["metadata"] == %{"comment" => "range_id"}
-      assert field["nullable"] == false
+      assert field["nullable"] == true
     end
 
     test "column-map data with a metadata-bearing struct schema keeps the JSON form" do

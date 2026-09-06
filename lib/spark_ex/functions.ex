@@ -636,15 +636,19 @@ defmodule SparkEx.Functions do
 
   `idx` is optional; when omitted, the server defaults to group 1.
 
+  `str` and `regexp` are both columns: a bare string names a column. Use
+  `lit/1` to pass a literal pattern.
+
   ## Examples
 
-      regexp_extract_all(col("s"), "(\\d+)")
-      regexp_extract_all(col("s"), "(\\d+)-(\\d+)", 2)
+      regexp_extract_all(col("s"), lit("(\\d+)"))
+      regexp_extract_all(col("s"), lit("(\\d+)-(\\d+)"), 2)
+      regexp_extract_all("s", "pattern_column")
   """
   @spec regexp_extract_all(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
   def regexp_extract_all(str, regexp) do
     %Column{
-      expr: {:fn, "regexp_extract_all", [to_expr(str), to_lit_string_or_expr(regexp)], false}
+      expr: {:fn, "regexp_extract_all", [to_expr(str), to_expr(regexp)], false}
     }
   end
 
@@ -656,8 +660,8 @@ defmodule SparkEx.Functions do
   def regexp_extract_all(str, regexp, idx) do
     %Column{
       expr:
-        {:fn, "regexp_extract_all",
-         [to_expr(str), to_lit_string_or_expr(regexp), to_expr_or_lit_int(idx)], false}
+        {:fn, "regexp_extract_all", [to_expr(str), to_expr(regexp), to_expr_or_lit_int(idx)],
+         false}
     }
   end
 
@@ -2260,15 +2264,14 @@ defmodule SparkEx.Functions do
   Returns the position of the n-th occurrence (capture group `idx`) of the
   regex `regexp` in `str`.
 
-  `str` accepts a Column or string column name. `regexp` follows the same
-  coercion as the 2-arity form: `%Column{}` is passed through, bare strings
-  are treated as literal patterns (not column refs). `idx` is wrapped as a
+  `str` and `regexp` both accept a Column or string column name; a bare string
+  names a column, so use `lit/1` for a literal pattern. `idx` is wrapped as a
   literal.
   """
   @spec regexp_instr(Column.t() | String.t(), Column.t() | String.t() | term(), term()) ::
           Column.t()
   def regexp_instr(str, regexp, idx) do
-    args = [to_expr(str), lit_expr(regexp), lit_expr(idx)]
+    args = [to_expr(str), to_expr(regexp), lit_expr(idx)]
     %Column{expr: {:fn, "regexp_instr", args, false}}
   end
 

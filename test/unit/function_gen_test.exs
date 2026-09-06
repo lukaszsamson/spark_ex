@@ -176,16 +176,16 @@ defmodule SparkEx.Unit.FunctionGenTest do
                Functions.getbit("e", "pos")
     end
 
-    test "regexp_instr/2 wraps regexp as literal" do
+    test "regexp_instr/2 treats a bare-string regexp as a column reference" do
       assert %Column{
-               expr: {:fn, "regexp_instr", [{:col, "s"}, {:lit, "\\d+"}], false}
-             } = Functions.regexp_instr("s", "\\d+")
+               expr: {:fn, "regexp_instr", [{:col, "s"}, {:col, "p"}], false}
+             } = Functions.regexp_instr("s", "p")
     end
 
-    test "regexp_instr/3 treats bare-string regexp as literal pattern, not column ref" do
+    test "regexp_instr/3 takes a literal pattern via lit/1" do
       assert %Column{
                expr: {:fn, "regexp_instr", [{:col, "s"}, {:lit, "\\d+"}, {:lit, 1}], false}
-             } = Functions.regexp_instr("s", "\\d+", 1)
+             } = Functions.regexp_instr("s", Functions.lit("\\d+"), 1)
     end
 
     test "regexp_instr/3 Column regexp passes through" do
