@@ -158,6 +158,10 @@ defmodule SparkEx.Types do
     end)
   end
 
+  @doc false
+  @spec data_type_to_ddl(term()) :: String.t()
+  def data_type_to_ddl(type), do: type_to_ddl(type)
+
   @doc """
   Quotes a Spark SQL identifier with backticks when necessary.
 

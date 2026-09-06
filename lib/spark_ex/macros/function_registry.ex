@@ -172,10 +172,16 @@ defmodule SparkEx.Macros.FunctionRegistry do
        group: :string, doc: "Counts regex pattern occurrences."},
       # regexp_extract_all hand-written in Functions: idx is optional (default omitted)
       # {:regexp_extract_all, ...} — see Functions.regexp_extract_all/2,3
-      {:regexp_instr, "regexp_instr", {:col_lit, 1},
-       group: :string, doc: "Returns position of first regex match."},
-      {:regexp_substr, "regexp_substr", {:col_lit, 1},
-       group: :string, doc: "Returns first substring matching regex."},
+      {:regexp_instr, "regexp_instr", :two_col,
+       group: :string,
+       doc:
+         "Returns position of first regex match. Both arguments are columns; " <>
+           "a bare string names a column, use `lit/1` for a literal pattern."},
+      {:regexp_substr, "regexp_substr", :two_col,
+       group: :string,
+       doc:
+         "Returns first substring matching regex. Both arguments are columns; " <>
+           "a bare string names a column, use `lit/1` for a literal pattern."},
       {:regexp_like, "regexp_like", :two_col,
        group: :string, doc: "Returns true if column matches regex.", aliases: [:regexp]},
       {:format_string, "format_string", {:lit_then_cols, 1},

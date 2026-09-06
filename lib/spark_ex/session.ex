@@ -792,6 +792,24 @@ defmodule SparkEx.Session do
   If a column is `nil` in every row, inference fails with
   `{:error, {:cannot_determine_type, column_name}}` (PySpark's
   `CANNOT_DETERMINE_TYPE`). Pass an explicit `:schema` for such columns.
+
+  `Decimal` values infer `DECIMAL(38,18)` like PySpark; values with more than
+  20 integer or 18 fractional digits are rejected with
+  `{:error, {:invalid_data, message}}` rather than rounded or nulled.
+
+  ## Nullability
+
+  `nullable: false` (and array `contains_null` / map `value_contains_null`
+  set to `false`) in an explicit struct schema is enforced locally on list
+  rows: a `nil` returns `{:error, {:invalid_data, message}}`. Arrow payloads
+  are always nullable on the wire, so for non-empty data the server-side
+  schema reports `nullable: true`; only the empty-list relation carries the
+  exact flags. For `Explorer.DataFrame` input only top-level columns are
+  checked.
+
+  Duplicate column names are supported with a column-name list schema
+  (`schema: ["x", "x"]`); with a DDL or struct schema they return
+  `{:error, {:invalid_schema, message}}`.
   """
   @spec create_dataframe(GenServer.server(), term(), keyword()) ::
           {:ok, SparkEx.DataFrame.t()} | {:error, term()}
@@ -1730,34 +1748,17 @@ defmodule SparkEx.Session do
 
   def handle_call({:create_dataframe, data, opts}, from, state) do
     case safe_prepare_local_data(data, opts) do
-      {:ok, {:local_relation, arrow_ipc, schema_ddl, source_df}} ->
-        {configs, state} = ensure_local_relation_configs(state, opts)
-
-        case local_relation_chunk_params(opts, configs) do
-          {:error, _} = error ->
-            {:reply, error, state}
-
-          # PySpark: `if cache_threshold <= table.nbytes: cache`, so a payload
-          # exactly at the threshold is cached, not inlined.
-          {:ok, %{cache_threshold: cache_threshold}} when byte_size(arrow_ipc) < cache_threshold ->
-            plan = {:local_relation, arrow_ipc, schema_ddl}
-            df = SparkEx.DataFrame.new(self(), plan)
-            {:reply, {:ok, df}, state}
-
-          {:ok, chunk_params} ->
-            # Drop arrow_ipc from this scope before re-encoding per chunk so
-            # peak memory stays close to the size of the source DataFrame
-            # rather than 2x that for very large payloads.
-            handle_call(
-              {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_params},
-              from,
-              state
-            )
+      # Positional rows whose requested column names repeat were built under
+      # unique internal names; restore the requested names with a final
+      # `toDF` projection (PySpark: `_dedup_names` + `toDF(*names)`).
+      {:ok, {:rename_columns, prepared, names}} ->
+        case create_dataframe_from_prepared(prepared, opts, from, state) do
+          {:reply, {:ok, df}, state} -> {:reply, {:ok, SparkEx.DataFrame.to_df(df, names)}, state}
+          other -> other
         end
 
-      {:ok, {:sql_relation, query, args}} ->
-        df = SparkEx.DataFrame.new(self(), {:sql, query, args})
-        {:reply, {:ok, df}, state}
+      {:ok, prepared} ->
+        create_dataframe_from_prepared(prepared, opts, from, state)
 
       {:error, _} = error ->
         reply_error(error, state)
@@ -3677,6 +3678,21 @@ defmodule SparkEx.Session do
        when kind in [:double, :float],
        do: Decimal.to_float(value)
 
+  # Spark's `to_json` writes non-finite doubles as the strings "NaN",
+  # "Infinity" and "-Infinity"; the Arrow path decodes the same values as
+  # Explorer's sentinel atoms, so mirror that (STRING columns are untouched).
+  defp coerce_complex_decoded_value("NaN", %Spark.Connect.DataType{kind: {kind, _}})
+       when kind in [:double, :float],
+       do: :nan
+
+  defp coerce_complex_decoded_value("Infinity", %Spark.Connect.DataType{kind: {kind, _}})
+       when kind in [:double, :float],
+       do: :infinity
+
+  defp coerce_complex_decoded_value("-Infinity", %Spark.Connect.DataType{kind: {kind, _}})
+       when kind in [:double, :float],
+       do: :neg_infinity
+
   defp coerce_complex_decoded_value(value, %Spark.Connect.DataType{kind: {:decimal, _}}) do
     coerce_json_decimal(value)
   end
@@ -4102,18 +4118,70 @@ defmodule SparkEx.Session do
       {:error, {:invalid_local_data, Exception.message(e)}}
   end
 
+  # Empty typed relation: no Arrow payload, the schema alone defines the
+  # columns (PySpark's `LocalRelation(table=None, schema=schema.json())`).
+  defp create_dataframe_from_prepared(
+         {:local_relation, nil, schema, _source_df},
+         _opts,
+         _from,
+         state
+       ) do
+    df = SparkEx.DataFrame.new(self(), {:local_relation, nil, schema})
+    {:reply, {:ok, df}, state}
+  end
+
+  defp create_dataframe_from_prepared(
+         {:local_relation, arrow_ipc, schema_ddl, source_df},
+         opts,
+         from,
+         state
+       ) do
+    {configs, state} = ensure_local_relation_configs(state, opts)
+
+    case local_relation_chunk_params(opts, configs) do
+      {:error, _} = error ->
+        {:reply, error, state}
+
+      # PySpark: `if cache_threshold <= table.nbytes: cache`, so a payload
+      # exactly at the threshold is cached, not inlined.
+      {:ok, %{cache_threshold: cache_threshold}} when byte_size(arrow_ipc) < cache_threshold ->
+        plan = {:local_relation, arrow_ipc, schema_ddl}
+        df = SparkEx.DataFrame.new(self(), plan)
+        {:reply, {:ok, df}, state}
+
+      {:ok, chunk_params} ->
+        # Drop arrow_ipc from this scope before re-encoding per chunk so
+        # peak memory stays close to the size of the source DataFrame
+        # rather than 2x that for very large payloads.
+        handle_call(
+          {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_params},
+          from,
+          state
+        )
+    end
+  end
+
+  defp create_dataframe_from_prepared({:sql_relation, query, args}, _opts, _from, state) do
+    df = SparkEx.DataFrame.new(self(), {:sql, query, args})
+    {:reply, {:ok, df}, state}
+  end
+
   defp prepare_local_data(data, opts) when is_struct(data, Explorer.DataFrame) do
     with {:ok, normalized_schema} <- normalize_create_dataframe_schema(opts),
+         :ok <- validate_non_null_constraints(data, Keyword.get(opts, :schema)),
          {:ok, data, schema} <- apply_schema_to_explorer(data, normalized_schema) do
       # Metadata-bearing struct schemas keep their JSON form on the Arrow
-      # path so field metadata/nullability round-trip into the local
-      # relation (mirrors prepare_list_data_with_json_schema); the SQL-JSON
-      # complex-dtype fallback needs the DDL form (metadata not preserved
-      # there, same documented limitation as the list path).
+      # path so field metadata round-trips into the local relation (mirrors
+      # prepare_list_data_with_json_schema); the SQL-JSON complex-dtype
+      # fallback needs the DDL form (metadata not preserved there, same
+      # documented limitation as the list path). Nullability is validated
+      # locally and relaxed in the transmitted schema: every Arrow field
+      # Explorer writes is nullable, and the server rejects a nullable column
+      # for a non-nullable field (NULLABLE_COLUMN_OR_FIELD).
       {arrow_schema, sql_schema} =
         case schema do
           {:json_schema, json, ddl} ->
-            {json, ddl}
+            {relax_json_schema_nullability(json), ddl}
 
           nil ->
             ddl = explorer_to_ddl(data)
@@ -4138,31 +4206,45 @@ defmodule SparkEx.Session do
   end
 
   defp prepare_local_data(data, opts) when is_list(data) do
+    struct_schema = Keyword.get(opts, :schema)
+
     with {:ok, schema} <- normalize_create_dataframe_schema(opts),
-         {:ok, normalized_data, normalized_schema} <- normalize_list_data_and_schema(data, schema) do
-      cond do
-        is_binary(normalized_schema) ->
-          prepare_list_data_with_schema(
-            normalized_data,
-            normalized_schema,
-            Keyword.put(opts, :schema, normalized_schema)
-          )
+         :ok <- validate_non_null_constraints(data, struct_schema),
+         {:ok, normalized_data, normalized_schema, restore_names} <-
+           normalize_list_data_and_schema(data, schema) do
+      result =
+        cond do
+          # An empty list with an explicit struct schema is an empty typed
+          # relation (PySpark: `LocalRelation(table=None, schema=schema.json())`)
+          # so nullability, container null flags and field metadata all
+          # round-trip without inferring anything from the (absent) rows.
+          normalized_data == [] and match?({:struct, _}, struct_schema) ->
+            {:ok, {:local_relation, nil, SparkEx.Types.to_json(struct_schema), nil}}
 
-        match?({:json_schema, _, _}, normalized_schema) ->
-          {:json_schema, json_str, ddl_str} = normalized_schema
-          prepare_list_data_with_json_schema(normalized_data, json_str, ddl_str, opts)
+          is_binary(normalized_schema) ->
+            prepare_list_data_with_schema(
+              normalized_data,
+              normalized_schema,
+              Keyword.put(opts, :schema, normalized_schema)
+            )
 
-        is_nil(normalized_schema) ->
-          prepare_list_data_inferred(normalized_data, Keyword.delete(opts, :schema))
+          match?({:json_schema, _, _}, normalized_schema) ->
+            {:json_schema, json_str, ddl_str} = normalized_schema
+            prepare_list_data_with_json_schema(normalized_data, json_str, ddl_str, opts)
 
-        match?({:column_order, _}, normalized_schema) ->
-          {:column_order, names} = normalized_schema
+          is_nil(normalized_schema) ->
+            prepare_list_data_inferred(normalized_data, Keyword.delete(opts, :schema))
 
-          prepare_list_data_inferred(
-            normalized_data,
-            opts |> Keyword.delete(:schema) |> Keyword.put(:column_order, names)
-          )
-      end
+          match?({:column_order, _}, normalized_schema) ->
+            {:column_order, names} = normalized_schema
+
+            prepare_list_data_inferred(
+              normalized_data,
+              opts |> Keyword.delete(:schema) |> Keyword.put(:column_order, names)
+            )
+        end
+
+      with_restored_column_names(result, restore_names)
     end
   end
 
@@ -4174,27 +4256,27 @@ defmodule SparkEx.Session do
       # column name so the encoded relation is deterministic regardless
       # of insertion order. Callers needing user-controlled order should
       # pass a list of `{name, values}` pairs instead.
-      case safe_explorer_new(ordered) do
-        {:ok, explorer_df} ->
-          # Apply the (possibly column-name / json) schema against the built
-          # frame here so a {:column_names, ...} tuple is resolved into a
-          # rename/DDL rather than being re-normalized as a raw :schema opt.
-          case apply_schema_to_explorer(explorer_df, normalized_schema) do
-            {:ok, explorer_df, {:json_schema, _json, _ddl}} ->
-              # Keep the original struct schema in opts; the Explorer clause
-              # re-normalizes it to the metadata-preserving JSON form.
-              prepare_local_data(explorer_df, opts)
+      with {:ok, explorer_df} <- safe_explorer_new(ordered),
+           :ok <- validate_non_null_constraints(explorer_df, Keyword.get(opts, :schema)) do
+        # Apply the (possibly column-name / json) schema against the built
+        # frame here so a {:column_names, ...} tuple is resolved into a
+        # rename/DDL rather than being re-normalized as a raw :schema opt.
+        case apply_schema_to_explorer(explorer_df, normalized_schema) do
+          {:ok, explorer_df, {:json_schema, _json, _ddl}} ->
+            # Keep the original struct schema in opts; the Explorer clause
+            # re-normalizes it to the metadata-preserving JSON form.
+            prepare_local_data(explorer_df, opts)
 
-            {:ok, explorer_df, schema_ddl} ->
-              effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
-              prepare_local_data(explorer_df, Keyword.put(opts, :schema, effective_schema))
+          {:ok, explorer_df, schema_ddl} ->
+            effective_schema = schema_ddl || explorer_to_ddl(explorer_df)
+            prepare_local_data(explorer_df, Keyword.put(opts, :schema, effective_schema))
 
-            {:error, _} = error ->
-              error
-          end
-
-        {:error, reason} ->
-          {:error, {:data_conversion_error, reason}}
+          {:error, _} = error ->
+            error
+        end
+      else
+        {:error, {:invalid_data, _}} = error -> error
+        {:error, reason} -> {:error, {:data_conversion_error, reason}}
       end
     end
   end
@@ -4202,6 +4284,13 @@ defmodule SparkEx.Session do
   defp prepare_local_data(_data, _opts) do
     {:error, {:invalid_data, "expected Explorer.DataFrame, list of maps, or column map"}}
   end
+
+  defp with_restored_column_names(result, nil), do: result
+
+  defp with_restored_column_names({:ok, prepared}, names),
+    do: {:ok, {:rename_columns, prepared, names}}
+
+  defp with_restored_column_names({:error, _} = error, _names), do: error
 
   # Resolves the normalized schema against an Explorer.DataFrame and returns
   # `{:ok, frame, schema}` where schema is a DDL string, nil (inference /
@@ -4254,8 +4343,7 @@ defmodule SparkEx.Session do
         # field nullability and metadata round-trip into the local relation.
         # Only emit JSON when metadata is non-empty for at least one field;
         # otherwise keep the DDL form so existing schema-string flows that
-        # reparse fields (binary_top_level_fields, non_string_top_level_map_fields,
-        # etc.) keep working.
+        # reparse fields (parse_schema_field_types etc.) keep working.
         if struct_has_field_metadata?(fields) do
           {:ok, {:json_schema, SparkEx.Types.to_json(schema), SparkEx.Types.to_ddl(schema)}}
         else
@@ -4289,6 +4377,10 @@ defmodule SparkEx.Session do
   # string or `nil` (inference). Tuples without column names are
   # rejected — the previous `is_list/1` arm silently fell through to
   # the inferred path which then failed inside Explorer.
+  # Returns `{:ok, rows, schema, restore_names}`; `restore_names` is the list
+  # of requested column names to re-apply with a final `toDF` projection when
+  # positional rows had to be built under unique internal names (duplicate
+  # requested names), otherwise nil.
   defp normalize_list_data_and_schema([], schema) do
     case schema do
       {:column_names, _} ->
@@ -4296,7 +4388,7 @@ defmodule SparkEx.Session do
          {:invalid_data, "cannot create DataFrame from empty list with column-name schema"}}
 
       _ ->
-        {:ok, [], schema}
+        {:ok, [], schema, nil}
     end
   end
 
@@ -4310,7 +4402,7 @@ defmodule SparkEx.Session do
             apply_column_names_to_map_rows(data, names)
 
           _ ->
-            {:ok, data, schema}
+            {:ok, data, schema, nil}
         end
 
       Enum.all?(data, &is_tuple/1) ->
@@ -4343,16 +4435,55 @@ defmodule SparkEx.Session do
 
   defp normalize_tuple_rows(data, schema) do
     with {:ok, names} <- column_names_for_tuple_data(data, schema) do
-      maps = Enum.map(data, fn tuple -> tuple_to_named_map(tuple, names) end)
+      # Duplicate requested names (`schema: ["x", "x"]`) would collapse when
+      # the positional rows become maps, so the relation is built under unique
+      # internal names and the requested names are restored afterwards with a
+      # `toDF` projection (PySpark: `_dedup_names` + `toDF(*names)`).
+      {internal_names, restore_names} = dedup_positional_names(names, schema)
 
       # Tuple rows are positional: PySpark keeps their column order (only dict
       # rows are key-sorted), so carry the resolved names into inference.
       case schema do
-        binary when is_binary(binary) -> {:ok, maps, binary}
-        {:json_schema, _, _} = json_schema -> {:ok, maps, json_schema}
-        {:column_names, _} -> {:ok, maps, {:column_order, names}}
-        nil -> {:ok, maps, {:column_order, names}}
+        _ when internal_names != names and is_nil(restore_names) ->
+          {:error,
+           {:invalid_schema,
+            "duplicate column names #{inspect(names)} are only supported with a " <>
+              "column-name list schema; DDL and struct schemas would silently drop values"}}
+
+        binary when is_binary(binary) ->
+          {:ok, tuple_rows_to_maps(data, internal_names), binary, nil}
+
+        {:json_schema, _, _} = json_schema ->
+          {:ok, tuple_rows_to_maps(data, internal_names), json_schema, nil}
+
+        {:column_names, _} ->
+          {:ok, tuple_rows_to_maps(data, internal_names), {:column_order, internal_names},
+           restore_names}
+
+        nil ->
+          {:ok, tuple_rows_to_maps(data, internal_names), {:column_order, internal_names}, nil}
       end
+    end
+  end
+
+  defp tuple_rows_to_maps(data, names),
+    do: Enum.map(data, fn tuple -> tuple_to_named_map(tuple, names) end)
+
+  defp dedup_positional_names(names, {:column_names, _}) do
+    if Enum.uniq(names) == names do
+      {names, nil}
+    else
+      {Enum.with_index(names, fn _name, i -> "_spark_ex_col_#{i}" end), names}
+    end
+  end
+
+  # DDL / struct schemas: duplicates are detected (internal names differ) but
+  # cannot be restored positionally, so normalize_tuple_rows/2 rejects them.
+  defp dedup_positional_names(names, _schema) do
+    if Enum.uniq(names) == names do
+      {names, nil}
+    else
+      {Enum.with_index(names, fn _name, i -> "_spark_ex_col_#{i}" end), nil}
     end
   end
 
@@ -4382,16 +4513,19 @@ defmodule SparkEx.Session do
        {:invalid_schema,
         "column-name list of length #{length(names)} does not match data with #{length(sorted_keys)} unique keys"}}
     else
-      renamed =
+      # Turn the key-sorted maps into positional rows so the requested names
+      # keep the order they were given in (PySpark applies them with
+      # `toDF(*names)`); the tuple path also copes with duplicate names.
+      tuples =
         Enum.map(data, fn row ->
           stringified = Map.new(row, fn {k, v} -> {to_string(k), v} end)
 
           sorted_keys
-          |> Enum.zip(names)
-          |> Map.new(fn {orig, new} -> {new, Map.get(stringified, orig)} end)
+          |> Enum.map(&Map.get(stringified, &1))
+          |> List.to_tuple()
         end)
 
-      {:ok, renamed, nil}
+      normalize_tuple_rows(tuples, {:column_names, names})
     end
   end
 
@@ -4488,29 +4622,15 @@ defmodule SparkEx.Session do
 
   defp prepare_list_data_with_schema(data, schema_ddl, opts) when is_binary(schema_ddl) do
     if normalize_local_relation_arrow?(opts) do
-      non_string_map_fields = non_string_top_level_map_fields(schema_ddl)
-      binary_fields = binary_top_level_fields(schema_ddl)
+      binary_fields = top_level_binary_fields(schema_ddl)
 
       if rows_contain_null_byte_text?(data, binary_fields) do
         case prepare_list_data_with_schema_arrow_fallback(data, schema_ddl, opts) do
-          {:ok, _} = ok ->
-            ok
-
-          {:error, _} ->
-            prepare_list_data_with_schema_json_relation(
-              data,
-              schema_ddl,
-              non_string_map_fields,
-              binary_fields
-            )
+          {:ok, _} = ok -> ok
+          {:error, _} -> json_relation_from_rows(data, schema_ddl)
         end
       else
-        prepare_list_data_with_schema_json_relation(
-          data,
-          schema_ddl,
-          non_string_map_fields,
-          binary_fields
-        )
+        json_relation_from_rows(data, schema_ddl)
       end
     else
       case safe_list_of_maps_to_explorer(data) do
@@ -4523,26 +4643,25 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp prepare_list_data_with_schema_json_relation(
-         data,
-         schema_ddl,
-         non_string_map_fields,
-         binary_fields
-       ) do
+  defp top_level_binary_fields(schema_ddl) do
+    for {name, :binary} <- parse_schema_field_types(schema_ddl), do: name
+  end
+
+  # Shared JSON local-data path: list rows with a DDL schema, and the Explorer
+  # complex-dtype fallback (`prepare_sql_json_relation/2`). Row values are
+  # normalised by the schema's type tree so the encoding is schema-directed
+  # at every nesting level: BINARY leaves are base64-encoded (Spark decodes
+  # JSON binaries as base64), non-string-keyed MAPs become entry arrays
+  # (from_json only accepts STRING map keys) and are rebuilt with
+  # map_from_entries in a projection, and Explorer's non-finite float
+  # sentinels become the spellings Spark's JSON parser accepts.
+  defp json_relation_from_rows(rows, schema_ddl) do
     with {:ok, validated_schema} <- validate_schema_ddl_for_sql_relation(schema_ddl),
-         {:ok, normalized_rows} <-
-           normalize_rows_for_schema(
-             data,
-             Enum.map(non_string_map_fields, & &1.name),
-             binary_fields
-           ),
+         fields = parse_schema_field_types(validated_schema),
+         {:ok, normalized_rows} <- normalize_rows_for_schema(rows, fields),
          {:ok, row_json} <- encode_rows_as_json(normalized_rows) do
-      if non_string_map_fields == [] do
-        query = json_rows_to_sql_query(row_json, validated_schema)
-        {:ok, {:sql_relation, query, nil}}
-      else
-        helper_schema =
-          helper_schema_for_non_string_map_fields(validated_schema, non_string_map_fields)
+      if Enum.any?(fields, fn {_name, type} -> needs_json_projection?(type) end) do
+        helper_schema = json_helper_schema_ddl(fields)
 
         with {:ok, validated_helper_schema} <-
                validate_schema_ddl_for_sql_relation(helper_schema) do
@@ -4550,27 +4669,31 @@ defmodule SparkEx.Session do
             json_rows_to_sql_query_with_projection(
               row_json,
               validated_helper_schema,
-              projected_select_list_for_non_string_map_fields(
-                validated_schema,
-                non_string_map_fields
-              )
+              json_projection_select_list(fields)
             )
 
           {:ok, {:sql_relation, query, nil}}
         end
+      else
+        {:ok, {:sql_relation, json_rows_to_sql_query(row_json, validated_schema), nil}}
       end
     end
   end
 
   # Handles metadata-bearing struct schemas (json_schema 3-tuple form).
-  # When normalize_local_relation_arrow? is true AND the Explorer.DataFrame has
-  # complex dtypes, the SQL-JSON path must be used — it cannot carry field
-  # metadata, but at least complex-type Arrow incompatibilities are avoided.
-  # For simple-column frames (no complex dtypes), or when normalization is
-  # disabled, the Arrow local-relation path is used with the JSON schema string
-  # so that LocalRelation.schema preserves field metadata.
+  # Rows are projected onto the schema's fields, in field order (extra keys
+  # are dropped, missing fields become null): the server applies a
+  # LocalRelation schema positionally, so the Arrow columns must line up with
+  # the fields (PySpark's LocalDataToArrowConversion indexes dict rows by
+  # `field_names`). When normalize_local_relation_arrow? is true AND the
+  # Explorer.DataFrame has complex dtypes, the SQL-JSON path must be used —
+  # it cannot carry field metadata, but complex-type Arrow incompatibilities
+  # are avoided. Otherwise the Arrow path carries the JSON schema so field
+  # metadata is preserved.
   defp prepare_list_data_with_json_schema(data, json_str, ddl_str, opts) do
-    case safe_list_of_maps_to_explorer(data) do
+    field_names = json_schema_field_names(json_str)
+
+    case safe_list_of_maps_to_explorer(data, field_names) do
       {:ok, explorer_df} ->
         if normalize_local_relation_arrow?(opts) and
              dataframe_contains_complex_dtype?(explorer_df) do
@@ -4580,11 +4703,13 @@ defmodule SparkEx.Session do
         else
           # Simple columns: Arrow path with JSON schema preserves metadata.
           # Disable JSON-relation normalization so the binary json_str schema
-          # is not embedded in a SQL `from_json(val, ...)` template.
+          # is not embedded in a SQL `from_json(val, ...)` template. Nullability
+          # is relaxed in the transmitted schema (the constraints were
+          # validated locally against the rows).
           prepare_local_data(
             explorer_df,
             opts
-            |> Keyword.put(:schema, json_str)
+            |> Keyword.put(:schema, relax_json_schema_nullability(json_str))
             |> Keyword.put(:normalize_local_relation_arrow, false)
           )
         end
@@ -4592,6 +4717,207 @@ defmodule SparkEx.Session do
       {:error, reason} ->
         {:error, {:data_conversion_error, reason}}
     end
+  end
+
+  defp json_schema_field_names(json_str) do
+    case Jason.decode(json_str) do
+      {:ok, %{"fields" => fields}} when is_list(fields) ->
+        names = for %{"name" => name} <- fields, is_binary(name), do: name
+        if names == [], do: nil, else: names
+
+      _ ->
+        nil
+    end
+  end
+
+  # Polars marks every Arrow field it writes as nullable, and the server
+  # reconciles the Arrow batch against the requested schema with
+  # `Dataset.to`, which rejects a nullable column for a non-nullable field
+  # (NULLABLE_COLUMN_OR_FIELD). Non-null constraints are validated locally
+  # (validate_non_null_constraints/2) before the data is encoded, so the
+  # transmitted schema relaxes them while keeping field metadata intact.
+  defp relax_json_schema_nullability(json_str) do
+    case Jason.decode(json_str) do
+      {:ok, decoded} -> Jason.encode!(relax_nullability(decoded))
+      _ -> json_str
+    end
+  end
+
+  defp relax_nullability(%{"type" => "struct", "fields" => fields} = type) when is_list(fields) do
+    relaxed =
+      Enum.map(fields, fn field ->
+        field
+        |> Map.put("nullable", true)
+        |> update_if_present("type", &relax_nullability/1)
+      end)
+
+    %{type | "fields" => relaxed}
+  end
+
+  defp relax_nullability(%{"type" => "array"} = type) do
+    type
+    |> Map.put("containsNull", true)
+    |> update_if_present("elementType", &relax_nullability/1)
+  end
+
+  defp relax_nullability(%{"type" => "map"} = type) do
+    type
+    |> Map.put("valueContainsNull", true)
+    |> update_if_present("valueType", &relax_nullability/1)
+  end
+
+  defp relax_nullability(other), do: other
+
+  defp update_if_present(map, key, fun) do
+    case map do
+      %{^key => value} -> Map.put(map, key, fun.(value))
+      _ -> map
+    end
+  end
+
+  # Local enforcement of `nullable: false` (and array `contains_null` / map
+  # `value_contains_null`) for explicit struct schemas, recursively, before
+  # anything is encoded — mirrors PySpark's `_create_converter` /
+  # `_check_type` ("input for LongType() must not be None"). The encodings
+  # used on the wire cannot enforce the constraint themselves (from_json
+  # yields nullable fields; Arrow fields written by Explorer are nullable).
+  defp validate_non_null_constraints(rows, {:struct, fields} = schema) when is_list(rows) do
+    if struct_has_non_null_constraint?(schema) do
+      Enum.reduce_while(rows, :ok, fn row, :ok ->
+        case check_non_null_row(row, fields) do
+          :ok -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+    else
+      :ok
+    end
+  end
+
+  defp validate_non_null_constraints(data, {:struct, fields})
+       when is_struct(data, Explorer.DataFrame) do
+    names = Explorer.DataFrame.names(data)
+
+    Enum.reduce_while(fields, :ok, fn field, :ok ->
+      if Map.get(field, :nullable, true) == false and field.name in names and
+           Explorer.Series.nil_count(data[field.name]) > 0 do
+        {:halt, non_null_violation(field.name, field.type)}
+      else
+        {:cont, :ok}
+      end
+    end)
+  end
+
+  defp validate_non_null_constraints(_data, _schema), do: :ok
+
+  defp struct_has_non_null_constraint?({:struct, fields}) do
+    Enum.any?(fields, fn field ->
+      Map.get(field, :nullable, true) == false or type_has_non_null_constraint?(field.type)
+    end)
+  end
+
+  defp type_has_non_null_constraint?({:struct, _} = type),
+    do: struct_has_non_null_constraint?(type)
+
+  defp type_has_non_null_constraint?({:array, _elem, false}), do: true
+  defp type_has_non_null_constraint?({:array, elem, _}), do: type_has_non_null_constraint?(elem)
+  defp type_has_non_null_constraint?({:array, elem}), do: type_has_non_null_constraint?(elem)
+  defp type_has_non_null_constraint?({:map, _k, _v, false}), do: true
+  defp type_has_non_null_constraint?({:map, _k, v, _}), do: type_has_non_null_constraint?(v)
+  defp type_has_non_null_constraint?({:map, _k, v}), do: type_has_non_null_constraint?(v)
+  defp type_has_non_null_constraint?(_), do: false
+
+  defp check_non_null_row(row, fields) when is_map(row) and not is_struct(row) do
+    stringified = Map.new(row, fn {k, v} -> {to_string(k), v} end)
+    check_non_null_fields(fields, fn field, _index -> Map.get(stringified, field.name) end)
+  end
+
+  defp check_non_null_row(row, fields) when is_tuple(row) do
+    values = Tuple.to_list(row)
+
+    # Arity mismatches are reported by the row normalisation step.
+    if length(values) == length(fields) do
+      check_non_null_fields(fields, fn _field, index -> Enum.at(values, index) end)
+    else
+      :ok
+    end
+  end
+
+  defp check_non_null_row(row, fields) when is_list(row) do
+    if keyword_row?(row),
+      do: check_non_null_row(Map.new(row), fields),
+      else: check_non_null_row(List.to_tuple(row), fields)
+  end
+
+  defp check_non_null_row(value, fields), do: check_non_null_row({value}, fields)
+
+  defp check_non_null_fields(fields, lookup) do
+    fields
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {field, index}, :ok ->
+      value = lookup.(field, index)
+
+      case check_non_null_value(value, field.type, Map.get(field, :nullable, true), field.name) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp check_non_null_value(nil, type, false, path), do: non_null_violation(path, type)
+  defp check_non_null_value(nil, _type, _nullable, _path), do: :ok
+
+  defp check_non_null_value(value, {:struct, fields}, _nullable, path)
+       when is_map(value) and not is_struct(value) do
+    stringified = Map.new(value, fn {k, v} -> {to_string(k), v} end)
+
+    Enum.reduce_while(fields, :ok, fn field, :ok ->
+      nested_path = "#{path}.#{field.name}"
+
+      case check_non_null_value(
+             Map.get(stringified, field.name),
+             field.type,
+             Map.get(field, :nullable, true),
+             nested_path
+           ) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp check_non_null_value(value, {:array, elem}, nullable, path),
+    do: check_non_null_value(value, {:array, elem, true}, nullable, path)
+
+  defp check_non_null_value(value, {:array, elem, contains_null}, _nullable, path)
+       when is_list(value) do
+    Enum.reduce_while(value, :ok, fn item, :ok ->
+      case check_non_null_value(item, elem, contains_null, path <> "[]") do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp check_non_null_value(value, {:map, key, val}, nullable, path),
+    do: check_non_null_value(value, {:map, key, val, true}, nullable, path)
+
+  defp check_non_null_value(value, {:map, _key, val, value_contains_null}, _nullable, path)
+       when is_map(value) and not is_struct(value) do
+    Enum.reduce_while(value, :ok, fn {_k, item}, :ok ->
+      case check_non_null_value(item, val, value_contains_null, path <> "[]") do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp check_non_null_value(_value, _type, _nullable, _path), do: :ok
+
+  defp non_null_violation(path, type) do
+    {:error,
+     {:invalid_data,
+      "input for field #{inspect(path)} (#{SparkEx.Types.data_type_to_ddl(type)}) must not be nil"}}
   end
 
   defp prepare_list_data_with_schema_arrow_fallback(data, schema_ddl, opts) do
@@ -4620,9 +4946,12 @@ defmodule SparkEx.Session do
           error
 
         :ok ->
-          case safe_list_of_maps_to_explorer(data, column_order) do
-            {:ok, explorer_df} ->
-              prepare_local_data(explorer_df, opts)
+          with :ok <- validate_inferred_decimals(data),
+               {:ok, explorer_df} <- safe_list_of_maps_to_explorer(data, column_order) do
+            prepare_local_data(widen_inferred_decimal_columns(explorer_df), opts)
+          else
+            {:error, {:invalid_data, _}} = error ->
+              error
 
             {:error, reason} ->
               prepare_list_data_inferred_fallback(data, reason, opts, column_order)
@@ -4630,6 +4959,59 @@ defmodule SparkEx.Session do
       end
     end
   end
+
+  # PySpark infers `decimal.Decimal` as DecimalType(38, 18) whatever the
+  # values look like (same shape infer_single_type/1 declares); Explorer
+  # derives the scale from the values instead, so inferred Elixir rows are
+  # cast to the fixed shape. User-supplied Explorer frames keep their dtypes.
+  defp widen_inferred_decimal_columns(explorer_df) do
+    explorer_df
+    |> Explorer.DataFrame.dtypes()
+    |> Enum.reduce(explorer_df, fn
+      {name, {:decimal, _precision, _scale}}, acc ->
+        Explorer.DataFrame.put(acc, name, Explorer.Series.cast(acc[name], {:decimal, 38, 18}))
+
+      _other, acc ->
+        acc
+    end)
+  end
+
+  # The decimal(38,18) shape holds at most 20 integer digits and 18 fractional
+  # digits. Explorer's cast is non-strict (it rounds excess scale and turns
+  # overflow into nulls), so values that do not fit are rejected up front the
+  # way PyArrow rejects a lossy rescale in PySpark.
+  @inferred_decimal_scale 18
+  @inferred_decimal_integer_digits 20
+
+  defp validate_inferred_decimals(rows) do
+    rows
+    |> Enum.flat_map(fn row -> Enum.map(row, fn {key, value} -> {to_string(key), value} end) end)
+    |> Enum.find_value(:ok, fn
+      {key, %Decimal{} = value} ->
+        if decimal_fits_inferred_shape?(value) do
+          nil
+        else
+          {:error,
+           {:invalid_data,
+            "decimal value #{Decimal.to_string(value, :normal)} in column \"#{key}\" does not " <>
+              "fit the inferred DECIMAL(38,18) (at most 20 integer and 18 fractional " <>
+              "digits); pass an explicit :schema"}}
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp decimal_fits_inferred_shape?(%Decimal{coef: coef, exp: exp}) when is_integer(coef) do
+    digits = coef |> Integer.digits() |> length()
+    scale = max(-exp, 0)
+    integer_digits = if coef == 0, do: 0, else: max(digits + exp, 0)
+    scale <= @inferred_decimal_scale and integer_digits <= @inferred_decimal_integer_digits
+  end
+
+  # NaN / infinity decimals cannot be represented in a fixed-shape column.
+  defp decimal_fits_inferred_shape?(_), do: false
 
   # Column order for inference: positional names for tuple rows, the sorted
   # key union (T-47) for map/keyword rows.
@@ -4742,29 +5124,20 @@ defmodule SparkEx.Session do
     Explorer.DataFrame.new(columns)
   end
 
-  defp normalize_rows_for_schema(rows, non_string_map_fields \\ [], binary_fields \\ [])
-       when is_list(rows) do
-    non_string_map_fields_map = Map.new(non_string_map_fields, &{&1, true})
-    binary_fields_map = Map.new(binary_fields, &{&1, true})
+  # Normalises map rows for the JSON local-data path. `fields` is the
+  # `[{name, type_tree}]` list from parse_schema_field_types/1; values whose
+  # column is not in the schema (or when no schema is known) go through the
+  # plain normalize_json_value/1 pass.
+  defp normalize_rows_for_schema(rows, fields \\ []) when is_list(rows) do
+    field_types = Map.new(fields)
 
     Enum.reduce_while(rows, {:ok, []}, fn
       row, {:ok, acc} when is_map(row) and not is_struct(row) ->
         normalized =
-          row
-          |> Enum.map(fn {key, value} ->
+          Map.new(row, fn {key, value} ->
             key_string = to_string(key)
-
-            value =
-              normalize_row_field_value(
-                value,
-                key_string,
-                non_string_map_fields_map,
-                binary_fields_map
-              )
-
-            {key_string, value}
+            {key_string, normalize_value_for_type(value, Map.get(field_types, key_string))}
           end)
-          |> Map.new()
 
         {:cont, {:ok, [normalized | acc]}}
 
@@ -4780,27 +5153,43 @@ defmodule SparkEx.Session do
     end
   end
 
-  defp normalize_row_field_value(value, key_string, non_string_map_fields_map, binary_fields_map) do
-    cond do
-      Map.has_key?(non_string_map_fields_map, key_string) -> normalize_non_string_map_value(value)
-      Map.has_key?(binary_fields_map, key_string) -> normalize_binary_field_value(value)
-      true -> normalize_json_value(value)
+  # Schema-directed JSON value normalisation (see json_relation_from_rows/2).
+  defp normalize_value_for_type(nil, _type), do: nil
+  defp normalize_value_for_type(value, nil), do: normalize_json_value(value)
+  defp normalize_value_for_type(value, :binary) when is_binary(value), do: Base.encode64(value)
+
+  defp normalize_value_for_type({:binary, value}, :binary) when is_binary(value),
+    do: Base.encode64(value)
+
+  defp normalize_value_for_type(value, {:array, elem}) when is_list(value),
+    do: Enum.map(value, &normalize_value_for_type(&1, elem))
+
+  defp normalize_value_for_type(value, {:map, key_type, value_type})
+       when is_map(value) and not is_struct(value) do
+    if string_key_type?(key_type) do
+      Map.new(value, fn {k, v} -> {to_string(k), normalize_value_for_type(v, value_type)} end)
+    else
+      # from_json only accepts STRING map keys: ship the map as an array of
+      # `{key, value}` entries and rebuild it with map_from_entries.
+      Enum.map(value, fn {k, v} ->
+        %{
+          "key" => normalize_value_for_type(k, key_type),
+          "value" => normalize_value_for_type(v, value_type)
+        }
+      end)
     end
   end
 
-  defp normalize_non_string_map_value(nil), do: nil
+  defp normalize_value_for_type(value, {:struct, fields})
+       when is_map(value) and not is_struct(value) do
+    stringified = Map.new(value, fn {k, v} -> {to_string(k), v} end)
 
-  defp normalize_non_string_map_value(value) when is_map(value) and not is_struct(value) do
-    Enum.map(value, fn {k, v} ->
-      %{"key" => k, "value" => normalize_json_value(v)}
+    Map.new(fields, fn {name, type} ->
+      {name, normalize_value_for_type(Map.get(stringified, name), type)}
     end)
   end
 
-  defp normalize_non_string_map_value(value), do: normalize_json_value(value)
-
-  defp normalize_binary_field_value(nil), do: nil
-  defp normalize_binary_field_value(value) when is_binary(value), do: Base.encode64(value)
-  defp normalize_binary_field_value(value), do: normalize_json_value(value)
+  defp normalize_value_for_type(value, _type), do: normalize_json_value(value)
 
   defp rows_contain_null_byte_text?(rows, binary_fields) when is_list(rows) do
     binary_fields_set = MapSet.new(binary_fields)
@@ -4837,85 +5226,195 @@ defmodule SparkEx.Session do
 
   defp value_contains_null_byte_text?(_value), do: false
 
-  defp binary_top_level_fields(schema_ddl) do
+  # Parses the top-level fields of a DDL schema into `[{name, type_tree}]`.
+  # The type tree only distinguishes what the JSON local-data path needs:
+  # `:binary`, `{:array, t}`, `{:map, k, v}`, `{:struct, [{name, t}]}` and
+  # `{:opaque, raw}` for every other type (kept verbatim). Trailing
+  # `NOT NULL` / `COMMENT '...'` qualifiers are stripped at every level.
+  defp parse_schema_field_types(schema_ddl) do
     schema_ddl
     |> split_top_level_schema_fields()
     |> Enum.flat_map(fn field ->
       case parse_schema_field(field) do
-        {name, type} ->
-          if String.upcase(String.trim(type)) == "BINARY", do: [name], else: []
-
-        :error ->
-          []
-      end
-    end)
-  end
-
-  defp non_string_top_level_map_fields(schema_ddl) do
-    schema_ddl
-    |> split_top_level_schema_fields()
-    |> Enum.flat_map(fn field ->
-      case parse_schema_field(field) do
-        {name, type} -> non_string_map_field_entry(name, type)
+        {name, type} -> [{name, parse_type_tree(type)}]
         :error -> []
       end
     end)
   end
 
-  defp non_string_map_field_entry(name, type) do
-    case parse_map_type(type) do
-      {:ok, key_type, value_type} ->
-        if String.upcase(String.trim(key_type)) == "STRING" do
-          []
-        else
-          [%{name: name, key_type: String.trim(key_type), value_type: String.trim(value_type)}]
+  defp parse_type_tree(type) do
+    trimmed = type |> String.trim() |> strip_type_qualifiers()
+    upper = String.upcase(trimmed)
+
+    cond do
+      upper == "BINARY" ->
+        :binary
+
+      String.starts_with?(upper, "ARRAY<") and String.ends_with?(trimmed, ">") ->
+        {:array, parse_type_tree(inner_type_argument(trimmed, 6))}
+
+      String.starts_with?(upper, "MAP<") and String.ends_with?(trimmed, ">") ->
+        case parse_map_type(trimmed) do
+          {:ok, key_type, value_type} ->
+            {:map, parse_type_tree(key_type), parse_type_tree(value_type)}
+
+          :error ->
+            {:opaque, trimmed}
         end
 
-      :error ->
-        []
+      String.starts_with?(upper, "STRUCT<") and String.ends_with?(trimmed, ">") ->
+        parse_struct_type_tree(inner_type_argument(trimmed, 7), trimmed)
+
+      true ->
+        {:opaque, trimmed}
     end
   end
 
-  defp helper_schema_for_non_string_map_fields(schema_ddl, non_string_map_fields) do
-    replacements =
-      Map.new(non_string_map_fields, fn %{name: name, key_type: key_type, value_type: value_type} ->
-        {name, "ARRAY<STRUCT<key: #{key_type}, value: #{value_type}>>"}
-      end)
+  defp inner_type_argument(type, prefix_length),
+    do: String.slice(type, prefix_length, String.length(type) - prefix_length - 1)
 
-    schema_ddl
-    |> split_top_level_schema_fields()
-    |> Enum.map_join(", ", fn field ->
-      case parse_schema_field(field) do
-        {name, _type} ->
-          replacement = Map.get(replacements, name)
-          "#{name} #{replacement || schema_field_type(field)}"
+  defp strip_type_qualifiers(type) do
+    type
+    |> String.replace(~r/\s+COMMENT\s+'(?:[^']|'')*'\s*\z/i, "")
+    |> String.replace(~r/\s+NOT\s+NULL\s*\z/i, "")
+    |> String.trim()
+  end
 
-        :error ->
-          field
-      end
+  defp parse_struct_type_tree(inner, raw) do
+    fields =
+      inner
+      |> split_top_level_schema_fields()
+      |> Enum.map(&parse_struct_field_type/1)
+
+    if Enum.any?(fields, &(&1 == :error)), do: {:opaque, raw}, else: {:struct, fields}
+  end
+
+  # STRUCT fields accept `name: TYPE`, `name:TYPE` and `name TYPE`, with an
+  # optionally backtick-quoted name.
+  defp parse_struct_field_type(field) do
+    case String.trim(field) do
+      <<"`", rest::binary>> ->
+        case consume_backtick_identifier(rest, []) do
+          {:ok, name, after_close} ->
+            type =
+              after_close
+              |> String.trim_leading()
+              |> String.replace_prefix(":", "")
+              |> String.trim()
+
+            if type == "", do: :error, else: {name, parse_type_tree(type)}
+
+          :error ->
+            :error
+        end
+
+      other ->
+        case Regex.run(~r/^([^\s:`]+)\s*:?\s*(\S.*)$/s, other) do
+          [_, name, type] -> {name, parse_type_tree(type)}
+          _ -> :error
+        end
+    end
+  end
+
+  defp string_key_type?({:opaque, raw}), do: String.upcase(raw) == "STRING"
+  defp string_key_type?(_type), do: false
+
+  # True when the type (at any depth) holds a non-string-keyed MAP, which
+  # from_json cannot parse directly and must be rebuilt in a projection.
+  defp needs_json_projection?({:map, key_type, value_type}),
+    do: not string_key_type?(key_type) or needs_json_projection?(value_type)
+
+  defp needs_json_projection?({:array, elem}), do: needs_json_projection?(elem)
+
+  defp needs_json_projection?({:struct, fields}),
+    do: Enum.any?(fields, fn {_name, type} -> needs_json_projection?(type) end)
+
+  defp needs_json_projection?(_type), do: false
+
+  # Rebuilds the DDL for the from_json helper schema with non-string-keyed
+  # maps replaced by entry arrays. Field names are re-quoted (the parser
+  # decoded them), so names with spaces or backticks survive the round-trip.
+  defp json_helper_schema_ddl(fields) do
+    Enum.map_join(fields, ", ", fn {name, type} ->
+      "#{SparkEx.Types.quote_identifier(name)} #{render_json_helper_type(type)}"
     end)
   end
 
-  defp projected_select_list_for_non_string_map_fields(schema_ddl, non_string_map_fields) do
-    map_fields = MapSet.new(Enum.map(non_string_map_fields, & &1.name))
+  defp render_json_helper_type(:binary), do: "BINARY"
+  defp render_json_helper_type({:opaque, raw}), do: raw
+  defp render_json_helper_type({:array, elem}), do: "ARRAY<#{render_json_helper_type(elem)}>"
 
-    schema_ddl
-    |> split_top_level_schema_fields()
-    |> Enum.map(fn field ->
-      case parse_schema_field(field) do
-        {name, _type} ->
-          if MapSet.member?(map_fields, name) do
-            "map_from_entries(parsed.`#{name}`) AS `#{name}`"
-          else
-            "parsed.`#{name}` AS `#{name}`"
-          end
+  defp render_json_helper_type({:map, key_type, value_type}) do
+    key = render_json_helper_type(key_type)
+    value = render_json_helper_type(value_type)
 
-        :error ->
-          nil
-      end
+    if string_key_type?(key_type),
+      do: "MAP<#{key}, #{value}>",
+      else: "ARRAY<STRUCT<key: #{key}, value: #{value}>>"
+  end
+
+  defp render_json_helper_type({:struct, fields}) do
+    inner =
+      Enum.map_join(fields, ", ", fn {name, type} ->
+        "#{SparkEx.Types.quote_identifier(name)}: #{render_json_helper_type(type)}"
+      end)
+
+    "STRUCT<#{inner}>"
+  end
+
+  # Projection that turns the helper-schema columns back into the requested
+  # types: `map_from_entries` for entry arrays, `transform` through arrays,
+  # `transform_values` through string-keyed maps and `named_struct` through
+  # structs (null-preserving). Every identifier is backtick-quoted with
+  # embedded backticks escaped.
+  defp json_projection_select_list(fields) do
+    Enum.map_join(fields, ", ", fn {name, type} ->
+      quoted = backtick_quote(name)
+      "#{json_projection_expr(type, "parsed.#{quoted}", 0)} AS #{quoted}"
     end)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join(", ")
+  end
+
+  defp backtick_quote(name), do: "`" <> String.replace(name, "`", "``") <> "`"
+
+  defp json_projection_expr(type, expr, depth) do
+    if needs_json_projection?(type),
+      do: json_projection_transform(type, expr, depth),
+      else: expr
+  end
+
+  defp json_projection_transform({:map, key_type, value_type}, expr, depth) do
+    var = "_spark_ex_e#{depth}"
+
+    if string_key_type?(key_type) do
+      "transform_values(#{expr}, (_spark_ex_k#{depth}, #{var}) -> " <>
+        "#{json_projection_expr(value_type, var, depth + 1)})"
+    else
+      entries =
+        if needs_json_projection?(key_type) or needs_json_projection?(value_type) do
+          "transform(#{expr}, #{var} -> named_struct(" <>
+            "'key', #{json_projection_expr(key_type, var <> ".key", depth + 1)}, " <>
+            "'value', #{json_projection_expr(value_type, var <> ".value", depth + 1)}))"
+        else
+          expr
+        end
+
+      "map_from_entries(#{entries})"
+    end
+  end
+
+  defp json_projection_transform({:array, elem}, expr, depth) do
+    var = "_spark_ex_e#{depth}"
+    "transform(#{expr}, #{var} -> #{json_projection_expr(elem, var, depth + 1)})"
+  end
+
+  defp json_projection_transform({:struct, fields}, expr, depth) do
+    inner =
+      Enum.map_join(fields, ", ", fn {name, type} ->
+        "'#{sql_escape_string(name)}', " <>
+          json_projection_expr(type, "#{expr}.#{backtick_quote(name)}", depth)
+      end)
+
+    "CASE WHEN #{expr} IS NULL THEN NULL ELSE named_struct(#{inner}) END"
   end
 
   # Splits a DDL field list on top-level commas only. Tracks `<>` and `()`
@@ -5008,13 +5507,6 @@ defmodule SparkEx.Session do
     case Regex.run(~r/^(\S+)\s+(.+)$/s, field) do
       [_, name, type] -> {name, String.trim(type)}
       _ -> :error
-    end
-  end
-
-  defp schema_field_type(field) do
-    case parse_schema_field(field) do
-      {_name, type} -> type
-      :error -> field
     end
   end
 
@@ -5273,14 +5765,13 @@ defmodule SparkEx.Session do
     TypeMapper.explorer_schema_to_ddl(ordered_dtypes)
   end
 
+  # Explorer frames with complex dtypes take the JSON path; the rows go
+  # through the same schema-directed normalisation as list rows (binary
+  # columns, non-finite floats, non-string-keyed maps).
   defp prepare_sql_json_relation(explorer_df, schema_ddl) do
-    rows = Explorer.DataFrame.to_rows(explorer_df)
-
-    with {:ok, validated_schema} <- validate_schema_ddl_for_sql_relation(schema_ddl),
-         {:ok, row_json} <- encode_rows_as_json(rows) do
-      query = json_rows_to_sql_query(row_json, validated_schema)
-      {:ok, {:sql_relation, query, nil}}
-    end
+    explorer_df
+    |> Explorer.DataFrame.to_rows()
+    |> json_relation_from_rows(schema_ddl)
   end
 
   # Reject schema DDL strings that are syntactically malformed before

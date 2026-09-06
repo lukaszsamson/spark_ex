@@ -114,7 +114,7 @@ defmodule SparkEx.FunctionsTest do
 
   describe "regex helpers" do
     test "regexp_extract_all/3 builds expression" do
-      result = Functions.regexp_extract_all(Functions.col("name"), "(foo)", 1)
+      result = Functions.regexp_extract_all(Functions.col("name"), Functions.lit("(foo)"), 1)
 
       assert %Column{
                expr:
@@ -124,7 +124,7 @@ defmodule SparkEx.FunctionsTest do
     end
 
     test "regexp_substr/2 builds expression" do
-      result = Functions.regexp_substr(Functions.col("name"), "foo")
+      result = Functions.regexp_substr(Functions.col("name"), Functions.lit("foo"))
 
       assert %Column{expr: {:fn, "regexp_substr", [{:col, "name"}, {:lit, "foo"}], false}} =
                result
