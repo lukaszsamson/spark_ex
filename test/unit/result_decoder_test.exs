@@ -700,6 +700,105 @@ defmodule SparkEx.Connect.ResultDecoderTest do
     end
   end
 
+  describe "failed observations" do
+    test "keeps successful data and remote errors through every materialization path" do
+      ipc = build_ipc_data([1, 2])
+      frames = observation_error_frames(ipc)
+
+      assert {:ok, rows} = ResultDecoder.decode_stream(frames)
+      assert rows.rows == [%{"id" => 1}, %{"id" => 2}]
+      assert {:ok, explorer} = ResultDecoder.decode_stream_explorer(frames, nil)
+      assert Explorer.DataFrame.to_rows(explorer.dataframe) == rows.rows
+      assert {:ok, arrow} = ResultDecoder.decode_stream_arrow(frames)
+      assert arrow.arrow_batches == [ipc]
+
+      for result <- [rows, explorer, arrow] do
+        assert result.observed_metrics["good"] == %{"count" => 2}
+        assert {:error, error} = result.observed_metrics["bad"]
+        assert error.error_class == "DIVIDE_BY_ZERO"
+        assert error.sql_state == "22012"
+        assert error.server_message == "division failed"
+        assert error.message == "division failed"
+        assert Enum.map(error.cause_chain, & &1.message) == ["division failed", "root cause"]
+      end
+
+      owner = self()
+
+      assert Enum.to_list(
+               ResultDecoder.rows_stream(frames, nil,
+                 on_metrics: &send(owner, {:observation_metrics, &1})
+               )
+             ) == [{:ok, %{"id" => 1}}, {:ok, %{"id" => 2}}]
+
+      assert_receive {:observation_metrics, %{observed_metrics: metrics}}
+      assert metrics == rows.observed_metrics
+    end
+
+    test "failed metrics do not discard command results" do
+      command = %Spark.Connect.CheckpointCommandResult{}
+      [_arrow | frames] = observation_error_frames(<<>>)
+
+      frames = [
+        {:ok, %ExecutePlanResponse{response_type: {:checkpoint_command_result, command}}} | frames
+      ]
+
+      assert {:ok, result} = ResultDecoder.decode_stream(frames)
+      assert result.command_result == {:checkpoint, command}
+      assert {:error, %SparkEx.Error.Remote{}} = result.observed_metrics["bad"]
+    end
+
+    test "invalid error indices still report a failure instead of partial metrics" do
+      for idx <- [-1, 5] do
+        metric = %ExecutePlanResponse.ObservedMetrics{name: "bad", root_error_idx: idx}
+
+        assert {:ok, result} =
+                 ResultDecoder.decode_stream([
+                   {:ok, %ExecutePlanResponse{observed_metrics: [metric]}}
+                 ])
+
+        assert {:error, %SparkEx.Error.Remote{}} = result.observed_metrics["bad"]
+      end
+    end
+  end
+
+  defp observation_error_frames(ipc) do
+    alias Spark.Connect.FetchErrorDetailsResponse
+
+    good = %ExecutePlanResponse.ObservedMetrics{
+      name: "good",
+      keys: ["count"],
+      values: [%Spark.Connect.Expression.Literal{literal_type: {:long, 2}}]
+    }
+
+    bad = %ExecutePlanResponse.ObservedMetrics{
+      name: "bad",
+      root_error_idx: 0,
+      errors: [
+        %FetchErrorDetailsResponse.Error{
+          message: "division failed",
+          cause_idx: 1,
+          spark_throwable: %FetchErrorDetailsResponse.SparkThrowable{
+            error_class: "DIVIDE_BY_ZERO",
+            sql_state: "22012"
+          }
+        },
+        %FetchErrorDetailsResponse.Error{message: "root cause"}
+      ]
+    }
+
+    [
+      {:ok,
+       %ExecutePlanResponse{
+         response_type:
+           {:arrow_batch,
+            %ExecutePlanResponse.ArrowBatch{data: ipc, row_count: 2, start_offset: 0}}
+       }},
+      {:ok, %ExecutePlanResponse{observed_metrics: [%{good | name: "bad"}]}},
+      {:ok, %ExecutePlanResponse{observed_metrics: [bad, good]}},
+      {:ok, %ExecutePlanResponse{observed_metrics: [%{good | name: "bad"}]}}
+    ]
+  end
+
   defp build_multi_row_ipc_data(n) do
     build_ipc_data(Enum.to_list(1..n))
   end

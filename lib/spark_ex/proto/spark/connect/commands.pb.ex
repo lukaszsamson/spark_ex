@@ -324,6 +324,7 @@ defmodule Spark.Connect.WriteOperation do
   field(:bucket_by, 8, type: Spark.Connect.WriteOperation.BucketBy, json_name: "bucketBy")
   field(:options, 9, repeated: true, type: Spark.Connect.WriteOperation.OptionsEntry, map: true)
   field(:clustering_columns, 10, repeated: true, type: :string, json_name: "clusteringColumns")
+  field(:with_schema_evolution, 11, type: :bool, json_name: "withSchemaEvolution")
 end
 
 defmodule Spark.Connect.WriteOperationV2.OptionsEntry do
@@ -382,6 +383,7 @@ defmodule Spark.Connect.WriteOperationV2 do
   field(:mode, 7, type: Spark.Connect.WriteOperationV2.Mode, enum: true)
   field(:overwrite_condition, 8, type: Spark.Connect.Expression, json_name: "overwriteCondition")
   field(:clustering_columns, 9, repeated: true, type: :string, json_name: "clusteringColumns")
+  field(:with_schema_evolution, 10, type: :bool, json_name: "withSchemaEvolution")
 end
 
 defmodule Spark.Connect.WriteStreamOperationStart.OptionsEntry do
@@ -436,6 +438,12 @@ defmodule Spark.Connect.WriteStreamOperationStart do
   field(:continuous_checkpoint_interval, 8,
     type: :string,
     json_name: "continuousCheckpointInterval",
+    oneof: 0
+  )
+
+  field(:real_time_batch_duration, 100,
+    type: :string,
+    json_name: "realTimeBatchDuration",
     oneof: 0
   )
 

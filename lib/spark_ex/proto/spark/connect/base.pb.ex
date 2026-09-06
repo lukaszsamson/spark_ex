@@ -70,6 +70,24 @@ defmodule Spark.Connect.FetchErrorDetailsResponse.QueryContext.ContextType do
   field(:DATAFRAME, 1)
 end
 
+defmodule Spark.Connect.GetStatusResponse.OperationStatus.OperationState do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "spark.connect.GetStatusResponse.OperationStatus.OperationState",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:OPERATION_STATE_UNSPECIFIED, 0)
+  field(:OPERATION_STATE_UNKNOWN, 1)
+  field(:OPERATION_STATE_RUNNING, 2)
+  field(:OPERATION_STATE_TERMINATING, 3)
+  field(:OPERATION_STATE_SUCCEEDED, 4)
+  field(:OPERATION_STATE_FAILED, 5)
+  field(:OPERATION_STATE_CANCELLED, 6)
+end
+
 defmodule Spark.Connect.Plan.CompressedOperation do
   @moduledoc false
 
@@ -764,6 +782,8 @@ defmodule Spark.Connect.ExecutePlanResponse.ObservedMetrics do
   field(:values, 2, repeated: true, type: Spark.Connect.Expression.Literal)
   field(:keys, 3, repeated: true, type: :string)
   field(:plan_id, 4, type: :int64, json_name: "planId")
+  field(:root_error_idx, 5, proto3_optional: true, type: :int32, json_name: "rootErrorIdx")
+  field(:errors, 6, repeated: true, type: Spark.Connect.FetchErrorDetailsResponse.Error)
 end
 
 defmodule Spark.Connect.ExecutePlanResponse.ResultComplete do
@@ -1666,6 +1686,83 @@ defmodule Spark.Connect.CloneSessionResponse do
   field(:new_server_side_session_id, 4, type: :string, json_name: "newServerSideSessionId")
 end
 
+defmodule Spark.Connect.GetStatusRequest.OperationStatusRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.GetStatusRequest.OperationStatusRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:operation_ids, 1, repeated: true, type: :string, json_name: "operationIds")
+  field(:extensions, 999, repeated: true, type: Google.Protobuf.Any)
+end
+
+defmodule Spark.Connect.GetStatusRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.GetStatusRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:session_id, 1, type: :string, json_name: "sessionId")
+  field(:user_context, 2, type: Spark.Connect.UserContext, json_name: "userContext")
+  field(:client_type, 3, proto3_optional: true, type: :string, json_name: "clientType")
+
+  field(:client_observed_server_side_session_id, 4,
+    proto3_optional: true,
+    type: :string,
+    json_name: "clientObservedServerSideSessionId"
+  )
+
+  field(:operation_status, 5,
+    proto3_optional: true,
+    type: Spark.Connect.GetStatusRequest.OperationStatusRequest,
+    json_name: "operationStatus"
+  )
+
+  field(:extensions, 999, repeated: true, type: Google.Protobuf.Any)
+end
+
+defmodule Spark.Connect.GetStatusResponse.OperationStatus do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.GetStatusResponse.OperationStatus",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:operation_id, 1, type: :string, json_name: "operationId")
+
+  field(:state, 2,
+    type: Spark.Connect.GetStatusResponse.OperationStatus.OperationState,
+    enum: true
+  )
+
+  field(:extensions, 999, repeated: true, type: Google.Protobuf.Any)
+end
+
+defmodule Spark.Connect.GetStatusResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.GetStatusResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:session_id, 1, type: :string, json_name: "sessionId")
+  field(:server_side_session_id, 2, type: :string, json_name: "serverSideSessionId")
+
+  field(:operation_statuses, 3,
+    repeated: true,
+    type: Spark.Connect.GetStatusResponse.OperationStatus,
+    json_name: "operationStatuses"
+  )
+
+  field(:extensions, 999, repeated: true, type: Google.Protobuf.Any)
+end
+
 defmodule Spark.Connect.SparkConnectService.Service do
   @moduledoc false
 
@@ -1708,6 +1805,8 @@ defmodule Spark.Connect.SparkConnectService.Service do
   )
 
   rpc(:CloneSession, Spark.Connect.CloneSessionRequest, Spark.Connect.CloneSessionResponse)
+
+  rpc(:GetStatus, Spark.Connect.GetStatusRequest, Spark.Connect.GetStatusResponse)
 end
 
 defmodule Spark.Connect.SparkConnectService.Stub do

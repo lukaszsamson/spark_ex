@@ -286,7 +286,8 @@ defmodule SparkEx.Macros.FunctionGen do
 
     quote do
       @doc unquote(doc)
-      @spec unquote(name)(Column.t() | String.t(), keyword()) :: Column.t()
+      @spec unquote(name)(Column.t() | String.t()) :: Column.t()
+      @spec unquote(name)(Column.t() | String.t(), term() | keyword()) :: Column.t()
       def unquote(name)(col, opts \\ [])
 
       def unquote(name)(col, opt_value) when not is_list(opt_value) do
@@ -321,7 +322,8 @@ defmodule SparkEx.Macros.FunctionGen do
 
     quote do
       @doc unquote(doc)
-      @spec unquote(name)(Column.t() | String.t(), Column.t() | String.t(), keyword()) ::
+      @spec unquote(name)(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
+      @spec unquote(name)(Column.t() | String.t(), Column.t() | String.t(), term() | keyword()) ::
               Column.t()
       def unquote(name)(col1, col2, opts \\ [])
 
@@ -349,6 +351,117 @@ defmodule SparkEx.Macros.FunctionGen do
             {:fn, unquote(spark_name), [to_expr(col1), to_expr(col2) | opt_args],
              unquote(is_distinct)}
         }
+      end
+    end
+  end
+
+  defp generate_function(name, spark_name, {:two_col_opt_col, key}, is_distinct, doc) do
+    quote do
+      @doc unquote(doc)
+      @spec unquote(name)(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
+      @spec unquote(name)(
+              Column.t() | String.t(),
+              Column.t() | String.t(),
+              Column.t() | String.t() | nil
+            ) :: Column.t()
+      def unquote(name)(col1, col2, option \\ nil)
+
+      def unquote(name)(col1, col2, nil) do
+        %Column{
+          expr: {:fn, unquote(spark_name), [to_expr(col1), to_expr(col2)], unquote(is_distinct)}
+        }
+      end
+
+      def unquote(name)(col1, col2, [{unquote(key), option}]) do
+        unquote(name)(col1, col2, option)
+      end
+
+      def unquote(name)(col1, col2, option) do
+        %Column{
+          expr:
+            {:fn, unquote(spark_name), [to_expr(col1), to_expr(col2), to_expr(option)],
+             unquote(is_distinct)}
+        }
+      end
+    end
+  end
+
+  defp generate_function(name, spark_name, {:col_opt_expr_int, key}, is_distinct, doc) do
+    quote do
+      @doc unquote(doc)
+      @spec unquote(name)(Column.t() | String.t()) :: Column.t()
+      @spec unquote(name)(
+              Column.t() | String.t(),
+              Column.t() | String.t() | integer() | keyword()
+            ) :: Column.t()
+      def unquote(name)(col, option \\ [])
+
+      def unquote(name)(col, []) do
+        %Column{expr: {:fn, unquote(spark_name), [to_expr(col)], unquote(is_distinct)}}
+      end
+
+      def unquote(name)(col, nil), do: unquote(name)(col, [])
+
+      def unquote(name)(col, [{unquote(key), value}]) do
+        unquote(name)(col, value)
+      end
+
+      def unquote(name)(col, value) do
+        %Column{
+          expr:
+            {:fn, unquote(spark_name), [to_expr(col), to_expr_or_lit_int(value)],
+             unquote(is_distinct)}
+        }
+      end
+    end
+  end
+
+  defp generate_function(name, spark_name, {:one_col_defaults, defaults}, is_distinct, doc) do
+    escaped_defaults = Macro.escape(defaults)
+
+    quote do
+      @doc unquote(doc)
+      @spec unquote(name)(Column.t() | String.t()) :: Column.t()
+      @spec unquote(name)(Column.t() | String.t(), term()) :: Column.t()
+      @spec unquote(name)(Column.t() | String.t(), term(), term()) :: Column.t()
+      def unquote(name)(col, first \\ nil, second \\ nil) do
+        [{_, default_first}, {_, default_second}] = unquote(escaped_defaults)
+
+        args = [
+          to_expr(col),
+          lit_expr(if(is_nil(first), do: default_first, else: first)),
+          lit_expr(if(is_nil(second), do: default_second, else: second))
+        ]
+
+        %Column{expr: {:fn, unquote(spark_name), args, unquote(is_distinct)}}
+      end
+    end
+  end
+
+  defp generate_function(name, spark_name, {:two_col_defaults, defaults}, is_distinct, doc) do
+    escaped_defaults = Macro.escape(defaults)
+
+    quote do
+      @doc unquote(doc)
+      @spec unquote(name)(Column.t() | String.t(), Column.t() | String.t()) :: Column.t()
+      @spec unquote(name)(Column.t() | String.t(), Column.t() | String.t(), term()) :: Column.t()
+      @spec unquote(name)(
+              Column.t() | String.t(),
+              Column.t() | String.t(),
+              term(),
+              term()
+            ) :: Column.t()
+      def unquote(name)(col1, col2, first \\ nil, second \\ nil) do
+        [{_, default_first}, {_, default_second}] = unquote(escaped_defaults)
+
+        args = [
+          to_expr(col1),
+          to_expr(col2),
+          lit_expr(if(is_nil(first), do: default_first, else: first)),
+          lit_expr(if(is_nil(second), do: default_second, else: second))
+        ]
+
+        %Column{expr: {:fn, unquote(spark_name), args, unquote(is_distinct)}}
       end
     end
   end

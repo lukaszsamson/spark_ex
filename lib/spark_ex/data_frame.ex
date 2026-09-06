@@ -2064,7 +2064,16 @@ defmodule SparkEx.DataFrame do
       # the collected-result path, surfacing drift as `{:error, _}`
       # elements instead of merging foreign-session rows silently.
       session_state = fetch_session_state(df.session)
-      decoder_opts = Keyword.take(opts, [:on_metrics, :map_format])
+      on_metrics = Keyword.get(opts, :on_metrics)
+      session_id = if is_struct(session_state, SparkEx.Session), do: session_state.session_id
+
+      decoder_opts =
+        opts
+        |> Keyword.take([:map_format])
+        |> Keyword.put(:on_metrics, fn metrics ->
+          SparkEx.Observation.store_observed_metrics(metrics.observed_metrics, session_id)
+          if is_function(on_metrics, 1), do: on_metrics.(metrics)
+        end)
 
       rows =
         SparkEx.Connect.ResultDecoder.rows_stream(stream, session_state, decoder_opts)

@@ -104,6 +104,44 @@ defmodule Spark.Connect.Catalog do
   )
 
   field(:list_catalogs, 26, type: Spark.Connect.ListCatalogs, json_name: "listCatalogs", oneof: 0)
+  field(:drop_table, 27, type: Spark.Connect.DropTable, json_name: "dropTable", oneof: 0)
+  field(:drop_view, 28, type: Spark.Connect.DropView, json_name: "dropView", oneof: 0)
+
+  field(:create_database, 29,
+    type: Spark.Connect.CreateDatabase,
+    json_name: "createDatabase",
+    oneof: 0
+  )
+
+  field(:drop_database, 30, type: Spark.Connect.DropDatabase, json_name: "dropDatabase", oneof: 0)
+
+  field(:list_partitions, 31,
+    type: Spark.Connect.ListPartitions,
+    json_name: "listPartitions",
+    oneof: 0
+  )
+
+  field(:list_views, 32, type: Spark.Connect.ListViews, json_name: "listViews", oneof: 0)
+
+  field(:get_table_properties, 33,
+    type: Spark.Connect.GetTableProperties,
+    json_name: "getTableProperties",
+    oneof: 0
+  )
+
+  field(:get_create_table_string, 34,
+    type: Spark.Connect.GetCreateTableString,
+    json_name: "getCreateTableString",
+    oneof: 0
+  )
+
+  field(:truncate_table, 35,
+    type: Spark.Connect.TruncateTable,
+    json_name: "truncateTable",
+    oneof: 0
+  )
+
+  field(:analyze_table, 36, type: Spark.Connect.AnalyzeTable, json_name: "analyzeTable", oneof: 0)
 end
 
 defmodule Spark.Connect.CurrentDatabase do
@@ -437,4 +475,142 @@ defmodule Spark.Connect.ListCatalogs do
     syntax: :proto3
 
   field(:pattern, 1, proto3_optional: true, type: :string)
+end
+
+defmodule Spark.Connect.DropTable do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.DropTable",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:table_name, 1, type: :string, json_name: "tableName")
+  field(:if_exists, 2, type: :bool, json_name: "ifExists")
+  field(:purge, 3, type: :bool)
+end
+
+defmodule Spark.Connect.DropView do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.DropView",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:view_name, 1, type: :string, json_name: "viewName")
+  field(:if_exists, 2, type: :bool, json_name: "ifExists")
+end
+
+defmodule Spark.Connect.CreateDatabase.PropertiesEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.CreateDatabase.PropertiesEntry",
+    map: true,
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:key, 1, type: :string)
+  field(:value, 2, type: :string)
+end
+
+defmodule Spark.Connect.CreateDatabase do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.CreateDatabase",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:db_name, 1, type: :string, json_name: "dbName")
+  field(:if_not_exists, 2, type: :bool, json_name: "ifNotExists")
+
+  field(:properties, 3,
+    repeated: true,
+    type: Spark.Connect.CreateDatabase.PropertiesEntry,
+    map: true
+  )
+end
+
+defmodule Spark.Connect.DropDatabase do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.DropDatabase",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:db_name, 1, type: :string, json_name: "dbName")
+  field(:if_exists, 2, type: :bool, json_name: "ifExists")
+  field(:cascade, 3, type: :bool)
+end
+
+defmodule Spark.Connect.ListPartitions do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.ListPartitions",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:table_name, 1, type: :string, json_name: "tableName")
+end
+
+defmodule Spark.Connect.ListViews do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.ListViews",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:db_name, 1, proto3_optional: true, type: :string, json_name: "dbName")
+  field(:pattern, 2, proto3_optional: true, type: :string)
+end
+
+defmodule Spark.Connect.GetTableProperties do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.GetTableProperties",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:table_name, 1, type: :string, json_name: "tableName")
+end
+
+defmodule Spark.Connect.GetCreateTableString do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.GetCreateTableString",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:table_name, 1, type: :string, json_name: "tableName")
+  field(:as_serde, 2, type: :bool, json_name: "asSerde")
+end
+
+defmodule Spark.Connect.TruncateTable do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.TruncateTable",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:table_name, 1, type: :string, json_name: "tableName")
+end
+
+defmodule Spark.Connect.AnalyzeTable do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.AnalyzeTable",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:table_name, 1, type: :string, json_name: "tableName")
+  field(:no_scan, 2, type: :bool, json_name: "noScan")
 end

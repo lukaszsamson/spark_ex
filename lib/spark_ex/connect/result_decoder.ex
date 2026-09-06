@@ -1638,6 +1638,14 @@ defmodule SparkEx.Connect.ResultDecoder do
        when name == "" or is_nil(name),
        do: acc
 
+  defp merge_observed_metric(
+         %ExecutePlanResponse.ObservedMetrics{root_error_idx: idx} = metric,
+         acc
+       )
+       when not is_nil(idx) do
+    Map.put(acc, metric.name, {:error, Errors.from_observed_metrics(metric)})
+  end
+
   defp merge_observed_metric(%ExecutePlanResponse.ObservedMetrics{} = metric, acc) do
     keys = metric.keys || []
     values = metric.values || []
@@ -1660,8 +1668,9 @@ defmodule SparkEx.Connect.ResultDecoder do
         end)
       end
 
-    Map.update(acc, metric.name, entry, fn existing ->
-      Map.merge(existing, entry, fn _key, _left, right -> right end)
+    Map.update(acc, metric.name, entry, fn
+      {:error, _} = error -> error
+      existing -> Map.merge(existing, entry)
     end)
   end
 

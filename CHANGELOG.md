@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Spark 4.2 foundation
+
+- Refresh Spark Connect protobufs to v4.2.0 (source commit recorded in
+  `priv/proto/SPARK_VERSION`) while retaining older-server wire compatibility.
+- Add 36 SQL function wrappers: TIME conversions, `time_bucket`, `current_path`,
+  `is_valid_variant`, KLL merge aggregates and tuple sketches. Add top-K
+  `max_by`/`min_by` and optional SRID/endianness geospatial arguments.
+- Deliver observation evaluation failures as `%SparkEx.Error.Remote{}` through
+  `Observation.get/1` without discarding successful query data, including local
+  iteration, display and writes.
+- Enforce the server's local-relation size limit before cached artifact upload,
+  counting schema bytes and repeated chunks. Explicit cache options no longer
+  bypass the server configuration. Older servers without the limit retain their
+  existing behavior. Failed config lookups block cached uploads until the limit
+  can be read. Chunk materialization remains eager in this first phase.
+- Extend CI to Elixir 1.20 / OTP 29 and Spark 4.2, including 4.2 test exclusions
+  on older servers; pin the PySpark function inventory so parity also runs in
+  clean CI checkouts, with no missing-function allowance.
+
+
 ### Changed
 
 - **API consistency and behaviour-changing defaults**:

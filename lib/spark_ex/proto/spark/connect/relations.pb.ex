@@ -61,6 +61,7 @@ defmodule Spark.Connect.Parse.ParseFormat do
   field(:PARSE_FORMAT_UNSPECIFIED, 0)
   field(:PARSE_FORMAT_CSV, 1)
   field(:PARSE_FORMAT_JSON, 2)
+  field(:PARSE_FORMAT_XML, 3)
 end
 
 defmodule Spark.Connect.Relation do
@@ -199,6 +200,18 @@ defmodule Spark.Connect.Relation do
   field(:chunked_cached_local_relation, 45,
     type: Spark.Connect.ChunkedCachedLocalRelation,
     json_name: "chunkedCachedLocalRelation",
+    oneof: 0
+  )
+
+  field(:relation_changes, 46,
+    type: Spark.Connect.RelationChanges,
+    json_name: "relationChanges",
+    oneof: 0
+  )
+
+  field(:nearest_by_join, 47,
+    type: Spark.Connect.NearestByJoin,
+    json_name: "nearestByJoin",
     oneof: 0
   )
 
@@ -442,6 +455,7 @@ defmodule Spark.Connect.Read.DataSource do
   field(:options, 3, repeated: true, type: Spark.Connect.Read.DataSource.OptionsEntry, map: true)
   field(:paths, 4, repeated: true, type: :string)
   field(:predicates, 5, repeated: true, type: :string)
+  field(:source_name, 6, proto3_optional: true, type: :string, json_name: "sourceName")
 end
 
 defmodule Spark.Connect.Read do
@@ -456,6 +470,32 @@ defmodule Spark.Connect.Read do
 
   field(:named_table, 1, type: Spark.Connect.Read.NamedTable, json_name: "namedTable", oneof: 0)
   field(:data_source, 2, type: Spark.Connect.Read.DataSource, json_name: "dataSource", oneof: 0)
+  field(:is_streaming, 3, type: :bool, json_name: "isStreaming")
+end
+
+defmodule Spark.Connect.RelationChanges.OptionsEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.RelationChanges.OptionsEntry",
+    map: true,
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:key, 1, type: :string)
+  field(:value, 2, type: :string)
+end
+
+defmodule Spark.Connect.RelationChanges do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.RelationChanges",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:unparsed_identifier, 1, type: :string, json_name: "unparsedIdentifier")
+  field(:options, 2, repeated: true, type: Spark.Connect.RelationChanges.OptionsEntry, map: true)
   field(:is_streaming, 3, type: :bool, json_name: "isStreaming")
 end
 
@@ -1459,4 +1499,21 @@ defmodule Spark.Connect.LateralJoin do
   field(:right, 2, type: Spark.Connect.Relation)
   field(:join_condition, 3, type: Spark.Connect.Expression, json_name: "joinCondition")
   field(:join_type, 4, type: Spark.Connect.Join.JoinType, json_name: "joinType", enum: true)
+end
+
+defmodule Spark.Connect.NearestByJoin do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "spark.connect.NearestByJoin",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:left, 1, type: Spark.Connect.Relation)
+  field(:right, 2, type: Spark.Connect.Relation)
+  field(:ranking_expression, 3, type: Spark.Connect.Expression, json_name: "rankingExpression")
+  field(:num_results, 4, type: :int32, json_name: "numResults")
+  field(:join_type, 5, type: :string, json_name: "joinType")
+  field(:mode, 6, type: :string)
+  field(:direction, 7, type: :string)
 end

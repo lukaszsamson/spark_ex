@@ -126,7 +126,8 @@ defmodule SparkEx.Unit.Wave6SessionTest do
                cache_threshold: 1_048_576,
                chunk_size_rows: 10_000,
                chunk_size_bytes: 16_777_216,
-               batch_of_chunks_size_bytes: 1_073_741_824
+               batch_of_chunks_size_bytes: 1_073_741_824,
+               size_limit: nil
              }
     end
 
@@ -139,7 +140,8 @@ defmodule SparkEx.Unit.Wave6SessionTest do
                cache_threshold: 4 * 1024 * 1024,
                chunk_size_rows: 10_000,
                chunk_size_bytes: 16 * 1024 * 1024,
-               batch_of_chunks_size_bytes: 1024 * 1024 * 1024
+               batch_of_chunks_size_bytes: 1024 * 1024 * 1024,
+               size_limit: nil
              }
     end
 

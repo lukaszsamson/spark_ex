@@ -10,6 +10,32 @@ defmodule SparkEx.ObservationTest do
     :ok
   end
 
+  test "routes observation failures by session and allows recovery on a later execution" do
+    a = Observation.new("same")
+    b = Observation.new("same")
+    Observation.register_observation(a, [], "a")
+    Observation.register_observation(b, [], "b")
+    Observation.store_observed_metrics(%{"same" => %{"count" => 1}}, "a")
+    failure = {:error, %SparkEx.Error.Remote{error_class: "DIVIDE_BY_ZERO", sql_state: "22012"}}
+    Observation.store_observed_metrics(%{"same" => failure}, "a")
+    Observation.store_observed_metrics(%{"same" => %{"count" => 2}}, "b")
+    assert Observation.get(a) == failure
+    assert Observation.get(b) == %{"count" => 2}
+    Observation.store_observed_metrics(%{"same" => %{"count" => 3}}, "a")
+    assert Observation.get(a) == %{"count" => 3}
+    Observation.clear_session("a")
+    assert Observation.get(b) == %{"count" => 2}
+  end
+
+  test "stores errors for legacy name observations without alias remapping" do
+    Observation.register_metric_aliases("legacy", [{:alias, nil, "count"}], "session")
+    failure = {:error, %SparkEx.Error.Remote{message: "failed"}}
+    assert :ok = Observation.store_observed_metrics(%{"legacy" => failure}, "session")
+
+    assert [{{:metric_legacy, "session", "legacy"}, ^failure}] =
+             :ets.lookup(:spark_ex_observations, {:metric_legacy, "session", "legacy"})
+  end
+
   describe "new/1" do
     test "auto-generates a unique id and a UUID name when no name is provided" do
       a = Observation.new()

@@ -16,6 +16,10 @@ defmodule SparkEx.Macros.FunctionRegistry do
   #   {:lit_then_cols, n} — first n args are literal-coerced, rest is a Column list
   #   {:col_opt, defaults} — Column + optional keyword args with defaults
   #   {:two_col_opt, defaults} — two Columns + optional keyword args with defaults
+  #   {:two_col_opt_col, key} — two Columns + an optional Column argument
+  #   {:one_col_defaults, defaults} — Column + two literal-coerced args, always emitted
+  #   {:two_col_defaults, defaults} — two Columns + two literal-coerced args, always emitted
+  #   {:col_opt_expr_int, key} — Column + optional Column or integer literal
   #   {:lit_opt, defaults} — optional keyword args only, no column arg
   #
   # opts (keyword):
@@ -256,6 +260,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
 
   defp date_functions do
     [
+      {:time_bucket, "time_bucket", {:two_col_opt_col, :origin},
+       group: :datetime, doc: "Buckets a timestamp using an interval expression."},
       {:current_date, "current_date", :zero,
        group: :datetime, doc: "Returns current date.", aliases: [:curdate]},
       {:current_timestamp, "current_timestamp", :zero,
@@ -502,9 +508,9 @@ defmodule SparkEx.Macros.FunctionRegistry do
       # any_value hand-written in functions.ex to support ignoreNulls
       {:count_if, "count_if", :one_col,
        group: :aggregate, doc: "Counts rows where condition is true."},
-      {:max_by, "max_by", :two_col,
+      {:max_by, "max_by", {:two_col_opt, [k: nil]},
        group: :aggregate, doc: "Value of first col at max of second."},
-      {:min_by, "min_by", :two_col,
+      {:min_by, "min_by", {:two_col_opt, [k: nil]},
        group: :aggregate, doc: "Value of first col at min of second."},
       {:bool_and, "bool_and", :one_col,
        group: :aggregate, doc: "True if all values are true.", aliases: [:every]},
@@ -670,6 +676,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
 
   defp session_functions do
     [
+      {:current_path, "current_path", :zero,
+       group: :session, doc: "Returns the current catalog and namespace path."},
       {:current_catalog, "current_catalog", :zero,
        group: :session, doc: "Returns current catalog name."},
       {:current_database, "current_database", :zero,
@@ -685,6 +693,20 @@ defmodule SparkEx.Macros.FunctionRegistry do
 
   defp misc_functions do
     [
+      {:is_valid_variant, "is_valid_variant", :one_col,
+       group: :variant, doc: "Returns whether binary input is valid variant data."},
+      {:time_from_seconds, "time_from_seconds", :one_col,
+       group: :datetime, doc: "Creates a TIME value from seconds."},
+      {:time_from_millis, "time_from_millis", :one_col,
+       group: :datetime, doc: "Creates a TIME value from milliseconds."},
+      {:time_from_micros, "time_from_micros", :one_col,
+       group: :datetime, doc: "Creates a TIME value from microseconds."},
+      {:time_to_seconds, "time_to_seconds", :one_col,
+       group: :datetime, doc: "Converts a TIME value to seconds."},
+      {:time_to_millis, "time_to_millis", :one_col,
+       group: :datetime, doc: "Converts a TIME value to milliseconds."},
+      {:time_to_micros, "time_to_micros", :one_col,
+       group: :datetime, doc: "Converts a TIME value to microseconds."},
       {:monotonically_increasing_id, "monotonically_increasing_id", :zero,
        group: :misc, doc: "Globally unique monotonically increasing ID."},
       {:spark_partition_id, "spark_partition_id", :zero,
@@ -707,6 +729,7 @@ defmodule SparkEx.Macros.FunctionRegistry do
     ] ++
       hll_functions() ++
       theta_sketch_functions() ++
+      tuple_sketch_functions() ++
       kll_sketch_functions() ++ bitmap_functions() ++ geospatial_functions()
   end
 
@@ -749,6 +772,8 @@ defmodule SparkEx.Macros.FunctionRegistry do
       [
         {:"kll_sketch_agg_#{type}", "kll_sketch_agg_#{type}", {:col_opt, [k: nil]},
          group: :sketch, doc: "Aggregates #{type} values into a KLL sketch."},
+        {:"kll_merge_agg_#{type}", "kll_merge_agg_#{type}", {:col_opt, [k: nil]},
+         group: :sketch, doc: "Aggregates and merges #{type} KLL sketches."},
         {:"kll_sketch_to_string_#{type}", "kll_sketch_to_string_#{type}", :one_col,
          group: :sketch, doc: "Converts a KLL sketch (#{type}) to a string."},
         {:"kll_sketch_get_n_#{type}", "kll_sketch_get_n_#{type}", :one_col,
@@ -763,13 +788,50 @@ defmodule SparkEx.Macros.FunctionRegistry do
     end)
   end
 
+  defp tuple_sketch_functions do
+    Enum.flat_map(["double", "integer"], fn type ->
+      [
+        {:"tuple_sketch_agg_#{type}", "tuple_sketch_agg_#{type}",
+         {:two_col_defaults, [lg_nom_entries: 12, mode: "sum"]},
+         group: :sketch, doc: "Aggregates keys and #{type} summaries into a tuple sketch."},
+        {:"tuple_union_agg_#{type}", "tuple_union_agg_#{type}",
+         {:one_col_defaults, [lg_nom_entries: 12, mode: "sum"]},
+         group: :sketch, doc: "Aggregate union of #{type} tuple sketches."},
+        {:"tuple_intersection_agg_#{type}", "tuple_intersection_agg_#{type}",
+         {:col_opt, [mode: nil]},
+         group: :sketch, doc: "Aggregate intersection of #{type} tuple sketches."},
+        {:"tuple_sketch_estimate_#{type}", "tuple_sketch_estimate_#{type}", :one_col,
+         group: :sketch, doc: "Estimates the number of keys in a #{type} tuple sketch."},
+        {:"tuple_sketch_summary_#{type}", "tuple_sketch_summary_#{type}", {:col_opt, [mode: nil]},
+         group: :sketch, doc: "Returns the numeric summary of a #{type} tuple sketch."},
+        {:"tuple_sketch_theta_#{type}", "tuple_sketch_theta_#{type}", :one_col,
+         group: :sketch, doc: "Returns theta from a #{type} tuple sketch."},
+        {:"tuple_union_#{type}", "tuple_union_#{type}",
+         {:two_col_defaults, [lg_nom_entries: 12, mode: "sum"]},
+         group: :sketch, doc: "Unions two #{type} tuple sketches."},
+        {:"tuple_intersection_#{type}", "tuple_intersection_#{type}", {:two_col_opt, [mode: nil]},
+         group: :sketch, doc: "Intersects two #{type} tuple sketches."},
+        {:"tuple_difference_#{type}", "tuple_difference_#{type}", :two_col,
+         group: :sketch, doc: "Computes the difference of two #{type} tuple sketches."},
+        {:"tuple_difference_theta_#{type}", "tuple_difference_theta_#{type}", :two_col,
+         group: :sketch, doc: "Computes theta for a #{type} tuple sketch difference."},
+        {:"tuple_intersection_theta_#{type}", "tuple_intersection_theta_#{type}",
+         {:two_col_opt, [mode: nil]},
+         group: :sketch, doc: "Computes theta for a #{type} tuple sketch intersection."},
+        {:"tuple_union_theta_#{type}", "tuple_union_theta_#{type}",
+         {:two_col_defaults, [lg_nom_entries: 12, mode: "sum"]},
+         group: :sketch, doc: "Computes theta for a #{type} tuple sketch union."}
+      ]
+    end)
+  end
+
   defp geospatial_functions do
     [
-      {:st_asbinary, "ST_AsBinary", :one_col,
+      {:st_asbinary, "ST_AsBinary", {:col_opt, [endianness: nil]},
        group: :geospatial, doc: "Converts geometry/geography to WKB binary."},
       {:st_geogfromwkb, "ST_GeogFromWKB", :one_col,
        group: :geospatial, doc: "Creates geography from WKB binary."},
-      {:st_geomfromwkb, "ST_GeomFromWKB", :one_col,
+      {:st_geomfromwkb, "ST_GeomFromWKB", {:col_opt_expr_int, :srid},
        group: :geospatial, doc: "Creates geometry from WKB binary."},
       {:st_setsrid, "ST_SetSRID", {:col_int, 1},
        group: :geospatial, doc: "Sets the SRID of a geometry."},

@@ -428,6 +428,24 @@ defmodule SparkEx.Connect.Errors do
     :exit, {:noproc, _} -> {:error, :task_supervisor_unavailable}
   end
 
+  @doc false
+  @spec from_observed_metrics(Spark.Connect.ExecutePlanResponse.ObservedMetrics.t()) ::
+          SparkEx.Error.Remote.t()
+  def from_observed_metrics(metric) do
+    error = %SparkEx.Error.Remote{
+      message: "Observed metrics collection failed",
+      enriched?: true
+    }
+
+    enriched =
+      enrich_from_response(error, %FetchErrorDetailsResponse{
+        root_error_idx: metric.root_error_idx,
+        errors: metric.errors
+      })
+
+    %{enriched | message: enriched.server_message || enriched.message}
+  end
+
   defp enrich_from_response(error, %FetchErrorDetailsResponse{} = resp) do
     case {resp.root_error_idx, resp.errors} do
       {idx, errors} when is_integer(idx) and is_list(errors) and idx >= 0 ->
