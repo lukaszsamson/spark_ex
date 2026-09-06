@@ -1687,10 +1687,10 @@ defmodule SparkEx.MissOpus2Test do
       end
     end
 
-    test "group_by rejects integer column indices (PySpark ordinals need an RPC)" do
+    test "group_by rejects zero column ordinal" do
       df = make_df()
 
-      assert_raise ArgumentError, ~r/integer column ordinals are not supported/, fn ->
+      assert_raise ArgumentError, ~r/grouping column ordinals must be positive/, fn ->
         DataFrame.group_by(df, [0])
       end
     end

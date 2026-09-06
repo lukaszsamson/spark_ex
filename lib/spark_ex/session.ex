@@ -763,8 +763,8 @@ defmodule SparkEx.Session do
 
   - `:schema` — DDL schema string (e.g. `"id INT, name STRING"`). If omitted,
     inferred from the Explorer.DataFrame or from the data.
-  - `:cache_threshold` — byte size at or above which data is cached on the
-    server instead of inlined. Defaults to the server's
+  - `:cache_threshold` — estimated native DataFrame byte size at or above which
+    data is cached on the server instead of inlined (as with PySpark table size). Defaults to the server's
     `spark.sql.session.localRelationCacheThreshold` (read once per session;
     4 MiB when the server does not expose it).
   - `:cache_chunk_size` — maximum byte size of each Arrow IPC chunk uploaded as
@@ -818,6 +818,11 @@ defmodule SparkEx.Session do
   def create_dataframe(session, data, opts \\ []) do
     GenServer.call(session, {:create_dataframe, data, opts}, call_timeout(opts))
   end
+
+  @doc "Creates an empty DataFrame with a DDL or `SparkEx.Types` struct schema."
+  @spec empty_dataframe(GenServer.server(), term()) ::
+          {:ok, SparkEx.DataFrame.t()} | {:error, term()}
+  def empty_dataframe(session, schema), do: create_dataframe(session, [], schema: schema)
 
   @doc """
   Executes a command (write, create view, etc.) and returns :ok or error.
@@ -954,6 +959,44 @@ defmodule SparkEx.Session do
           {:ok, [String.t()]} | {:error, term()}
   def interrupt_operation(session, operation_id) when is_binary(operation_id) do
     interrupt(session, {:operation_id, operation_id})
+  end
+
+  @doc """
+  Fetches a snapshot of operation statuses (experimental; Spark 4.2+).
+
+  An empty list requests all operations in the session. Returns the complete
+  `Spark.Connect.GetStatusResponse`, preserving response/operation extensions
+  and unknown numeric enum values. This does not consume or release results.
+
+  Options are `:timeout`, `:extensions` and `:operation_extensions` (lists of
+  `Google.Protobuf.Any` messages). The RPC runs outside the session's mailbox,
+  so it can inspect a query while a blocking action is executing.
+  Older servers return their unsupported-RPC error without a version probe.
+  The session must already exist on the server (for example after `spark_version/1`
+  or an action); a new local-only connection can return `SESSION_NOT_FOUND`.
+  """
+  @spec get_operation_statuses(GenServer.server(), [String.t()], keyword()) ::
+          {:ok, Spark.Connect.GetStatusResponse.t()} | {:error, term()}
+  def get_operation_statuses(session, operation_ids \\ [], opts \\ []) do
+    case SparkEx.Internal.SessionSnapshot.fetch(session) do
+      {:ok, snapshot} ->
+        case Client.get_operation_statuses(snapshot, operation_ids, opts) do
+          {:ok, response, server_side_session_id} ->
+            observe_server_session_id(session, server_side_session_id)
+            {:ok, response}
+
+          {:error, _} = error ->
+            GenServer.cast(session, {:observe_rpc_error, error})
+            error
+        end
+
+      :error ->
+        GenServer.call(
+          session,
+          {:get_operation_statuses, operation_ids, opts},
+          call_timeout(opts)
+        )
+    end
   end
 
   # Interrupt must not queue behind a running execute on the Session
@@ -1207,6 +1250,17 @@ defmodule SparkEx.Session do
   end
 
   # --- Session lifecycle handlers ---
+
+  def handle_call({:get_operation_statuses, operation_ids, opts}, _from, state) do
+    case Client.get_operation_statuses(state, operation_ids, opts) do
+      {:ok, response, server_side_session_id} ->
+        state = maybe_update_server_session(state, server_side_session_id)
+        {:reply, {:ok, response}, state}
+
+      {:error, _} = error ->
+        reply_error(error, state)
+    end
+  end
 
   def handle_call({:interrupt, type}, _from, state) do
     case Client.interrupt(state, type) do
@@ -1749,7 +1803,7 @@ defmodule SparkEx.Session do
   end
 
   def handle_call({:create_dataframe, data, opts}, from, state) do
-    case safe_prepare_local_data(data, opts) do
+    case safe_prepare_local_data(data, Keyword.put(opts, :defer_arrow_encoding, true)) do
       # Positional rows whose requested column names repeat were built under
       # unique internal names; restore the requested names with a final
       # `toDF` projection (PySpark: `_dedup_names` + `toDF(*names)`).
@@ -1772,54 +1826,9 @@ defmodule SparkEx.Session do
         _from,
         state
       ) do
-    %{
-      chunk_size_bytes: chunk_size_bytes,
-      chunk_size_rows: chunk_size_rows,
-      batch_of_chunks_size_bytes: batch_bytes
-    } = chunk_params
-
-    with :ok <- validate_cache_configuration(state),
-         {:ok, data_chunks} <-
-           split_explorer_dataframe_for_cache(source_df, chunk_size_bytes, chunk_size_rows),
-         :ok <-
-           validate_local_relation_size(
-             data_chunks,
-             schema_ddl,
-             Map.get(chunk_params, :size_limit)
-           ) do
-      {data_hashes, data_artifacts} =
-        data_chunks
-        |> Enum.map(fn chunk ->
-          hash = :crypto.hash(:sha256, chunk) |> Base.encode16(case: :lower)
-          {hash, {"cache/#{hash}", chunk}}
-        end)
-        |> Enum.unzip()
-
-      # Upload schema DDL as separate cache artifact (no "schema_" prefix —
-      # the server looks up schemaHash directly in the cache key space)
-      schema_bytes = if schema_ddl, do: schema_ddl, else: ""
-      schema_hash = :crypto.hash(:sha256, schema_bytes) |> Base.encode16(case: :lower)
-      schema_artifact = {"cache/#{schema_hash}", schema_bytes}
-
-      # Dedupe by artifact name so identical chunks (or chunk == schema bytes
-      # by coincidence) only get uploaded once. The plan still references
-      # each hash in original order via `data_hashes`.
-      artifacts =
-        (data_artifacts ++ [schema_artifact])
-        |> Enum.uniq_by(fn {name, _data} -> name end)
-
-      case upload_missing_cache_artifacts(state, artifacts, batch_bytes) do
-        {:ok, state} ->
-          plan = {:chunked_cached_local_relation, data_hashes, schema_hash}
-          df = SparkEx.DataFrame.new(self(), plan)
-          {:reply, {:ok, df}, state}
-
-        {:error, _reason} = error ->
-          {:reply, error, state}
-      end
-    else
-      {:error, _reason} = error ->
-        reply_error(error, state)
+    case validate_cache_configuration(state) do
+      :ok -> create_chunked_local_relation(source_df, schema_ddl, chunk_params, state)
+      {:error, _} = error -> reply_error(error, state)
     end
   end
 
@@ -4127,6 +4136,28 @@ defmodule SparkEx.Session do
     end
   end
 
+  defp create_chunked_local_relation(source_df, schema_ddl, chunk_params, state) do
+    upload = fn state, artifacts ->
+      upload_missing_cache_artifacts(state, artifacts, chunk_params.batch_of_chunks_size_bytes)
+    end
+
+    case SparkEx.Internal.LocalRelationCache.upload(
+           source_df,
+           schema_ddl,
+           chunk_params,
+           state,
+           upload
+         ) do
+      {:ok, data_hashes, schema_hash, state} ->
+        plan = {:chunked_cached_local_relation, data_hashes, schema_hash}
+        df = SparkEx.DataFrame.new(self(), plan)
+        {:reply, {:ok, df}, state}
+
+      {:error, reason, state} ->
+        reply_error({:error, reason}, state)
+    end
+  end
+
   # --- Local data preparation ---
 
   # Wraps prepare_local_data so malformed local input (e.g. mismatched tuple
@@ -4153,7 +4184,7 @@ defmodule SparkEx.Session do
   end
 
   defp create_dataframe_from_prepared(
-         {:local_relation, arrow_ipc, schema_ddl, source_df},
+         {:local_relation, :deferred, schema_ddl, source_df},
          opts,
          from,
          state
@@ -4161,31 +4192,50 @@ defmodule SparkEx.Session do
     {configs, state} = ensure_local_relation_configs(state, opts)
 
     case local_relation_chunk_params(opts, configs) do
-      {:error, _} = error ->
-        {:reply, error, state}
-
-      # PySpark: `if cache_threshold <= table.nbytes: cache`, so a payload
-      # exactly at the threshold is cached, not inlined.
-      {:ok, %{cache_threshold: cache_threshold}} when byte_size(arrow_ipc) < cache_threshold ->
-        plan = {:local_relation, arrow_ipc, schema_ddl}
-        df = SparkEx.DataFrame.new(self(), plan)
-        {:reply, {:ok, df}, state}
-
       {:ok, chunk_params} ->
-        # Drop arrow_ipc from this scope before re-encoding per chunk so
-        # peak memory stays close to the size of the source DataFrame
-        # rather than 2x that for very large payloads.
-        handle_call(
-          {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_params},
-          from,
-          state
-        )
+        create_explorer_relation(source_df, schema_ddl, chunk_params, from, state)
+
+      {:error, _} = error ->
+        reply_error(error, state)
     end
   end
 
   defp create_dataframe_from_prepared({:sql_relation, query, args}, _opts, _from, state) do
     df = SparkEx.DataFrame.new(self(), {:sql, query, args})
     {:reply, {:ok, df}, state}
+  end
+
+  defp create_explorer_relation(source_df, schema_ddl, chunk_params, from, state) do
+    # Match PySpark's native Arrow-table size decision, without serializing a
+    # full relation that would immediately be discarded on the cached path.
+    if Explorer.DataFrame.estimated_size(source_df) < chunk_params.cache_threshold do
+      case dump_ipc_stream_safe(source_df) do
+        {:ok, bytes} ->
+          df = SparkEx.DataFrame.new(self(), {:local_relation, bytes, schema_ddl})
+          {:reply, {:ok, df}, state}
+
+        {:error, _} = error ->
+          reply_error(error, state)
+      end
+    else
+      handle_call(
+        {:create_dataframe_chunked_cache, source_df, schema_ddl, chunk_params},
+        from,
+        state
+      )
+    end
+  end
+
+  defp prepare_explorer_arrow_relation(data, schema, opts) do
+    if Keyword.get(opts, :defer_arrow_encoding, false) do
+      {:ok, {:local_relation, :deferred, schema, data}}
+    else
+      # The diagnostic preparation helper retains its materialized form.
+      case dump_ipc_stream_safe(data) do
+        {:ok, bytes} -> {:ok, {:local_relation, bytes, schema, data}}
+        {:error, _} = error -> error
+      end
+    end
   end
 
   defp prepare_local_data(data, opts) when is_struct(data, Explorer.DataFrame) do
@@ -4216,13 +4266,7 @@ defmodule SparkEx.Session do
       if normalize_local_relation_arrow?(opts) and dataframe_contains_complex_dtype?(data) do
         prepare_sql_json_relation(data, sql_schema)
       else
-        case Explorer.DataFrame.dump_ipc_stream(data) do
-          # Pass the source Explorer.DataFrame alongside the IPC bytes so the
-          # chunked-cache path can re-slice it natively without a full IPC
-          # decode round-trip on multi-hundred-MB payloads.
-          {:ok, ipc_bytes} -> {:ok, {:local_relation, ipc_bytes, arrow_schema, data}}
-          {:error, reason} -> {:error, {:arrow_encode_error, reason}}
-        end
+        prepare_explorer_arrow_relation(data, arrow_schema, opts)
       end
     end
   end
@@ -6152,13 +6196,17 @@ defmodule SparkEx.Session do
       not (is_integer(chunk_size_rows) and chunk_size_rows > 0) ->
         {:error, {:invalid_option, {:cache_chunk_rows, chunk_size_rows}}}
 
+      not (is_integer(configs.batch_of_chunks_size_bytes) and
+               configs.batch_of_chunks_size_bytes > 0) ->
+        {:error, {:invalid_local_relation_batch_size, configs.batch_of_chunks_size_bytes}}
+
       true ->
         {:ok,
          %{
            cache_threshold: cache_threshold,
-           chunk_size_bytes: chunk_size_bytes,
+           chunk_size_bytes: min(chunk_size_bytes, configs.batch_of_chunks_size_bytes),
            chunk_size_rows: chunk_size_rows,
-           batch_of_chunks_size_bytes: max(configs.batch_of_chunks_size_bytes, chunk_size_bytes),
+           batch_of_chunks_size_bytes: configs.batch_of_chunks_size_bytes,
            size_limit: Map.get(configs, :size_limit)
          }}
     end
@@ -6331,12 +6379,12 @@ defmodule SparkEx.Session do
         |> Enum.reduce_while({:ok, state}, fn batch, {:ok, state} ->
           case maybe_upload_cache_artifacts(state, batch) do
             {:ok, state} -> {:cont, {:ok, state}}
-            {:error, _reason} = error -> {:halt, error}
+            {:error, reason} -> {:halt, {:error, reason, state}}
           end
         end)
 
-      {:error, _reason} = error ->
-        error
+      {:error, reason} ->
+        {:error, reason, state}
     end
   end
 

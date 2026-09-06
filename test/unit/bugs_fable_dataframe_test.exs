@@ -107,8 +107,8 @@ defmodule SparkEx.BugsFableDataFrameTest do
       end
     end
 
-    test "group_by with integer raises ArgumentError" do
-      assert_raise ArgumentError, ~r/integer column ordinals are not supported/, fn ->
+    test "group_by with zero ordinal raises ArgumentError" do
+      assert_raise ArgumentError, ~r/grouping column ordinals must be positive/, fn ->
         DataFrame.group_by(make_df(), [0])
       end
     end

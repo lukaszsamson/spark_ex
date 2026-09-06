@@ -189,6 +189,23 @@ defmodule SparkEx.Connect.ChannelTest do
   end
 
   describe "build_grpc_opts/1" do
+    test "gRPC binary metadata is base64 encoded exactly once by the adapter" do
+      # Spark Connect URI metadata is text, while grpc-elixir owns the wire
+      # representation. Its contract is to accept raw bytes and encode -bin
+      # values when constructing HTTP/2 headers.
+      assert %{"x-ascii-bin" => "YWJj", "x-raw-bin" => "/wAB"} =
+               GRPC.Transport.HTTP2.encode_metadata(%{
+                 "x-ascii-bin" => "abc",
+                 "x-raw-bin" => <<255, 0, 1>>
+               })
+    end
+
+    test "gRPC binary metadata rejects malformed base64 in received headers" do
+      assert_raise ArgumentError, fn ->
+        GRPC.Transport.HTTP2.decode_headers([{"x-payload-bin", "not-base64!"}])
+      end
+    end
+
     test "includes custom metadata headers and authorization" do
       opts = %{
         host: "host",

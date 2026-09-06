@@ -14,6 +14,8 @@ defmodule SparkEx.Connect.Client do
     ConfigResponse,
     ExecutePlanRequest,
     ExecutePlanResponse,
+    GetStatusRequest,
+    GetStatusResponse,
     CloneSessionRequest,
     CloneSessionResponse,
     InterruptRequest,
@@ -1131,6 +1133,39 @@ defmodule SparkEx.Connect.Client do
         {:error, _} = error ->
           error
       end
+    end
+  end
+
+  @doc false
+  @spec get_operation_statuses(
+          SparkEx.Session.t() | SparkEx.Internal.SessionSnapshot.snapshot(),
+          [String.t()],
+          keyword()
+        ) ::
+          {:ok, GetStatusResponse.t(), String.t()} | {:error, term()}
+  def get_operation_statuses(session, operation_ids \\ [], opts \\ []) do
+    if is_list(operation_ids) and Enum.all?(operation_ids, &is_binary/1) do
+      request = %GetStatusRequest{
+        session_id: session.session_id,
+        user_context: UserContextExtensions.build_user_context(session.user_id),
+        client_type: session.client_type,
+        client_observed_server_side_session_id: session.server_side_session_id,
+        operation_status: %GetStatusRequest.OperationStatusRequest{
+          operation_ids: operation_ids,
+          extensions: Keyword.get(opts, :operation_extensions, [])
+        },
+        extensions: Keyword.get(opts, :extensions, [])
+      }
+
+      case dispatch_unary_rpc(:get_status, session, request, opts) do
+        {:ok, %GetStatusResponse{} = response} ->
+          {:ok, response, response.server_side_session_id}
+
+        {:error, _} = error ->
+          error
+      end
+    else
+      {:error, {:invalid_operation_ids, operation_ids}}
     end
   end
 
@@ -2436,6 +2471,7 @@ defmodule SparkEx.Connect.Client do
            | :clone_session
            | :release_session
            | :interrupt
+           | :get_status
            | :artifact_status
            | :release_execute
 
@@ -2536,6 +2572,9 @@ defmodule SparkEx.Connect.Client do
 
   defp do_unary_stub_call(:interrupt, channel, request, opts),
     do: Stub.interrupt(channel, request, opts)
+
+  defp do_unary_stub_call(:get_status, channel, request, opts),
+    do: Stub.get_status(channel, request, opts)
 
   defp do_unary_stub_call(:artifact_status, channel, request, opts),
     do: Stub.artifact_status(channel, request, opts)

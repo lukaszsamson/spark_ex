@@ -45,7 +45,8 @@ defmodule SparkEx.WriterV2 do
     options: %{},
     table_properties: %{},
     partitioned_by: [],
-    cluster_by: []
+    cluster_by: [],
+    with_schema_evolution: false
   ]
 
   @type t :: %__MODULE__{
@@ -56,7 +57,8 @@ defmodule SparkEx.WriterV2 do
           table_properties: %{String.t() => String.t()},
           partitioned_by: [term()],
           cluster_by: [String.t()],
-          overwrite_condition: term() | nil
+          overwrite_condition: term() | nil,
+          with_schema_evolution: boolean()
         }
 
   @doc """
@@ -178,6 +180,25 @@ defmodule SparkEx.WriterV2 do
     %{writer | cluster_by: Enum.map(columns, &to_string/1)}
   end
 
+  @doc """
+  Enables or disables schema evolution for append and overwrite operations.
+
+  This Spark 4.2 additive flag can be silently ignored by older servers.
+  Enabling it is an explicit assertion by the caller that the server, catalog,
+  table, and provider support schema evolution. The server rejects unsupported
+  create, replace, and provider combinations.
+  """
+  @spec with_schema_evolution(t(), boolean()) :: t()
+  def with_schema_evolution(writer, enabled \\ true)
+
+  def with_schema_evolution(%__MODULE__{} = writer, enabled) when is_boolean(enabled) do
+    %{writer | with_schema_evolution: enabled}
+  end
+
+  def with_schema_evolution(%__MODULE__{}, enabled) do
+    raise ArgumentError, "with_schema_evolution expects a boolean, got: #{inspect(enabled)}"
+  end
+
   # --- Write actions ---
 
   @doc """
@@ -268,7 +289,8 @@ defmodule SparkEx.WriterV2 do
       table_properties: writer.table_properties,
       partitioned_by: writer.partitioned_by,
       cluster_by: writer.cluster_by,
-      overwrite_condition: writer.overwrite_condition
+      overwrite_condition: writer.overwrite_condition,
+      with_schema_evolution: writer.with_schema_evolution
     ]
 
     SparkEx.Session.execute_command(

@@ -269,6 +269,13 @@ defmodule SparkEx.Connect.PlanEncoder do
   end
 
   def encode_relation({:read_data_source_streaming, format, paths, schema, options}, counter) do
+    encode_relation({:read_data_source_streaming, format, paths, schema, options, nil}, counter)
+  end
+
+  def encode_relation(
+        {:read_data_source_streaming, format, paths, schema, options, source_name},
+        counter
+      ) do
     {plan_id, counter} = next_id(counter)
 
     read = %Spark.Connect.Read{
@@ -279,13 +286,31 @@ defmodule SparkEx.Connect.PlanEncoder do
            format: format,
            schema: schema,
            paths: paths,
-           options: options
+           options: options,
+           source_name: source_name
          }}
     }
 
     relation = %Relation{
       common: %RelationCommon{plan_id: plan_id},
       rel_type: {:read, read}
+    }
+
+    {relation, counter}
+  end
+
+  def encode_relation({:relation_changes, table_name, options, is_streaming}, counter) do
+    {plan_id, counter} = next_id(counter)
+
+    relation = %Relation{
+      common: %RelationCommon{plan_id: plan_id},
+      rel_type:
+        {:relation_changes,
+         %Spark.Connect.RelationChanges{
+           unparsed_identifier: table_name,
+           options: options,
+           is_streaming: is_streaming
+         }}
     }
 
     {relation, counter}
@@ -711,6 +736,7 @@ defmodule SparkEx.Connect.PlanEncoder do
       case format do
         :csv -> :PARSE_FORMAT_CSV
         :json -> :PARSE_FORMAT_JSON
+        :xml -> :PARSE_FORMAT_XML
         _ -> :PARSE_FORMAT_UNSPECIFIED
       end
 
@@ -2078,6 +2104,22 @@ defmodule SparkEx.Connect.PlanEncoder do
        ),
        do: {plan, plan_ids, refs, counter}
 
+  defp rewrite_plan(
+         {:read_data_source_streaming, _format, _paths, _schema, _options, _source_name} = plan,
+         plan_ids,
+         refs,
+         counter
+       ),
+       do: {plan, plan_ids, refs, counter}
+
+  defp rewrite_plan(
+         {:relation_changes, _table_name, _options, _is_streaming} = plan,
+         plan_ids,
+         refs,
+         counter
+       ),
+       do: {plan, plan_ids, refs, counter}
+
   defp rewrite_plan({:project, child_plan, expressions}, plan_ids, refs, counter) do
     {child_plan, plan_ids, refs, counter} = rewrite_plan(child_plan, plan_ids, refs, counter)
 
@@ -3232,6 +3274,50 @@ defmodule SparkEx.Connect.PlanEncoder do
 
   defp encode_catalog_type({:refresh_by_path, path}),
     do: {:refresh_by_path, %Spark.Connect.RefreshByPath{path: path}}
+
+  # These Catalog relations were introduced by Spark Connect 4.2.  Callers select
+  # them explicitly in Catalog so older servers can continue to use SQL fallbacks.
+  defp encode_catalog_type({:drop_table, table_name, if_exists, purge}),
+    do:
+      {:drop_table,
+       %Spark.Connect.DropTable{table_name: table_name, if_exists: if_exists, purge: purge}}
+
+  defp encode_catalog_type({:drop_view, view_name, if_exists}),
+    do: {:drop_view, %Spark.Connect.DropView{view_name: view_name, if_exists: if_exists}}
+
+  defp encode_catalog_type({:create_database, db_name, if_not_exists, properties}),
+    do:
+      {:create_database,
+       %Spark.Connect.CreateDatabase{
+         db_name: db_name,
+         if_not_exists: if_not_exists,
+         properties: properties || %{}
+       }}
+
+  defp encode_catalog_type({:drop_database, db_name, if_exists, cascade}),
+    do:
+      {:drop_database,
+       %Spark.Connect.DropDatabase{db_name: db_name, if_exists: if_exists, cascade: cascade}}
+
+  defp encode_catalog_type({:list_partitions, table_name}),
+    do: {:list_partitions, %Spark.Connect.ListPartitions{table_name: table_name}}
+
+  defp encode_catalog_type({:list_views, db_name, pattern}),
+    do: {:list_views, %Spark.Connect.ListViews{db_name: db_name, pattern: pattern}}
+
+  defp encode_catalog_type({:get_table_properties, table_name}),
+    do: {:get_table_properties, %Spark.Connect.GetTableProperties{table_name: table_name}}
+
+  defp encode_catalog_type({:get_create_table_string, table_name, as_serde}),
+    do:
+      {:get_create_table_string,
+       %Spark.Connect.GetCreateTableString{table_name: table_name, as_serde: as_serde}}
+
+  defp encode_catalog_type({:truncate_table, table_name}),
+    do: {:truncate_table, %Spark.Connect.TruncateTable{table_name: table_name}}
+
+  defp encode_catalog_type({:analyze_table, table_name, no_scan}),
+    do: {:analyze_table, %Spark.Connect.AnalyzeTable{table_name: table_name, no_scan: no_scan}}
 
   # PySpark's NAFill._convert_value always uses long for ints (not integer)
   # because the Spark server only accepts Long/Double/String/Boolean in NAFill values.

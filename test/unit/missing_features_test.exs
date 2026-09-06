@@ -6,6 +6,17 @@ defmodule SparkEx.MissingFeaturesTest do
   alias SparkEx.Functions
   alias SparkEx.Types
 
+  defmodule ParseSchemaSession do
+    use GenServer
+
+    def start_link(schema), do: GenServer.start_link(__MODULE__, schema)
+    @impl true
+    def init(schema), do: {:ok, schema}
+    @impl true
+    def handle_call({:analyze_ddl_parse, _ddl}, _from, schema),
+      do: {:reply, {:ok, schema}, schema}
+  end
+
   # ── Types ──
 
   describe "SparkEx.Types new types" do
@@ -824,18 +835,26 @@ defmodule SparkEx.MissingFeaturesTest do
 
   describe "DataFrame.parse/3" do
     test "creates parse plan for CSV" do
-      df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
+      schema =
+        Types.to_proto(
+          Types.struct_type([Types.struct_field("a", :integer), Types.struct_field("b", :string)])
+        )
+
+      {:ok, session} = ParseSchemaSession.start_link(schema)
+      df = DataFrame.new(session, {:sql, "SELECT 1", nil})
       result = DataFrame.parse(df, :csv, "a INT, b STRING")
 
-      assert {:parse, _, :csv, "a INT, b STRING", nil} =
+      assert {:parse, _, :csv, ^schema, nil} =
                SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
 
     test "creates parse plan for JSON with options" do
-      df = DataFrame.new(self(), {:sql, "SELECT 1", nil})
+      schema = Types.to_proto(Types.struct_type([Types.struct_field("a", :integer)]))
+      {:ok, session} = ParseSchemaSession.start_link(schema)
+      df = DataFrame.new(session, {:sql, "SELECT 1", nil})
       result = DataFrame.parse(df, :json, "a INT", %{"mode" => "FAILFAST"})
 
-      assert {:parse, _, :json, "a INT", %{"mode" => "FAILFAST"}} =
+      assert {:parse, _, :json, ^schema, %{"mode" => "FAILFAST"}} =
                SparkEx.Test.PlanHelpers.unwrap_plan(result)
     end
   end
@@ -846,7 +865,8 @@ defmodule SparkEx.MissingFeaturesTest do
     alias SparkEx.Connect.PlanEncoder
 
     test "encodes parse relation" do
-      plan = {:parse, {:sql, "SELECT 1", nil}, :csv, "a INT", %{"sep" => "|"}}
+      schema = Types.to_proto(Types.struct_type([Types.struct_field("a", :integer)]))
+      plan = {:parse, {:sql, "SELECT 1", nil}, :csv, schema, %{"sep" => "|"}}
       {encoded, _counter} = PlanEncoder.encode(plan, 0)
 
       assert %Spark.Connect.Plan{op_type: {:root, relation}} = encoded

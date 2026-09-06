@@ -287,7 +287,9 @@ defmodule SparkEx.DataFrame do
 
   Use `SparkEx.GroupedData.agg/2` to apply aggregate functions.
 
-  Accepts a list of column names (strings or atoms) or `Column` structs.
+  Accepts column names (strings or atoms), `Column` structs, and positive integer
+  ordinals. Ordinals resolve 1-based positions through the DataFrame schema; names
+  and explicit columns remain lazy.
 
   ## Examples
 
@@ -297,10 +299,17 @@ defmodule SparkEx.DataFrame do
       |> DataFrame.group_by(["department"])
       |> SparkEx.GroupedData.agg([sum(col("salary"))])
   """
-  @spec group_by(t(), Column.t() | String.t() | atom() | [Column.t() | String.t() | atom()]) ::
+  @spec group_by(
+          t(),
+          Column.t()
+          | String.t()
+          | atom()
+          | pos_integer()
+          | [Column.t() | String.t() | atom() | pos_integer()]
+        ) ::
           SparkEx.GroupedData.t()
   def group_by(%__MODULE__{} = df, columns) when is_list(columns) do
-    grouping_exprs = Enum.map(columns, &normalize_column_expr/1)
+    grouping_exprs = normalize_grouping_columns(df, columns)
 
     %SparkEx.GroupedData{
       session: df.session,
@@ -317,11 +326,20 @@ defmodule SparkEx.DataFrame do
 
   @doc """
   Groups by rollup of the specified columns.
+
+  Positive integer ordinals resolve 1-based positions through the DataFrame schema.
   """
-  @spec rollup(t(), Column.t() | String.t() | atom() | [Column.t() | String.t() | atom()]) ::
+  @spec rollup(
+          t(),
+          Column.t()
+          | String.t()
+          | atom()
+          | pos_integer()
+          | [Column.t() | String.t() | atom() | pos_integer()]
+        ) ::
           SparkEx.GroupedData.t()
   def rollup(%__MODULE__{} = df, columns) when is_list(columns) do
-    grouping_exprs = Enum.map(columns, &normalize_column_expr/1)
+    grouping_exprs = normalize_grouping_columns(df, columns)
 
     %SparkEx.GroupedData{
       session: df.session,
@@ -338,11 +356,20 @@ defmodule SparkEx.DataFrame do
 
   @doc """
   Groups by cube of the specified columns.
+
+  Positive integer ordinals resolve 1-based positions through the DataFrame schema.
   """
-  @spec cube(t(), Column.t() | String.t() | atom() | [Column.t() | String.t() | atom()]) ::
+  @spec cube(
+          t(),
+          Column.t()
+          | String.t()
+          | atom()
+          | pos_integer()
+          | [Column.t() | String.t() | atom() | pos_integer()]
+        ) ::
           SparkEx.GroupedData.t()
   def cube(%__MODULE__{} = df, columns) when is_list(columns) do
-    grouping_exprs = Enum.map(columns, &normalize_column_expr/1)
+    grouping_exprs = normalize_grouping_columns(df, columns)
 
     %SparkEx.GroupedData{
       session: df.session,
@@ -361,24 +388,27 @@ defmodule SparkEx.DataFrame do
   Groups by grouping sets.
 
   Accepts a list of column lists, and an optional list of explicit grouping columns.
+  Positive integer ordinals resolve 1-based positions through the DataFrame schema.
   When grouping columns are provided, they are used as the grouping expressions
   instead of being derived from the sets.
   """
   @spec grouping_sets(
           t(),
-          [[Column.t() | String.t() | atom()]],
-          [Column.t() | String.t() | atom()]
+          [[Column.t() | String.t() | atom() | pos_integer()]],
+          [Column.t() | String.t() | atom() | pos_integer()]
         ) :: SparkEx.GroupedData.t()
   def grouping_sets(%__MODULE__{} = df, sets, cols \\ []) when is_list(sets) do
+    df = prefetch_grouping_ordinals(df, List.flatten(sets) ++ cols)
+
     grouping_sets =
       Enum.map(sets, fn set ->
-        Enum.map(set, &normalize_column_expr/1)
+        normalize_grouping_columns(df, set)
       end)
 
     grouping_exprs =
       case cols do
         [] -> Enum.uniq(List.flatten(grouping_sets))
-        cols when is_list(cols) -> Enum.map(cols, &normalize_column_expr/1)
+        cols when is_list(cols) -> normalize_grouping_columns(df, cols)
       end
 
     %SparkEx.GroupedData{
@@ -1414,8 +1444,9 @@ defmodule SparkEx.DataFrame do
 
   ## Parameters
 
-  - `format` — `:csv` or `:json`
-  - `schema` — DDL string or struct type for the output schema (optional)
+  - `format` — `:csv`, `:json`, or `:xml`
+  - `schema` — DDL string or struct type for the output schema (optional). DDL
+    strings make a schema-only analysis RPC; input rows remain unevaluated.
   - `options` — map of parse options (optional)
 
   ## Examples
@@ -1423,11 +1454,39 @@ defmodule SparkEx.DataFrame do
       df |> DataFrame.parse(:csv, "a INT, b STRING")
       df |> DataFrame.parse(:json, "a INT, b STRING", %{"mode" => "FAILFAST"})
   """
-  @spec parse(t(), :csv | :json, String.t() | SparkEx.Types.struct_type() | nil, map() | nil) ::
+  @spec parse(
+          t(),
+          :csv | :json | :xml,
+          String.t() | SparkEx.Types.struct_type() | nil,
+          map() | nil
+        ) ::
           t()
   def parse(%__MODULE__{} = df, format, schema \\ nil, options \\ nil)
-      when format in [:csv, :json] do
+      when format in [:csv, :json, :xml] do
+    schema = normalize_parse_schema(df.session, schema)
     update_plan(df, {:parse, df.plan, format, schema, options})
+  end
+
+  defp normalize_parse_schema(session, schema) when is_binary(schema) do
+    case SparkEx.Session.analyze_ddl_parse(session, schema) do
+      {:ok, parsed} -> parsed
+      {:error, reason} -> raise ArgumentError, "failed to parse schema: #{inspect(reason)}"
+    end
+  end
+
+  defp normalize_parse_schema(_session, schema), do: schema
+
+  @doc """
+  Appends consecutive zero-based long indices as the last column.
+
+  Index assignments may change after repartitioning or recomputation. The column
+  name defaults to `"index"`; duplicate names are permitted, as in Spark.
+  """
+  @spec zip_with_index(t(), String.t()) :: t()
+  def zip_with_index(%__MODULE__{} = df, index_col_name \\ "index")
+      when is_binary(index_col_name) do
+    index = {:alias, {:fn, "distributed_sequence_id", [], false}, index_col_name}
+    update_plan(df, {:project, df.plan, [{:star, nil, df.plan}, index]})
   end
 
   @doc """
@@ -2629,6 +2688,47 @@ defmodule SparkEx.DataFrame do
     raise_unstamped_plan!(:as_of_join, plan)
   end
 
+  defp prefetch_grouping_ordinals(df, columns) do
+    Enum.each(columns, fn
+      ordinal when is_integer(ordinal) and ordinal < 1 ->
+        raise ArgumentError,
+              "grouping column ordinals must be positive (1-based), got: #{ordinal}"
+
+      _ ->
+        :ok
+    end)
+
+    if Enum.any?(columns, &is_integer/1) do
+      case prefetch_schema(df) do
+        {:ok, cached} -> cached
+        {:error, reason} -> raise ArgumentError, "failed to fetch schema: #{inspect(reason)}"
+      end
+    else
+      df
+    end
+  end
+
+  defp normalize_grouping_columns(df, columns) do
+    df = prefetch_grouping_ordinals(df, columns)
+
+    Enum.map(columns, fn
+      ordinal when is_integer(ordinal) ->
+        {:ok, names} = columns(df)
+
+        case Enum.fetch(names, ordinal - 1) do
+          {:ok, name} ->
+            col(df, SparkEx.Types.quote_identifier(name)).expr
+
+          :error ->
+            raise ArgumentError,
+                  "grouping column ordinal #{ordinal} exceeds #{length(names)} columns"
+        end
+
+      column ->
+        normalize_column_expr(column)
+    end)
+  end
+
   defp normalize_column_expr(%Column{} = col), do: col.expr
   # Route raw strings through the same star handling as SparkEx.Functions.col/1
   # so "*" / "x.*" become UnresolvedStar instead of UnresolvedAttribute (which
@@ -2645,9 +2745,9 @@ defmodule SparkEx.DataFrame do
   defp normalize_column_expr({name, alias}) when is_atom(name) and is_binary(alias),
     do: {:alias, name_to_col_expr(name), alias}
 
-  # PySpark treats integer args as 1-based schema ordinals (self[c - 1]), which
-  # requires a schema-resolving RPC; resolve locally by raising, consistent with
-  # normalize_sort_expr/1. (Divergence: PySpark ordinals are not supported here.)
+  # Grouping handles ordinals through normalize_grouping_columns/2. Other
+  # expression APIs retain the existing rejection instead of treating integers
+  # as literals or changing the separate sort-direction contract.
   defp normalize_column_expr(idx) when is_integer(idx) do
     raise ArgumentError,
           "integer column ordinals are not supported (PySpark resolves them as 1-based " <>

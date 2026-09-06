@@ -509,6 +509,22 @@ defmodule SparkEx do
     SparkEx.Session.create_dataframe(session, data, opts)
   end
 
+  @doc "Creates an empty DataFrame with an explicit DDL or struct schema."
+  @spec empty_dataframe(GenServer.server(), term()) ::
+          {:ok, SparkEx.DataFrame.t()} | {:error, term()}
+  defdelegate empty_dataframe(session, schema), to: SparkEx.Session
+
+  @doc """
+  Fetches operation statuses (experimental; Spark 4.2+).
+
+  See `SparkEx.Session.get_operation_statuses/3` for the full response and options.
+  Empty IDs mean all operations. This works while a blocking query is active.
+  """
+  @spec get_operation_statuses(GenServer.server(), [String.t()], keyword()) ::
+          {:ok, Spark.Connect.GetStatusResponse.t()} | {:error, term()}
+  defdelegate get_operation_statuses(session, operation_ids \\ [], opts \\ []),
+    to: SparkEx.Session
+
   @doc """
   Interrupts all running operations on the session.
 

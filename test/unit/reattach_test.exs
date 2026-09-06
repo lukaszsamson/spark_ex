@@ -1,5 +1,6 @@
 defmodule SparkEx.Unit.ReattachTest do
-  use ExUnit.Case, async: true
+  # These cases replace the global ETS-backed retry policies.
+  use ExUnit.Case, async: false
 
   alias SparkEx.Connect.Client
 

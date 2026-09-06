@@ -228,7 +228,7 @@ defmodule SparkEx.GroupedData do
           numeric_names
 
         names ->
-          invalid = Enum.reject(names, &(&1 in numeric_names))
+          invalid = Enum.reject(names, &numeric_column_name?(&1, schema))
 
           if invalid != [] do
             raise ArgumentError, "expected numeric columns, got: #{inspect(invalid)}"
@@ -299,6 +299,41 @@ defmodule SparkEx.GroupedData do
         {:ok, cached}
     end
   end
+
+  # Spark multipart identifiers permit backtick-quoted segments and doubled
+  # backticks. Validate the whole name so malformed paths cannot pass locally.
+  defp numeric_column_name?(name, schema) do
+    if Regex.match?(~r/\A(?:`(?:``|[^`])*`|[^.`]+)(?:\.(?:`(?:``|[^`])*`|[^.`]+))*\z/u, name) do
+      parts =
+        Regex.scan(~r/`((?:``|[^`])*)`|([^.`]+)/u, name)
+        |> Enum.map(fn
+          [_, quoted] -> String.replace(quoted, "``", "`")
+          [_, "", plain] -> plain
+        end)
+
+      numeric_path?(schema, parts)
+    else
+      false
+    end
+  end
+
+  defp numeric_path?(type, []), do: numeric_type?(type)
+
+  defp numeric_path?(%Spark.Connect.DataType{kind: {:struct, struct}}, [name | rest]) do
+    case Enum.find(struct.fields, &(&1.name == name)) do
+      nil -> false
+      field -> numeric_path?(field.data_type, rest)
+    end
+  end
+
+  defp numeric_path?(%Spark.Connect.DataType{kind: {:array, array}}, parts) do
+    case array.element_type do
+      %Spark.Connect.DataType{kind: {:struct, _}} = struct -> numeric_path?(struct, parts)
+      _ -> false
+    end
+  end
+
+  defp numeric_path?(_, _), do: false
 
   defp numeric_column_names(%Spark.Connect.DataType{kind: {:struct, struct}}) do
     struct.fields

@@ -22,7 +22,8 @@ defmodule SparkEx.Reader do
   @type t :: %__MODULE__{
           session: GenServer.server(),
           format: String.t() | nil,
-          schema: String.t() | nil,
+          schema:
+            String.t() | SparkEx.Types.struct_type() | SparkEx.Types.data_type_proto() | nil,
           options: %{String.t() => String.t()}
         }
 
@@ -63,11 +64,11 @@ defmodule SparkEx.Reader do
   end
 
   def schema(%__MODULE__{} = reader, {:struct, _} = struct_type) do
-    %{reader | schema: SparkEx.Types.to_json(struct_type)}
+    %{reader | schema: struct_type}
   end
 
   def schema(%__MODULE__{} = reader, %Spark.Connect.DataType{} = schema) do
-    %{reader | schema: SparkEx.Types.data_type_to_json(schema)}
+    %{reader | schema: schema}
   end
 
   @doc """
@@ -206,6 +207,26 @@ defmodule SparkEx.Reader do
   end
 
   @doc """
+  Reads a batch change feed from a Data Source V2 table.
+
+  The table catalog must implement change-log loading (Spark 4.2+). Reader
+  options select version or timestamp bounds and CDC behavior. User schemas are
+  rejected because the provider defines the change-feed schema.
+  """
+  @spec changes(t(), String.t()) :: DataFrame.t()
+  def changes(%__MODULE__{schema: schema}, _table_name) when not is_nil(schema) do
+    raise ArgumentError, "user-specified schema is not supported with changes/2"
+  end
+
+  def changes(%__MODULE__{} = reader, table_name) when is_binary(table_name) do
+    if String.trim(table_name) == "" do
+      raise ArgumentError, "table name must not be empty or blank"
+    end
+
+    DataFrame.new(reader.session, {:relation_changes, table_name, reader.options, false})
+  end
+
+  @doc """
   Creates a DataFrame by reading Parquet file(s).
 
   ## Options
@@ -238,15 +259,22 @@ defmodule SparkEx.Reader do
 
       df = SparkEx.Reader.csv(session, "/data/users.csv", header: true, infer_schema: true)
   """
-  @spec csv(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  @spec csv(GenServer.server() | t(), String.t() | [String.t()] | DataFrame.t(), keyword()) ::
+          DataFrame.t()
   def csv(session, paths, opts \\ []) do
-    {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator, :sep])
-    csv_opts = reconcile_csv_separator(csv_opts)
+    if match?(%DataFrame{}, paths) do
+      {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator, :sep])
+      csv_opts = reconcile_csv_separator(csv_opts)
+      parse_data_frame(session, paths, :csv, Keyword.merge(rest, csv_opts))
+    else
+      {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator, :sep])
+      csv_opts = reconcile_csv_separator(csv_opts)
 
-    # :header/:infer_schema/:sep normalize to "header"/"inferSchema"/"sep" through
-    # the shared key normalizer, so they can simply ride along as top-level
-    # keywords and get the standard duplicate check against :options.
-    data_source(session, "csv", paths, Keyword.merge(rest, csv_opts))
+      # :header/:infer_schema/:sep normalize to "header"/"inferSchema"/"sep" through
+      # the shared key normalizer, so they can simply ride along as top-level
+      # keywords and get the standard duplicate check against :options.
+      data_source(session, "csv", paths, Keyword.merge(rest, csv_opts))
+    end
   end
 
   # `:separator` is a SparkEx-only alias for PySpark's `sep`. Compare the
@@ -284,9 +312,12 @@ defmodule SparkEx.Reader do
 
       df = SparkEx.Reader.json(session, "/data/logs.json")
   """
-  @spec json(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  @spec json(GenServer.server() | t(), String.t() | [String.t()] | DataFrame.t(), keyword()) ::
+          DataFrame.t()
   def json(session, paths, opts \\ []) do
-    data_source(session, "json", paths, opts)
+    if match?(%DataFrame{}, paths),
+      do: parse_data_frame(session, paths, :json, opts),
+      else: data_source(session, "json", paths, opts)
   end
 
   @doc """
@@ -345,9 +376,12 @@ defmodule SparkEx.Reader do
   - `:schema` — optional schema string
   - `:options` — map of XML reader options
   """
-  @spec xml(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  @spec xml(GenServer.server() | t(), String.t() | [String.t()] | DataFrame.t(), keyword()) ::
+          DataFrame.t()
   def xml(session, paths, opts \\ []) do
-    data_source(session, "xml", paths, opts)
+    if match?(%DataFrame{}, paths),
+      do: parse_data_frame(session, paths, :xml, opts),
+      else: data_source(session, "xml", paths, opts)
   end
 
   @doc """
@@ -442,6 +476,26 @@ defmodule SparkEx.Reader do
 
   # --- Private ---
 
+  defp parse_data_frame(%__MODULE__{} = reader, %DataFrame{} = input, format, opts) do
+    if reader.session != input.session do
+      raise ArgumentError, "reader and input DataFrame must belong to the same session"
+    end
+
+    schema = (Keyword.get(opts, :schema) || reader.schema) |> normalize_parse_schema()
+    options = Map.merge(reader.options, merge_source_options(opts, [:schema]))
+    DataFrame.parse(input, format, schema, options)
+  end
+
+  defp parse_data_frame(session, %DataFrame{} = input, format, opts) do
+    if session != input.session do
+      raise ArgumentError, "reader and input DataFrame must belong to the same session"
+    end
+
+    schema = opts |> Keyword.get(:schema) |> normalize_parse_schema()
+    options = merge_source_options(opts, [:schema])
+    DataFrame.parse(input, format, schema, options)
+  end
+
   defp validate_jdbc_partition_args(column_name, lower_bound, upper_bound, _properties) do
     if String.trim(column_name) == "" do
       raise ArgumentError, "column_name must be a non-empty string"
@@ -517,6 +571,17 @@ defmodule SparkEx.Reader do
   defp normalize_schema(schema) do
     raise ArgumentError,
           "schema must be a string, {:struct, fields} tuple, or Spark.Connect.DataType, got: #{inspect(schema)}"
+  end
+
+  defp normalize_parse_schema(nil), do: nil
+  defp normalize_parse_schema(schema) when is_binary(schema), do: schema
+  defp normalize_parse_schema({:struct, _} = schema), do: schema
+  defp normalize_parse_schema(%Spark.Connect.DataType{} = schema), do: schema
+
+  defp normalize_parse_schema(schema) do
+    raise ArgumentError,
+          "parse schema must be a DDL string, {:struct, fields} tuple, or Spark.Connect.DataType, got: " <>
+            inspect(schema)
   end
 
   defp normalize_options(opts) do
