@@ -1,4 +1,4 @@
-defmodule SparkEx.Spark42P1DataFrameTest do
+defmodule SparkEx.Unit.Spark42P1DataFrameTest do
   use ExUnit.Case, async: true
 
   alias SparkEx.{DataFrame, Functions, GroupedData}

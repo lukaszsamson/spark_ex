@@ -292,8 +292,13 @@ defmodule SparkEx.Catalog do
       end
 
     case result do
-      {:ok, rows} -> {:ok, Enum.map(rows, &%TablePartition{partition: first_row_value(&1)})}
-      {:error, _} = error -> error
+      {:ok, rows} ->
+        with {:ok, values} <- decode_rows(rows, &single_row_value/1) do
+          {:ok, Enum.map(values, &%TablePartition{partition: &1})}
+        end
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -311,7 +316,7 @@ defmodule SparkEx.Catalog do
               :catalog -> execute_catalog(session, {:list_views, resolved_db_name, pattern})
               :sql -> execute_sql(session, build_list_views_sql(resolved_db_name, pattern))
             end) do
-      {:ok, Enum.map(rows, &parse_view/1)}
+      decode_rows(rows, &parse_view/1)
     end
   end
 
@@ -327,8 +332,11 @@ defmodule SparkEx.Catalog do
       end
 
     case result do
-      {:ok, rows} -> {:ok, Map.new(rows, &row_pair/1)}
-      {:error, _} = error -> error
+      {:ok, rows} ->
+        with {:ok, pairs} <- decode_rows(rows, &row_pair/1), do: {:ok, Map.new(pairs)}
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -347,7 +355,7 @@ defmodule SparkEx.Catalog do
 
     case result do
       {:ok, []} -> {:ok, ""}
-      {:ok, [row | _]} -> {:ok, first_row_value(row)}
+      {:ok, [row | _]} -> single_row_value(row)
       {:error, _} = error -> error
     end
   end
@@ -1183,35 +1191,56 @@ defmodule SparkEx.Catalog do
     }
   end
 
-  defp parse_view(%{"name" => _} = row), do: parse_table(row)
+  defp parse_view(%{"name" => name} = row) when is_binary(name), do: {:ok, parse_table(row)}
 
   defp parse_view(row) do
-    %Table{
-      name: row["viewName"] || row["view_name"] || first_row_value(row),
-      catalog: row["catalog"],
-      namespace: parse_namespace(row["namespace"]),
-      description: row["description"],
-      table_type: row["tableType"] || "VIEW",
-      is_temporary: row["isTemporary"] || false
-    }
+    case row["viewName"] || row["view_name"] do
+      name when is_binary(name) ->
+        {:ok,
+         %Table{
+           name: name,
+           catalog: row["catalog"],
+           namespace: parse_namespace(row["namespace"]),
+           description: row["description"],
+           table_type: row["tableType"] || "VIEW",
+           is_temporary: row["isTemporary"] || false
+         }}
+
+      _ ->
+        unexpected_columns(row)
+    end
   end
 
-  defp first_row_value(row) when is_map(row) do
-    row
-    |> Map.values()
-    |> List.first()
+  defp single_row_value(row) when map_size(row) == 1 do
+    [{_column, value}] = Map.to_list(row)
+    {:ok, value}
   end
+
+  defp single_row_value(row), do: unexpected_columns(row)
 
   defp row_pair(row) when is_map(row) do
     case {row["key"] || row["Key"], row["value"] || row["Value"]} do
       {key, value} when not is_nil(key) and not is_nil(value) ->
-        {to_string(key), to_string(value)}
+        {:ok, {to_string(key), to_string(value)}}
 
       _ ->
-        case Map.values(row) do
-          [key, value] -> {to_string(key), to_string(value)}
-          values -> raise ArgumentError, "expected a two-column result, got: #{inspect(values)}"
-        end
+        unexpected_columns(row)
+    end
+  end
+
+  defp unexpected_columns(row), do: {:error, {:unexpected_columns, Map.keys(row)}}
+
+  defp decode_rows(rows, decode) do
+    rows
+    |> Enum.reduce_while({:ok, []}, fn row, {:ok, values} ->
+      case decode.(row) do
+        {:ok, value} -> {:cont, {:ok, [value | values]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, values} -> {:ok, Enum.reverse(values)}
+      error -> error
     end
   end
 

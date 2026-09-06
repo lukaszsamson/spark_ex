@@ -2,7 +2,8 @@
 
 These fixtures exercise CDC and schema evolution against Spark's published
 4.2.0 test catalogs. Prepare the checksum-pinned JARs and the small seeded CDC
-catalog outside the repository:
+catalog outside the repository. Use a Java 17+ JDK (CI uses Java 17;
+the example below uses Java 21):
 
 ```sh
 export SPARK_HOME=/path/to/spark-4.2.0-bin-hadoop3
