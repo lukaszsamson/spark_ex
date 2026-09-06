@@ -75,9 +75,7 @@ defmodule SparkEx.ReaderTest do
       }
 
       reader = self() |> SparkEx.read() |> Reader.schema(schema)
-      decoded = Jason.decode!(reader.schema)
-      assert decoded["type"] == "struct"
-      assert Enum.at(decoded["fields"], 0)["metadata"]["comment"] == "pk"
+      assert reader.schema == schema
     end
   end
 

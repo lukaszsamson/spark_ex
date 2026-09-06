@@ -78,6 +78,20 @@ defmodule SparkEx.Integration.ObservationCollectionGapsTest do
     end
   end
 
+  describe "observations on reused relations" do
+    test "self-join preserves observation metrics", %{session: session} do
+      obs = Observation.new("self_join_obs_#{System.unique_integer([:positive])}")
+
+      joined =
+        SparkEx.range(session, 3)
+        |> DataFrame.join(SparkEx.range(session, 3), ["id"], :inner)
+        |> DataFrame.observe(obs, [Column.alias_(Functions.count(Functions.lit(1)), "rows")])
+
+      assert {:ok, _rows} = DataFrame.collect(joined)
+      assert Observation.get(obs)["rows"] == 3
+    end
+  end
+
   # ── observe with struct type ──
 
   describe "observe with complex aggregate types" do

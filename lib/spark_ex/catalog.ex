@@ -75,6 +75,12 @@ defmodule SparkEx.Catalog do
           }
   end
 
+  defmodule TablePartition do
+    @moduledoc "A table partition specification returned by `list_partitions/3`."
+    defstruct [:partition]
+    @type t :: %__MODULE__{partition: String.t()}
+  end
+
   # ── Catalog Management ──
 
   @spec current_catalog(GenServer.server()) :: {:ok, String.t()} | {:error, term()}
@@ -158,15 +164,35 @@ defmodule SparkEx.Catalog do
   @spec create_database(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
   def create_database(session, db_name, opts \\ []) when is_binary(db_name) and is_list(opts) do
     with :ok <- validate_create_database_opts(opts) do
-      sql = build_create_database_sql(db_name, opts)
-      execute_sql_void(session, sql)
+      case catalog_backend(opts) do
+        :catalog ->
+          execute_void(session, {
+            :create_database,
+            db_name,
+            Keyword.get(opts, :if_not_exists, false),
+            normalize_properties(Keyword.get(opts, :properties, %{}))
+          })
+
+        :sql ->
+          execute_sql_void(session, build_create_database_sql(db_name, opts))
+      end
     end
   end
 
   @spec drop_database(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
   def drop_database(session, db_name, opts \\ []) when is_binary(db_name) do
-    sql = build_drop_database_sql(db_name, opts)
-    execute_sql_void(session, sql)
+    case catalog_backend(opts) do
+      :catalog ->
+        execute_void(session, {
+          :drop_database,
+          db_name,
+          Keyword.get(opts, :if_exists, false),
+          Keyword.get(opts, :cascade, false)
+        })
+
+      :sql ->
+        execute_sql_void(session, build_drop_database_sql(db_name, opts))
+    end
   end
 
   @spec alter_database(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
@@ -229,8 +255,121 @@ defmodule SparkEx.Catalog do
 
   @spec drop_table(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
   def drop_table(session, table_name, opts \\ []) when is_binary(table_name) do
-    sql = build_drop_table_sql(table_name, opts)
-    execute_sql_void(session, sql)
+    case catalog_backend(opts) do
+      :catalog ->
+        execute_void(session, {
+          :drop_table,
+          table_name,
+          Keyword.get(opts, :if_exists, false),
+          Keyword.get(opts, :purge, false)
+        })
+
+      :sql ->
+        execute_sql_void(session, build_drop_table_sql(table_name, opts))
+    end
+  end
+
+  @doc "Drops a persistent view. Use `backend: :catalog` to require Spark 4.2's catalog relation."
+  @spec drop_view(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
+  def drop_view(session, view_name, opts \\ []) when is_binary(view_name) and is_list(opts) do
+    if_exists = Keyword.get(opts, :if_exists, false)
+
+    case catalog_backend(opts) do
+      :catalog -> execute_void(session, {:drop_view, view_name, if_exists})
+      :sql -> execute_sql_void(session, build_drop_view_sql(view_name, if_exists))
+    end
+  end
+
+  @doc "Lists partition specifications for a table."
+  @spec list_partitions(GenServer.server(), String.t(), keyword()) ::
+          {:ok, [TablePartition.t()]} | {:error, term()}
+  def list_partitions(session, table_name, opts \\ [])
+      when is_binary(table_name) and is_list(opts) do
+    result =
+      case catalog_backend(opts) do
+        :catalog -> execute_catalog(session, {:list_partitions, table_name})
+        :sql -> execute_sql(session, "SHOW PARTITIONS " <> quote_qualified_name(table_name))
+      end
+
+    case result do
+      {:ok, rows} -> {:ok, Enum.map(rows, &%TablePartition{partition: first_row_value(&1)})}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "Lists views in a database. A pattern without a database uses the current database."
+  @spec list_views(GenServer.server(), String.t() | nil, String.t() | nil, keyword()) ::
+          {:ok, [Table.t()]} | {:error, term()}
+  def list_views(session, db_name \\ nil, pattern \\ nil, opts \\ [])
+      when (is_nil(db_name) or is_binary(db_name)) and (is_nil(pattern) or is_binary(pattern)) and
+             is_list(opts) do
+    backend = catalog_backend(opts)
+
+    with {:ok, resolved_db_name} <- resolve_list_views_db_name(session, db_name, pattern, backend),
+         {:ok, rows} <-
+           (case backend do
+              :catalog -> execute_catalog(session, {:list_views, resolved_db_name, pattern})
+              :sql -> execute_sql(session, build_list_views_sql(resolved_db_name, pattern))
+            end) do
+      {:ok, Enum.map(rows, &parse_view/1)}
+    end
+  end
+
+  @doc "Returns table properties as a string-keyed map."
+  @spec get_table_properties(GenServer.server(), String.t(), keyword()) ::
+          {:ok, %{String.t() => String.t()}} | {:error, term()}
+  def get_table_properties(session, table_name, opts \\ [])
+      when is_binary(table_name) and is_list(opts) do
+    result =
+      case catalog_backend(opts) do
+        :catalog -> execute_catalog(session, {:get_table_properties, table_name})
+        :sql -> execute_sql(session, "SHOW TBLPROPERTIES " <> quote_qualified_name(table_name))
+      end
+
+    case result do
+      {:ok, rows} -> {:ok, Map.new(rows, &row_pair/1)}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "Returns a table's DDL, or an empty string when the server returns no row."
+  @spec get_create_table_string(GenServer.server(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def get_create_table_string(session, table_name, opts \\ [])
+      when is_binary(table_name) and is_list(opts) do
+    as_serde = Keyword.get(opts, :as_serde, false)
+
+    result =
+      case catalog_backend(opts) do
+        :catalog -> execute_catalog(session, {:get_create_table_string, table_name, as_serde})
+        :sql -> execute_sql(session, build_show_create_table_sql(table_name, as_serde))
+      end
+
+    case result do
+      {:ok, []} -> {:ok, ""}
+      {:ok, [row | _]} -> {:ok, first_row_value(row)}
+      {:error, _} = error -> error
+    end
+  end
+
+  @spec truncate_table(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
+  def truncate_table(session, table_name, opts \\ [])
+      when is_binary(table_name) and is_list(opts) do
+    case catalog_backend(opts) do
+      :catalog -> execute_void(session, {:truncate_table, table_name})
+      :sql -> execute_sql_void(session, "TRUNCATE TABLE " <> quote_qualified_name(table_name))
+    end
+  end
+
+  @spec analyze_table(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
+  def analyze_table(session, table_name, opts \\ [])
+      when is_binary(table_name) and is_list(opts) do
+    no_scan = Keyword.get(opts, :no_scan, false)
+
+    case catalog_backend(opts) do
+      :catalog -> execute_void(session, {:analyze_table, table_name, no_scan})
+      :sql -> execute_sql_void(session, build_analyze_table_sql(table_name, no_scan))
+    end
   end
 
   @spec alter_table(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
@@ -443,6 +582,46 @@ defmodule SparkEx.Catalog do
     end
   end
 
+  defp execute_sql(session, sql) when is_binary(sql),
+    do: SparkEx.sql(session, sql) |> DataFrame.collect()
+
+  defp catalog_backend(opts) do
+    allowed_options = [
+      :backend,
+      :if_exists,
+      :if_not_exists,
+      :purge,
+      :cascade,
+      :properties,
+      :comment,
+      :location,
+      :as_serde,
+      :no_scan
+    ]
+
+    unknown = Keyword.keys(opts) -- allowed_options
+
+    if unknown != [] do
+      raise ArgumentError, "unsupported catalog options: #{inspect(unknown)}"
+    end
+
+    case Keyword.get(opts, :backend, :sql) do
+      :sql ->
+        :sql
+
+      :catalog ->
+        :catalog
+
+      backend ->
+        raise ArgumentError, "expected :backend to be :sql or :catalog, got: #{inspect(backend)}"
+    end
+  end
+
+  defp resolve_list_views_db_name(session, nil, pattern, :catalog) when not is_nil(pattern),
+    do: current_database(session)
+
+  defp resolve_list_views_db_name(_session, db_name, _pattern, _backend), do: {:ok, db_name}
+
   defp resolve_catalog_db_name(_session, db_name) when is_binary(db_name), do: {:ok, db_name}
   defp resolve_catalog_db_name(_session, nil), do: {:ok, nil}
   defp resolve_catalog_db_name(_session, db_name), do: {:error, {:invalid_db_name, db_name}}
@@ -481,32 +660,58 @@ defmodule SparkEx.Catalog do
   defp normalize_optional_db_name(db_name), do: {:error, {:invalid_db_name, db_name}}
 
   defp validate_create_database_opts(opts) do
-    allowed_keys = [:if_not_exists, :comment, :location]
+    allowed_keys = [:if_not_exists, :comment, :location, :properties, :backend]
     invalid_keys = Keyword.keys(opts) -- allowed_keys
 
     if invalid_keys != [] do
       {:error,
        {:invalid_options, "unsupported create_database options: #{inspect(invalid_keys)}"}}
     else
-      if_not_exists = Keyword.get(opts, :if_not_exists, false)
-      comment = Keyword.get(opts, :comment, nil)
-      location = Keyword.get(opts, :location, nil)
-
-      cond do
-        not is_boolean(if_not_exists) ->
-          {:error, {:invalid_if_not_exists, if_not_exists}}
-
-        not (is_nil(comment) or is_binary(comment)) ->
-          {:error, {:invalid_comment, comment}}
-
-        not (is_nil(location) or is_binary(location)) ->
-          {:error, {:invalid_location, location}}
-
-        true ->
-          :ok
+      with :ok <- validate_create_database_values(opts),
+           :ok <- validate_create_database_backend(opts) do
+        validate_create_database_properties(opts)
       end
     end
   end
+
+  defp validate_create_database_values(opts) do
+    if_not_exists = Keyword.get(opts, :if_not_exists, false)
+    comment = Keyword.get(opts, :comment)
+    location = Keyword.get(opts, :location)
+
+    cond do
+      not is_boolean(if_not_exists) -> {:error, {:invalid_if_not_exists, if_not_exists}}
+      not optional_binary?(comment) -> {:error, {:invalid_comment, comment}}
+      not optional_binary?(location) -> {:error, {:invalid_location, location}}
+      true -> :ok
+    end
+  end
+
+  defp validate_create_database_backend(opts) do
+    backend = Keyword.get(opts, :backend, :sql)
+
+    cond do
+      backend not in [:sql, :catalog] ->
+        {:error, {:invalid_backend, backend}}
+
+      backend == :catalog and (not is_nil(opts[:comment]) or not is_nil(opts[:location])) ->
+        {:error,
+         {:invalid_options, "catalog backend supports :properties, not :comment or :location"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_create_database_properties(opts) do
+    if valid_properties?(Keyword.get(opts, :properties, %{})) do
+      :ok
+    else
+      {:error, {:invalid_properties, Keyword.get(opts, :properties)}}
+    end
+  end
+
+  defp optional_binary?(value), do: is_nil(value) or is_binary(value)
 
   defp resolve_table_lookup(_session, table_name, nil), do: {:ok, {table_name, nil}}
 
@@ -550,6 +755,22 @@ defmodule SparkEx.Catalog do
     {:error,
      {:invalid_options, "expected :options to be a map or keyword list, got: #{inspect(other)}"}}
   end
+
+  defp normalize_properties(nil), do: %{}
+  defp normalize_properties(properties), do: OptionUtils.stringify_options_reject_nil(properties)
+
+  defp valid_properties?(nil), do: true
+
+  defp valid_properties?(properties) when is_map(properties) or is_list(properties) do
+    try do
+      _ = normalize_properties(properties)
+      true
+    rescue
+      ArgumentError -> false
+    end
+  end
+
+  defp valid_properties?(_properties), do: false
 
   # Mirrors pyspark/storagelevel.py: each preset is
   # StorageLevel(useDisk, useMemory, useOffHeap, deserialized, replication).
@@ -597,6 +818,7 @@ defmodule SparkEx.Catalog do
     if_not_exists = Keyword.get(opts, :if_not_exists, false)
     comment = Keyword.get(opts, :comment)
     location = Keyword.get(opts, :location)
+    properties = Keyword.get(opts, :properties)
 
     tail_clauses =
       []
@@ -612,6 +834,13 @@ defmodule SparkEx.Catalog do
           acc ++ ["LOCATION", sql_string(location)]
         else
           acc
+        end
+      end)
+      |> then(fn acc ->
+        if is_nil(properties) do
+          acc
+        else
+          acc ++ ["WITH", "DBPROPERTIES", format_properties(properties)]
         end
       end)
 
@@ -690,6 +919,34 @@ defmodule SparkEx.Catalog do
     else
       join_sql(base)
     end
+  end
+
+  defp build_drop_view_sql(view_name, if_exists) do
+    join_sql(
+      ["DROP", "VIEW"] ++
+        maybe_add([], "IF EXISTS", if_exists) ++ [quote_qualified_name(view_name)]
+    )
+  end
+
+  defp build_list_views_sql(db_name, pattern) do
+    clauses = ["SHOW", "VIEWS"]
+    clauses = if db_name, do: clauses ++ ["IN", quote_qualified_name(db_name)], else: clauses
+    clauses = if pattern, do: clauses ++ ["LIKE", sql_string(pattern)], else: clauses
+    join_sql(clauses)
+  end
+
+  defp build_show_create_table_sql(table_name, as_serde) do
+    join_sql(
+      ["SHOW", "CREATE", "TABLE", quote_qualified_name(table_name)] ++
+        maybe_add([], "AS SERDE", as_serde)
+    )
+  end
+
+  defp build_analyze_table_sql(table_name, no_scan) do
+    join_sql(
+      ["ANALYZE", "TABLE", quote_qualified_name(table_name), "COMPUTE", "STATISTICS"] ++
+        maybe_add([], "NOSCAN", no_scan)
+    )
   end
 
   @doc false
@@ -924,6 +1181,38 @@ defmodule SparkEx.Catalog do
       is_bucket: row["isBucket"],
       is_cluster: row["isCluster"]
     }
+  end
+
+  defp parse_view(%{"name" => _} = row), do: parse_table(row)
+
+  defp parse_view(row) do
+    %Table{
+      name: row["viewName"] || row["view_name"] || first_row_value(row),
+      catalog: row["catalog"],
+      namespace: parse_namespace(row["namespace"]),
+      description: row["description"],
+      table_type: row["tableType"] || "VIEW",
+      is_temporary: row["isTemporary"] || false
+    }
+  end
+
+  defp first_row_value(row) when is_map(row) do
+    row
+    |> Map.values()
+    |> List.first()
+  end
+
+  defp row_pair(row) when is_map(row) do
+    case {row["key"] || row["Key"], row["value"] || row["Value"]} do
+      {key, value} when not is_nil(key) and not is_nil(value) ->
+        {to_string(key), to_string(value)}
+
+      _ ->
+        case Map.values(row) do
+          [key, value] -> {to_string(key), to_string(value)}
+          values -> raise ArgumentError, "expected a two-column result, got: #{inspect(values)}"
+        end
+    end
   end
 
   defp parse_namespace(nil), do: nil

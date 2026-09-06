@@ -36,6 +36,30 @@ defmodule SparkEx.ManagedStreamTest do
     assert_receive :released_explicit, 500
   end
 
+  test "closing one stream does not release another stream's execution" do
+    parent = self()
+
+    release = fn label ->
+      fn _opts ->
+        send(parent, {:released, label})
+        {:ok, label}
+      end
+    end
+
+    {:ok, first} =
+      ManagedStream.new(Stream.repeatedly(fn -> :row end), release_fun: release.(:first))
+
+    {:ok, second} =
+      ManagedStream.new(Stream.repeatedly(fn -> :row end), release_fun: release.(:second))
+
+    :ok = ManagedStream.close(first)
+    assert_receive {:released, :first}, 500
+    refute_receive {:released, :second}, 100
+
+    :ok = ManagedStream.close(second)
+    assert_receive {:released, :second}, 500
+  end
+
   test "owner exit triggers release cleanup" do
     parent = self()
     owner = spawn(fn -> Process.sleep(:infinity) end)

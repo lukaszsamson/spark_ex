@@ -184,14 +184,14 @@ defmodule SparkEx.Integration.Wave6Spark35Test do
       assert List.last(rows)["payload"] == String.duplicate("x", 30) <> Integer.to_string(n)
     end
 
-    test "a payload exactly at the threshold is cached (>= boundary)", %{session: session} do
+    test "native data exactly at the threshold is cached (>= boundary)", %{session: session} do
       data = Explorer.DataFrame.new(%{"id" => [1, 2, 3]})
-      {:ok, ipc} = Explorer.DataFrame.dump_ipc_stream(data)
+      size = Explorer.DataFrame.estimated_size(data)
 
-      {:ok, at} = SparkEx.create_dataframe(session, data, cache_threshold: byte_size(ipc))
+      {:ok, at} = SparkEx.create_dataframe(session, data, cache_threshold: size)
       assert {:chunked_cached_local_relation, _, _} = SparkEx.Test.PlanHelpers.unwrap(at.plan)
 
-      {:ok, below} = SparkEx.create_dataframe(session, data, cache_threshold: byte_size(ipc) + 1)
+      {:ok, below} = SparkEx.create_dataframe(session, data, cache_threshold: size + 1)
       assert {:local_relation, _, _} = SparkEx.Test.PlanHelpers.unwrap(below.plan)
 
       assert {:ok, rows} = at |> DataFrame.order_by(["id"]) |> DataFrame.collect()

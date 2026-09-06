@@ -143,16 +143,21 @@ defmodule SparkEx.StreamWriter do
   - `available_now: true` — process all available data then stop
   - `once: true` — process one micro-batch then stop
   - `continuous: "1 second"` — continuous processing at the given checkpoint interval
+  - `real_time: "5 seconds"` — Spark 4.2 real-time mode batch duration
+
+  Real-time mode is an additive Spark 4.2 field. Using it asserts that the
+  server, source, and sink support real-time mode; unsupported combinations are
+  surfaced as server errors.
   """
   @spec trigger(t(), keyword()) :: t()
   def trigger(%__MODULE__{} = writer, opts) when is_list(opts) do
-    trigger_keys = [:processing_time, :available_now, :once, :continuous]
+    trigger_keys = [:processing_time, :available_now, :once, :continuous, :real_time]
     set_keys = Enum.filter(trigger_keys, &Keyword.has_key?(opts, &1))
 
     case set_keys do
       [] ->
         raise ArgumentError,
-              "expected one of :processing_time, :available_now, :once, :continuous"
+              "expected one of :processing_time, :available_now, :once, :continuous, :real_time"
 
       [_single] ->
         :ok
@@ -297,6 +302,9 @@ defmodule SparkEx.StreamWriter do
 
       Keyword.has_key?(opts, :continuous) ->
         build_trigger_continuous(Keyword.fetch!(opts, :continuous))
+
+      Keyword.has_key?(opts, :real_time) ->
+        build_trigger_real_time(Keyword.fetch!(opts, :real_time))
     end
   end
 
@@ -325,6 +333,15 @@ defmodule SparkEx.StreamWriter do
     end
 
     {:continuous, String.trim(value)}
+  end
+
+  defp build_trigger_real_time(value) do
+    if not is_binary(value) or String.trim(value) == "" do
+      raise ArgumentError,
+            "real_time must be a non-empty string, got: #{inspect(value)}"
+    end
+
+    {:real_time, String.trim(value)}
   end
 
   defp build_write_opts(writer) do

@@ -695,7 +695,7 @@ defmodule SparkEx.M14.StreamingTest do
         |> SparkEx.StreamReader.load()
 
       assert %SparkEx.DataFrame{} = df
-      assert {:read_data_source_streaming, "rate", [], nil, _opts} = unwrap_plan(df)
+      assert {:read_data_source_streaming, "rate", [], nil, _opts, nil} = unwrap_plan(df)
     end
 
     test "load with path creates streaming DataFrame" do
@@ -704,7 +704,8 @@ defmodule SparkEx.M14.StreamingTest do
         |> SparkEx.StreamReader.format("json")
         |> SparkEx.StreamReader.load("/data/stream")
 
-      assert {:read_data_source_streaming, "json", ["/data/stream"], nil, _opts} = unwrap_plan(df)
+      assert {:read_data_source_streaming, "json", ["/data/stream"], nil, _opts, nil} =
+               unwrap_plan(df)
     end
 
     test "table creates streaming DataFrame" do
@@ -1384,7 +1385,7 @@ defmodule SparkEx.M14.StreamingTest do
       assert schema_to_string(schema) == "id BIGINT"
     end
 
-    test "Reader.schema accepts struct type as JSON schema" do
+    test "Reader.schema retains struct type and file load serializes it" do
       schema =
         struct_type([
           struct_field("id", :long, nullable: false, metadata: %{"comment" => "primary"}),
@@ -1392,7 +1393,12 @@ defmodule SparkEx.M14.StreamingTest do
         ])
 
       reader = SparkEx.Reader.new(:s) |> SparkEx.Reader.schema(schema)
-      decoded = Jason.decode!(reader.schema)
+      assert reader.schema == schema
+
+      {:read_data_source, _, _, encoded_schema, _} =
+        reader |> SparkEx.Reader.format("json") |> SparkEx.Reader.load() |> unwrap_plan()
+
+      decoded = Jason.decode!(encoded_schema)
       assert decoded["type"] == "struct"
       assert Enum.at(decoded["fields"], 0)["nullable"] == false
       assert Enum.at(decoded["fields"], 0)["metadata"]["comment"] == "primary"

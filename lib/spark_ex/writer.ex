@@ -41,7 +41,8 @@ defmodule SparkEx.Writer do
     sort_by: [],
     partition_by: [],
     bucket_by: nil,
-    cluster_by: []
+    cluster_by: [],
+    with_schema_evolution: false
   ]
 
   @type t :: %__MODULE__{
@@ -52,7 +53,8 @@ defmodule SparkEx.Writer do
           sort_by: [String.t()],
           partition_by: [String.t()],
           bucket_by: {pos_integer(), [String.t()]} | nil,
-          cluster_by: [String.t()]
+          cluster_by: [String.t()],
+          with_schema_evolution: boolean()
         }
 
   @exec_opt_keys [
@@ -226,6 +228,25 @@ defmodule SparkEx.Writer do
   def cluster_by(%__MODULE__{}, columns) do
     raise ArgumentError,
           "cluster_by expects a list of column names, got: #{inspect(columns)}"
+  end
+
+  @doc """
+  Enables or disables schema evolution for this write.
+
+  This Spark 4.2 additive flag can be silently ignored by older servers.
+  Enabling it is an explicit assertion by the caller that the server and data
+  source provider support schema evolution. Unsupported operations, including
+  V1 writes, are rejected by a compatible server.
+  """
+  @spec with_schema_evolution(t(), boolean()) :: t()
+  def with_schema_evolution(writer, enabled \\ true)
+
+  def with_schema_evolution(%__MODULE__{} = writer, enabled) when is_boolean(enabled) do
+    %{writer | with_schema_evolution: enabled}
+  end
+
+  def with_schema_evolution(%__MODULE__{}, enabled) do
+    raise ArgumentError, "with_schema_evolution expects a boolean, got: #{inspect(enabled)}"
   end
 
   @doc """
@@ -522,7 +543,8 @@ defmodule SparkEx.Writer do
       sort_by: writer.sort_by,
       partition_by: writer.partition_by,
       bucket_by: writer.bucket_by,
-      cluster_by: writer.cluster_by
+      cluster_by: writer.cluster_by,
+      with_schema_evolution: writer.with_schema_evolution
     ]
 
     Keyword.merge(base, extra)

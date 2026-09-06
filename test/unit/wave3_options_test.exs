@@ -238,7 +238,8 @@ defmodule SparkEx.Unit.Wave3OptionsTest do
         |> StreamReader.schema("id LONG")
         |> StreamReader.load("/data/s", format: nil, schema: nil)
 
-      assert {:read_data_source_streaming, "json", ["/data/s"], "id LONG", %{}} = unwrap_plan(df)
+      assert {:read_data_source_streaming, "json", ["/data/s"], "id LONG", %{}, nil} =
+               unwrap_plan(df)
     end
 
     test "call-time non-nil values still override" do

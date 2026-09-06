@@ -75,6 +75,7 @@ defmodule SparkEx.Connect.CommandEncoder do
     partitioning_columns = Keyword.get(write_opts, :partition_by, [])
     clustering_columns = Keyword.get(write_opts, :cluster_by, [])
     bucket_by = encode_bucket_by(write_opts)
+    with_schema_evolution = Keyword.get(write_opts, :with_schema_evolution, false)
 
     write_op = %WriteOperation{
       input: relation,
@@ -84,7 +85,8 @@ defmodule SparkEx.Connect.CommandEncoder do
       partitioning_columns: partitioning_columns,
       bucket_by: bucket_by,
       options: options,
-      clustering_columns: clustering_columns
+      clustering_columns: clustering_columns,
+      with_schema_evolution: with_schema_evolution
     }
 
     write_op = apply_save_type(write_op, save_type)
@@ -103,6 +105,7 @@ defmodule SparkEx.Connect.CommandEncoder do
     options = v2_opts |> Keyword.get(:options, %{}) |> stringify_options()
     table_properties = v2_opts |> Keyword.get(:table_properties, %{}) |> stringify_options()
     clustering_columns = Keyword.get(v2_opts, :cluster_by, [])
+    with_schema_evolution = Keyword.get(v2_opts, :with_schema_evolution, false)
 
     # Command-level expressions are NOT routed through `rewrite_plan/4` —
     # they don't belong to the plan tree. With stable plan_ids assigned at
@@ -139,7 +142,8 @@ defmodule SparkEx.Connect.CommandEncoder do
       table_properties: table_properties,
       mode: mode,
       overwrite_condition: overwrite_condition,
-      clustering_columns: clustering_columns
+      clustering_columns: clustering_columns,
+      with_schema_evolution: with_schema_evolution
     }
 
     command = %Command{command_type: {:write_operation_v2, write_v2}}
@@ -551,6 +555,11 @@ defmodule SparkEx.Connect.CommandEncoder do
   defp apply_trigger(proto, {:continuous, interval}) do
     validate_trigger_interval!(:continuous, interval)
     %{proto | trigger: {:continuous_checkpoint_interval, interval}}
+  end
+
+  defp apply_trigger(proto, {:real_time, duration}) do
+    validate_trigger_interval!(:real_time, duration)
+    %{proto | trigger: {:real_time_batch_duration, duration}}
   end
 
   defp validate_trigger_interval!(kind, interval)

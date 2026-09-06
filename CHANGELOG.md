@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Spark 4.2 P1 APIs and fixes
+
+- Add grouping ordinals, nested numeric aggregation names, `zip_with_index`,
+  and `empty_dataframe`; preserve explicit column origins and lazy names.
+- Read JSON/CSV/XML from DataFrames with concrete typed schemas and full DDL
+  normalization; preserve reader options, metadata, and session ownership.
+- Add catalog DDL/query helpers with SQL compatibility defaults and an explicit
+  native Spark 4.2 backend.
+- Add CDC readers, named streaming sources, real-time triggers, and writer
+  schema-evolution flags with documented server/provider requirements.
+- Add experimental operation statuses outside the blocking session mailbox,
+  preserving extensions, unknown states, retries, and session integrity.
+- Serialize cached local relations incrementally, retaining only bounded upload
+  batches and hashes. Choose caching using native DataFrame size rather than
+  materializing a full IPC payload first; count every chunk toward size limits.
+- Cover lifecycle isolation, observed self-joins, Arrow field metadata, empty
+  grouping sets, feature flags, and aggregate NULL treatment.
+
 ### Spark 4.2 foundation
 
 - Refresh Spark Connect protobufs to v4.2.0 (source commit recorded in
@@ -21,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counting schema bytes and repeated chunks. Explicit cache options no longer
   bypass the server configuration. Older servers without the limit retain their
   existing behavior. Failed config lookups block cached uploads until the limit
-  can be read. Chunk materialization remains eager in this first phase.
+  can be read. Later P1 work makes chunk serialization incremental.
 - Extend CI to Elixir 1.20 / OTP 29 and Spark 4.2, including 4.2 test exclusions
   on older servers; pin the PySpark function inventory so parity also runs in
   clean CI checkouts, with no missing-function allowance.

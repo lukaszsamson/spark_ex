@@ -15,6 +15,9 @@ server APIs are added incrementally. Newly added SQL functions require the
 server version that implements them (most require Spark 4.2; KLL merge
 aggregates are available in Spark 4.1.2).
 
+See [Spark 4.2 APIs and compatibility](docs/spark_42.md) for grouping ordinals,
+DataFrame readers, catalog operations, CDC, streaming/write flags, and operation status.
+
 ## Features
 
 - **Lazy DataFrame API** &mdash; select, filter, join, group, window, set ops,
