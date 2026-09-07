@@ -224,6 +224,10 @@ defmodule SparkEx.Unit.ReleaseDrainTest do
 
       custom = SparkEx.Session.child_spec(url: "sc://127.0.0.1:1", release_drain_timeout_ms: 300)
       assert custom.shutdown == 300 + 10_000 + 1_000
+
+      assert_raise ArgumentError, ~r/release_drain_timeout_ms/, fn ->
+        SparkEx.Session.child_spec(url: "sc://127.0.0.1:1", release_drain_timeout_ms: -1)
+      end
     end
 
     test "a hanging release does not block stop past the drain timeout", %{port: port} do

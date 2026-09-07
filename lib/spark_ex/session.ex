@@ -2241,18 +2241,9 @@ defmodule SparkEx.Session do
   # ReleaseSession and `cleanup_session_resources/1`, so size the shutdown to
   # the configured drain plus the fixed release budget.
   def child_spec(opts) do
-    drain_ms =
-      case Keyword.get(opts, :release_drain_timeout_ms) do
-        ms when is_integer(ms) and ms >= 0 ->
-          ms
-
-        _ ->
-          Application.get_env(
-            :spark_ex,
-            :release_drain_timeout_ms,
-            @default_release_drain_timeout_ms
-          )
-      end
+    # Same validation as `start_link/1`, so an invalid value fails here with
+    # the same ArgumentError instead of surfacing later or as a badarith.
+    drain_ms = normalize_release_drain_timeout_opt(opts)
 
     %{
       id: __MODULE__,

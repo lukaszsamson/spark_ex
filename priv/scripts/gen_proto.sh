@@ -23,7 +23,7 @@ echo "Generating Elixir protobuf modules..."
 # protoc-gen-elixir >= 0.17 nests its output under the package module path
 # ("spark/connect") on top of the .proto path, so generate into a staging
 # directory and keep the historical lib/spark_ex/proto/spark/connect layout.
-STAGING_DIR="$(mktemp -d)"
+STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/spark_ex_gen_proto.XXXXXX")"
 trap 'rm -rf "$STAGING_DIR"' EXIT
 
 protoc \
