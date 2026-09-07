@@ -147,3 +147,40 @@ Artifact helpers continue to accept native filesystem paths, with literal
 spaces and percent characters. They do not decode `file://` URIs or expand
 Windows drive/UNC paths using POSIX rules; native path interpretation belongs
 to the host filesystem.
+
+## Plan completion and acceptance evidence
+
+The A–S implementation plan is complete for its selected Spark Connect scope.
+The final pass adds acceptance tests where earlier coverage proved encoding or
+negative behavior but did not exercise the intended server path:
+
+- `spark42_real_time_test.exs` uses a finite source that rejects ordinary
+  micro-batch execution, the console sink, and Update output mode.
+- `spark42_pending_operation_test.exs` holds real server executions Pending
+  before starting a runner, then verifies both interrupt APIs, cancelled status,
+  resource removal, and continued session use.
+- Observation reuse and release-isolation tests cover already observed
+  self-joins/unions, early iterator termination, and independent sessions.
+  Reused observed relations require Spark 4.1+ because the server fix
+  [SPARK-53908](https://github.com/apache/spark/commit/eb117a642bcd217b81f6ac4980f2030fcf17d46b)
+  preserves the registered observation instance across repeated plan traversal.
+  Spark 4.0 sends empty metric keys and values for these self-joins/unions,
+  including with its plan cache disabled; SparkEx cannot recover omitted values.
+  Ordinary observations and session isolation remain covered on Spark 4.0.
+- Function and error regressions verify bucket origins/boundaries, top-K edge
+  cases, and exact final-release Parse error classes, SQLSTATE, and parameters.
+- A local gRPC echo verifies the URI/channel/HTTP2 binary-metadata path.
+
+The pinned server setup is documented in
+[`test/support/spark42/README.md`](../test/support/spark42/README.md). Fixture
+classes are test-only; real-time, CDC, and schema-evolution support still depends
+on the caller's production server and provider. The earlier bounded-upload
+regression measures retained binary memory, not just RPC batch size. Compression
+maximum-plan-size rejection has a dedicated low-limit-server test script in
+`test/support/plan_compression_limit.exs`.
+
+The plan's exclusions remain intentional: Python workers/UDFs, pandas/NumPy,
+classic/RDD and ML APIs, and public declarative-pipeline/AutoCDC builders.
+Pipeline protobuf schemas are current; a public pipeline API remains a separate
+product design. Caller-stack metadata is available to server instrumentation;
+stock Spark does not log that extension automatically.

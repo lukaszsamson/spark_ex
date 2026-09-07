@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Spark 4.2 acceptance coverage
+
+- Verify supported real-time streaming and deterministic Pending-operation
+  cancellation through isolated server fixtures enabled in Spark 4.2 CI.
+- Cover observed-relation reuse, cross-session release isolation, actual gRPC
+  binary metadata transport, exact Parse errors, and time-bucket/top-K edge cases.
+
 ### Spark 4.2 P2 APIs and diagnostics
 
 - Add nearest-by joins with per-left-row top-K ranking and seven SQL vector
