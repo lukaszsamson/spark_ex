@@ -34,6 +34,13 @@ defmodule SparkEx.Macros.FunctionGen do
   # resolves a caller keyword list against the registry defaults, keeping the
   # declared order and rejecting unknown keys.
   @spec resolve_default_opts!(atom(), keyword(), keyword()) :: [term()]
+  @doc false
+  def raise_mixed_opts!(name) do
+    raise ArgumentError,
+          "#{inspect(name)} options must be passed either positionally or as a single " <>
+            "keyword list, not both"
+  end
+
   def resolve_default_opts!(name, opts, defaults) do
     unless opts == [] or Keyword.keyword?(opts) do
       raise ArgumentError,
@@ -481,6 +488,10 @@ defmodule SparkEx.Macros.FunctionGen do
         %Column{expr: {:fn, unquote(spark_name), args, unquote(is_distinct)}}
       end
 
+      def unquote(name)(_col, _first, opts) when is_list(opts) do
+        SparkEx.Macros.FunctionGen.raise_mixed_opts!(unquote(name))
+      end
+
       def unquote(name)(col, first, second) do
         [{_, default_first}, {_, default_second}] = unquote(escaped_defaults)
 
@@ -521,6 +532,10 @@ defmodule SparkEx.Macros.FunctionGen do
         args = [to_expr(col1), to_expr(col2) | Enum.map(values, &lit_expr/1)]
 
         %Column{expr: {:fn, unquote(spark_name), args, unquote(is_distinct)}}
+      end
+
+      def unquote(name)(_col1, _col2, _first, opts) when is_list(opts) do
+        SparkEx.Macros.FunctionGen.raise_mixed_opts!(unquote(name))
       end
 
       def unquote(name)(col1, col2, first, second) do

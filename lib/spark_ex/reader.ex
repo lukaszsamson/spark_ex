@@ -239,8 +239,14 @@ defmodule SparkEx.Reader do
       df = SparkEx.Reader.parquet(session, "/data/events.parquet")
       df = SparkEx.Reader.parquet(session, ["/data/part1.parquet", "/data/part2.parquet"])
   """
-  @spec parquet(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
-  def parquet(session, paths, opts \\ []) do
+  @spec parquet(GenServer.server() | t(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def parquet(session, paths, opts \\ [])
+
+  def parquet(%__MODULE__{} = reader, paths, opts) when not is_struct(paths, DataFrame) do
+    load_from_builder_as(reader, "parquet", paths, opts)
+  end
+
+  def parquet(session, paths, opts) do
     data_source(session, "parquet", paths, opts)
   end
 
@@ -334,8 +340,14 @@ defmodule SparkEx.Reader do
 
       df = SparkEx.Reader.text(session, "/data/lines.txt")
   """
-  @spec text(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
-  def text(session, paths, opts \\ []) do
+  @spec text(GenServer.server() | t(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def text(session, paths, opts \\ [])
+
+  def text(%__MODULE__{} = reader, paths, opts) when not is_struct(paths, DataFrame) do
+    load_from_builder_as(reader, "text", paths, opts)
+  end
+
+  def text(session, paths, opts) do
     data_source(session, "text", paths, opts)
   end
 
@@ -351,8 +363,14 @@ defmodule SparkEx.Reader do
 
       df = SparkEx.Reader.orc(session, "/data/events.orc")
   """
-  @spec orc(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
-  def orc(session, paths, opts \\ []) do
+  @spec orc(GenServer.server() | t(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def orc(session, paths, opts \\ [])
+
+  def orc(%__MODULE__{} = reader, paths, opts) when not is_struct(paths, DataFrame) do
+    load_from_builder_as(reader, "orc", paths, opts)
+  end
+
+  def orc(session, paths, opts) do
     data_source(session, "orc", paths, opts)
   end
 
@@ -364,8 +382,14 @@ defmodule SparkEx.Reader do
   - `:schema` — optional schema string
   - `:options` — map of Avro reader options
   """
-  @spec avro(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
-  def avro(session, paths, opts \\ []) do
+  @spec avro(GenServer.server() | t(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def avro(session, paths, opts \\ [])
+
+  def avro(%__MODULE__{} = reader, paths, opts) when not is_struct(paths, DataFrame) do
+    load_from_builder_as(reader, "avro", paths, opts)
+  end
+
+  def avro(session, paths, opts) do
     data_source(session, "avro", paths, opts)
   end
 

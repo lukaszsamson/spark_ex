@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tuple_union_*`, `tuple_union_theta_*`) accept keyword options
   (`lg_nom_entries:`, `mode:`) in addition to the positional form; previously a
   keyword list was encoded as a literal and failed at plan-encoding time.
-  Unknown keys raise `ArgumentError`.
+  Unknown keys, or mixing positional and keyword options, raise `ArgumentError`.
 - `Reader.csv/3`, `Reader.json/3` and `Reader.xml/3` accept a `%SparkEx.Reader{}`
   builder with a path (or list of paths), honouring the builder's schema and
   options; this call shape previously crashed with `FunctionClauseError`.
@@ -28,13 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching PySpark) before sending ReleaseSession, so the server does not keep
   orphaned executions. Other sessions' releases are never awaited. A
   `[:spark_ex, :session, :release_drain, :timeout]` telemetry event fires on
-  timeout.
+  timeout. The same drain runs on the explicit `Session.release/1`. As a
+  consequence `stop/1` may block for up to drain + 10 s on an unresponsive
+  server, and `SparkEx.Session.child_spec/1` now sizes the supervisor
+  `shutdown` to that budget instead of the 5 s GenServer default.
 - Shutdown against an unreachable or unresponsive server is covered by tests:
   `stop/1`, supervised shutdown and `Process.exit(:shutdown)` complete within
   the existing bounded timeouts; connecting to a closed port fails fast.
 - Streaming CDC (`StreamReader.changes/2`) is covered live against the seeded
   changelog fixture in Spark 4.2 CI, alongside the batch variant.
-- Dependencies: `protobuf` bumped to 0.17 (fixes GHSA-rv48-qqj5-crxg); the
+- Dependencies: `protobuf` requirement raised to `~> 0.16.1 or ~> 0.17` and the
+  lock moved to 0.17.0 (GHSA-rv48-qqj5-crxg is fixed from 0.16.1); the
   generated protos are regenerated with the matching plugin, with no message or
   field changes. `priv/scripts/gen_proto.sh` keeps the historical output layout.
 - README developer instructions target Spark 4.2.0 and point to the provider

@@ -108,7 +108,10 @@ defmodule SparkEx.Unit.SessionShutdownTest do
         :timer.tc(fn -> SparkEx.connect(url: "sc://127.0.0.1:#{port}") end, :millisecond)
 
       assert {:error, reason} = result
-      assert reason in [:timeout, :econnrefused] or match?({:error, _}, reason)
+
+      assert reason in [:timeout, :econnrefused, :closed],
+             "expected a fail-fast connect error, got: #{inspect(reason)}"
+
       assert elapsed < @stop_bound_ms
     after
       Process.flag(:trap_exit, false)

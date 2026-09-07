@@ -240,4 +240,33 @@ defmodule SparkEx.ReaderTest do
               %{"multiLine" => "true", "mode" => "PERMISSIVE"}} = unwrap_plan(df)
     end
   end
+
+  describe "builder + path for parquet/text/orc/avro" do
+    test "routes a %Reader{} with a path through the builder and pins the format" do
+      for {fun, format} <- [
+            {&Reader.parquet/3, "parquet"},
+            {&Reader.text/3, "text"},
+            {&Reader.orc/3, "orc"},
+            {&Reader.avro/3, "avro"}
+          ] do
+        df =
+          self()
+          |> SparkEx.read()
+          |> Reader.format("csv")
+          |> Reader.schema("id INT")
+          |> Reader.option("mode", "PERMISSIVE")
+          |> fun.("/data/in", options: %{"mode" => "FAILFAST"})
+
+        assert {:read_data_source, ^format, ["/data/in"], "id INT", %{"mode" => "FAILFAST"}} =
+                 unwrap_plan(df)
+
+        assert df.session == self()
+      end
+    end
+
+    test "accepts a list of paths from a builder" do
+      df = self() |> SparkEx.read() |> Reader.parquet(["/a", "/b"])
+      assert {:read_data_source, "parquet", ["/a", "/b"], nil, %{}} = unwrap_plan(df)
+    end
+  end
 end

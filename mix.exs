@@ -37,7 +37,7 @@ defmodule SparkEx.MixProject do
     [
       # gRPC client + protobuf
       {:grpc, "~> 0.9"},
-      {:protobuf, "~> 0.17"},
+      {:protobuf, "~> 0.16.1 or ~> 0.17"},
 
       # Utilities
       {:decimal, "~> 1.0 or ~> 2.0"},

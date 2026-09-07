@@ -191,6 +191,41 @@ defmodule SparkEx.Unit.ReleaseDrainTest do
              ]
     end
 
+    test "explicit Session.release/1 also drains pending releases first", %{port: port} do
+      {:ok, session} = SparkEx.connect(url: "sc://127.0.0.1:#{port}")
+      session_id = SparkEx.Session.get_state(session).session_id
+
+      attach_release_session_telemetry(session_id)
+      parent = self()
+
+      {:ok, _pid} =
+        ReleaseTracker.start_tracked(session_id, fn ->
+          Process.sleep(200)
+          send(parent, :release_execute_done)
+          :ok
+        end)
+
+      # The ReleaseSession RPC itself hangs against the black hole, so run the
+      # call off-test and only observe the ordering of the two events.
+      spawn(fn -> catch_exit(SparkEx.Session.release(session)) end)
+
+      assert receive_order(session_id, 2) == [
+               :release_execute_done,
+               {:release_session_rpc, session_id}
+             ]
+
+      :ok = SparkEx.Session.stop(session)
+    end
+
+    test "child_spec sizes the supervisor shutdown to the drain budget" do
+      default = SparkEx.Session.child_spec(url: "sc://127.0.0.1:1")
+      assert default.shutdown > 10_000
+      assert default.restart == :temporary
+
+      custom = SparkEx.Session.child_spec(url: "sc://127.0.0.1:1", release_drain_timeout_ms: 300)
+      assert custom.shutdown == 300 + 10_000 + 1_000
+    end
+
     test "a hanging release does not block stop past the drain timeout", %{port: port} do
       {:ok, session} =
         SparkEx.connect(url: "sc://127.0.0.1:#{port}", release_drain_timeout_ms: 300)

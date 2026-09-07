@@ -213,4 +213,18 @@ defmodule SparkEx.Unit.Spark42FunctionsTest do
       assert %Column{expr: {:fn, _, [{:col, "vector"}], false}} = apply(F, name, ["vector"])
     end
   end
+
+  test "tuple sketch wrappers reject mixing positional and keyword options" do
+    assert_raise ArgumentError,
+                 ~r/must be passed either positionally or as a single keyword/,
+                 fn ->
+                   F.tuple_union_agg_double("s", 20, mode: "max")
+                 end
+
+    assert_raise ArgumentError,
+                 ~r/must be passed either positionally or as a single keyword/,
+                 fn ->
+                   F.tuple_union_double("l", "r", 20, mode: "max")
+                 end
+  end
 end

@@ -1266,6 +1266,9 @@ defmodule SparkEx.Session do
       {:reply, :ok, state}
     else
       SparkEx.Internal.SessionSnapshot.delete(self())
+      # Same ordering guarantee as `terminate/2`: this session's in-flight
+      # ReleaseExecute tasks must reach the server before ReleaseSession.
+      drain_pending_releases(state)
 
       case Client.release_session(state) do
         {:ok, server_side_session_id} ->
@@ -2233,6 +2236,34 @@ defmodule SparkEx.Session do
   end
 
   @impl true
+  # `terminate/2` can legitimately take up to release-drain (default 10s) +
+  # ReleaseSession yield (5s) + task shutdown grace (5s). The default GenServer
+  # child shutdown of 5s would brutal-kill the session mid-drain, skipping
+  # ReleaseSession and `cleanup_session_resources/1`, so size the shutdown to
+  # the configured drain plus the fixed release budget.
+  def child_spec(opts) do
+    drain_ms =
+      case Keyword.get(opts, :release_drain_timeout_ms) do
+        ms when is_integer(ms) and ms >= 0 ->
+          ms
+
+        _ ->
+          Application.get_env(
+            :spark_ex,
+            :release_drain_timeout_ms,
+            @default_release_drain_timeout_ms
+          )
+      end
+
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      shutdown: drain_ms + 10_000 + 1_000,
+      restart: :temporary,
+      type: :worker
+    }
+  end
+
   def terminate(_reason, %{released: true} = state) do
     cleanup_session_resources(state)
     :ok
