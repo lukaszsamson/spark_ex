@@ -29,6 +29,32 @@ defmodule SparkEx.Macros.FunctionGen do
     List.flatten(funcs)
   end
 
+  @doc false
+  # Runtime helper for `{:one_col_defaults, _}` / `{:two_col_defaults, _}` wrappers:
+  # resolves a caller keyword list against the registry defaults, keeping the
+  # declared order and rejecting unknown keys.
+  @spec resolve_default_opts!(atom(), keyword(), keyword()) :: [term()]
+  def resolve_default_opts!(name, opts, defaults) do
+    unless opts == [] or Keyword.keyword?(opts) do
+      raise ArgumentError,
+            "expected #{inspect(name)} options to be a keyword list, got: #{inspect(opts)}"
+    end
+
+    known = Keyword.keys(defaults)
+
+    case Keyword.keys(opts) -- known do
+      [] ->
+        :ok
+
+      unknown ->
+        raise ArgumentError,
+              "unknown #{inspect(name)} options: #{inspect(unknown)}; " <>
+                "expected any of #{inspect(known)}"
+    end
+
+    Enum.map(defaults, fn {key, default} -> Keyword.get(opts, key, default) end)
+  end
+
   # --- Validation ---
 
   defp validate_no_duplicates!(entries) do
@@ -438,9 +464,24 @@ defmodule SparkEx.Macros.FunctionGen do
     quote do
       @doc unquote(doc)
       @spec unquote(name)(Column.t() | String.t()) :: Column.t()
-      @spec unquote(name)(Column.t() | String.t(), term()) :: Column.t()
+      @spec unquote(name)(Column.t() | String.t(), term() | keyword()) :: Column.t()
       @spec unquote(name)(Column.t() | String.t(), term(), term()) :: Column.t()
-      def unquote(name)(col, first \\ nil, second \\ nil) do
+      def unquote(name)(col, first \\ nil, second \\ nil)
+
+      def unquote(name)(col, opts, nil) when is_list(opts) do
+        values =
+          SparkEx.Macros.FunctionGen.resolve_default_opts!(
+            unquote(name),
+            opts,
+            unquote(escaped_defaults)
+          )
+
+        args = [to_expr(col) | Enum.map(values, &lit_expr/1)]
+
+        %Column{expr: {:fn, unquote(spark_name), args, unquote(is_distinct)}}
+      end
+
+      def unquote(name)(col, first, second) do
         [{_, default_first}, {_, default_second}] = unquote(escaped_defaults)
 
         args = [
@@ -467,7 +508,22 @@ defmodule SparkEx.Macros.FunctionGen do
               term(),
               term()
             ) :: Column.t()
-      def unquote(name)(col1, col2, first \\ nil, second \\ nil) do
+      def unquote(name)(col1, col2, first \\ nil, second \\ nil)
+
+      def unquote(name)(col1, col2, opts, nil) when is_list(opts) do
+        values =
+          SparkEx.Macros.FunctionGen.resolve_default_opts!(
+            unquote(name),
+            opts,
+            unquote(escaped_defaults)
+          )
+
+        args = [to_expr(col1), to_expr(col2) | Enum.map(values, &lit_expr/1)]
+
+        %Column{expr: {:fn, unquote(spark_name), args, unquote(is_distinct)}}
+      end
+
+      def unquote(name)(col1, col2, first, second) do
         [{_, default_first}, {_, default_second}] = unquote(escaped_defaults)
 
         args = [
