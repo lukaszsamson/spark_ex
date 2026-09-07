@@ -79,6 +79,10 @@ defmodule SparkEx.Integration.ObservationCollectionGapsTest do
   end
 
   describe "observations on reused relations" do
+    # SPARK-53908 (Spark 4.1) reuses the server Observation instance for a
+    # repeated (name, plan_id). Spark 4.0 sends empty keys/values for these
+    # reused relations even with its plan cache disabled.
+    @tag min_spark: "4.1"
     test "self-join preserves observation metrics", %{session: session} do
       obs = Observation.new("self_join_obs_#{System.unique_integer([:positive])}")
 
@@ -93,6 +97,7 @@ defmodule SparkEx.Integration.ObservationCollectionGapsTest do
       assert Observation.get(obs)["rows"] == 3
     end
 
+    @tag min_spark: "4.1"
     test "union of a reused observed relation preserves registration", %{session: session} do
       obs = Observation.new("union_obs_#{System.unique_integer([:positive])}")
 

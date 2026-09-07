@@ -161,6 +161,12 @@ negative behavior but did not exercise the intended server path:
   resource removal, and continued session use.
 - Observation reuse and release-isolation tests cover already observed
   self-joins/unions, early iterator termination, and independent sessions.
+  Reused observed relations require Spark 4.1+ because the server fix
+  [SPARK-53908](https://github.com/apache/spark/commit/eb117a642bcd217b81f6ac4980f2030fcf17d46b)
+  preserves the registered observation instance across repeated plan traversal.
+  Spark 4.0 sends empty metric keys and values for these self-joins/unions,
+  including with its plan cache disabled; SparkEx cannot recover omitted values.
+  Ordinary observations and session isolation remain covered on Spark 4.0.
 - Function and error regressions verify bucket origins/boundaries, top-K edge
   cases, and exact final-release Parse error classes, SQLSTATE, and parameters.
 - A local gRPC echo verifies the URI/channel/HTTP2 binary-metadata path.
