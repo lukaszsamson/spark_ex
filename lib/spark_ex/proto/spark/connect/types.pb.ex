@@ -3,7 +3,7 @@ defmodule Spark.Connect.DataType.Boolean do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Boolean",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -14,7 +14,7 @@ defmodule Spark.Connect.DataType.Byte do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Byte",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -25,7 +25,7 @@ defmodule Spark.Connect.DataType.Short do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Short",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -36,7 +36,7 @@ defmodule Spark.Connect.DataType.Integer do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Integer",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -47,7 +47,7 @@ defmodule Spark.Connect.DataType.Long do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Long",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -58,7 +58,7 @@ defmodule Spark.Connect.DataType.Float do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Float",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -69,7 +69,7 @@ defmodule Spark.Connect.DataType.Double do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Double",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -80,7 +80,7 @@ defmodule Spark.Connect.DataType.String do
 
   use Protobuf,
     full_name: "spark.connect.DataType.String",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -92,7 +92,7 @@ defmodule Spark.Connect.DataType.Binary do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Binary",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -103,7 +103,7 @@ defmodule Spark.Connect.DataType.NULL do
 
   use Protobuf,
     full_name: "spark.connect.DataType.NULL",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -114,7 +114,7 @@ defmodule Spark.Connect.DataType.Timestamp do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Timestamp",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -125,7 +125,7 @@ defmodule Spark.Connect.DataType.Date do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Date",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -136,7 +136,7 @@ defmodule Spark.Connect.DataType.TimestampNTZ do
 
   use Protobuf,
     full_name: "spark.connect.DataType.TimestampNTZ",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -147,7 +147,7 @@ defmodule Spark.Connect.DataType.Time do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Time",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:precision, 1, proto3_optional: true, type: :int32)
@@ -159,7 +159,7 @@ defmodule Spark.Connect.DataType.CalendarInterval do
 
   use Protobuf,
     full_name: "spark.connect.DataType.CalendarInterval",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -170,7 +170,7 @@ defmodule Spark.Connect.DataType.YearMonthInterval do
 
   use Protobuf,
     full_name: "spark.connect.DataType.YearMonthInterval",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:start_field, 1, proto3_optional: true, type: :int32, json_name: "startField")
@@ -183,7 +183,7 @@ defmodule Spark.Connect.DataType.DayTimeInterval do
 
   use Protobuf,
     full_name: "spark.connect.DataType.DayTimeInterval",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:start_field, 1, proto3_optional: true, type: :int32, json_name: "startField")
@@ -196,7 +196,7 @@ defmodule Spark.Connect.DataType.Char do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Char",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:length, 1, type: :int32)
@@ -208,7 +208,7 @@ defmodule Spark.Connect.DataType.VarChar do
 
   use Protobuf,
     full_name: "spark.connect.DataType.VarChar",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:length, 1, type: :int32)
@@ -220,7 +220,7 @@ defmodule Spark.Connect.DataType.Decimal do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Decimal",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:scale, 1, proto3_optional: true, type: :int32)
@@ -233,7 +233,7 @@ defmodule Spark.Connect.DataType.StructField do
 
   use Protobuf,
     full_name: "spark.connect.DataType.StructField",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:name, 1, type: :string)
@@ -247,7 +247,7 @@ defmodule Spark.Connect.DataType.Struct do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Struct",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:fields, 1, repeated: true, type: Spark.Connect.DataType.StructField)
@@ -259,7 +259,7 @@ defmodule Spark.Connect.DataType.Array do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Array",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:element_type, 1, type: Spark.Connect.DataType, json_name: "elementType")
@@ -272,7 +272,7 @@ defmodule Spark.Connect.DataType.Map do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Map",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key_type, 1, type: Spark.Connect.DataType, json_name: "keyType")
@@ -286,7 +286,7 @@ defmodule Spark.Connect.DataType.Geometry do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Geometry",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:srid, 1, type: :int32)
@@ -298,7 +298,7 @@ defmodule Spark.Connect.DataType.Geography do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Geography",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:srid, 1, type: :int32)
@@ -310,7 +310,7 @@ defmodule Spark.Connect.DataType.Variant do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Variant",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type_variation_reference, 1, type: :uint32, json_name: "typeVariationReference")
@@ -321,7 +321,7 @@ defmodule Spark.Connect.DataType.UDT do
 
   use Protobuf,
     full_name: "spark.connect.DataType.UDT",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:type, 1, type: :string)
@@ -342,7 +342,7 @@ defmodule Spark.Connect.DataType.Unparsed do
 
   use Protobuf,
     full_name: "spark.connect.DataType.Unparsed",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:data_type_string, 1, type: :string, json_name: "dataTypeString")
@@ -353,7 +353,7 @@ defmodule Spark.Connect.DataType do
 
   use Protobuf,
     full_name: "spark.connect.DataType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:kind, 0)

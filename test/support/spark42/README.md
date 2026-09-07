@@ -34,6 +34,15 @@ SPARK_REMOTE=sc://localhost:15004 SPARK_EX_TEST_PROVIDERS=1 \
     test/integration/spark42_pending_operation_test.exs
 ```
 
+`Spark42SeededChangelogCatalog` extends Spark's `InMemoryChangelogCatalog` and
+seeds a deterministic four-row history the moment a table named `p1_cdc` is
+created: `insert` at version 1, `update_before`/`update_after` at version 2, and
+`delete` at version 3, all for `id = 1` (`data` moving from `old` to `new`).
+Inherited `InMemoryTableWithChangelog` support means the same history is
+readable both as a bounded batch scan and as a streaming change scan through
+`InMemoryChangelogMicroBatchStream`, so no fixture change is needed to cover
+`StreamReader.changes/2`.
+
 The real-time source is a finite three-row test provider implementing Spark's
 `SupportsRealTimeMode` and `SupportsRealTimeRead` contracts. It rejects ordinary
 micro-batch planning and uses the supported console sink with Update output

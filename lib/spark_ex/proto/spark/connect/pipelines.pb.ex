@@ -4,7 +4,7 @@ defmodule Spark.Connect.OutputType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.OutputType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:OUTPUT_TYPE_UNSPECIFIED, 0)
@@ -20,7 +20,7 @@ defmodule Spark.Connect.PipelineCommand.DefineFlow.SCDType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.PipelineCommand.DefineFlow.SCDType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:SCD_TYPE_UNSPECIFIED, 0)
@@ -33,7 +33,7 @@ defmodule Spark.Connect.PipelineCommand.CreateDataflowGraph.SqlConfEntry do
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.CreateDataflowGraph.SqlConfEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -45,7 +45,7 @@ defmodule Spark.Connect.PipelineCommand.CreateDataflowGraph do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.CreateDataflowGraph",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:default_catalog, 1, proto3_optional: true, type: :string, json_name: "defaultCatalog")
@@ -64,7 +64,7 @@ defmodule Spark.Connect.PipelineCommand.DropDataflowGraph do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DropDataflowGraph",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:dataflow_graph_id, 1, proto3_optional: true, type: :string, json_name: "dataflowGraphId")
@@ -76,7 +76,7 @@ defmodule Spark.Connect.PipelineCommand.DefineOutput.TableDetails.TablePropertie
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineOutput.TableDetails.TablePropertiesEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -88,7 +88,7 @@ defmodule Spark.Connect.PipelineCommand.DefineOutput.TableDetails do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineOutput.TableDetails",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:schema, 0)
@@ -113,7 +113,7 @@ defmodule Spark.Connect.PipelineCommand.DefineOutput.SinkDetails.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineOutput.SinkDetails.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -125,7 +125,7 @@ defmodule Spark.Connect.PipelineCommand.DefineOutput.SinkDetails do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineOutput.SinkDetails",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:options, 1,
@@ -142,7 +142,7 @@ defmodule Spark.Connect.PipelineCommand.DefineOutput do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineOutput",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:details, 0)
@@ -186,7 +186,7 @@ defmodule Spark.Connect.PipelineCommand.DefineFlow.SqlConfEntry do
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineFlow.SqlConfEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -198,7 +198,7 @@ defmodule Spark.Connect.PipelineCommand.DefineFlow.WriteRelationFlowDetails do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineFlow.WriteRelationFlowDetails",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:relation, 1, proto3_optional: true, type: Spark.Connect.Relation)
@@ -209,7 +209,7 @@ defmodule Spark.Connect.PipelineCommand.DefineFlow.AutoCdcFlowDetails do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineFlow.AutoCdcFlowDetails",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:source, 1, proto3_optional: true, type: :string)
@@ -265,7 +265,7 @@ defmodule Spark.Connect.PipelineCommand.DefineFlow.Response do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineFlow.Response",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:flow_name, 1, proto3_optional: true, type: :string, json_name: "flowName")
@@ -276,7 +276,7 @@ defmodule Spark.Connect.PipelineCommand.DefineFlow do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineFlow",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:details, 0)
@@ -326,7 +326,7 @@ defmodule Spark.Connect.PipelineCommand.ExecuteOutputFlows do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.ExecuteOutputFlows",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:define_output, 1,
@@ -351,7 +351,7 @@ defmodule Spark.Connect.PipelineCommand.StartRun do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.StartRun",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:dataflow_graph_id, 1, proto3_optional: true, type: :string, json_name: "dataflowGraphId")
@@ -373,7 +373,7 @@ defmodule Spark.Connect.PipelineCommand.DefineSqlGraphElements do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineSqlGraphElements",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:dataflow_graph_id, 1, proto3_optional: true, type: :string, json_name: "dataflowGraphId")
@@ -386,7 +386,7 @@ defmodule Spark.Connect.PipelineCommand.GetQueryFunctionExecutionSignalStream do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.GetQueryFunctionExecutionSignalStream",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:dataflow_graph_id, 1, proto3_optional: true, type: :string, json_name: "dataflowGraphId")
@@ -398,7 +398,7 @@ defmodule Spark.Connect.PipelineCommand.DefineFlowQueryFunctionResult do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand.DefineFlowQueryFunctionResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:flow_name, 1,
@@ -423,7 +423,7 @@ defmodule Spark.Connect.PipelineCommand do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:command_type, 0)
@@ -490,7 +490,7 @@ defmodule Spark.Connect.PipelineCommandResult.CreateDataflowGraphResult do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommandResult.CreateDataflowGraphResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:dataflow_graph_id, 1, proto3_optional: true, type: :string, json_name: "dataflowGraphId")
@@ -501,7 +501,7 @@ defmodule Spark.Connect.PipelineCommandResult.DefineOutputResult do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommandResult.DefineOutputResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:resolved_identifier, 1,
@@ -516,7 +516,7 @@ defmodule Spark.Connect.PipelineCommandResult.DefineFlowResult do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommandResult.DefineFlowResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:resolved_identifier, 1,
@@ -531,7 +531,7 @@ defmodule Spark.Connect.PipelineCommandResult do
 
   use Protobuf,
     full_name: "spark.connect.PipelineCommandResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:result_type, 0)
@@ -560,7 +560,7 @@ defmodule Spark.Connect.PipelineEventResult do
 
   use Protobuf,
     full_name: "spark.connect.PipelineEventResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:event, 1, type: Spark.Connect.PipelineEvent)
@@ -571,7 +571,7 @@ defmodule Spark.Connect.PipelineEvent do
 
   use Protobuf,
     full_name: "spark.connect.PipelineEvent",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:timestamp, 1, type: Google.Protobuf.Timestamp)
@@ -583,7 +583,7 @@ defmodule Spark.Connect.SourceCodeLocation do
 
   use Protobuf,
     full_name: "spark.connect.SourceCodeLocation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:file_name, 1, proto3_optional: true, type: :string, json_name: "fileName")
@@ -597,7 +597,7 @@ defmodule Spark.Connect.PipelineQueryFunctionExecutionSignal do
 
   use Protobuf,
     full_name: "spark.connect.PipelineQueryFunctionExecutionSignal",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:flow_names, 1, repeated: true, type: :string, json_name: "flowNames", deprecated: true)
@@ -614,7 +614,7 @@ defmodule Spark.Connect.PipelineAnalysisContext do
 
   use Protobuf,
     full_name: "spark.connect.PipelineAnalysisContext",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:dataflow_graph_id, 1, proto3_optional: true, type: :string, json_name: "dataflowGraphId")

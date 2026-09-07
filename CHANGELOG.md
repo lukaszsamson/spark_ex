@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Spark 4.2 follow-ups
+
+- Tuple-sketch wrappers with defaults (`tuple_sketch_agg_*`, `tuple_union_agg_*`,
+  `tuple_union_*`, `tuple_union_theta_*`) accept keyword options
+  (`lg_nom_entries:`, `mode:`) in addition to the positional form; previously a
+  keyword list was encoded as a literal and failed at plan-encoding time.
+  Unknown keys, or mixing positional and keyword options, raise `ArgumentError`.
+- `Reader.csv/3`, `Reader.json/3` and `Reader.xml/3` accept a `%SparkEx.Reader{}`
+  builder with a path (or list of paths), honouring the builder's schema and
+  options; this call shape previously crashed with `FunctionClauseError`.
+- Artifact paths are classified like PySpark (SPARK-55071): Windows drive paths
+  (`C:\x.jar`) and UNC paths are local paths, not URIs, and `file:` URIs
+  (percent-encoded, with or without the authority slash, Windows or POSIX
+  targets) resolve to the underlying file. POSIX paths and remote URIs are
+  unchanged. `SparkEx.Artifacts.classify_local_path/1` exposes the pure
+  classifier.
+- `Session.stop/1` / `terminate` drain this session's in-flight ReleaseExecute
+  tasks (bounded by the new `:release_drain_timeout_ms` option, default 10 s,
+  matching PySpark) before sending ReleaseSession, so the server does not keep
+  orphaned executions. Other sessions' releases are never awaited. A
+  `[:spark_ex, :session, :release_drain, :timeout]` telemetry event fires on
+  timeout. The same drain runs on the explicit `Session.release/1`. As a
+  consequence `stop/1` may block for up to drain + 10 s on an unresponsive
+  server, and `SparkEx.Session.child_spec/1` now sizes the supervisor
+  `shutdown` to that budget instead of the 5 s GenServer default.
+- Shutdown against an unreachable or unresponsive server is covered by tests:
+  `stop/1`, supervised shutdown and `Process.exit(:shutdown)` complete within
+  the existing bounded timeouts; connecting to a closed port fails fast.
+- Streaming CDC (`StreamReader.changes/2`) is covered live against the seeded
+  changelog fixture in Spark 4.2 CI, alongside the batch variant.
+- Dependencies: `protobuf` requirement raised to `~> 0.16.1 or ~> 0.17` and the
+  lock moved to 0.17.0 (GHSA-rv48-qqj5-crxg is fixed from 0.16.1); the
+  generated protos are regenerated with the matching plugin, with no message or
+  field changes. `priv/scripts/gen_proto.sh` keeps the historical output layout.
+- README developer instructions target Spark 4.2.0 and point to the provider
+  fixture server for CDC / real-time / pending-operation tests.
+
 ### Spark 4.2 acceptance coverage
 
 - Verify supported real-time streaming and deterministic Pending-operation

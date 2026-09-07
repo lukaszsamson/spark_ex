@@ -35,6 +35,7 @@ defmodule SparkEx.ManagedStream do
     release_fun = Keyword.fetch!(opts, :release_fun)
     release_timeout = Keyword.get(opts, :release_timeout, @default_release_timeout)
     closed_flag = Keyword.get_lazy(opts, :closed_flag, &new_closed_flag/0)
+    session_id = Keyword.get(opts, :session_id)
 
     # T-03: the controller must NOT be linked to the caller. The caller is
     # almost always the owner, and an abnormal owner exit would take a linked
@@ -48,7 +49,8 @@ defmodule SparkEx.ManagedStream do
              idle_timeout: idle_timeout,
              release_fun: release_fun,
              release_timeout: release_timeout,
-             closed_flag: closed_flag
+             closed_flag: closed_flag,
+             session_id: session_id
            ) do
       wrapped =
         Stream.transform(
@@ -120,6 +122,7 @@ defmodule SparkEx.ManagedStream.Controller do
     release_fun = Keyword.fetch!(opts, :release_fun)
     release_timeout = Keyword.get(opts, :release_timeout, 5_000)
     closed_flag = Keyword.get_lazy(opts, :closed_flag, &SparkEx.ManagedStream.new_closed_flag/0)
+    session_id = Keyword.get(opts, :session_id)
 
     owner_ref = Process.monitor(owner)
     timer_ref = arm_idle_timer(idle_timeout)
@@ -133,6 +136,7 @@ defmodule SparkEx.ManagedStream.Controller do
        release_fun: release_fun,
        release_timeout: release_timeout,
        closed_flag: closed_flag,
+       session_id: session_id,
        closed?: false
      }}
   end
@@ -175,16 +179,18 @@ defmodule SparkEx.ManagedStream.Controller do
     if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
     Process.demonitor(state.owner_ref, [:flush])
     :atomics.put(state.closed_flag, 1, 1)
-    start_async_release(state.release_fun, state.release_timeout)
+    start_async_release(state.session_id, state.release_fun, state.release_timeout)
 
     {:ok, %{state | closed?: true, timer_ref: nil}}
   end
 
-  defp start_async_release(release_fun, timeout_ms) do
+  defp start_async_release(session_id, release_fun, timeout_ms) do
     # T-19: during application shutdown the TaskSupervisor may already be
     # gone; start_child then exits with :noproc instead of returning an error
-    # tuple, which is what the helper normalises.
-    case SparkEx.Connect.Client.start_supervised_task(fn ->
+    # tuple, which is what the helper normalises. The task is tracked against
+    # the owning session so `SparkEx.Session.terminate/2` drains it before
+    # sending ReleaseSession.
+    case SparkEx.Internal.ReleaseTracker.start_tracked(session_id, fn ->
            run_release_fun(release_fun, timeout_ms)
          end) do
       {:ok, _pid} ->

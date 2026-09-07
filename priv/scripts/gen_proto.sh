@@ -16,14 +16,28 @@ fi
 
 # Clean previous generated files
 rm -rf "$OUTPUT_DIR"
-mkdir -p "$OUTPUT_DIR"
+mkdir -p "$OUTPUT_DIR/spark/connect"
 
 echo "Generating Elixir protobuf modules..."
 
+# protoc-gen-elixir >= 0.17 nests its output under the package module path
+# ("spark/connect") on top of the .proto path, so generate into a staging
+# directory and keep the historical lib/spark_ex/proto/spark/connect layout.
+STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/spark_ex_gen_proto.XXXXXX")"
+trap 'rm -rf "$STAGING_DIR"' EXIT
+
 protoc \
-  --elixir_out=plugins=grpc:"$OUTPUT_DIR" \
+  --elixir_out=plugins=grpc:"$STAGING_DIR" \
   --proto_path="$PROTO_SRC" \
   "$PROTO_SRC"/spark/connect/*.proto
+
+if [ -d "$STAGING_DIR/spark/connect/spark/connect" ]; then
+  GENERATED_DIR="$STAGING_DIR/spark/connect/spark/connect"
+else
+  GENERATED_DIR="$STAGING_DIR/spark/connect"
+fi
+
+cp "$GENERATED_DIR"/*.pb.ex "$OUTPUT_DIR/spark/connect/"
 
 echo "Generated Elixir protobuf modules in $OUTPUT_DIR"
 ls -la "$OUTPUT_DIR"/spark/connect/

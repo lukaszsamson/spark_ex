@@ -33,7 +33,8 @@ defmodule SparkEx.Session do
     retry_policies: nil,
     local_relation_configs: nil,
     plan_compression_enabled: false,
-    plan_compression: nil
+    plan_compression: nil,
+    release_drain_timeout_ms: 10_000
   ]
 
   # Server configs that drive `create_dataframe/3` (T-64), mirroring PySpark's
@@ -79,7 +80,8 @@ defmodule SparkEx.Session do
           closed: boolean(),
           local_relation_configs:
             %{atom() => non_neg_integer() | nil} | {:unavailable, integer()} | nil,
-          retry_policies: %{atom() => map()} | nil
+          retry_policies: %{atom() => map()} | nil,
+          release_drain_timeout_ms: non_neg_integer()
         }
 
   defp session_call(session, message, timeout \\ 5_000) do
@@ -105,6 +107,11 @@ defmodule SparkEx.Session do
   - `:session_id` — custom session UUID (default: auto-generated)
   - `:allow_arrow_batch_chunking` — allow server-side Arrow chunk splitting (default: `true`)
   - `:preferred_arrow_chunk_size` — preferred chunk size in bytes (default: `nil`)
+  - `:release_drain_timeout_ms` — how long `stop/1` waits for this session's
+    in-flight `ReleaseExecute` RPCs before sending `ReleaseSession` (default:
+    `10_000`, matching PySpark's `SparkConnectClient.close()`; also settable
+    application-wide via `config :spark_ex, release_drain_timeout_ms: ...`).
+    `0` disables the wait.
   - `:retry_policies` — per-session retry policy overrides (default: `nil`,
     falling back to `SparkEx.RetryPolicyRegistry`'s global policies). Accepts
     a map or keyword list keyed by `:retry`, `:reattach`, and/or `:streaming`,
@@ -749,11 +756,13 @@ defmodule SparkEx.Session do
   @spec copy_from_local_to_fs(GenServer.server(), String.t(), String.t()) ::
           :ok | {:error, term()}
   def copy_from_local_to_fs(session, local_path, dest_path) do
+    real_path = SparkEx.Artifacts.classify_local_path(local_path)
+
     with :ok <- validate_forward_dest_path(dest_path),
-         {:ok, size} <- stat_local_file(local_path),
+         {:ok, size} <- stat_local_file(real_path),
          {:ok, _summaries} <-
            add_artifacts(session, [
-             {forward_to_fs_artifact_name(dest_path), {:file, local_path, size}}
+             {forward_to_fs_artifact_name(dest_path), {:file, real_path, size}}
            ]) do
       :ok
     end
@@ -1088,6 +1097,7 @@ defmodule SparkEx.Session do
     allow_arrow_batch_chunking = Keyword.get(opts, :allow_arrow_batch_chunking, true)
     preferred_arrow_chunk_size = Keyword.get(opts, :preferred_arrow_chunk_size, nil)
     retry_policies = normalize_retry_policies_opt(Keyword.get(opts, :retry_policies))
+    release_drain_timeout_ms = normalize_release_drain_timeout_opt(opts)
 
     grpc_opts = Keyword.get(opts, :grpc_opts, [])
 
@@ -1116,7 +1126,8 @@ defmodule SparkEx.Session do
         client_type: session_identity.client_type,
         allow_arrow_batch_chunking: allow_arrow_batch_chunking,
         preferred_arrow_chunk_size: preferred_arrow_chunk_size,
-        retry_policies: retry_policies
+        retry_policies: retry_policies,
+        release_drain_timeout_ms: release_drain_timeout_ms
       }
 
       publish_connection_snapshot(state)
@@ -1124,6 +1135,26 @@ defmodule SparkEx.Session do
       {:ok, state}
     else
       {:error, reason} -> {:stop, reason}
+    end
+  end
+
+  # PySpark's `SparkConnectClient.close()` waits up to 10s for the pending
+  # ReleaseExecute futures before releasing the session (SPARK-55406); mirror
+  # that default and allow a per-session override.
+  @default_release_drain_timeout_ms 10_000
+
+  defp normalize_release_drain_timeout_opt(opts) do
+    default =
+      Application.get_env(:spark_ex, :release_drain_timeout_ms, @default_release_drain_timeout_ms)
+
+    case Keyword.get(opts, :release_drain_timeout_ms, default) do
+      timeout when is_integer(timeout) and timeout >= 0 ->
+        timeout
+
+      other ->
+        raise ArgumentError,
+              "expected :release_drain_timeout_ms to be a non-negative integer, got: " <>
+                inspect(other)
     end
   end
 
@@ -1235,6 +1266,9 @@ defmodule SparkEx.Session do
       {:reply, :ok, state}
     else
       SparkEx.Internal.SessionSnapshot.delete(self())
+      # Same ordering guarantee as `terminate/2`: this session's in-flight
+      # ReleaseExecute tasks must reach the server before ReleaseSession.
+      drain_pending_releases(state)
 
       case Client.release_session(state) do
         {:ok, server_side_session_id} ->
@@ -2201,6 +2235,25 @@ defmodule SparkEx.Session do
     {:noreply, state}
   end
 
+  # `terminate/2` can legitimately take up to release-drain (default 10s) +
+  # ReleaseSession yield (5s) + task shutdown grace (5s). The default GenServer
+  # child shutdown of 5s would brutal-kill the session mid-drain, skipping
+  # ReleaseSession and `cleanup_session_resources/1`, so size the shutdown to
+  # the configured drain plus the fixed release budget.
+  def child_spec(opts) do
+    # Same validation as `start_link/1`, so an invalid value fails here with
+    # the same ArgumentError instead of surfacing later or as a badarith.
+    drain_ms = normalize_release_drain_timeout_opt(opts)
+
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      shutdown: drain_ms + 10_000 + 1_000,
+      restart: :temporary,
+      type: :worker
+    }
+  end
+
   @impl true
   def terminate(_reason, %{released: true} = state) do
     cleanup_session_resources(state)
@@ -2213,6 +2266,14 @@ defmodule SparkEx.Session do
   end
 
   def terminate(_reason, %{channel: channel} = state) do
+    # Drain this session's in-flight ReleaseExecute tasks first: the server
+    # must not see ReleaseSession before the releases of the executions that
+    # belong to it, or it is left with orphaned executions until GC. Bounded
+    # by `:release_drain_timeout_ms` (default 10s, as PySpark's
+    # `SparkConnectClient.close()`), a no-op when nothing is pending, and it
+    # never waits on another session's releases.
+    drain_pending_releases(state)
+
     # Best-effort release before disconnect with timeout to prevent blocking
     task = Task.async(fn -> Client.release_session(state) end)
     Task.yield(task, 5_000) || Task.shutdown(task)
@@ -2221,11 +2282,37 @@ defmodule SparkEx.Session do
     :ok
   end
 
+  defp drain_pending_releases(state) do
+    session_id = Map.get(state, :session_id)
+    timeout_ms = Map.get(state, :release_drain_timeout_ms) || @default_release_drain_timeout_ms
+
+    case SparkEx.Internal.ReleaseTracker.await_pending(session_id, timeout_ms) do
+      :ok ->
+        :ok
+
+      {:timeout, pending} ->
+        Logger.debug(
+          "session #{inspect(session_id)}: #{pending} ReleaseExecute task(s) still in flight " <>
+            "after #{timeout_ms}ms; releasing session anyway"
+        )
+
+        :telemetry.execute(
+          [:spark_ex, :session, :release_drain, :timeout],
+          %{pending: pending},
+          %{session_id: session_id, timeout_ms: timeout_ms}
+        )
+
+        :ok
+    end
+  end
+
   # Reclaim process/session-scoped resources on shutdown: the plan-id
-  # allocator row (EtsTableOwner monitors as a backstop for abnormal exits)
-  # and any observation rows this session accumulated (FABLE-29).
+  # allocator row (EtsTableOwner monitors as a backstop for abnormal exits),
+  # any release-task rows left behind, and any observation rows this session
+  # accumulated (FABLE-29).
   defp cleanup_session_resources(state) do
     SparkEx.Internal.PlanIds.unregister_session(self())
+    SparkEx.Internal.ReleaseTracker.clear(Map.get(state, :session_id))
     SparkEx.Internal.SessionSnapshot.delete(self())
     SparkEx.Observation.clear_session(Map.get(state, :session_id))
     :ok

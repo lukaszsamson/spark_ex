@@ -77,6 +77,56 @@ defmodule SparkEx.ReaderTest do
       reader = self() |> SparkEx.read() |> Reader.schema(schema)
       assert reader.schema == schema
     end
+
+    test "csv/3 accepts a builder and pins the format" do
+      df = self() |> SparkEx.read() |> Reader.csv("/tmp/x.csv")
+
+      assert {:read_data_source, "csv", ["/tmp/x.csv"], nil, %{}} = unwrap_plan(df)
+    end
+
+    test "json/3 and xml/3 accept a builder and a list of paths" do
+      json_df = self() |> SparkEx.read() |> Reader.json(["/a.json", "/b.json"])
+      assert {:read_data_source, "json", ["/a.json", "/b.json"], nil, %{}} = unwrap_plan(json_df)
+
+      xml_df = self() |> SparkEx.read() |> Reader.xml("/a.xml")
+      assert {:read_data_source, "xml", ["/a.xml"], nil, %{}} = unwrap_plan(xml_df)
+    end
+
+    test "builder schema and options propagate, call-time options win" do
+      reader =
+        self()
+        |> SparkEx.read()
+        |> Reader.format("parquet")
+        |> Reader.schema("id INT, name STRING")
+        |> Reader.options(%{"mode" => "PERMISSIVE", "maxColumns" => 200})
+
+      assert {:read_data_source, "csv", ["/tmp/x.csv"], "id INT, name STRING",
+              %{"mode" => "FAILFAST", "maxColumns" => "200"}} =
+               unwrap_plan(Reader.csv(reader, "/tmp/x.csv", options: %{"mode" => "FAILFAST"}))
+
+      assert {:read_data_source, "json", ["/a.json"], "id INT, name STRING",
+              %{"mode" => "PERMISSIVE", "maxColumns" => "200"}} =
+               unwrap_plan(Reader.json(reader, "/a.json"))
+
+      assert {:read_data_source, "xml", ["/a.xml"], "a STRING",
+              %{"mode" => "PERMISSIVE", "maxColumns" => "200"}} =
+               unwrap_plan(Reader.xml(reader, "/a.xml", schema: "a STRING"))
+    end
+
+    test "csv/3 with a builder normalizes :header and :sep aliases" do
+      reader = self() |> SparkEx.read() |> Reader.option("quote", "'")
+
+      assert {:read_data_source, "csv", ["/tmp/x.csv"], nil,
+              %{"header" => "true", "sep" => ";", "quote" => "'"}} =
+               unwrap_plan(Reader.csv(reader, "/tmp/x.csv", header: true, separator: ";"))
+
+      assert {:read_data_source, "csv", ["/tmp/x.csv"], nil, %{"sep" => "|", "quote" => "'"}} =
+               unwrap_plan(Reader.csv(reader, "/tmp/x.csv", sep: "|"))
+
+      assert_raise ArgumentError, ~r/conflicting :sep and :separator/, fn ->
+        Reader.csv(reader, "/tmp/x.csv", sep: "|", separator: ";")
+      end
+    end
   end
 
   describe "parquet/2" do
@@ -188,6 +238,35 @@ defmodule SparkEx.ReaderTest do
 
       assert {:read_data_source, "json", ["/data/file.json"], nil,
               %{"multiLine" => "true", "mode" => "PERMISSIVE"}} = unwrap_plan(df)
+    end
+  end
+
+  describe "builder + path for parquet/text/orc/avro" do
+    test "routes a %Reader{} with a path through the builder and pins the format" do
+      for {fun, format} <- [
+            {&Reader.parquet/3, "parquet"},
+            {&Reader.text/3, "text"},
+            {&Reader.orc/3, "orc"},
+            {&Reader.avro/3, "avro"}
+          ] do
+        df =
+          self()
+          |> SparkEx.read()
+          |> Reader.format("csv")
+          |> Reader.schema("id INT")
+          |> Reader.option("mode", "PERMISSIVE")
+          |> fun.("/data/in", options: %{"mode" => "FAILFAST"})
+
+        assert {:read_data_source, ^format, ["/data/in"], "id INT", %{"mode" => "FAILFAST"}} =
+                 unwrap_plan(df)
+
+        assert df.session == self()
+      end
+    end
+
+    test "accepts a list of paths from a builder" do
+      df = self() |> SparkEx.read() |> Reader.parquet(["/a", "/b"])
+      assert {:read_data_source, "parquet", ["/a", "/b"], nil, %{}} = unwrap_plan(df)
     end
   end
 end

@@ -3,7 +3,7 @@ defmodule Spark.Connect.StorageLevel do
 
   use Protobuf,
     full_name: "spark.connect.StorageLevel",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:use_disk, 1, type: :bool, json_name: "useDisk")
@@ -18,7 +18,7 @@ defmodule Spark.Connect.ResourceInformation do
 
   use Protobuf,
     full_name: "spark.connect.ResourceInformation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:name, 1, type: :string)
@@ -30,7 +30,7 @@ defmodule Spark.Connect.ExecutorResourceRequest do
 
   use Protobuf,
     full_name: "spark.connect.ExecutorResourceRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:resource_name, 1, type: :string, json_name: "resourceName")
@@ -44,7 +44,7 @@ defmodule Spark.Connect.TaskResourceRequest do
 
   use Protobuf,
     full_name: "spark.connect.TaskResourceRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:resource_name, 1, type: :string, json_name: "resourceName")
@@ -57,7 +57,7 @@ defmodule Spark.Connect.ResourceProfile.ExecutorResourcesEntry do
   use Protobuf,
     full_name: "spark.connect.ResourceProfile.ExecutorResourcesEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -70,7 +70,7 @@ defmodule Spark.Connect.ResourceProfile.TaskResourcesEntry do
   use Protobuf,
     full_name: "spark.connect.ResourceProfile.TaskResourcesEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -82,7 +82,7 @@ defmodule Spark.Connect.ResourceProfile do
 
   use Protobuf,
     full_name: "spark.connect.ResourceProfile",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:executor_resources, 1,
@@ -105,7 +105,7 @@ defmodule Spark.Connect.Origin do
 
   use Protobuf,
     full_name: "spark.connect.Origin",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:function, 0)
@@ -119,7 +119,7 @@ defmodule Spark.Connect.PythonOrigin do
 
   use Protobuf,
     full_name: "spark.connect.PythonOrigin",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:fragment, 1, type: :string)
@@ -131,7 +131,7 @@ defmodule Spark.Connect.JvmOrigin do
 
   use Protobuf,
     full_name: "spark.connect.JvmOrigin",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:line, 1, proto3_optional: true, type: :int32)
@@ -154,7 +154,7 @@ defmodule Spark.Connect.StackTraceElement do
 
   use Protobuf,
     full_name: "spark.connect.StackTraceElement",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:class_loader_name, 1, proto3_optional: true, type: :string, json_name: "classLoaderName")
@@ -171,7 +171,7 @@ defmodule Spark.Connect.ResolvedIdentifier do
 
   use Protobuf,
     full_name: "spark.connect.ResolvedIdentifier",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:catalog_name, 1, type: :string, json_name: "catalogName")
@@ -184,7 +184,7 @@ defmodule Spark.Connect.Bools do
 
   use Protobuf,
     full_name: "spark.connect.Bools",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:values, 1, repeated: true, type: :bool)
@@ -195,7 +195,7 @@ defmodule Spark.Connect.Ints do
 
   use Protobuf,
     full_name: "spark.connect.Ints",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:values, 1, repeated: true, type: :int32)
@@ -206,7 +206,7 @@ defmodule Spark.Connect.Longs do
 
   use Protobuf,
     full_name: "spark.connect.Longs",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:values, 1, repeated: true, type: :int64)
@@ -217,7 +217,7 @@ defmodule Spark.Connect.Floats do
 
   use Protobuf,
     full_name: "spark.connect.Floats",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:values, 1, repeated: true, type: :float)
@@ -228,7 +228,7 @@ defmodule Spark.Connect.Doubles do
 
   use Protobuf,
     full_name: "spark.connect.Doubles",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:values, 1, repeated: true, type: :double)
@@ -239,7 +239,7 @@ defmodule Spark.Connect.Strings do
 
   use Protobuf,
     full_name: "spark.connect.Strings",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:values, 1, repeated: true, type: :string)

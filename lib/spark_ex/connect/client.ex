@@ -692,7 +692,8 @@ defmodule SparkEx.Connect.Client do
                idle_timeout: idle_timeout,
                release_fun: release_fun,
                release_timeout: release_timeout,
-               closed_flag: closed_flag
+               closed_flag: closed_flag,
+               session_id: session_id_of(session)
              ) do
           {:ok, managed_stream} ->
             {:ok, managed_stream}
@@ -1696,19 +1697,11 @@ defmodule SparkEx.Connect.Client do
         # can drop its retry buffer as the client makes progress.
         new_state =
           if complete? do
-            fire_release_all(
-              new_state.ctx.release_execute_fun,
-              new_state.ctx.release_execute_timeout
-            )
+            fire_release_all(new_state.ctx)
 
             new_state
           else
-            fire_release_checkpoint(
-              new_state.ctx.release_execute_fun,
-              new_id,
-              new_state.ctx.release_execute_timeout,
-              new_state.ctx.release_checkpoint_counter
-            )
+            fire_release_checkpoint(new_state.ctx, new_id)
 
             new_state
           end
@@ -1761,7 +1754,7 @@ defmodule SparkEx.Connect.Client do
   defp emit_terminal_error(state, error) do
     # On terminal error PySpark calls _release_all() to drop the server-side
     # buffer. We do the same and mark result_complete? so downstream halts.
-    fire_release_all(state.ctx.release_execute_fun, state.ctx.release_execute_timeout)
+    fire_release_all(state.ctx)
     {[{:error, error}], %{state | result_complete?: true}}
   end
 
@@ -1786,8 +1779,22 @@ defmodule SparkEx.Connect.Client do
     :exit, {:noproc, _} -> {:error, :noproc}
   end
 
-  defp fire_release_all(release_execute_fun, timeout_ms) do
-    start_supervised_task(fn ->
+  # Release tasks are recorded per session so `SparkEx.Session.terminate/2`
+  # can wait for the ones it fired before sending `ReleaseSession` (PySpark's
+  # `SparkConnectClient.close()` drains its release executor first, SPARK-55406).
+  defp start_tracked_release(ctx, fun) do
+    SparkEx.Internal.ReleaseTracker.start_tracked(session_id_of(Map.get(ctx, :session)), fun)
+  end
+
+  @doc false
+  @spec session_id_of(term()) :: String.t() | nil
+  def session_id_of(%SparkEx.Session{session_id: session_id}), do: session_id
+  def session_id_of(_), do: nil
+
+  defp fire_release_all(ctx) do
+    %{release_execute_fun: release_execute_fun, release_execute_timeout: timeout_ms} = ctx
+
+    start_tracked_release(ctx, fn ->
       task =
         Task.async(fn ->
           try do
@@ -2012,9 +2019,15 @@ defmodule SparkEx.Connect.Client do
 
   defp pull_iter(_), do: :done
 
-  defp fire_release_checkpoint(_release_execute_fun, nil, _timeout_ms, _counter), do: :ok
+  defp fire_release_checkpoint(_ctx, nil), do: :ok
 
-  defp fire_release_checkpoint(release_execute_fun, response_id, timeout_ms, counter) do
+  defp fire_release_checkpoint(ctx, response_id) do
+    %{
+      release_execute_fun: release_execute_fun,
+      release_execute_timeout: timeout_ms,
+      release_checkpoint_counter: counter
+    } = ctx
+
     # Cap concurrent in-flight checkpoint tasks. `release_until(...)` is
     # monotonic on the server side, so dropping an intermediate id is safe:
     # the next response's checkpoint subsumes it, and terminal completion
@@ -2034,7 +2047,7 @@ defmodule SparkEx.Connect.Client do
     else
       :counters.add(counter, 1, 1)
 
-      case start_supervised_task(fn ->
+      case start_tracked_release(ctx, fn ->
              task =
                Task.async(fn ->
                  try do

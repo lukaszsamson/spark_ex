@@ -3,7 +3,7 @@ defmodule Spark.Connect.Catalog do
 
   use Protobuf,
     full_name: "spark.connect.Catalog",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:cat_type, 0)
@@ -149,7 +149,7 @@ defmodule Spark.Connect.CurrentDatabase do
 
   use Protobuf,
     full_name: "spark.connect.CurrentDatabase",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -158,7 +158,7 @@ defmodule Spark.Connect.SetCurrentDatabase do
 
   use Protobuf,
     full_name: "spark.connect.SetCurrentDatabase",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:db_name, 1, type: :string, json_name: "dbName")
@@ -169,7 +169,7 @@ defmodule Spark.Connect.ListDatabases do
 
   use Protobuf,
     full_name: "spark.connect.ListDatabases",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:pattern, 1, proto3_optional: true, type: :string)
@@ -180,7 +180,7 @@ defmodule Spark.Connect.ListTables do
 
   use Protobuf,
     full_name: "spark.connect.ListTables",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:db_name, 1, proto3_optional: true, type: :string, json_name: "dbName")
@@ -192,7 +192,7 @@ defmodule Spark.Connect.ListFunctions do
 
   use Protobuf,
     full_name: "spark.connect.ListFunctions",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:db_name, 1, proto3_optional: true, type: :string, json_name: "dbName")
@@ -204,7 +204,7 @@ defmodule Spark.Connect.ListColumns do
 
   use Protobuf,
     full_name: "spark.connect.ListColumns",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -216,7 +216,7 @@ defmodule Spark.Connect.GetDatabase do
 
   use Protobuf,
     full_name: "spark.connect.GetDatabase",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:db_name, 1, type: :string, json_name: "dbName")
@@ -227,7 +227,7 @@ defmodule Spark.Connect.GetTable do
 
   use Protobuf,
     full_name: "spark.connect.GetTable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -239,7 +239,7 @@ defmodule Spark.Connect.GetFunction do
 
   use Protobuf,
     full_name: "spark.connect.GetFunction",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:function_name, 1, type: :string, json_name: "functionName")
@@ -251,7 +251,7 @@ defmodule Spark.Connect.DatabaseExists do
 
   use Protobuf,
     full_name: "spark.connect.DatabaseExists",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:db_name, 1, type: :string, json_name: "dbName")
@@ -262,7 +262,7 @@ defmodule Spark.Connect.TableExists do
 
   use Protobuf,
     full_name: "spark.connect.TableExists",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -274,7 +274,7 @@ defmodule Spark.Connect.FunctionExists do
 
   use Protobuf,
     full_name: "spark.connect.FunctionExists",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:function_name, 1, type: :string, json_name: "functionName")
@@ -287,7 +287,7 @@ defmodule Spark.Connect.CreateExternalTable.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.CreateExternalTable.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -299,7 +299,7 @@ defmodule Spark.Connect.CreateExternalTable do
 
   use Protobuf,
     full_name: "spark.connect.CreateExternalTable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -320,7 +320,7 @@ defmodule Spark.Connect.CreateTable.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.CreateTable.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -332,7 +332,7 @@ defmodule Spark.Connect.CreateTable do
 
   use Protobuf,
     full_name: "spark.connect.CreateTable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -348,7 +348,7 @@ defmodule Spark.Connect.DropTempView do
 
   use Protobuf,
     full_name: "spark.connect.DropTempView",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:view_name, 1, type: :string, json_name: "viewName")
@@ -359,7 +359,7 @@ defmodule Spark.Connect.DropGlobalTempView do
 
   use Protobuf,
     full_name: "spark.connect.DropGlobalTempView",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:view_name, 1, type: :string, json_name: "viewName")
@@ -370,7 +370,7 @@ defmodule Spark.Connect.RecoverPartitions do
 
   use Protobuf,
     full_name: "spark.connect.RecoverPartitions",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -381,7 +381,7 @@ defmodule Spark.Connect.IsCached do
 
   use Protobuf,
     full_name: "spark.connect.IsCached",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -392,7 +392,7 @@ defmodule Spark.Connect.CacheTable do
 
   use Protobuf,
     full_name: "spark.connect.CacheTable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -409,7 +409,7 @@ defmodule Spark.Connect.UncacheTable do
 
   use Protobuf,
     full_name: "spark.connect.UncacheTable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -420,7 +420,7 @@ defmodule Spark.Connect.ClearCache do
 
   use Protobuf,
     full_name: "spark.connect.ClearCache",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -429,7 +429,7 @@ defmodule Spark.Connect.RefreshTable do
 
   use Protobuf,
     full_name: "spark.connect.RefreshTable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -440,7 +440,7 @@ defmodule Spark.Connect.RefreshByPath do
 
   use Protobuf,
     full_name: "spark.connect.RefreshByPath",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:path, 1, type: :string)
@@ -451,7 +451,7 @@ defmodule Spark.Connect.CurrentCatalog do
 
   use Protobuf,
     full_name: "spark.connect.CurrentCatalog",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -460,7 +460,7 @@ defmodule Spark.Connect.SetCurrentCatalog do
 
   use Protobuf,
     full_name: "spark.connect.SetCurrentCatalog",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:catalog_name, 1, type: :string, json_name: "catalogName")
@@ -471,7 +471,7 @@ defmodule Spark.Connect.ListCatalogs do
 
   use Protobuf,
     full_name: "spark.connect.ListCatalogs",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:pattern, 1, proto3_optional: true, type: :string)
@@ -482,7 +482,7 @@ defmodule Spark.Connect.DropTable do
 
   use Protobuf,
     full_name: "spark.connect.DropTable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -495,7 +495,7 @@ defmodule Spark.Connect.DropView do
 
   use Protobuf,
     full_name: "spark.connect.DropView",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:view_name, 1, type: :string, json_name: "viewName")
@@ -508,7 +508,7 @@ defmodule Spark.Connect.CreateDatabase.PropertiesEntry do
   use Protobuf,
     full_name: "spark.connect.CreateDatabase.PropertiesEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -520,7 +520,7 @@ defmodule Spark.Connect.CreateDatabase do
 
   use Protobuf,
     full_name: "spark.connect.CreateDatabase",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:db_name, 1, type: :string, json_name: "dbName")
@@ -538,7 +538,7 @@ defmodule Spark.Connect.DropDatabase do
 
   use Protobuf,
     full_name: "spark.connect.DropDatabase",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:db_name, 1, type: :string, json_name: "dbName")
@@ -551,7 +551,7 @@ defmodule Spark.Connect.ListPartitions do
 
   use Protobuf,
     full_name: "spark.connect.ListPartitions",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -562,7 +562,7 @@ defmodule Spark.Connect.ListViews do
 
   use Protobuf,
     full_name: "spark.connect.ListViews",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:db_name, 1, proto3_optional: true, type: :string, json_name: "dbName")
@@ -574,7 +574,7 @@ defmodule Spark.Connect.GetTableProperties do
 
   use Protobuf,
     full_name: "spark.connect.GetTableProperties",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -585,7 +585,7 @@ defmodule Spark.Connect.GetCreateTableString do
 
   use Protobuf,
     full_name: "spark.connect.GetCreateTableString",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -597,7 +597,7 @@ defmodule Spark.Connect.TruncateTable do
 
   use Protobuf,
     full_name: "spark.connect.TruncateTable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -608,7 +608,7 @@ defmodule Spark.Connect.AnalyzeTable do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzeTable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")

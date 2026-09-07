@@ -4,7 +4,7 @@ defmodule Spark.Connect.CompressionCodec do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.CompressionCodec",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:COMPRESSION_CODEC_UNSPECIFIED, 0)
@@ -17,7 +17,7 @@ defmodule Spark.Connect.Plan.CompressedOperation.OpType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.Plan.CompressedOperation.OpType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:OP_TYPE_UNSPECIFIED, 0)
@@ -31,7 +31,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.Explain.ExplainMode do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.AnalyzePlanRequest.Explain.ExplainMode",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:EXPLAIN_MODE_UNSPECIFIED, 0)
@@ -48,7 +48,7 @@ defmodule Spark.Connect.InterruptRequest.InterruptType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.InterruptRequest.InterruptType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:INTERRUPT_TYPE_UNSPECIFIED, 0)
@@ -63,7 +63,7 @@ defmodule Spark.Connect.FetchErrorDetailsResponse.QueryContext.ContextType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.FetchErrorDetailsResponse.QueryContext.ContextType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:SQL, 0)
@@ -76,7 +76,7 @@ defmodule Spark.Connect.GetStatusResponse.OperationStatus.OperationState do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.GetStatusResponse.OperationStatus.OperationState",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:OPERATION_STATE_UNSPECIFIED, 0)
@@ -93,7 +93,7 @@ defmodule Spark.Connect.Plan.CompressedOperation do
 
   use Protobuf,
     full_name: "spark.connect.Plan.CompressedOperation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:data, 1, type: :bytes)
@@ -116,7 +116,7 @@ defmodule Spark.Connect.Plan do
 
   use Protobuf,
     full_name: "spark.connect.Plan",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:op_type, 0)
@@ -136,7 +136,7 @@ defmodule Spark.Connect.UserContext do
 
   use Protobuf,
     full_name: "spark.connect.UserContext",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:user_id, 1, type: :string, json_name: "userId")
@@ -149,7 +149,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.Schema do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.Schema",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:plan, 1, type: Spark.Connect.Plan)
@@ -160,7 +160,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.Explain do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.Explain",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:plan, 1, type: Spark.Connect.Plan)
@@ -177,7 +177,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.TreeString do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.TreeString",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:plan, 1, type: Spark.Connect.Plan)
@@ -189,7 +189,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.IsLocal do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.IsLocal",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:plan, 1, type: Spark.Connect.Plan)
@@ -200,7 +200,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.IsStreaming do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.IsStreaming",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:plan, 1, type: Spark.Connect.Plan)
@@ -211,7 +211,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.InputFiles do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.InputFiles",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:plan, 1, type: Spark.Connect.Plan)
@@ -222,7 +222,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.SparkVersion do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.SparkVersion",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -231,7 +231,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.DDLParse do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.DDLParse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:ddl_string, 1, type: :string, json_name: "ddlString")
@@ -242,7 +242,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.SameSemantics do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.SameSemantics",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:target_plan, 1, type: Spark.Connect.Plan, json_name: "targetPlan")
@@ -254,7 +254,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.SemanticHash do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.SemanticHash",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:plan, 1, type: Spark.Connect.Plan)
@@ -265,7 +265,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.Persist do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.Persist",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:relation, 1, type: Spark.Connect.Relation)
@@ -282,7 +282,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.Unpersist do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.Unpersist",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:relation, 1, type: Spark.Connect.Relation)
@@ -294,7 +294,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.GetStorageLevel do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.GetStorageLevel",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:relation, 1, type: Spark.Connect.Relation)
@@ -305,7 +305,7 @@ defmodule Spark.Connect.AnalyzePlanRequest.JsonToDDL do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest.JsonToDDL",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:json_string, 1, type: :string, json_name: "jsonString")
@@ -316,7 +316,7 @@ defmodule Spark.Connect.AnalyzePlanRequest do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:analyze, 0)
@@ -403,7 +403,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.Schema do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.Schema",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:schema, 1, type: Spark.Connect.DataType)
@@ -414,7 +414,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.Explain do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.Explain",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:explain_string, 1, type: :string, json_name: "explainString")
@@ -425,7 +425,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.TreeString do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.TreeString",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:tree_string, 1, type: :string, json_name: "treeString")
@@ -436,7 +436,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.IsLocal do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.IsLocal",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:is_local, 1, type: :bool, json_name: "isLocal")
@@ -447,7 +447,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.IsStreaming do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.IsStreaming",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:is_streaming, 1, type: :bool, json_name: "isStreaming")
@@ -458,7 +458,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.InputFiles do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.InputFiles",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:files, 1, repeated: true, type: :string)
@@ -469,7 +469,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.SparkVersion do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.SparkVersion",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:version, 1, type: :string)
@@ -480,7 +480,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.DDLParse do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.DDLParse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:parsed, 1, type: Spark.Connect.DataType)
@@ -491,7 +491,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.SameSemantics do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.SameSemantics",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:result, 1, type: :bool)
@@ -502,7 +502,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.SemanticHash do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.SemanticHash",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:result, 1, type: :int32)
@@ -513,7 +513,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.Persist do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.Persist",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -522,7 +522,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.Unpersist do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.Unpersist",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -531,7 +531,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.GetStorageLevel do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.GetStorageLevel",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:storage_level, 1, type: Spark.Connect.StorageLevel, json_name: "storageLevel")
@@ -542,7 +542,7 @@ defmodule Spark.Connect.AnalyzePlanResponse.JsonToDDL do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse.JsonToDDL",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:ddl_string, 1, type: :string, json_name: "ddlString")
@@ -553,7 +553,7 @@ defmodule Spark.Connect.AnalyzePlanResponse do
 
   use Protobuf,
     full_name: "spark.connect.AnalyzePlanResponse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:result, 0)
@@ -632,7 +632,7 @@ defmodule Spark.Connect.ExecutePlanRequest.RequestOption do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanRequest.RequestOption",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:request_option, 0)
@@ -657,7 +657,7 @@ defmodule Spark.Connect.ExecutePlanRequest do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -687,7 +687,7 @@ defmodule Spark.Connect.ExecutePlanResponse.SqlCommandResult do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanResponse.SqlCommandResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:relation, 1, type: Spark.Connect.Relation)
@@ -698,7 +698,7 @@ defmodule Spark.Connect.ExecutePlanResponse.ArrowBatch do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanResponse.ArrowBatch",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:row_count, 1, type: :int64, json_name: "rowCount")
@@ -719,7 +719,7 @@ defmodule Spark.Connect.ExecutePlanResponse.Metrics.MetricObject.ExecutionMetric
   use Protobuf,
     full_name: "spark.connect.ExecutePlanResponse.Metrics.MetricObject.ExecutionMetricsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -731,7 +731,7 @@ defmodule Spark.Connect.ExecutePlanResponse.Metrics.MetricObject do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanResponse.Metrics.MetricObject",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:name, 1, type: :string)
@@ -751,7 +751,7 @@ defmodule Spark.Connect.ExecutePlanResponse.Metrics.MetricValue do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanResponse.Metrics.MetricValue",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:name, 1, type: :string)
@@ -764,7 +764,7 @@ defmodule Spark.Connect.ExecutePlanResponse.Metrics do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanResponse.Metrics",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:metrics, 1, repeated: true, type: Spark.Connect.ExecutePlanResponse.Metrics.MetricObject)
@@ -775,7 +775,7 @@ defmodule Spark.Connect.ExecutePlanResponse.ObservedMetrics do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanResponse.ObservedMetrics",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:name, 1, type: :string)
@@ -791,7 +791,7 @@ defmodule Spark.Connect.ExecutePlanResponse.ResultComplete do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanResponse.ResultComplete",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -800,7 +800,7 @@ defmodule Spark.Connect.ExecutePlanResponse.ExecutionProgress.StageInfo do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanResponse.ExecutionProgress.StageInfo",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:stage_id, 1, type: :int64, json_name: "stageId")
@@ -815,7 +815,7 @@ defmodule Spark.Connect.ExecutePlanResponse.ExecutionProgress do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanResponse.ExecutionProgress",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:stages, 1,
@@ -831,7 +831,7 @@ defmodule Spark.Connect.ExecutePlanResponse do
 
   use Protobuf,
     full_name: "spark.connect.ExecutePlanResponse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:response_type, 0)
@@ -948,7 +948,7 @@ defmodule Spark.Connect.KeyValue do
 
   use Protobuf,
     full_name: "spark.connect.KeyValue",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -960,7 +960,7 @@ defmodule Spark.Connect.ConfigRequest.Operation do
 
   use Protobuf,
     full_name: "spark.connect.ConfigRequest.Operation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:op_type, 0)
@@ -995,7 +995,7 @@ defmodule Spark.Connect.ConfigRequest.Set do
 
   use Protobuf,
     full_name: "spark.connect.ConfigRequest.Set",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:pairs, 1, repeated: true, type: Spark.Connect.KeyValue)
@@ -1007,7 +1007,7 @@ defmodule Spark.Connect.ConfigRequest.Get do
 
   use Protobuf,
     full_name: "spark.connect.ConfigRequest.Get",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:keys, 1, repeated: true, type: :string)
@@ -1018,7 +1018,7 @@ defmodule Spark.Connect.ConfigRequest.GetWithDefault do
 
   use Protobuf,
     full_name: "spark.connect.ConfigRequest.GetWithDefault",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:pairs, 1, repeated: true, type: Spark.Connect.KeyValue)
@@ -1029,7 +1029,7 @@ defmodule Spark.Connect.ConfigRequest.GetOption do
 
   use Protobuf,
     full_name: "spark.connect.ConfigRequest.GetOption",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:keys, 1, repeated: true, type: :string)
@@ -1040,7 +1040,7 @@ defmodule Spark.Connect.ConfigRequest.GetAll do
 
   use Protobuf,
     full_name: "spark.connect.ConfigRequest.GetAll",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:prefix, 1, proto3_optional: true, type: :string)
@@ -1051,7 +1051,7 @@ defmodule Spark.Connect.ConfigRequest.Unset do
 
   use Protobuf,
     full_name: "spark.connect.ConfigRequest.Unset",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:keys, 1, repeated: true, type: :string)
@@ -1062,7 +1062,7 @@ defmodule Spark.Connect.ConfigRequest.IsModifiable do
 
   use Protobuf,
     full_name: "spark.connect.ConfigRequest.IsModifiable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:keys, 1, repeated: true, type: :string)
@@ -1073,7 +1073,7 @@ defmodule Spark.Connect.ConfigRequest do
 
   use Protobuf,
     full_name: "spark.connect.ConfigRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1094,7 +1094,7 @@ defmodule Spark.Connect.ConfigResponse do
 
   use Protobuf,
     full_name: "spark.connect.ConfigResponse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1108,7 +1108,7 @@ defmodule Spark.Connect.AddArtifactsRequest.ArtifactChunk do
 
   use Protobuf,
     full_name: "spark.connect.AddArtifactsRequest.ArtifactChunk",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:data, 1, type: :bytes)
@@ -1120,7 +1120,7 @@ defmodule Spark.Connect.AddArtifactsRequest.SingleChunkArtifact do
 
   use Protobuf,
     full_name: "spark.connect.AddArtifactsRequest.SingleChunkArtifact",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:name, 1, type: :string)
@@ -1132,7 +1132,7 @@ defmodule Spark.Connect.AddArtifactsRequest.Batch do
 
   use Protobuf,
     full_name: "spark.connect.AddArtifactsRequest.Batch",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:artifacts, 1,
@@ -1146,7 +1146,7 @@ defmodule Spark.Connect.AddArtifactsRequest.BeginChunkedArtifact do
 
   use Protobuf,
     full_name: "spark.connect.AddArtifactsRequest.BeginChunkedArtifact",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:name, 1, type: :string)
@@ -1164,7 +1164,7 @@ defmodule Spark.Connect.AddArtifactsRequest do
 
   use Protobuf,
     full_name: "spark.connect.AddArtifactsRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:payload, 0)
@@ -1195,7 +1195,7 @@ defmodule Spark.Connect.AddArtifactsResponse.ArtifactSummary do
 
   use Protobuf,
     full_name: "spark.connect.AddArtifactsResponse.ArtifactSummary",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:name, 1, type: :string)
@@ -1207,7 +1207,7 @@ defmodule Spark.Connect.AddArtifactsResponse do
 
   use Protobuf,
     full_name: "spark.connect.AddArtifactsResponse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 2, type: :string, json_name: "sessionId")
@@ -1220,7 +1220,7 @@ defmodule Spark.Connect.ArtifactStatusesRequest do
 
   use Protobuf,
     full_name: "spark.connect.ArtifactStatusesRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1242,7 +1242,7 @@ defmodule Spark.Connect.ArtifactStatusesResponse.StatusesEntry do
   use Protobuf,
     full_name: "spark.connect.ArtifactStatusesResponse.StatusesEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -1254,7 +1254,7 @@ defmodule Spark.Connect.ArtifactStatusesResponse.ArtifactStatus do
 
   use Protobuf,
     full_name: "spark.connect.ArtifactStatusesResponse.ArtifactStatus",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:exists, 1, type: :bool)
@@ -1265,7 +1265,7 @@ defmodule Spark.Connect.ArtifactStatusesResponse do
 
   use Protobuf,
     full_name: "spark.connect.ArtifactStatusesResponse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 2, type: :string, json_name: "sessionId")
@@ -1283,7 +1283,7 @@ defmodule Spark.Connect.InterruptRequest do
 
   use Protobuf,
     full_name: "spark.connect.InterruptRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:interrupt, 0)
@@ -1314,7 +1314,7 @@ defmodule Spark.Connect.InterruptResponse do
 
   use Protobuf,
     full_name: "spark.connect.InterruptResponse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1327,7 +1327,7 @@ defmodule Spark.Connect.ReattachOptions do
 
   use Protobuf,
     full_name: "spark.connect.ReattachOptions",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:reattachable, 1, type: :bool)
@@ -1338,7 +1338,7 @@ defmodule Spark.Connect.ResultChunkingOptions do
 
   use Protobuf,
     full_name: "spark.connect.ResultChunkingOptions",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:allow_arrow_batch_chunking, 1, type: :bool, json_name: "allowArrowBatchChunking")
@@ -1355,7 +1355,7 @@ defmodule Spark.Connect.ReattachExecuteRequest do
 
   use Protobuf,
     full_name: "spark.connect.ReattachExecuteRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1377,7 +1377,7 @@ defmodule Spark.Connect.ReleaseExecuteRequest.ReleaseAll do
 
   use Protobuf,
     full_name: "spark.connect.ReleaseExecuteRequest.ReleaseAll",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -1386,7 +1386,7 @@ defmodule Spark.Connect.ReleaseExecuteRequest.ReleaseUntil do
 
   use Protobuf,
     full_name: "spark.connect.ReleaseExecuteRequest.ReleaseUntil",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:response_id, 1, type: :string, json_name: "responseId")
@@ -1397,7 +1397,7 @@ defmodule Spark.Connect.ReleaseExecuteRequest do
 
   use Protobuf,
     full_name: "spark.connect.ReleaseExecuteRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:release, 0)
@@ -1432,7 +1432,7 @@ defmodule Spark.Connect.ReleaseExecuteResponse do
 
   use Protobuf,
     full_name: "spark.connect.ReleaseExecuteResponse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1445,7 +1445,7 @@ defmodule Spark.Connect.ReleaseSessionRequest do
 
   use Protobuf,
     full_name: "spark.connect.ReleaseSessionRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1459,7 +1459,7 @@ defmodule Spark.Connect.ReleaseSessionResponse do
 
   use Protobuf,
     full_name: "spark.connect.ReleaseSessionResponse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1471,7 +1471,7 @@ defmodule Spark.Connect.FetchErrorDetailsRequest do
 
   use Protobuf,
     full_name: "spark.connect.FetchErrorDetailsRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1492,7 +1492,7 @@ defmodule Spark.Connect.FetchErrorDetailsResponse.StackTraceElement do
 
   use Protobuf,
     full_name: "spark.connect.FetchErrorDetailsResponse.StackTraceElement",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:declaring_class, 1, type: :string, json_name: "declaringClass")
@@ -1506,7 +1506,7 @@ defmodule Spark.Connect.FetchErrorDetailsResponse.QueryContext do
 
   use Protobuf,
     full_name: "spark.connect.FetchErrorDetailsResponse.QueryContext",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:context_type, 10,
@@ -1530,7 +1530,7 @@ defmodule Spark.Connect.FetchErrorDetailsResponse.SparkThrowable.MessageParamete
   use Protobuf,
     full_name: "spark.connect.FetchErrorDetailsResponse.SparkThrowable.MessageParametersEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -1542,7 +1542,7 @@ defmodule Spark.Connect.FetchErrorDetailsResponse.SparkThrowable do
 
   use Protobuf,
     full_name: "spark.connect.FetchErrorDetailsResponse.SparkThrowable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:error_class, 1, proto3_optional: true, type: :string, json_name: "errorClass")
@@ -1574,7 +1574,7 @@ defmodule Spark.Connect.FetchErrorDetailsResponse.BreakingChangeInfo do
 
   use Protobuf,
     full_name: "spark.connect.FetchErrorDetailsResponse.BreakingChangeInfo",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:migration_message, 1, repeated: true, type: :string, json_name: "migrationMessage")
@@ -1593,7 +1593,7 @@ defmodule Spark.Connect.FetchErrorDetailsResponse.MitigationConfig do
 
   use Protobuf,
     full_name: "spark.connect.FetchErrorDetailsResponse.MitigationConfig",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -1605,7 +1605,7 @@ defmodule Spark.Connect.FetchErrorDetailsResponse.Error do
 
   use Protobuf,
     full_name: "spark.connect.FetchErrorDetailsResponse.Error",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:error_type_hierarchy, 1, repeated: true, type: :string, json_name: "errorTypeHierarchy")
@@ -1631,7 +1631,7 @@ defmodule Spark.Connect.FetchErrorDetailsResponse do
 
   use Protobuf,
     full_name: "spark.connect.FetchErrorDetailsResponse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:server_side_session_id, 3, type: :string, json_name: "serverSideSessionId")
@@ -1645,7 +1645,7 @@ defmodule Spark.Connect.CheckpointCommandResult do
 
   use Protobuf,
     full_name: "spark.connect.CheckpointCommandResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:relation, 1, type: Spark.Connect.CachedRemoteRelation)
@@ -1656,7 +1656,7 @@ defmodule Spark.Connect.CloneSessionRequest do
 
   use Protobuf,
     full_name: "spark.connect.CloneSessionRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1677,7 +1677,7 @@ defmodule Spark.Connect.CloneSessionResponse do
 
   use Protobuf,
     full_name: "spark.connect.CloneSessionResponse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1691,7 +1691,7 @@ defmodule Spark.Connect.GetStatusRequest.OperationStatusRequest do
 
   use Protobuf,
     full_name: "spark.connect.GetStatusRequest.OperationStatusRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:operation_ids, 1, repeated: true, type: :string, json_name: "operationIds")
@@ -1703,7 +1703,7 @@ defmodule Spark.Connect.GetStatusRequest do
 
   use Protobuf,
     full_name: "spark.connect.GetStatusRequest",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1730,7 +1730,7 @@ defmodule Spark.Connect.GetStatusResponse.OperationStatus do
 
   use Protobuf,
     full_name: "spark.connect.GetStatusResponse.OperationStatus",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:operation_id, 1, type: :string, json_name: "operationId")
@@ -1748,7 +1748,7 @@ defmodule Spark.Connect.GetStatusResponse do
 
   use Protobuf,
     full_name: "spark.connect.GetStatusResponse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
@@ -1766,7 +1766,7 @@ end
 defmodule Spark.Connect.SparkConnectService.Service do
   @moduledoc false
 
-  use GRPC.Service, name: "spark.connect.SparkConnectService", protoc_gen_elixir_version: "0.16.0"
+  use GRPC.Service, name: "spark.connect.SparkConnectService", protoc_gen_elixir_version: "0.17.0"
 
   rpc(:ExecutePlan, Spark.Connect.ExecutePlanRequest, stream(Spark.Connect.ExecutePlanResponse))
 

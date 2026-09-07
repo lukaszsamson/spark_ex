@@ -239,8 +239,14 @@ defmodule SparkEx.Reader do
       df = SparkEx.Reader.parquet(session, "/data/events.parquet")
       df = SparkEx.Reader.parquet(session, ["/data/part1.parquet", "/data/part2.parquet"])
   """
-  @spec parquet(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
-  def parquet(session, paths, opts \\ []) do
+  @spec parquet(GenServer.server() | t(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def parquet(session, paths, opts \\ [])
+
+  def parquet(%__MODULE__{} = reader, paths, opts) when not is_struct(paths, DataFrame) do
+    load_from_builder_as(reader, "parquet", paths, opts)
+  end
+
+  def parquet(session, paths, opts) do
     data_source(session, "parquet", paths, opts)
   end
 
@@ -262,18 +268,17 @@ defmodule SparkEx.Reader do
   @spec csv(GenServer.server() | t(), String.t() | [String.t()] | DataFrame.t(), keyword()) ::
           DataFrame.t()
   def csv(session, paths, opts \\ []) do
-    if match?(%DataFrame{}, paths) do
-      {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator, :sep])
-      csv_opts = reconcile_csv_separator(csv_opts)
-      parse_data_frame(session, paths, :csv, Keyword.merge(rest, csv_opts))
-    else
-      {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator, :sep])
-      csv_opts = reconcile_csv_separator(csv_opts)
+    {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator, :sep])
 
-      # :header/:infer_schema/:sep normalize to "header"/"inferSchema"/"sep" through
-      # the shared key normalizer, so they can simply ride along as top-level
-      # keywords and get the standard duplicate check against :options.
-      data_source(session, "csv", paths, Keyword.merge(rest, csv_opts))
+    # :header/:infer_schema/:sep normalize to "header"/"inferSchema"/"sep" through
+    # the shared key normalizer, so they can simply ride along as top-level
+    # keywords and get the standard duplicate check against :options.
+    opts = Keyword.merge(rest, reconcile_csv_separator(csv_opts))
+
+    cond do
+      match?(%DataFrame{}, paths) -> parse_data_frame(session, paths, :csv, opts)
+      match?(%__MODULE__{}, session) -> load_from_builder_as(session, "csv", paths, opts)
+      true -> data_source(session, "csv", paths, opts)
     end
   end
 
@@ -315,9 +320,11 @@ defmodule SparkEx.Reader do
   @spec json(GenServer.server() | t(), String.t() | [String.t()] | DataFrame.t(), keyword()) ::
           DataFrame.t()
   def json(session, paths, opts \\ []) do
-    if match?(%DataFrame{}, paths),
-      do: parse_data_frame(session, paths, :json, opts),
-      else: data_source(session, "json", paths, opts)
+    cond do
+      match?(%DataFrame{}, paths) -> parse_data_frame(session, paths, :json, opts)
+      match?(%__MODULE__{}, session) -> load_from_builder_as(session, "json", paths, opts)
+      true -> data_source(session, "json", paths, opts)
+    end
   end
 
   @doc """
@@ -333,8 +340,14 @@ defmodule SparkEx.Reader do
 
       df = SparkEx.Reader.text(session, "/data/lines.txt")
   """
-  @spec text(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
-  def text(session, paths, opts \\ []) do
+  @spec text(GenServer.server() | t(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def text(session, paths, opts \\ [])
+
+  def text(%__MODULE__{} = reader, paths, opts) when not is_struct(paths, DataFrame) do
+    load_from_builder_as(reader, "text", paths, opts)
+  end
+
+  def text(session, paths, opts) do
     data_source(session, "text", paths, opts)
   end
 
@@ -350,8 +363,14 @@ defmodule SparkEx.Reader do
 
       df = SparkEx.Reader.orc(session, "/data/events.orc")
   """
-  @spec orc(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
-  def orc(session, paths, opts \\ []) do
+  @spec orc(GenServer.server() | t(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def orc(session, paths, opts \\ [])
+
+  def orc(%__MODULE__{} = reader, paths, opts) when not is_struct(paths, DataFrame) do
+    load_from_builder_as(reader, "orc", paths, opts)
+  end
+
+  def orc(session, paths, opts) do
     data_source(session, "orc", paths, opts)
   end
 
@@ -363,8 +382,14 @@ defmodule SparkEx.Reader do
   - `:schema` — optional schema string
   - `:options` — map of Avro reader options
   """
-  @spec avro(GenServer.server(), String.t() | [String.t()], keyword()) :: DataFrame.t()
-  def avro(session, paths, opts \\ []) do
+  @spec avro(GenServer.server() | t(), String.t() | [String.t()], keyword()) :: DataFrame.t()
+  def avro(session, paths, opts \\ [])
+
+  def avro(%__MODULE__{} = reader, paths, opts) when not is_struct(paths, DataFrame) do
+    load_from_builder_as(reader, "avro", paths, opts)
+  end
+
+  def avro(session, paths, opts) do
     data_source(session, "avro", paths, opts)
   end
 
@@ -379,9 +404,11 @@ defmodule SparkEx.Reader do
   @spec xml(GenServer.server() | t(), String.t() | [String.t()] | DataFrame.t(), keyword()) ::
           DataFrame.t()
   def xml(session, paths, opts \\ []) do
-    if match?(%DataFrame{}, paths),
-      do: parse_data_frame(session, paths, :xml, opts),
-      else: data_source(session, "xml", paths, opts)
+    cond do
+      match?(%DataFrame{}, paths) -> parse_data_frame(session, paths, :xml, opts)
+      match?(%__MODULE__{}, session) -> load_from_builder_as(session, "xml", paths, opts)
+      true -> data_source(session, "xml", paths, opts)
+    end
   end
 
   @doc """
@@ -521,6 +548,12 @@ defmodule SparkEx.Reader do
   defp normalize_jdbc_properties(other) do
     raise ArgumentError,
           "properties must be nil, a map, or a keyword list, got: #{inspect(other)}"
+  end
+
+  # Format-specific entry points (csv/json/xml) accept a builder as their first
+  # argument, exactly like load/3, with the format pinned by the caller.
+  defp load_from_builder_as(%__MODULE__{} = reader, format, paths, opts) do
+    load_from_builder(reader, List.wrap(paths), Keyword.put(opts, :format, format))
   end
 
   defp load_from_builder(reader, paths, opts) do

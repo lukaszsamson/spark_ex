@@ -4,7 +4,7 @@ defmodule Spark.Connect.Expression.Window.WindowFrame.FrameType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.Expression.Window.WindowFrame.FrameType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:FRAME_TYPE_UNDEFINED, 0)
@@ -18,7 +18,7 @@ defmodule Spark.Connect.Expression.SortOrder.SortDirection do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.Expression.SortOrder.SortDirection",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:SORT_DIRECTION_UNSPECIFIED, 0)
@@ -32,7 +32,7 @@ defmodule Spark.Connect.Expression.SortOrder.NullOrdering do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.Expression.SortOrder.NullOrdering",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:SORT_NULLS_UNSPECIFIED, 0)
@@ -46,7 +46,7 @@ defmodule Spark.Connect.Expression.Cast.EvalMode do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.Expression.Cast.EvalMode",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:EVAL_MODE_UNSPECIFIED, 0)
@@ -61,7 +61,7 @@ defmodule Spark.Connect.MergeAction.ActionType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.MergeAction.ActionType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:ACTION_TYPE_INVALID, 0)
@@ -78,7 +78,7 @@ defmodule Spark.Connect.SubqueryExpression.SubqueryType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.SubqueryExpression.SubqueryType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:SUBQUERY_TYPE_UNKNOWN, 0)
@@ -93,7 +93,7 @@ defmodule Spark.Connect.Expression.Window.WindowFrame.FrameBoundary do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Window.WindowFrame.FrameBoundary",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:boundary, 0)
@@ -108,7 +108,7 @@ defmodule Spark.Connect.Expression.Window.WindowFrame do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Window.WindowFrame",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:frame_type, 1,
@@ -126,7 +126,7 @@ defmodule Spark.Connect.Expression.Window do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Window",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:window_function, 1, type: Spark.Connect.Expression, json_name: "windowFunction")
@@ -151,7 +151,7 @@ defmodule Spark.Connect.Expression.SortOrder do
 
   use Protobuf,
     full_name: "spark.connect.Expression.SortOrder",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:child, 1, type: Spark.Connect.Expression)
@@ -169,7 +169,7 @@ defmodule Spark.Connect.Expression.DirectShufflePartitionID do
 
   use Protobuf,
     full_name: "spark.connect.Expression.DirectShufflePartitionID",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:child, 1, type: Spark.Connect.Expression)
@@ -180,7 +180,7 @@ defmodule Spark.Connect.Expression.Cast do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Cast",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:cast_to_type, 0)
@@ -201,7 +201,7 @@ defmodule Spark.Connect.Expression.Literal.Decimal do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Literal.Decimal",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:value, 1, type: :string)
@@ -214,7 +214,7 @@ defmodule Spark.Connect.Expression.Literal.CalendarInterval do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Literal.CalendarInterval",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:months, 1, type: :int32)
@@ -227,7 +227,7 @@ defmodule Spark.Connect.Expression.Literal.Array do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Literal.Array",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:element_type, 1,
@@ -244,7 +244,7 @@ defmodule Spark.Connect.Expression.Literal.Map do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Literal.Map",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key_type, 1, type: Spark.Connect.DataType, json_name: "keyType", deprecated: true)
@@ -258,7 +258,7 @@ defmodule Spark.Connect.Expression.Literal.Struct do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Literal.Struct",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:struct_type, 1, type: Spark.Connect.DataType, json_name: "structType", deprecated: true)
@@ -270,7 +270,7 @@ defmodule Spark.Connect.Expression.Literal.SpecializedArray do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Literal.SpecializedArray",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:value_type, 0)
@@ -288,7 +288,7 @@ defmodule Spark.Connect.Expression.Literal.Time do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Literal.Time",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:nano, 1, type: :int64)
@@ -300,7 +300,7 @@ defmodule Spark.Connect.Expression.Literal do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Literal",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:literal_type, 0)
@@ -347,7 +347,7 @@ defmodule Spark.Connect.Expression.UnresolvedAttribute do
 
   use Protobuf,
     full_name: "spark.connect.Expression.UnresolvedAttribute",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:unparsed_identifier, 1, type: :string, json_name: "unparsedIdentifier")
@@ -360,7 +360,7 @@ defmodule Spark.Connect.Expression.UnresolvedFunction do
 
   use Protobuf,
     full_name: "spark.connect.Expression.UnresolvedFunction",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:function_name, 1, type: :string, json_name: "functionName")
@@ -375,7 +375,7 @@ defmodule Spark.Connect.Expression.ExpressionString do
 
   use Protobuf,
     full_name: "spark.connect.Expression.ExpressionString",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:expression, 1, type: :string)
@@ -386,7 +386,7 @@ defmodule Spark.Connect.Expression.UnresolvedStar do
 
   use Protobuf,
     full_name: "spark.connect.Expression.UnresolvedStar",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:unparsed_target, 1, proto3_optional: true, type: :string, json_name: "unparsedTarget")
@@ -398,7 +398,7 @@ defmodule Spark.Connect.Expression.UnresolvedRegex do
 
   use Protobuf,
     full_name: "spark.connect.Expression.UnresolvedRegex",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:col_name, 1, type: :string, json_name: "colName")
@@ -410,7 +410,7 @@ defmodule Spark.Connect.Expression.UnresolvedExtractValue do
 
   use Protobuf,
     full_name: "spark.connect.Expression.UnresolvedExtractValue",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:child, 1, type: Spark.Connect.Expression)
@@ -422,7 +422,7 @@ defmodule Spark.Connect.Expression.UpdateFields do
 
   use Protobuf,
     full_name: "spark.connect.Expression.UpdateFields",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:struct_expression, 1, type: Spark.Connect.Expression, json_name: "structExpression")
@@ -435,7 +435,7 @@ defmodule Spark.Connect.Expression.Alias do
 
   use Protobuf,
     full_name: "spark.connect.Expression.Alias",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:expr, 1, type: Spark.Connect.Expression)
@@ -448,7 +448,7 @@ defmodule Spark.Connect.Expression.LambdaFunction do
 
   use Protobuf,
     full_name: "spark.connect.Expression.LambdaFunction",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:function, 1, type: Spark.Connect.Expression)
@@ -464,7 +464,7 @@ defmodule Spark.Connect.Expression.UnresolvedNamedLambdaVariable do
 
   use Protobuf,
     full_name: "spark.connect.Expression.UnresolvedNamedLambdaVariable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:name_parts, 1, repeated: true, type: :string, json_name: "nameParts")
@@ -475,7 +475,7 @@ defmodule Spark.Connect.Expression do
 
   use Protobuf,
     full_name: "spark.connect.Expression",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:expr_type, 0)
@@ -590,7 +590,7 @@ defmodule Spark.Connect.ExpressionCommon do
 
   use Protobuf,
     full_name: "spark.connect.ExpressionCommon",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:origin, 1, type: Spark.Connect.Origin)
@@ -601,7 +601,7 @@ defmodule Spark.Connect.CommonInlineUserDefinedFunction do
 
   use Protobuf,
     full_name: "spark.connect.CommonInlineUserDefinedFunction",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:function, 0)
@@ -626,7 +626,7 @@ defmodule Spark.Connect.PythonUDF do
 
   use Protobuf,
     full_name: "spark.connect.PythonUDF",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:output_type, 1, type: Spark.Connect.DataType, json_name: "outputType")
@@ -641,7 +641,7 @@ defmodule Spark.Connect.ScalarScalaUDF do
 
   use Protobuf,
     full_name: "spark.connect.ScalarScalaUDF",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:payload, 1, type: :bytes)
@@ -656,7 +656,7 @@ defmodule Spark.Connect.JavaUDF do
 
   use Protobuf,
     full_name: "spark.connect.JavaUDF",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:class_name, 1, type: :string, json_name: "className")
@@ -675,7 +675,7 @@ defmodule Spark.Connect.TypedAggregateExpression do
 
   use Protobuf,
     full_name: "spark.connect.TypedAggregateExpression",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:scalar_scala_udf, 1, type: Spark.Connect.ScalarScalaUDF, json_name: "scalarScalaUdf")
@@ -686,7 +686,7 @@ defmodule Spark.Connect.CallFunction do
 
   use Protobuf,
     full_name: "spark.connect.CallFunction",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:function_name, 1, type: :string, json_name: "functionName")
@@ -698,7 +698,7 @@ defmodule Spark.Connect.NamedArgumentExpression do
 
   use Protobuf,
     full_name: "spark.connect.NamedArgumentExpression",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -710,7 +710,7 @@ defmodule Spark.Connect.MergeAction.Assignment do
 
   use Protobuf,
     full_name: "spark.connect.MergeAction.Assignment",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: Spark.Connect.Expression)
@@ -722,7 +722,7 @@ defmodule Spark.Connect.MergeAction do
 
   use Protobuf,
     full_name: "spark.connect.MergeAction",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:action_type, 1,
@@ -740,7 +740,7 @@ defmodule Spark.Connect.SubqueryExpression.TableArgOptions do
 
   use Protobuf,
     full_name: "spark.connect.SubqueryExpression.TableArgOptions",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:partition_spec, 1,
@@ -767,7 +767,7 @@ defmodule Spark.Connect.SubqueryExpression do
 
   use Protobuf,
     full_name: "spark.connect.SubqueryExpression",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:plan_id, 1, type: :int64, json_name: "planId")

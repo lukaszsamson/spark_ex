@@ -66,6 +66,72 @@ defmodule SparkEx.Unit.Spark42FunctionsTest do
              F.tuple_intersection_agg_double("s")
   end
 
+  test "tuple sketch wrappers accept keyword options for their defaults" do
+    assert %Column{
+             expr:
+               {:fn, "tuple_union_agg_double", [{:col, "s"}, {:lit, 12}, {:lit, "max"}], false}
+           } = F.tuple_union_agg_double("s", mode: "max")
+
+    assert %Column{
+             expr:
+               {:fn, "tuple_union_agg_double", [{:col, "s"}, {:lit, 20}, {:lit, "sum"}], false}
+           } = F.tuple_union_agg_double("s", lg_nom_entries: 20)
+
+    assert %Column{
+             expr:
+               {:fn, "tuple_union_agg_integer", [{:col, "s"}, {:lit, 8}, {:lit, "min"}], false}
+           } = F.tuple_union_agg_integer("s", lg_nom_entries: 8, mode: "min")
+
+    assert %Column{
+             expr:
+               {:fn, "tuple_sketch_agg_double",
+                [{:col, "key"}, {:col, "summary"}, {:lit, 12}, {:lit, "max"}], false}
+           } = F.tuple_sketch_agg_double("key", "summary", mode: "max")
+
+    assert %Column{
+             expr:
+               {:fn, "tuple_union_integer", [{:col, "l"}, {:col, "r"}, {:lit, 20}, {:lit, "sum"}],
+                false}
+           } = F.tuple_union_integer("l", "r", lg_nom_entries: 20)
+
+    assert %Column{
+             expr:
+               {:fn, "tuple_union_theta_double",
+                [{:col, "l"}, {:col, "r"}, {:lit, 16}, {:lit, "min"}], false}
+           } = F.tuple_union_theta_double("l", "r", lg_nom_entries: 16, mode: "min")
+  end
+
+  test "tuple sketch wrappers keep the positional form and reject unknown options" do
+    assert %Column{
+             expr:
+               {:fn, "tuple_union_agg_double", [{:col, "s"}, {:lit, 20}, {:lit, "max"}], false}
+           } = F.tuple_union_agg_double("s", 20, "max")
+
+    assert %Column{
+             expr:
+               {:fn, "tuple_union_agg_double", [{:col, "s"}, {:lit, 12}, {:lit, "sum"}], false}
+           } = F.tuple_union_agg_double("s")
+
+    assert_raise ArgumentError, ~r/unknown :tuple_union_agg_double options: \[:bogus\]/, fn ->
+      F.tuple_union_agg_double("s", bogus: 1)
+    end
+
+    assert_raise ArgumentError, ~r/unknown :tuple_union_double options: \[:bogus\]/, fn ->
+      F.tuple_union_double("l", "r", bogus: 1)
+    end
+  end
+
+  test "tuple sketch keyword options produce encodable expressions" do
+    for column <- [
+          F.tuple_union_agg_double("s", mode: "max"),
+          F.tuple_sketch_agg_integer("k", "v", lg_nom_entries: 8),
+          F.tuple_union_theta_double("l", "r", lg_nom_entries: 16, mode: "min")
+        ] do
+      assert %Spark.Connect.Expression{} =
+               SparkEx.Connect.PlanEncoder.encode_expression(column.expr)
+    end
+  end
+
   test "KLL merge aggregates omit k by default" do
     assert %Column{expr: {:fn, "kll_merge_agg_bigint", [{:col, "s"}], false}} =
              F.kll_merge_agg_bigint("s")
@@ -146,5 +212,19 @@ defmodule SparkEx.Unit.Spark42FunctionsTest do
     for name <- [:vector_avg, :vector_sum] do
       assert %Column{expr: {:fn, _, [{:col, "vector"}], false}} = apply(F, name, ["vector"])
     end
+  end
+
+  test "tuple sketch wrappers reject mixing positional and keyword options" do
+    assert_raise ArgumentError,
+                 ~r/must be passed either positionally or as a single keyword/,
+                 fn ->
+                   F.tuple_union_agg_double("s", 20, mode: "max")
+                 end
+
+    assert_raise ArgumentError,
+                 ~r/must be passed either positionally or as a single keyword/,
+                 fn ->
+                   F.tuple_union_double("l", "r", 20, mode: "max")
+                 end
   end
 end

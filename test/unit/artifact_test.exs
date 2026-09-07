@@ -266,10 +266,103 @@ defmodule SparkEx.Unit.ArtifactTest do
         Artifacts.prepare([path_a, path_b], "files")
       end
     end
+
+    test "resolves a file:// URI to the real local path and reads it from disk" do
+      file_path = tmp_path("file_uri.txt")
+      File.write!(file_path, "uri-data")
+
+      file_uri = "file://" <> file_path
+
+      assert {:ok, [{"files/spark_ex_file_uri.txt", {:file, ^file_path, 8}}]} =
+               Artifacts.prepare(file_uri, "files/")
+    end
   end
 
   defp tmp_path(name) do
     Path.join(System.tmp_dir!(), "spark_ex_" <> name)
+  end
+
+  describe "Artifacts.classify_local_path/1 (SPARK-55071 parity)" do
+    test "ordinary POSIX absolute paths are returned unchanged" do
+      assert Artifacts.classify_local_path("/tmp/foo.jar") == "/tmp/foo.jar"
+      assert Artifacts.classify_local_path("/home/user/my lib.jar") == "/home/user/my lib.jar"
+    end
+
+    test "ordinary POSIX relative paths are returned unchanged" do
+      assert Artifacts.classify_local_path("relative/foo.jar") == "relative/foo.jar"
+      assert Artifacts.classify_local_path("foo.jar") == "foo.jar"
+    end
+
+    test "Windows drive paths with backslashes are treated as local paths, not a URI scheme" do
+      assert Artifacts.classify_local_path("C:\\Users\\alex\\test.py") ==
+               "C:\\Users\\alex\\test.py"
+
+      assert Artifacts.classify_local_path("d:\\a\\b.jar") == "d:\\a\\b.jar"
+    end
+
+    test "Windows drive paths with forward slashes are treated as local paths" do
+      assert Artifacts.classify_local_path("C:/Users/alex/test.py") == "C:/Users/alex/test.py"
+    end
+
+    test "a bare drive-letter-looking scheme without a following separator is not a drive path" do
+      # No `\` or `/` right after the colon: not what SPARK-55071 guards against,
+      # left to fall through to ordinary (non-file) URI/path handling.
+      assert Artifacts.classify_local_path("c:foo.jar") == "c:foo.jar"
+    end
+
+    test "UNC paths are treated as local paths" do
+      assert Artifacts.classify_local_path("\\\\server\\share\\file.jar") ==
+               "\\\\server\\share\\file.jar"
+    end
+
+    test "file URI with triple slash decodes to a POSIX path" do
+      assert Artifacts.classify_local_path("file:///tmp/foo.jar") == "/tmp/foo.jar"
+    end
+
+    test "file URI with single slash decodes to a POSIX path" do
+      assert Artifacts.classify_local_path("file:/tmp/foo.jar") == "/tmp/foo.jar"
+    end
+
+    test "file URI with triple slash decodes to a Windows drive path" do
+      assert Artifacts.classify_local_path("file:///C:/Users/alex/test.py") ==
+               "C:/Users/alex/test.py"
+    end
+
+    test "file URI with single slash decodes to a Windows drive path" do
+      assert Artifacts.classify_local_path("file:/C:/Users/alex/test.py") ==
+               "C:/Users/alex/test.py"
+    end
+
+    test "percent-escapes in a file URI are decoded" do
+      assert Artifacts.classify_local_path("file:///tmp/foo%20bar.jar") == "/tmp/foo bar.jar"
+      assert Artifacts.classify_local_path("file:/tmp/foo%20bar.jar") == "/tmp/foo bar.jar"
+    end
+
+    test "literal spaces in a file URI pass through unchanged" do
+      assert Artifacts.classify_local_path("file:///tmp/foo bar.jar") == "/tmp/foo bar.jar"
+    end
+
+    test "remote URI schemes are left untouched, same as before this function existed" do
+      assert Artifacts.classify_local_path("hdfs://nn:9000/path/foo.jar") ==
+               "hdfs://nn:9000/path/foo.jar"
+
+      assert Artifacts.classify_local_path("s3://bucket/key.jar") == "s3://bucket/key.jar"
+    end
+
+    test "regression: POSIX behavior is byte-for-byte identical to the raw input" do
+      posix_inputs = [
+        "/tmp/foo.jar",
+        "relative/path/to/file.py",
+        "./file.txt",
+        "../parent/file.txt",
+        "/tmp/has spaces/file.jar",
+        "/tmp/has#not-a-fragment-since-split-already-happened.jar"
+      ]
+
+      for input <- posix_inputs do
+        assert Artifacts.classify_local_path(input) == input
+      end
+    end
   end
 
   describe "AddArtifactsResponse parsing" do

@@ -19,7 +19,11 @@ defmodule SparkEx.EtsTableOwner do
     # Session-pid -> connection snapshot for SparkEx.Internal.SessionSnapshot
     # (out-of-band Interrupt RPCs that must not queue behind a running
     # execute on the Session GenServer).
-    {:spark_ex_session_snapshots, :set}
+    {:spark_ex_session_snapshots, :set},
+    # {session_id, ref} -> pid of an in-flight ReleaseExecute task, for
+    # SparkEx.Internal.ReleaseTracker. Created here so its lifetime spans
+    # every Session (releases outlive the streams that fired them).
+    {:spark_ex_release_tasks, :set}
   ]
 
   @spec start_link(keyword()) :: GenServer.on_start()

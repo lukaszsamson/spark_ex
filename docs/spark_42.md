@@ -167,6 +167,11 @@ negative behavior but did not exercise the intended server path:
   Spark 4.0 sends empty metric keys and values for these self-joins/unions,
   including with its plan cache disabled; SparkEx cannot recover omitted values.
   Ordinary observations and session isolation remain covered on Spark 4.0.
+- `spark42_p1_readwrite_test.exs` exercises both CDC entry points against the
+  seeded changelog fixture: `Reader.changes/2` for the bounded batch history and
+  `StreamReader.changes/2` driven to completion through an `available_now`
+  trigger into a memory sink, asserting the replayed change types and commit
+  versions plus the changelog micro-batch stream in query progress.
 - Function and error regressions verify bucket origins/boundaries, top-K edge
   cases, and exact final-release Parse error classes, SQLSTATE, and parameters.
 - A local gRPC echo verifies the URI/channel/HTTP2 binary-metadata path.

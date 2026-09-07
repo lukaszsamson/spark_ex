@@ -3,7 +3,7 @@ defmodule Spark.Connect.ExamplePluginRelation do
 
   use Protobuf,
     full_name: "spark.connect.ExamplePluginRelation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -15,7 +15,7 @@ defmodule Spark.Connect.ExamplePluginExpression do
 
   use Protobuf,
     full_name: "spark.connect.ExamplePluginExpression",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:child, 1, type: Spark.Connect.Expression)
@@ -27,7 +27,7 @@ defmodule Spark.Connect.ExamplePluginCommand do
 
   use Protobuf,
     full_name: "spark.connect.ExamplePluginCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:custom_field, 1, type: :string, json_name: "customField")
