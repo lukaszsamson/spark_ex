@@ -289,6 +289,67 @@ defmodule SparkEx.Integration.Spark42P1ReadWriteTest do
       assert {:ok, bounded_rows} = DataFrame.collect(bounded)
       assert Enum.map(bounded_rows, & &1["_change_type"]) == ["update_before", "update_after"]
     end
+
+    test "streaming changes replay the seeded changelog through a memory sink", %{
+      session: session
+    } do
+      table = "cdc_e2e.p1_cdc"
+      suffix = System.unique_integer([:positive, :monotonic])
+      sink = "cdc_stream_#{suffix}"
+      checkpoint = Path.join(System.tmp_dir!(), "spark42-cdc-stream-#{suffix}")
+
+      sql_ok(session, "DROP TABLE IF EXISTS #{table}")
+      sql_ok(session, "CREATE TABLE #{table} (id BIGINT, data STRING) USING foo")
+
+      on_exit(fn ->
+        File.rm_rf(checkpoint)
+        sql_ok(session, "DROP TABLE IF EXISTS #{table}")
+      end)
+
+      {:ok, query} =
+        session
+        |> StreamReader.new()
+        |> StreamReader.option("startingVersion", 1)
+        |> StreamReader.changes(table)
+        |> DataFrame.write_stream()
+        |> StreamWriter.format("memory")
+        |> StreamWriter.query_name(sink)
+        |> StreamWriter.output_mode("append")
+        |> StreamWriter.option("checkpointLocation", checkpoint)
+        |> StreamWriter.trigger(available_now: true)
+        |> StreamWriter.start()
+
+      on_exit(fn -> StreamingQuery.stop(query) end)
+
+      assert {:ok, true} = StreamingQuery.await_termination(query, timeout: 30)
+
+      assert {:ok, rows} =
+               SparkEx.sql(
+                 session,
+                 "SELECT id, data, _change_type, _commit_version FROM #{sink} " <>
+                   "ORDER BY _commit_version, _change_type"
+               )
+               |> DataFrame.collect()
+
+      assert Enum.map(rows, &{&1["_change_type"], &1["_commit_version"], &1["data"]}) == [
+               {"insert", 1, "old"},
+               {"update_after", 2, "new"},
+               {"update_before", 2, "old"},
+               {"delete", 3, "new"}
+             ]
+
+      assert Enum.all?(rows, &(&1["id"] == 1))
+
+      assert {:ok, progresses} = StreamingQuery.recent_progress(query)
+
+      descriptions =
+        progresses
+        |> Enum.flat_map(&Map.get(&1, "sources", []))
+        |> Enum.map(&Map.get(&1, "description", ""))
+
+      assert descriptions != []
+      assert Enum.any?(descriptions, &(&1 =~ "ChangelogMicroBatchStream"))
+    end
   end
 
   defp sql_ok(session, statement) do
