@@ -1277,16 +1277,22 @@ defmodule SparkEx.Connect.ResultDecoder do
 
   # `Explorer.DataFrame.to_rows/1` returns `[]` for a positive-height,
   # zero-column DataFrame even though the native frame retains its height.
-  # Reconstruct the only possible row value (`%{}`) from that independently
-  # decoded height; the caller then validates it against ArrowBatch.row_count.
+  # Validate that independently decoded height against ArrowBatch.row_count
+  # before reconstructing the only possible row value (`%{}`).
   defp dataframe_to_rows(df, expected_row_count, wire_schema) do
     zero_columns? = Explorer.DataFrame.n_columns(df) == 0
     decoded_row_count = Explorer.DataFrame.n_rows(df)
 
-    if zero_columns? and expected_row_count > 0 and zero_column_wire_schema?(wire_schema) do
-      {:ok, List.duplicate(%{}, decoded_row_count)}
-    else
-      safe_dataframe_to_rows(df)
+    cond do
+      zero_columns? and decoded_row_count != expected_row_count ->
+        {:error,
+         {:invalid_arrow_batch_row_count, %{expected: expected_row_count, got: decoded_row_count}}}
+
+      zero_columns? and zero_column_wire_schema?(wire_schema) ->
+        {:ok, List.duplicate(%{}, decoded_row_count)}
+
+      true ->
+        safe_dataframe_to_rows(df)
     end
   end
 

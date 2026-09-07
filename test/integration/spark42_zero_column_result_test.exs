@@ -83,6 +83,16 @@ defmodule SparkEx.Integration.Spark42ZeroColumnResultTest do
          }}
     }
 
+    empty_schema = %DataType{kind: {:struct, %DataType.Struct{fields: []}}}
+    mismatch = {:invalid_arrow_batch_row_count, %{expected: 0, got: 1}}
+
+    for schema <- [nil, empty_schema, nonempty_schema] do
+      frames = [frame.(0, schema)]
+      assert {:error, ^mismatch} = ResultDecoder.decode_stream(frames)
+      assert [{:error, ^mismatch}] = frames |> ResultDecoder.rows_stream() |> Enum.to_list()
+      assert {:error, ^mismatch} = ResultDecoder.decode_stream_explorer(frames, nil)
+    end
+
     assert {:error, {:invalid_arrow_batch_row_count, %{expected: 1, got: 0}}} =
              ResultDecoder.decode_stream([frame.(1, nonempty_schema)])
 
