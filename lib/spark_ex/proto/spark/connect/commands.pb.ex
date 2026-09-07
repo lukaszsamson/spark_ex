@@ -4,7 +4,7 @@ defmodule Spark.Connect.StreamingQueryEventType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.StreamingQueryEventType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:QUERY_PROGRESS_UNSPECIFIED, 0)
@@ -19,7 +19,7 @@ defmodule Spark.Connect.WriteOperation.SaveMode do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.WriteOperation.SaveMode",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:SAVE_MODE_UNSPECIFIED, 0)
@@ -35,7 +35,7 @@ defmodule Spark.Connect.WriteOperation.SaveTable.TableSaveMethod do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.WriteOperation.SaveTable.TableSaveMethod",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:TABLE_SAVE_METHOD_UNSPECIFIED, 0)
@@ -49,7 +49,7 @@ defmodule Spark.Connect.WriteOperationV2.Mode do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.WriteOperationV2.Mode",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:MODE_UNSPECIFIED, 0)
@@ -66,7 +66,7 @@ defmodule Spark.Connect.Command do
 
   use Protobuf,
     full_name: "spark.connect.Command",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:command_type, 0)
@@ -186,7 +186,7 @@ defmodule Spark.Connect.SqlCommand.ArgsEntry do
   use Protobuf,
     full_name: "spark.connect.SqlCommand.ArgsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -199,7 +199,7 @@ defmodule Spark.Connect.SqlCommand.NamedArgumentsEntry do
   use Protobuf,
     full_name: "spark.connect.SqlCommand.NamedArgumentsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -211,7 +211,7 @@ defmodule Spark.Connect.SqlCommand do
 
   use Protobuf,
     full_name: "spark.connect.SqlCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:sql, 1, type: :string, deprecated: true)
@@ -253,7 +253,7 @@ defmodule Spark.Connect.CreateDataFrameViewCommand do
 
   use Protobuf,
     full_name: "spark.connect.CreateDataFrameViewCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -268,7 +268,7 @@ defmodule Spark.Connect.WriteOperation.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.WriteOperation.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -280,7 +280,7 @@ defmodule Spark.Connect.WriteOperation.SaveTable do
 
   use Protobuf,
     full_name: "spark.connect.WriteOperation.SaveTable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:table_name, 1, type: :string, json_name: "tableName")
@@ -297,7 +297,7 @@ defmodule Spark.Connect.WriteOperation.BucketBy do
 
   use Protobuf,
     full_name: "spark.connect.WriteOperation.BucketBy",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:bucket_column_names, 1, repeated: true, type: :string, json_name: "bucketColumnNames")
@@ -309,7 +309,7 @@ defmodule Spark.Connect.WriteOperation do
 
   use Protobuf,
     full_name: "spark.connect.WriteOperation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:save_type, 0)
@@ -333,7 +333,7 @@ defmodule Spark.Connect.WriteOperationV2.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.WriteOperationV2.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -346,7 +346,7 @@ defmodule Spark.Connect.WriteOperationV2.TablePropertiesEntry do
   use Protobuf,
     full_name: "spark.connect.WriteOperationV2.TablePropertiesEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -358,7 +358,7 @@ defmodule Spark.Connect.WriteOperationV2 do
 
   use Protobuf,
     full_name: "spark.connect.WriteOperationV2",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -392,7 +392,7 @@ defmodule Spark.Connect.WriteStreamOperationStart.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.WriteStreamOperationStart.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -404,7 +404,7 @@ defmodule Spark.Connect.WriteStreamOperationStart do
 
   use Protobuf,
     full_name: "spark.connect.WriteStreamOperationStart",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:trigger, 0)
@@ -474,7 +474,7 @@ defmodule Spark.Connect.StreamingForeachFunction do
 
   use Protobuf,
     full_name: "spark.connect.StreamingForeachFunction",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:function, 0)
@@ -493,7 +493,7 @@ defmodule Spark.Connect.WriteStreamOperationStartResult do
 
   use Protobuf,
     full_name: "spark.connect.WriteStreamOperationStartResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:query_id, 1, type: Spark.Connect.StreamingQueryInstanceId, json_name: "queryId")
@@ -511,7 +511,7 @@ defmodule Spark.Connect.StreamingQueryInstanceId do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryInstanceId",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:id, 1, type: :string)
@@ -523,7 +523,7 @@ defmodule Spark.Connect.StreamingQueryCommand.ExplainCommand do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryCommand.ExplainCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:extended, 1, type: :bool)
@@ -534,7 +534,7 @@ defmodule Spark.Connect.StreamingQueryCommand.AwaitTerminationCommand do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryCommand.AwaitTerminationCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:timeout_ms, 2, proto3_optional: true, type: :int64, json_name: "timeoutMs")
@@ -545,7 +545,7 @@ defmodule Spark.Connect.StreamingQueryCommand do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:command, 0)
@@ -571,7 +571,7 @@ defmodule Spark.Connect.StreamingQueryCommandResult.StatusResult do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryCommandResult.StatusResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:status_message, 1, type: :string, json_name: "statusMessage")
@@ -585,7 +585,7 @@ defmodule Spark.Connect.StreamingQueryCommandResult.RecentProgressResult do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryCommandResult.RecentProgressResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:recent_progress_json, 5, repeated: true, type: :string, json_name: "recentProgressJson")
@@ -596,7 +596,7 @@ defmodule Spark.Connect.StreamingQueryCommandResult.ExplainResult do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryCommandResult.ExplainResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:result, 1, type: :string)
@@ -607,7 +607,7 @@ defmodule Spark.Connect.StreamingQueryCommandResult.ExceptionResult do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryCommandResult.ExceptionResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:exception_message, 1,
@@ -625,7 +625,7 @@ defmodule Spark.Connect.StreamingQueryCommandResult.AwaitTerminationResult do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryCommandResult.AwaitTerminationResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:terminated, 1, type: :bool)
@@ -636,7 +636,7 @@ defmodule Spark.Connect.StreamingQueryCommandResult do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryCommandResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:result_type, 0)
@@ -665,7 +665,7 @@ defmodule Spark.Connect.StreamingQueryManagerCommand.AwaitAnyTerminationCommand 
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryManagerCommand.AwaitAnyTerminationCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:timeout_ms, 1, proto3_optional: true, type: :int64, json_name: "timeoutMs")
@@ -676,7 +676,7 @@ defmodule Spark.Connect.StreamingQueryManagerCommand.StreamingQueryListenerComma
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryManagerCommand.StreamingQueryListenerCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:listener_payload, 1, type: :bytes, json_name: "listenerPayload")
@@ -695,7 +695,7 @@ defmodule Spark.Connect.StreamingQueryManagerCommand do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryManagerCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:command, 0)
@@ -731,7 +731,7 @@ defmodule Spark.Connect.StreamingQueryManagerCommandResult.ActiveResult do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryManagerCommandResult.ActiveResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:active_queries, 1,
@@ -746,7 +746,7 @@ defmodule Spark.Connect.StreamingQueryManagerCommandResult.StreamingQueryInstanc
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryManagerCommandResult.StreamingQueryInstance",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:id, 1, type: Spark.Connect.StreamingQueryInstanceId)
@@ -758,7 +758,7 @@ defmodule Spark.Connect.StreamingQueryManagerCommandResult.AwaitAnyTerminationRe
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryManagerCommandResult.AwaitAnyTerminationResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:terminated, 1, type: :bool)
@@ -769,7 +769,7 @@ defmodule Spark.Connect.StreamingQueryManagerCommandResult.StreamingQueryListene
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryManagerCommandResult.StreamingQueryListenerInstance",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:listener_payload, 1, type: :bytes, json_name: "listenerPayload")
@@ -781,7 +781,7 @@ defmodule Spark.Connect.StreamingQueryManagerCommandResult.ListStreamingQueryLis
   use Protobuf,
     full_name:
       "spark.connect.StreamingQueryManagerCommandResult.ListStreamingQueryListenerResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:listener_ids, 1, repeated: true, type: :string, json_name: "listenerIds")
@@ -792,7 +792,7 @@ defmodule Spark.Connect.StreamingQueryManagerCommandResult do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryManagerCommandResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:result_type, 0)
@@ -826,7 +826,7 @@ defmodule Spark.Connect.StreamingQueryListenerBusCommand do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryListenerBusCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:command, 0)
@@ -845,7 +845,7 @@ defmodule Spark.Connect.StreamingQueryListenerEvent do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryListenerEvent",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:event_json, 1, type: :string, json_name: "eventJson")
@@ -862,7 +862,7 @@ defmodule Spark.Connect.StreamingQueryListenerEventsResult do
 
   use Protobuf,
     full_name: "spark.connect.StreamingQueryListenerEventsResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:events, 1, repeated: true, type: Spark.Connect.StreamingQueryListenerEvent)
@@ -879,7 +879,7 @@ defmodule Spark.Connect.GetResourcesCommand do
 
   use Protobuf,
     full_name: "spark.connect.GetResourcesCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -889,7 +889,7 @@ defmodule Spark.Connect.GetResourcesCommandResult.ResourcesEntry do
   use Protobuf,
     full_name: "spark.connect.GetResourcesCommandResult.ResourcesEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -901,7 +901,7 @@ defmodule Spark.Connect.GetResourcesCommandResult do
 
   use Protobuf,
     full_name: "spark.connect.GetResourcesCommandResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:resources, 1,
@@ -916,7 +916,7 @@ defmodule Spark.Connect.CreateResourceProfileCommand do
 
   use Protobuf,
     full_name: "spark.connect.CreateResourceProfileCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:profile, 1, type: Spark.Connect.ResourceProfile)
@@ -927,7 +927,7 @@ defmodule Spark.Connect.CreateResourceProfileCommandResult do
 
   use Protobuf,
     full_name: "spark.connect.CreateResourceProfileCommandResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:profile_id, 1, type: :int32, json_name: "profileId")
@@ -938,7 +938,7 @@ defmodule Spark.Connect.RemoveCachedRemoteRelationCommand do
 
   use Protobuf,
     full_name: "spark.connect.RemoveCachedRemoteRelationCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:relation, 1, type: Spark.Connect.CachedRemoteRelation)
@@ -949,7 +949,7 @@ defmodule Spark.Connect.CheckpointCommand do
 
   use Protobuf,
     full_name: "spark.connect.CheckpointCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:relation, 1, type: Spark.Connect.Relation)
@@ -968,7 +968,7 @@ defmodule Spark.Connect.MergeIntoTableCommand do
 
   use Protobuf,
     full_name: "spark.connect.MergeIntoTableCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:target_table_name, 1, type: :string, json_name: "targetTableName")
@@ -1002,7 +1002,7 @@ defmodule Spark.Connect.ExecuteExternalCommand.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.ExecuteExternalCommand.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -1014,7 +1014,7 @@ defmodule Spark.Connect.ExecuteExternalCommand do
 
   use Protobuf,
     full_name: "spark.connect.ExecuteExternalCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:runner, 1, type: :string)

@@ -4,7 +4,7 @@ defmodule Spark.Connect.Join.JoinType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.Join.JoinType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:JOIN_TYPE_UNSPECIFIED, 0)
@@ -23,7 +23,7 @@ defmodule Spark.Connect.SetOperation.SetOpType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.SetOperation.SetOpType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:SET_OP_TYPE_UNSPECIFIED, 0)
@@ -38,7 +38,7 @@ defmodule Spark.Connect.Aggregate.GroupType do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.Aggregate.GroupType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:GROUP_TYPE_UNSPECIFIED, 0)
@@ -55,7 +55,7 @@ defmodule Spark.Connect.Parse.ParseFormat do
   use Protobuf,
     enum: true,
     full_name: "spark.connect.Parse.ParseFormat",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:PARSE_FORMAT_UNSPECIFIED, 0)
@@ -69,7 +69,7 @@ defmodule Spark.Connect.Relation do
 
   use Protobuf,
     full_name: "spark.connect.Relation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:rel_type, 0)
@@ -243,7 +243,7 @@ defmodule Spark.Connect.MlRelation.Transform do
 
   use Protobuf,
     full_name: "spark.connect.MlRelation.Transform",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:operator, 0)
@@ -259,7 +259,7 @@ defmodule Spark.Connect.MlRelation do
 
   use Protobuf,
     full_name: "spark.connect.MlRelation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:ml_type, 0)
@@ -279,7 +279,7 @@ defmodule Spark.Connect.Fetch.Method.Args do
 
   use Protobuf,
     full_name: "spark.connect.Fetch.Method.Args",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:args_type, 0)
@@ -293,7 +293,7 @@ defmodule Spark.Connect.Fetch.Method do
 
   use Protobuf,
     full_name: "spark.connect.Fetch.Method",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:method, 1, type: :string)
@@ -305,7 +305,7 @@ defmodule Spark.Connect.Fetch do
 
   use Protobuf,
     full_name: "spark.connect.Fetch",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:obj_ref, 1, type: Spark.Connect.ObjectRef, json_name: "objRef")
@@ -317,7 +317,7 @@ defmodule Spark.Connect.Unknown do
 
   use Protobuf,
     full_name: "spark.connect.Unknown",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -326,7 +326,7 @@ defmodule Spark.Connect.RelationCommon do
 
   use Protobuf,
     full_name: "spark.connect.RelationCommon",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:source_info, 1, type: :string, json_name: "sourceInfo", deprecated: true)
@@ -340,7 +340,7 @@ defmodule Spark.Connect.SQL.ArgsEntry do
   use Protobuf,
     full_name: "spark.connect.SQL.ArgsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -353,7 +353,7 @@ defmodule Spark.Connect.SQL.NamedArgumentsEntry do
   use Protobuf,
     full_name: "spark.connect.SQL.NamedArgumentsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -365,7 +365,7 @@ defmodule Spark.Connect.SQL do
 
   use Protobuf,
     full_name: "spark.connect.SQL",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:query, 1, type: :string)
@@ -397,7 +397,7 @@ defmodule Spark.Connect.WithRelations do
 
   use Protobuf,
     full_name: "spark.connect.WithRelations",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:root, 1, type: Spark.Connect.Relation)
@@ -410,7 +410,7 @@ defmodule Spark.Connect.Read.NamedTable.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.Read.NamedTable.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -422,7 +422,7 @@ defmodule Spark.Connect.Read.NamedTable do
 
   use Protobuf,
     full_name: "spark.connect.Read.NamedTable",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:unparsed_identifier, 1, type: :string, json_name: "unparsedIdentifier")
@@ -435,7 +435,7 @@ defmodule Spark.Connect.Read.DataSource.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.Read.DataSource.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -447,7 +447,7 @@ defmodule Spark.Connect.Read.DataSource do
 
   use Protobuf,
     full_name: "spark.connect.Read.DataSource",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:format, 1, proto3_optional: true, type: :string)
@@ -463,7 +463,7 @@ defmodule Spark.Connect.Read do
 
   use Protobuf,
     full_name: "spark.connect.Read",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:read_type, 0)
@@ -479,7 +479,7 @@ defmodule Spark.Connect.RelationChanges.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.RelationChanges.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -491,7 +491,7 @@ defmodule Spark.Connect.RelationChanges do
 
   use Protobuf,
     full_name: "spark.connect.RelationChanges",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:unparsed_identifier, 1, type: :string, json_name: "unparsedIdentifier")
@@ -504,7 +504,7 @@ defmodule Spark.Connect.Project do
 
   use Protobuf,
     full_name: "spark.connect.Project",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -516,7 +516,7 @@ defmodule Spark.Connect.Filter do
 
   use Protobuf,
     full_name: "spark.connect.Filter",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -528,7 +528,7 @@ defmodule Spark.Connect.Join.JoinDataType do
 
   use Protobuf,
     full_name: "spark.connect.Join.JoinDataType",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:is_left_struct, 1, type: :bool, json_name: "isLeftStruct")
@@ -540,7 +540,7 @@ defmodule Spark.Connect.Join do
 
   use Protobuf,
     full_name: "spark.connect.Join",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:left, 1, type: Spark.Connect.Relation)
@@ -561,7 +561,7 @@ defmodule Spark.Connect.SetOperation do
 
   use Protobuf,
     full_name: "spark.connect.SetOperation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:left_input, 1, type: Spark.Connect.Relation, json_name: "leftInput")
@@ -588,7 +588,7 @@ defmodule Spark.Connect.Limit do
 
   use Protobuf,
     full_name: "spark.connect.Limit",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -600,7 +600,7 @@ defmodule Spark.Connect.Offset do
 
   use Protobuf,
     full_name: "spark.connect.Offset",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -612,7 +612,7 @@ defmodule Spark.Connect.Tail do
 
   use Protobuf,
     full_name: "spark.connect.Tail",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -624,7 +624,7 @@ defmodule Spark.Connect.Aggregate.Pivot do
 
   use Protobuf,
     full_name: "spark.connect.Aggregate.Pivot",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:col, 1, type: Spark.Connect.Expression)
@@ -636,7 +636,7 @@ defmodule Spark.Connect.Aggregate.GroupingSets do
 
   use Protobuf,
     full_name: "spark.connect.Aggregate.GroupingSets",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:grouping_set, 1,
@@ -651,7 +651,7 @@ defmodule Spark.Connect.Aggregate do
 
   use Protobuf,
     full_name: "spark.connect.Aggregate",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -688,7 +688,7 @@ defmodule Spark.Connect.Sort do
 
   use Protobuf,
     full_name: "spark.connect.Sort",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -701,7 +701,7 @@ defmodule Spark.Connect.Drop do
 
   use Protobuf,
     full_name: "spark.connect.Drop",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -714,7 +714,7 @@ defmodule Spark.Connect.Deduplicate do
 
   use Protobuf,
     full_name: "spark.connect.Deduplicate",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -734,7 +734,7 @@ defmodule Spark.Connect.LocalRelation do
 
   use Protobuf,
     full_name: "spark.connect.LocalRelation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:data, 1, proto3_optional: true, type: :bytes)
@@ -746,7 +746,7 @@ defmodule Spark.Connect.CachedLocalRelation do
 
   use Protobuf,
     full_name: "spark.connect.CachedLocalRelation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:hash, 3, type: :string)
@@ -757,7 +757,7 @@ defmodule Spark.Connect.ChunkedCachedLocalRelation do
 
   use Protobuf,
     full_name: "spark.connect.ChunkedCachedLocalRelation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:dataHashes, 1, repeated: true, type: :string)
@@ -769,7 +769,7 @@ defmodule Spark.Connect.CachedRemoteRelation do
 
   use Protobuf,
     full_name: "spark.connect.CachedRemoteRelation",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:relation_id, 1, type: :string, json_name: "relationId")
@@ -780,7 +780,7 @@ defmodule Spark.Connect.Sample do
 
   use Protobuf,
     full_name: "spark.connect.Sample",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -796,7 +796,7 @@ defmodule Spark.Connect.Range do
 
   use Protobuf,
     full_name: "spark.connect.Range",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:start, 1, proto3_optional: true, type: :int64)
@@ -810,7 +810,7 @@ defmodule Spark.Connect.SubqueryAlias do
 
   use Protobuf,
     full_name: "spark.connect.SubqueryAlias",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -823,7 +823,7 @@ defmodule Spark.Connect.Repartition do
 
   use Protobuf,
     full_name: "spark.connect.Repartition",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -836,7 +836,7 @@ defmodule Spark.Connect.ShowString do
 
   use Protobuf,
     full_name: "spark.connect.ShowString",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -850,7 +850,7 @@ defmodule Spark.Connect.HtmlString do
 
   use Protobuf,
     full_name: "spark.connect.HtmlString",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -863,7 +863,7 @@ defmodule Spark.Connect.StatSummary do
 
   use Protobuf,
     full_name: "spark.connect.StatSummary",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -875,7 +875,7 @@ defmodule Spark.Connect.StatDescribe do
 
   use Protobuf,
     full_name: "spark.connect.StatDescribe",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -887,7 +887,7 @@ defmodule Spark.Connect.StatCrosstab do
 
   use Protobuf,
     full_name: "spark.connect.StatCrosstab",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -900,7 +900,7 @@ defmodule Spark.Connect.StatCov do
 
   use Protobuf,
     full_name: "spark.connect.StatCov",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -913,7 +913,7 @@ defmodule Spark.Connect.StatCorr do
 
   use Protobuf,
     full_name: "spark.connect.StatCorr",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -927,7 +927,7 @@ defmodule Spark.Connect.StatApproxQuantile do
 
   use Protobuf,
     full_name: "spark.connect.StatApproxQuantile",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -941,7 +941,7 @@ defmodule Spark.Connect.StatFreqItems do
 
   use Protobuf,
     full_name: "spark.connect.StatFreqItems",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -954,7 +954,7 @@ defmodule Spark.Connect.StatSampleBy.Fraction do
 
   use Protobuf,
     full_name: "spark.connect.StatSampleBy.Fraction",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:stratum, 1, type: Spark.Connect.Expression.Literal)
@@ -966,7 +966,7 @@ defmodule Spark.Connect.StatSampleBy do
 
   use Protobuf,
     full_name: "spark.connect.StatSampleBy",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -980,7 +980,7 @@ defmodule Spark.Connect.NAFill do
 
   use Protobuf,
     full_name: "spark.connect.NAFill",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -993,7 +993,7 @@ defmodule Spark.Connect.NADrop do
 
   use Protobuf,
     full_name: "spark.connect.NADrop",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1006,7 +1006,7 @@ defmodule Spark.Connect.NAReplace.Replacement do
 
   use Protobuf,
     full_name: "spark.connect.NAReplace.Replacement",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:old_value, 1, type: Spark.Connect.Expression.Literal, json_name: "oldValue")
@@ -1018,7 +1018,7 @@ defmodule Spark.Connect.NAReplace do
 
   use Protobuf,
     full_name: "spark.connect.NAReplace",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1031,7 +1031,7 @@ defmodule Spark.Connect.ToDF do
 
   use Protobuf,
     full_name: "spark.connect.ToDF",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1044,7 +1044,7 @@ defmodule Spark.Connect.WithColumnsRenamed.RenameColumnsMapEntry do
   use Protobuf,
     full_name: "spark.connect.WithColumnsRenamed.RenameColumnsMapEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -1056,7 +1056,7 @@ defmodule Spark.Connect.WithColumnsRenamed.Rename do
 
   use Protobuf,
     full_name: "spark.connect.WithColumnsRenamed.Rename",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:col_name, 1, type: :string, json_name: "colName")
@@ -1068,7 +1068,7 @@ defmodule Spark.Connect.WithColumnsRenamed do
 
   use Protobuf,
     full_name: "spark.connect.WithColumnsRenamed",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1089,7 +1089,7 @@ defmodule Spark.Connect.WithColumns do
 
   use Protobuf,
     full_name: "spark.connect.WithColumns",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1101,7 +1101,7 @@ defmodule Spark.Connect.WithWatermark do
 
   use Protobuf,
     full_name: "spark.connect.WithWatermark",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1114,7 +1114,7 @@ defmodule Spark.Connect.Hint do
 
   use Protobuf,
     full_name: "spark.connect.Hint",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1127,7 +1127,7 @@ defmodule Spark.Connect.Unpivot.Values do
 
   use Protobuf,
     full_name: "spark.connect.Unpivot.Values",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:values, 1, repeated: true, type: Spark.Connect.Expression)
@@ -1138,7 +1138,7 @@ defmodule Spark.Connect.Unpivot do
 
   use Protobuf,
     full_name: "spark.connect.Unpivot",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1153,7 +1153,7 @@ defmodule Spark.Connect.Transpose do
 
   use Protobuf,
     full_name: "spark.connect.Transpose",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1170,7 +1170,7 @@ defmodule Spark.Connect.UnresolvedTableValuedFunction do
 
   use Protobuf,
     full_name: "spark.connect.UnresolvedTableValuedFunction",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:function_name, 1, type: :string, json_name: "functionName")
@@ -1182,7 +1182,7 @@ defmodule Spark.Connect.ToSchema do
 
   use Protobuf,
     full_name: "spark.connect.ToSchema",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1194,7 +1194,7 @@ defmodule Spark.Connect.RepartitionByExpression do
 
   use Protobuf,
     full_name: "spark.connect.RepartitionByExpression",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1213,7 +1213,7 @@ defmodule Spark.Connect.MapPartitions do
 
   use Protobuf,
     full_name: "spark.connect.MapPartitions",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1227,7 +1227,7 @@ defmodule Spark.Connect.GroupMap do
 
   use Protobuf,
     full_name: "spark.connect.GroupMap",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1281,7 +1281,7 @@ defmodule Spark.Connect.TransformWithStateInfo do
 
   use Protobuf,
     full_name: "spark.connect.TransformWithStateInfo",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:time_mode, 1, type: :string, json_name: "timeMode")
@@ -1304,7 +1304,7 @@ defmodule Spark.Connect.CoGroupMap do
 
   use Protobuf,
     full_name: "spark.connect.CoGroupMap",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1343,7 +1343,7 @@ defmodule Spark.Connect.ApplyInPandasWithState do
 
   use Protobuf,
     full_name: "spark.connect.ApplyInPandasWithState",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1366,7 +1366,7 @@ defmodule Spark.Connect.CommonInlineUserDefinedTableFunction do
 
   use Protobuf,
     full_name: "spark.connect.CommonInlineUserDefinedTableFunction",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:function, 0)
@@ -1382,7 +1382,7 @@ defmodule Spark.Connect.PythonUDTF do
 
   use Protobuf,
     full_name: "spark.connect.PythonUDTF",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:return_type, 1,
@@ -1401,7 +1401,7 @@ defmodule Spark.Connect.CommonInlineUserDefinedDataSource do
 
   use Protobuf,
     full_name: "spark.connect.CommonInlineUserDefinedDataSource",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:data_source, 0)
@@ -1420,7 +1420,7 @@ defmodule Spark.Connect.PythonDataSource do
 
   use Protobuf,
     full_name: "spark.connect.PythonDataSource",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:command, 1, type: :bytes)
@@ -1432,7 +1432,7 @@ defmodule Spark.Connect.CollectMetrics do
 
   use Protobuf,
     full_name: "spark.connect.CollectMetrics",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1446,7 +1446,7 @@ defmodule Spark.Connect.Parse.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.Parse.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -1458,7 +1458,7 @@ defmodule Spark.Connect.Parse do
 
   use Protobuf,
     full_name: "spark.connect.Parse",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:input, 1, type: Spark.Connect.Relation)
@@ -1472,7 +1472,7 @@ defmodule Spark.Connect.AsOfJoin do
 
   use Protobuf,
     full_name: "spark.connect.AsOfJoin",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:left, 1, type: Spark.Connect.Relation)
@@ -1492,7 +1492,7 @@ defmodule Spark.Connect.LateralJoin do
 
   use Protobuf,
     full_name: "spark.connect.LateralJoin",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:left, 1, type: Spark.Connect.Relation)
@@ -1506,7 +1506,7 @@ defmodule Spark.Connect.NearestByJoin do
 
   use Protobuf,
     full_name: "spark.connect.NearestByJoin",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:left, 1, type: Spark.Connect.Relation)

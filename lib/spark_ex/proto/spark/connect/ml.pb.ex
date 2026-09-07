@@ -3,7 +3,7 @@ defmodule Spark.Connect.MlCommand.Fit do
 
   use Protobuf,
     full_name: "spark.connect.MlCommand.Fit",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:estimator, 1, type: Spark.Connect.MlOperator)
@@ -16,7 +16,7 @@ defmodule Spark.Connect.MlCommand.Delete do
 
   use Protobuf,
     full_name: "spark.connect.MlCommand.Delete",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:obj_refs, 1, repeated: true, type: Spark.Connect.ObjectRef, json_name: "objRefs")
@@ -28,7 +28,7 @@ defmodule Spark.Connect.MlCommand.CleanCache do
 
   use Protobuf,
     full_name: "spark.connect.MlCommand.CleanCache",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -37,7 +37,7 @@ defmodule Spark.Connect.MlCommand.GetCacheInfo do
 
   use Protobuf,
     full_name: "spark.connect.MlCommand.GetCacheInfo",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 end
 
@@ -47,7 +47,7 @@ defmodule Spark.Connect.MlCommand.Write.OptionsEntry do
   use Protobuf,
     full_name: "spark.connect.MlCommand.Write.OptionsEntry",
     map: true,
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:key, 1, type: :string)
@@ -59,7 +59,7 @@ defmodule Spark.Connect.MlCommand.Write do
 
   use Protobuf,
     full_name: "spark.connect.MlCommand.Write",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:type, 0)
@@ -77,7 +77,7 @@ defmodule Spark.Connect.MlCommand.Read do
 
   use Protobuf,
     full_name: "spark.connect.MlCommand.Read",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:operator, 1, type: Spark.Connect.MlOperator)
@@ -89,7 +89,7 @@ defmodule Spark.Connect.MlCommand.Evaluate do
 
   use Protobuf,
     full_name: "spark.connect.MlCommand.Evaluate",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:evaluator, 1, type: Spark.Connect.MlOperator)
@@ -102,7 +102,7 @@ defmodule Spark.Connect.MlCommand.CreateSummary do
 
   use Protobuf,
     full_name: "spark.connect.MlCommand.CreateSummary",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:model_ref, 1, type: Spark.Connect.ObjectRef, json_name: "modelRef")
@@ -114,7 +114,7 @@ defmodule Spark.Connect.MlCommand.GetModelSize do
 
   use Protobuf,
     full_name: "spark.connect.MlCommand.GetModelSize",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   field(:model_ref, 1, type: Spark.Connect.ObjectRef, json_name: "modelRef")
@@ -125,7 +125,7 @@ defmodule Spark.Connect.MlCommand do
 
   use Protobuf,
     full_name: "spark.connect.MlCommand",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:command, 0)
@@ -167,7 +167,7 @@ defmodule Spark.Connect.MlCommandResult.MlOperatorInfo do
 
   use Protobuf,
     full_name: "spark.connect.MlCommandResult.MlOperatorInfo",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:type, 0)
@@ -184,7 +184,7 @@ defmodule Spark.Connect.MlCommandResult do
 
   use Protobuf,
     full_name: "spark.connect.MlCommandResult",
-    protoc_gen_elixir_version: "0.16.0",
+    protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
 
   oneof(:result_type, 0)
