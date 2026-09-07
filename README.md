@@ -334,7 +334,7 @@ default.
 
 ```bash
 curl -L -o /tmp/spark.tgz \
-  'https://dlcdn.apache.org/spark/spark-4.1.1/spark-4.1.1-bin-hadoop3-connect.tgz'
+  'https://dlcdn.apache.org/spark/spark-4.2.0/spark-4.2.0-bin-hadoop3.tgz'
 tar -xzf /tmp/spark.tgz -C test/
 ```
 
@@ -342,8 +342,9 @@ tar -xzf /tmp/spark.tgz -C test/
 
 ```bash
 export JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
-export SPARK_HOME="test/spark-4.1.1-bin-hadoop3-connect"
-bash "$SPARK_HOME/sbin/start-connect-server.sh"
+export SPARK_HOME="test/spark-4.2.0-bin-hadoop3"
+bash "$SPARK_HOME/sbin/start-connect-server.sh" \
+  --conf spark.connect.grpc.binding.port=15002
 ```
 
 3. Run:
@@ -358,6 +359,14 @@ mix test --include integration
 SPARK_REMOTE="sc://my-spark-host:15002" mix test --include integration
 ```
 
+Older servers (3.5, 4.0, 4.1) remain supported; 4.2-only integration tests are
+excluded automatically via `min_spark` tags when the server doesn't advertise
+that version. Spark 4.2 also ships a set of provider fixtures (CDC, real-time
+streaming, pending-operation cancellation) for tests gated behind
+`SPARK_EX_TEST_PROVIDERS=1` — see
+[test/support/spark42/README.md](test/support/spark42/README.md) for how to
+prepare and launch that server.
+
 ## Proto regeneration
 
 The vendored `.proto` files in `priv/proto/spark/connect/` and the generated
@@ -368,7 +377,7 @@ To update protos from a new Spark release:
 
 ```bash
 # Copy protos from Spark source
-git clone --depth 1 --branch v4.1.1 https://github.com/apache/spark.git /tmp/spark
+git clone --depth 1 --branch v4.2.0 https://github.com/apache/spark.git /tmp/spark
 cp /tmp/spark/sql/connect/common/src/main/protobuf/spark/connect/*.proto \
    priv/proto/spark/connect/
 
