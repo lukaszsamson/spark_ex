@@ -419,6 +419,33 @@ test/unit/                        # Unit tests (~1090 tests)
 test/integration/                 # Integration tests (~625 tests)
 ```
 
+### Optional plan compression
+
+Pass `plan_compression: true` to `SparkEx.connect/1` to negotiate ZSTD plan
+compression with Spark 4.1.1+ (or set `config :spark_ex, :plan_compression, true`).
+The runtime must provide OTP's `:zstd` module (OTP 28+); otherwise plans remain
+uncompressed. Compression is disabled by default. Server settings
+`spark.connect.session.planCompression.threshold` and
+`spark.connect.session.planCompression.defaultAlgorithm` are fetched once per
+session, then refreshed after session config changes. Missing configuration,
+disabled compression, and unsupported older servers use ordinary plans.
+Only serialized Relation or Command bodies strictly above the threshold and
+smaller after compression are sent compressed. Analyze and execute requests
+share this behavior, including streaming execution. Compression uses one OTP
+ZSTD context per caller, with no worker pool. The server's decompressed
+`spark.connect.maxPlanSize` limit still applies; its errors are returned normally.
+
+### Optional caller diagnostics
+
+Set `config :spark_ex, :debug_client_call_stack, true` or
+`SPARK_CONNECT_DEBUG_CLIENT_CALL_STACK=true` to send available caller file paths,
+line numbers, module names, and function names with execute, analyze, and config
+requests. This is disabled by default. SparkEx filters its internal frames and
+captures the caller before crossing the Session process boundary; BEAM tail calls
+may remove frames. The metadata is available to server instrumentation, but stock
+Spark does not automatically log it. See [Spark 4.2 compatibility](docs/spark_42.md).
+
+
 ## Acknowledgements
 
 SparkEx builds on the [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html)

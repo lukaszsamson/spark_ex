@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Spark 4.2 P2 APIs and diagnostics
+
+- Add nearest-by joins with per-left-row top-K ranking and seven SQL vector
+  functions with explicit Spark FLOAT degree handling.
+- Add opt-in ZSTD plan compression using OTP 28+ and negotiated session settings;
+  retain ordinary plans on runtimes and servers without support.
+- Add opt-in caller stack metadata for execute, analyze, and config RPCs,
+  preserving caller context across the Session boundary and lazy streams.
+- Preserve local empty-row cardinality and zero-column collection; report an
+  explicit error when Explorer batch concatenation would lose rows. Reject empty
+  lambda variable names.
+- Expand sketch, geospatial, nested-schema, and zero-column regression coverage.
+
 ### Spark 4.2 P1 APIs and fixes
 
 - Add grouping ordinals, nested numeric aggregation names, `zip_with_index`,

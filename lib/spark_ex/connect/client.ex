@@ -2109,9 +2109,10 @@ defmodule SparkEx.Connect.Client do
     %ExecutePlanRequest{
       session_id: session.session_id,
       client_type: session.client_type,
-      user_context: UserContextExtensions.build_user_context(session.user_id),
+      user_context:
+        UserContextExtensions.build_user_context(session.user_id, SparkEx.CallSite.extensions()),
       client_observed_server_side_session_id: session.server_side_session_id,
-      plan: plan,
+      plan: SparkEx.Connect.PlanCompression.compress(plan, session),
       tags: tags,
       operation_id: operation_id,
       request_options: request_options
@@ -2430,7 +2431,8 @@ defmodule SparkEx.Connect.Client do
       [
         session_id: session.session_id,
         client_type: session.client_type,
-        user_context: UserContextExtensions.build_user_context(session.user_id),
+        user_context:
+          UserContextExtensions.build_user_context(session.user_id, SparkEx.CallSite.extensions()),
         client_observed_server_side_session_id: session.server_side_session_id
       ] ++ fields
     )
@@ -2442,7 +2444,8 @@ defmodule SparkEx.Connect.Client do
       [
         session_id: session.session_id,
         client_type: session.client_type,
-        user_context: UserContextExtensions.build_user_context(session.user_id),
+        user_context:
+          UserContextExtensions.build_user_context(session.user_id, SparkEx.CallSite.extensions()),
         client_observed_server_side_session_id: session.server_side_session_id
       ] ++ fields
     )
@@ -2478,6 +2481,11 @@ defmodule SparkEx.Connect.Client do
   @spec dispatch_unary_rpc(unary_rpc, SparkEx.Session.t(), struct(), keyword()) ::
           {:ok, struct()} | {:error, term()}
   defp dispatch_unary_rpc(rpc, session, request, opts \\ []) do
+    request =
+      if rpc == :analyze_plan,
+        do: SparkEx.Connect.PlanCompression.compress_analyze(request, session),
+        else: request
+
     {extra_metadata, opts} = Keyword.pop(opts, :extra_metadata, %{})
     {grpc_opts, _} = Keyword.split(opts, [:timeout])
 

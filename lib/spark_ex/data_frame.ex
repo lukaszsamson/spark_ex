@@ -465,6 +465,90 @@ defmodule SparkEx.DataFrame do
   end
 
   @doc """
+  Performs a top-K nearest-by join for every row of the left DataFrame.
+
+  `ranking_expression` may reference columns from both inputs. `num_results`
+  must be between 1 and 100,000. The `:mode` (`:approx` or `:exact`) and
+  `:direction` (`:distance` or `:similarity`) options are required. `:join_type`
+  defaults to `:inner`; `:left` and `:left_outer` produce a left outer join.
+
+  Equal ranking values have unspecified order. Approximate mode permits the
+  server to use an approximate strategy when one is available.
+
+  ## Example
+
+      ranking =
+        users
+        |> DataFrame.col("score")
+        |> Column.minus(DataFrame.col(products, "score"))
+        |> Functions.abs()
+
+      DataFrame.nearest_by_join(users, products, ranking, 2,
+        mode: :exact,
+        direction: :distance,
+        join_type: :left_outer
+      )
+  """
+  @spec nearest_by_join(t(), t(), Column.t(), pos_integer(), keyword()) :: t()
+  def nearest_by_join(
+        %__MODULE__{} = left,
+        %__MODULE__{} = right,
+        %Column{expr: ranking_expression},
+        num_results,
+        opts
+      )
+      when is_list(opts) do
+    ensure_same_session!(left, right, :nearest_by_join)
+
+    unless Keyword.keyword?(opts) do
+      raise ArgumentError, "nearest_by_join options must be a keyword list"
+    end
+
+    unknown = Keyword.keys(opts) -- [:join_type, :mode, :direction]
+
+    if unknown != [] do
+      raise ArgumentError, "unknown nearest_by_join options: #{inspect(unknown)}"
+    end
+
+    unless is_integer(num_results) and num_results in 1..100_000 do
+      raise ArgumentError, "num_results must be an integer between 1 and 100000"
+    end
+
+    mode =
+      opts
+      |> fetch_nearest_by_option!(:mode)
+      |> normalize_nearest_by_option!(:mode, ~w(approx exact))
+
+    direction =
+      opts
+      |> fetch_nearest_by_option!(:direction)
+      |> normalize_nearest_by_option!(:direction, ~w(distance similarity))
+
+    join_type = opts |> Keyword.get(:join_type, :inner) |> normalize_nearest_by_join_type!()
+
+    update_plan(
+      left,
+      {:nearest_by_join, left.plan, right.plan, ranking_expression, num_results, join_type, mode,
+       direction}
+    )
+  end
+
+  def nearest_by_join(
+        %__MODULE__{},
+        %__MODULE__{},
+        %Column{},
+        _num_results,
+        opts
+      ) do
+    raise ArgumentError, "nearest_by_join options must be a keyword list, got: #{inspect(opts)}"
+  end
+
+  def nearest_by_join(%__MODULE__{}, %__MODULE__{}, ranking_expression, _num_results, _opts) do
+    raise ArgumentError,
+          "nearest_by_join ranking_expression must be a SparkEx.Column, got: #{inspect(ranking_expression)}"
+  end
+
+  @doc """
   Performs an as-of join between two DataFrames.
 
   ## Options
@@ -3154,6 +3238,57 @@ defmodule SparkEx.DataFrame do
         raise ArgumentError,
               "invalid as_of_join :join_type: #{inspect(join_type)}. Expected one of: \"inner\", \"left\", \"right\", \"full\""
     end
+  end
+
+  defp normalize_nearest_by_join_type!(join_type)
+       when is_atom(join_type) or is_binary(join_type) do
+    normalized =
+      join_type
+      |> to_string()
+      |> String.downcase()
+      |> String.replace("_", "")
+      |> String.replace(" ", "")
+
+    case normalized do
+      "inner" ->
+        "inner"
+
+      type when type in ["left", "leftouter"] ->
+        "leftouter"
+
+      _ ->
+        raise ArgumentError,
+              "invalid nearest_by_join :join_type: #{inspect(join_type)}. Expected :inner, :left, or :left_outer"
+    end
+  end
+
+  defp normalize_nearest_by_join_type!(join_type) do
+    raise ArgumentError,
+          "invalid nearest_by_join :join_type: #{inspect(join_type)}. Expected :inner, :left, or :left_outer"
+  end
+
+  defp fetch_nearest_by_option!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} -> value
+      :error -> raise ArgumentError, "nearest_by_join requires the #{inspect(key)} option"
+    end
+  end
+
+  defp normalize_nearest_by_option!(value, option, allowed)
+       when is_atom(value) or is_binary(value) do
+    normalized = value |> to_string() |> String.downcase()
+
+    if normalized in allowed do
+      normalized
+    else
+      raise ArgumentError,
+            "invalid nearest_by_join #{inspect(option)}: #{inspect(value)}. Expected one of: #{Enum.join(allowed, ", ")}"
+    end
+  end
+
+  defp normalize_nearest_by_option!(value, option, allowed) do
+    raise ArgumentError,
+          "invalid nearest_by_join #{inspect(option)}: #{inspect(value)}. Expected one of: #{Enum.join(allowed, ", ")}"
   end
 
   defp normalize_as_of_direction(direction) when is_atom(direction) do

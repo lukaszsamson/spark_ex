@@ -730,7 +730,10 @@ defmodule SparkEx.Macros.FunctionRegistry do
       hll_functions() ++
       theta_sketch_functions() ++
       tuple_sketch_functions() ++
-      kll_sketch_functions() ++ bitmap_functions() ++ geospatial_functions()
+      kll_sketch_functions() ++
+      bitmap_functions() ++
+      geospatial_functions() ++
+      vector_functions()
   end
 
   defp hll_functions do
@@ -836,6 +839,28 @@ defmodule SparkEx.Macros.FunctionRegistry do
       {:st_setsrid, "ST_SetSRID", {:col_int, 1},
        group: :geospatial, doc: "Sets the SRID of a geometry."},
       {:st_srid, "ST_SRID", :one_col, group: :geospatial, doc: "Returns the SRID of a geometry."}
+    ]
+  end
+
+  # These functions are registered by Spark SQL in 4.2 but do not have
+  # corresponding PySpark wrappers. Keep them separate from the PySpark parity
+  # inventory so their server-only availability remains explicit.
+  defp vector_functions do
+    [
+      {:vector_cosine_similarity, "vector_cosine_similarity", :two_col,
+       group: :vector, doc: "Returns the cosine similarity between two ARRAY<FLOAT> vectors."},
+      {:vector_inner_product, "vector_inner_product", :two_col,
+       group: :vector, doc: "Returns the inner product of two ARRAY<FLOAT> vectors."},
+      {:vector_l2_distance, "vector_l2_distance", :two_col,
+       group: :vector, doc: "Returns the Euclidean distance between two ARRAY<FLOAT> vectors."},
+      {:vector_norm, "vector_norm", :vector_col_degree,
+       group: :vector, doc: "Returns an L1, L2, or infinity norm for an ARRAY<FLOAT> vector."},
+      {:vector_normalize, "vector_normalize", :vector_col_degree,
+       group: :vector, doc: "Normalizes an ARRAY<FLOAT> vector using an L1, L2, or infinity norm."},
+      {:vector_avg, "vector_avg", :one_col,
+       group: :vector, doc: "Aggregates ARRAY<FLOAT> vectors by element-wise average."},
+      {:vector_sum, "vector_sum", :one_col,
+       group: :vector, doc: "Aggregates ARRAY<FLOAT> vectors by element-wise sum."}
     ]
   end
 
