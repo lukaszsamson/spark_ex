@@ -23,6 +23,74 @@ defmodule SparkEx.Artifacts do
   @jar_extensions ~w(.jar)
   @pyfile_extensions ~w(.py .zip .egg .jar)
 
+  # Matches an absolute Windows drive path such as `C:\foo\bar.jar` or
+  # `C:/foo/bar.jar`. A single-letter prefix followed by `:` and a path
+  # separator is a drive letter, not a URI scheme (see SPARK-55071 in
+  # upstream PySpark's `artifact.py:_parse_artifacts`, which hit exactly
+  # this: `urlparse("C:\\foo")` mis-parses the drive letter as scheme `c`).
+  @windows_drive_path ~r/^[A-Za-z]:[\\\/]/
+
+  @doc """
+  Classifies a raw artifact path/URI string into the local filesystem path
+  that should be used to read the file's contents.
+
+  This is a pure string transformation — it does not touch the filesystem
+  — so it can be unit-tested with Windows-shaped inputs from any host OS.
+
+  Handles, in order:
+
+    * an absolute Windows drive path (`C:\\foo\\bar.jar`, `C:/foo/bar.jar`)
+      — detected *before* URI parsing so the drive letter is never mistaken
+      for a URI scheme; returned unchanged.
+    * a UNC path (`\\\\host\\share\\file.jar`) — returned unchanged.
+    * a `file:` URI (`file:///tmp/x.jar`, `file:/tmp/x.jar`,
+      `file:///C:/x.jar`, `file:/C:/x.jar`) — percent-decoded to the
+      underlying local path, with the extra leading `/` that URI syntax
+      puts before a drive letter (`/C:/x.jar`) stripped off.
+    * anything else (an ordinary POSIX path, or a remote URI such as
+      `hdfs://...` or `s3://...`) — returned unchanged. spark_ex does not
+      resolve remote artifacts locally, so these behave exactly as before
+      this function existed: passed through as-is and left to fail (or
+      succeed, for a real POSIX path) via `File.stat/1` downstream.
+  """
+  @spec classify_local_path(String.t()) :: String.t()
+  def classify_local_path(raw) when is_binary(raw) do
+    cond do
+      windows_drive_path?(raw) -> raw
+      unc_path?(raw) -> raw
+      true -> decode_file_uri(raw) || raw
+    end
+  end
+
+  defp windows_drive_path?(raw), do: Regex.match?(@windows_drive_path, raw)
+
+  defp unc_path?(<<?\\, ?\\, _rest::binary>>), do: true
+  defp unc_path?(_raw), do: false
+
+  # Returns the decoded local path for a `file:` URI, or `nil` for anything
+  # else (including other URI schemes, which are left for the caller to
+  # pass through unchanged).
+  defp decode_file_uri(raw) do
+    case URI.parse(raw) do
+      %URI{scheme: "file", path: path} when is_binary(path) ->
+        path
+        |> URI.decode()
+        |> strip_uri_drive_slash()
+
+      _uri ->
+        nil
+    end
+  end
+
+  # `file:///C:/foo` parses to URI path `/C:/foo` — URI syntax always
+  # anchors the path with a leading `/`, which needs stripping when what
+  # follows is actually a Windows drive letter.
+  defp strip_uri_drive_slash(<<?/, rest::binary>> = path) do
+    if windows_drive_path?(rest), do: rest, else: path
+  end
+
+  defp strip_uri_drive_slash(path), do: path
+
   @doc """
   Prepares artifact entries by validating local paths and prefixing names.
 
@@ -143,8 +211,10 @@ defmodule SparkEx.Artifacts do
       Enum.reject(paths, fn raw ->
         {real, _alias_name} = split_fragment(raw)
         # Mirror PySpark: archive/jar/pyfile extension is checked against
-        # the *real* file's basename, not the alias fragment.
-        ext_match?(real, allowed)
+        # the *real* file's basename, not the alias fragment. Classify
+        # first so a `file:` URI or Windows drive path's extension is
+        # checked against its actual filename, not raw URI/UNC syntax.
+        real |> classify_local_path() |> ext_match?(allowed)
       end)
 
     case bad do
@@ -178,7 +248,8 @@ defmodule SparkEx.Artifacts do
 
   defp stat_paths(paths, archive?) do
     Enum.reduce_while(paths, {:ok, []}, fn raw, {:ok, acc} ->
-      {real_path, fragment} = split_fragment(raw)
+      {raw_path, fragment} = split_fragment(raw)
+      real_path = classify_local_path(raw_path)
 
       case File.stat(real_path) do
         {:ok, %File.Stat{type: :regular, size: size}} ->

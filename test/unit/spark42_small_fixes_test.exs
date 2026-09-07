@@ -28,7 +28,7 @@ defmodule SparkEx.Unit.Spark42SmallFixesTest do
     end
   end
 
-  test "artifact paths retain literal spaces and percent escapes rather than URI decoding" do
+  test "artifact paths retain literal spaces, and file: URIs percent-decode to the same path" do
     path =
       Path.join(
         System.tmp_dir!(),
@@ -40,7 +40,12 @@ defmodule SparkEx.Unit.Spark42SmallFixesTest do
     assert {:ok, [{name, {:file, ^path, 8}}]} = Artifacts.prepare(path, "files")
     assert name == "files/" <> Path.basename(path)
 
+    # A `file:` URI referencing the same path percent-decodes to the
+    # identical local path (SPARK-55071 parity — see
+    # `SparkEx.Artifacts.classify_local_path/1`) and resolves to the same
+    # file, rather than erroring on the raw, still-encoded URI string.
     uri = "file://" <> URI.encode(path)
-    assert {:error, {:file_stat_error, ^uri, _}} = Artifacts.prepare(uri, "files")
+    assert {:ok, [{name2, {:file, ^path, 8}}]} = Artifacts.prepare(uri, "files")
+    assert name2 == "files/" <> Path.basename(path)
   end
 end

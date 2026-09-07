@@ -749,11 +749,13 @@ defmodule SparkEx.Session do
   @spec copy_from_local_to_fs(GenServer.server(), String.t(), String.t()) ::
           :ok | {:error, term()}
   def copy_from_local_to_fs(session, local_path, dest_path) do
+    real_path = SparkEx.Artifacts.classify_local_path(local_path)
+
     with :ok <- validate_forward_dest_path(dest_path),
-         {:ok, size} <- stat_local_file(local_path),
+         {:ok, size} <- stat_local_file(real_path),
          {:ok, _summaries} <-
            add_artifacts(session, [
-             {forward_to_fs_artifact_name(dest_path), {:file, local_path, size}}
+             {forward_to_fs_artifact_name(dest_path), {:file, real_path, size}}
            ]) do
       :ok
     end
