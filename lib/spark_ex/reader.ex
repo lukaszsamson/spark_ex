@@ -262,18 +262,17 @@ defmodule SparkEx.Reader do
   @spec csv(GenServer.server() | t(), String.t() | [String.t()] | DataFrame.t(), keyword()) ::
           DataFrame.t()
   def csv(session, paths, opts \\ []) do
-    if match?(%DataFrame{}, paths) do
-      {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator, :sep])
-      csv_opts = reconcile_csv_separator(csv_opts)
-      parse_data_frame(session, paths, :csv, Keyword.merge(rest, csv_opts))
-    else
-      {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator, :sep])
-      csv_opts = reconcile_csv_separator(csv_opts)
+    {csv_opts, rest} = Keyword.split(opts, [:header, :infer_schema, :separator, :sep])
 
-      # :header/:infer_schema/:sep normalize to "header"/"inferSchema"/"sep" through
-      # the shared key normalizer, so they can simply ride along as top-level
-      # keywords and get the standard duplicate check against :options.
-      data_source(session, "csv", paths, Keyword.merge(rest, csv_opts))
+    # :header/:infer_schema/:sep normalize to "header"/"inferSchema"/"sep" through
+    # the shared key normalizer, so they can simply ride along as top-level
+    # keywords and get the standard duplicate check against :options.
+    opts = Keyword.merge(rest, reconcile_csv_separator(csv_opts))
+
+    cond do
+      match?(%DataFrame{}, paths) -> parse_data_frame(session, paths, :csv, opts)
+      match?(%__MODULE__{}, session) -> load_from_builder_as(session, "csv", paths, opts)
+      true -> data_source(session, "csv", paths, opts)
     end
   end
 
@@ -315,9 +314,11 @@ defmodule SparkEx.Reader do
   @spec json(GenServer.server() | t(), String.t() | [String.t()] | DataFrame.t(), keyword()) ::
           DataFrame.t()
   def json(session, paths, opts \\ []) do
-    if match?(%DataFrame{}, paths),
-      do: parse_data_frame(session, paths, :json, opts),
-      else: data_source(session, "json", paths, opts)
+    cond do
+      match?(%DataFrame{}, paths) -> parse_data_frame(session, paths, :json, opts)
+      match?(%__MODULE__{}, session) -> load_from_builder_as(session, "json", paths, opts)
+      true -> data_source(session, "json", paths, opts)
+    end
   end
 
   @doc """
@@ -379,9 +380,11 @@ defmodule SparkEx.Reader do
   @spec xml(GenServer.server() | t(), String.t() | [String.t()] | DataFrame.t(), keyword()) ::
           DataFrame.t()
   def xml(session, paths, opts \\ []) do
-    if match?(%DataFrame{}, paths),
-      do: parse_data_frame(session, paths, :xml, opts),
-      else: data_source(session, "xml", paths, opts)
+    cond do
+      match?(%DataFrame{}, paths) -> parse_data_frame(session, paths, :xml, opts)
+      match?(%__MODULE__{}, session) -> load_from_builder_as(session, "xml", paths, opts)
+      true -> data_source(session, "xml", paths, opts)
+    end
   end
 
   @doc """
@@ -521,6 +524,12 @@ defmodule SparkEx.Reader do
   defp normalize_jdbc_properties(other) do
     raise ArgumentError,
           "properties must be nil, a map, or a keyword list, got: #{inspect(other)}"
+  end
+
+  # Format-specific entry points (csv/json/xml) accept a builder as their first
+  # argument, exactly like load/3, with the format pinned by the caller.
+  defp load_from_builder_as(%__MODULE__{} = reader, format, paths, opts) do
+    load_from_builder(reader, List.wrap(paths), Keyword.put(opts, :format, format))
   end
 
   defp load_from_builder(reader, paths, opts) do

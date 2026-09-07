@@ -77,6 +77,56 @@ defmodule SparkEx.ReaderTest do
       reader = self() |> SparkEx.read() |> Reader.schema(schema)
       assert reader.schema == schema
     end
+
+    test "csv/3 accepts a builder and pins the format" do
+      df = self() |> SparkEx.read() |> Reader.csv("/tmp/x.csv")
+
+      assert {:read_data_source, "csv", ["/tmp/x.csv"], nil, %{}} = unwrap_plan(df)
+    end
+
+    test "json/3 and xml/3 accept a builder and a list of paths" do
+      json_df = self() |> SparkEx.read() |> Reader.json(["/a.json", "/b.json"])
+      assert {:read_data_source, "json", ["/a.json", "/b.json"], nil, %{}} = unwrap_plan(json_df)
+
+      xml_df = self() |> SparkEx.read() |> Reader.xml("/a.xml")
+      assert {:read_data_source, "xml", ["/a.xml"], nil, %{}} = unwrap_plan(xml_df)
+    end
+
+    test "builder schema and options propagate, call-time options win" do
+      reader =
+        self()
+        |> SparkEx.read()
+        |> Reader.format("parquet")
+        |> Reader.schema("id INT, name STRING")
+        |> Reader.options(%{"mode" => "PERMISSIVE", "maxColumns" => 200})
+
+      assert {:read_data_source, "csv", ["/tmp/x.csv"], "id INT, name STRING",
+              %{"mode" => "FAILFAST", "maxColumns" => "200"}} =
+               unwrap_plan(Reader.csv(reader, "/tmp/x.csv", options: %{"mode" => "FAILFAST"}))
+
+      assert {:read_data_source, "json", ["/a.json"], "id INT, name STRING",
+              %{"mode" => "PERMISSIVE", "maxColumns" => "200"}} =
+               unwrap_plan(Reader.json(reader, "/a.json"))
+
+      assert {:read_data_source, "xml", ["/a.xml"], "a STRING",
+              %{"mode" => "PERMISSIVE", "maxColumns" => "200"}} =
+               unwrap_plan(Reader.xml(reader, "/a.xml", schema: "a STRING"))
+    end
+
+    test "csv/3 with a builder normalizes :header and :sep aliases" do
+      reader = self() |> SparkEx.read() |> Reader.option("quote", "'")
+
+      assert {:read_data_source, "csv", ["/tmp/x.csv"], nil,
+              %{"header" => "true", "sep" => ";", "quote" => "'"}} =
+               unwrap_plan(Reader.csv(reader, "/tmp/x.csv", header: true, separator: ";"))
+
+      assert {:read_data_source, "csv", ["/tmp/x.csv"], nil, %{"sep" => "|", "quote" => "'"}} =
+               unwrap_plan(Reader.csv(reader, "/tmp/x.csv", sep: "|"))
+
+      assert_raise ArgumentError, ~r/conflicting :sep and :separator/, fn ->
+        Reader.csv(reader, "/tmp/x.csv", sep: "|", separator: ";")
+      end
+    end
   end
 
   describe "parquet/2" do
