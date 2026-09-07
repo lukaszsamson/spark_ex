@@ -21,6 +21,25 @@ defmodule SparkEx.ManagedStreamTest do
     refute_receive :released, 50
   end
 
+  test "early take releases execution exactly once and stops the controller" do
+    parent = self()
+
+    {:ok, stream} =
+      ManagedStream.new(Stream.iterate(0, &(&1 + 1)),
+        release_fun: fn _opts ->
+          send(parent, :released_early)
+          {:ok, :released}
+        end
+      )
+
+    monitor = Process.monitor(stream.controller)
+    assert Enum.take(stream, 2) == [0, 1]
+    assert_receive :released_early, 500
+    assert_receive {:DOWN, ^monitor, :process, _, :normal}, 500
+    assert :ok = ManagedStream.close(stream)
+    refute_receive :released_early, 50
+  end
+
   test "explicit close releases execute state" do
     parent = self()
 

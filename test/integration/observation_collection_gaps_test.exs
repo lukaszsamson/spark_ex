@@ -82,13 +82,44 @@ defmodule SparkEx.Integration.ObservationCollectionGapsTest do
     test "self-join preserves observation metrics", %{session: session} do
       obs = Observation.new("self_join_obs_#{System.unique_integer([:positive])}")
 
-      joined =
+      observed =
         SparkEx.range(session, 3)
-        |> DataFrame.join(SparkEx.range(session, 3), ["id"], :inner)
         |> DataFrame.observe(obs, [Column.alias_(Functions.count(Functions.lit(1)), "rows")])
 
-      assert {:ok, _rows} = DataFrame.collect(joined)
+      assert {:ok, rows} =
+               observed |> DataFrame.join(observed, ["id"], :inner) |> DataFrame.collect()
+
+      assert length(rows) == 3
       assert Observation.get(obs)["rows"] == 3
+    end
+
+    test "union of a reused observed relation preserves registration", %{session: session} do
+      obs = Observation.new("union_obs_#{System.unique_integer([:positive])}")
+
+      observed =
+        SparkEx.range(session, 3)
+        |> DataFrame.observe(obs, [Column.alias_(Functions.count(Functions.lit(1)), "rows")])
+
+      assert {:ok, rows} = observed |> DataFrame.union(observed) |> DataFrame.collect()
+      assert Enum.sort(Enum.map(rows, & &1["id"])) == [0, 0, 1, 1, 2, 2]
+      assert Observation.get(obs)["rows"] == 3
+    end
+
+    test "same observation name stays isolated between sessions", %{session: session} do
+      {:ok, other_session} = SparkEx.connect(url: @spark_remote)
+      Process.unlink(other_session)
+      on_exit(fn -> SparkEx.Session.stop(other_session) end)
+      name = "shared_obs_#{System.unique_integer([:positive])}"
+      first = Observation.new(name)
+      second = Observation.new(name)
+      metric = [Column.alias_(Functions.count(Functions.lit(1)), "rows")]
+      left = session |> SparkEx.range(3) |> DataFrame.observe(first, metric)
+      right = other_session |> SparkEx.range(5) |> DataFrame.observe(second, metric)
+
+      assert {:ok, _} = DataFrame.collect(right)
+      assert {:ok, _} = DataFrame.collect(left)
+      assert Observation.get(first)["rows"] == 3
+      assert Observation.get(second)["rows"] == 5
     end
   end
 

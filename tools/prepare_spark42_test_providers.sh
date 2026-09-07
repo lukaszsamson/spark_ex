@@ -33,7 +33,7 @@ verify_sha256 810bef6fd568e1626aad7354a1161e9e5ac629fbc55ba0a9a4e3cec8c06376eb "
 "$JAVA_HOME/bin/javac" -proc:none \
   -cp "$SPARK_HOME/jars/*:$catalyst_jar" \
   -d "$out_dir/classes" \
-  "$root_dir/test/support/spark42/Spark42SeededChangelogCatalog.java"
+  "$root_dir"/test/support/spark42/*.java
 "$JAVA_HOME/bin/jar" cf "$seeder_jar" -C "$out_dir/classes" .
 
 printf '%s\n' "$catalyst_jar,$sql_jar,$seeder_jar"

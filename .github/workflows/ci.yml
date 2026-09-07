@@ -181,7 +181,8 @@ jobs:
             ARGS+=(--jars "$PROVIDER_JARS"
               --conf spark.sql.catalog.testcat=org.apache.spark.sql.connector.catalog.InMemoryTableCatalog
               --conf spark.sql.catalog.testcat.copyOnLoad=true
-              --conf spark.sql.catalog.cdc_e2e=org.apache.spark.sql.connector.catalog.Spark42SeededChangelogCatalog)
+              --conf spark.sql.catalog.cdc_e2e=org.apache.spark.sql.connector.catalog.Spark42SeededChangelogCatalog
+              --conf spark.connect.extensions.command.classes=org.apache.spark.sql.connect.service.Spark42PendingOperationPlugin)
           fi
           bash "$SPARK_HOME/sbin/start-connect-server.sh" "${ARGS[@]}"
           echo -n "Waiting for Spark Connect server"
