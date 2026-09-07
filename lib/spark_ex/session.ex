@@ -2235,7 +2235,6 @@ defmodule SparkEx.Session do
     {:noreply, state}
   end
 
-  @impl true
   # `terminate/2` can legitimately take up to release-drain (default 10s) +
   # ReleaseSession yield (5s) + task shutdown grace (5s). The default GenServer
   # child shutdown of 5s would brutal-kill the session mid-drain, skipping
@@ -2264,6 +2263,7 @@ defmodule SparkEx.Session do
     }
   end
 
+  @impl true
   def terminate(_reason, %{released: true} = state) do
     cleanup_session_resources(state)
     :ok

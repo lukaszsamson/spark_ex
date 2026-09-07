@@ -34,13 +34,6 @@ defmodule SparkEx.Macros.FunctionGen do
   # resolves a caller keyword list against the registry defaults, keeping the
   # declared order and rejecting unknown keys.
   @spec resolve_default_opts!(atom(), keyword(), keyword()) :: [term()]
-  @doc false
-  def raise_mixed_opts!(name) do
-    raise ArgumentError,
-          "#{inspect(name)} options must be passed either positionally or as a single " <>
-            "keyword list, not both"
-  end
-
   def resolve_default_opts!(name, opts, defaults) do
     unless opts == [] or Keyword.keyword?(opts) do
       raise ArgumentError,
@@ -60,6 +53,14 @@ defmodule SparkEx.Macros.FunctionGen do
     end
 
     Enum.map(defaults, fn {key, default} -> Keyword.get(opts, key, default) end)
+  end
+
+  @doc false
+  @spec raise_mixed_opts!(atom()) :: no_return()
+  def raise_mixed_opts!(name) do
+    raise ArgumentError,
+          "#{inspect(name)} options must be passed either positionally or as a single " <>
+            "keyword list, not both"
   end
 
   # --- Validation ---
