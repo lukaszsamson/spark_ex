@@ -42,6 +42,7 @@ defmodule SparkEx.Integration.ArtifactHelpersTest do
     @describetag min_spark: "4.1"
     test "uploads archive artifacts with archives/ prefix", %{session: session} do
       archive_name = "test-archive-#{System.unique_integer([:positive])}.tar.gz"
+
       # Spark validates archive format (runs tar on extraction), so create a
       # valid tar.gz: write a real tar to a temp file, then gzip the contents.
       tar_path =
