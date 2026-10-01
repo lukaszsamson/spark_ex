@@ -227,7 +227,6 @@ defmodule SparkEx.Integration.ReadWriteTypesGapsTest do
     @tag :explorer_limitation
     test "year-month interval", %{session: session} do
       # SKIP: Explorer/Polars cannot deserialize YearMonth interval Arrow type.
-      # See EXPLORER_TODO.md for details.
       df =
         SparkEx.sql(session, """
         SELECT INTERVAL '1' YEAR + INTERVAL '6' MONTH AS ym_interval

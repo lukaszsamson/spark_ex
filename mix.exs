@@ -64,7 +64,8 @@ defmodule SparkEx.MixProject do
     [
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib priv/proto notebooks .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
+      files:
+        ~w(lib priv/proto priv/scripts docs notebooks .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end
 
@@ -72,7 +73,20 @@ defmodule SparkEx.MixProject do
     [
       main: "readme",
       source_ref: "v#{@version}",
-      extras: ["README.md", "CHANGELOG.md", "notebooks/spark_ex_demo.livemd", "LICENSE"]
+      extras: [
+        "README.md",
+        "docs/spark_42.md",
+        "CHANGELOG.md",
+        "notebooks/spark_ex_demo.livemd",
+        "LICENSE"
+      ],
+      skip_code_autolink_to: ["Spark.Connect.GetStatusResponse"],
+      # The experimental API intentionally returns a generated protobuf type.
+      # Generated modules are hidden from ExDoc; retain the precise public specs.
+      skip_undefined_reference_warnings_on: [
+        "SparkEx.get_operation_statuses/3",
+        "SparkEx.Session.get_operation_statuses/3"
+      ]
     ]
   end
 

@@ -2,22 +2,21 @@
 
 ## Setup
 
-Install SparkEx from the local path with its optional dependencies (Explorer for Arrow
-decoding, Kino for interactive rendering).
+Install SparkEx with Kino for interactive rendering. Explorer is a required
+dependency and is installed automatically.
 
 **Prerequisites:** A Spark Connect server must be running on `localhost:15002`.
-Start one with:
+For a Spark 4.x distribution with the Connect server bundled, start one with:
 
 ```bash
-export JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
-export SPARK_HOME="test/spark-4.1.1-bin-hadoop3-connect"
+# Set JAVA_HOME to Java 17 or 21, and SPARK_HOME to your Spark distribution.
+export SPARK_HOME="/path/to/spark"
 bash "$SPARK_HOME/sbin/start-connect-server.sh"
 ```
 
 ```elixir
 Mix.install([
-  {:spark_ex, "~> 0.1"},
-  {:explorer, "~> 0.10"},
+  {:spark_ex, "~> 0.2.0"},
   {:kino, "~> 0.14"}
 ])
 ```
@@ -166,9 +165,10 @@ into the Spark plan to prevent unbounded collection and OOM.
 explorer_df
 ```
 
-### Demonstrating OOM protection
+### Bounded preview
 
-Attempting to materialize a large dataset without limits raises `LimitExceeded`:
+The remote LIMIT fetches at most the requested number of rows. Decoder row and
+byte limits return an error tuple if the received data exceeds those limits:
 
 ```elixir
 large = SparkEx.range(session, 100_000)
@@ -185,7 +185,9 @@ end
 
 ### Unsafe mode (opt-in)
 
-Pass `unsafe: true` to skip LIMIT injection. Use only when you know the result fits in memory.
+Pass `unsafe: true` to skip LIMIT injection. Decoder limits still apply unless
+you also set `max_rows: :infinity` and `max_bytes: :infinity`. Use this only when
+you know the result fits in memory.
 
 ```elixir
 small = SparkEx.range(session, 25)
@@ -197,7 +199,8 @@ explorer_df
 ## Reading files from disk
 
 ```elixir
-spark_home = Path.expand("../test/spark-4.1.1-bin-hadoop3-connect", __DIR__)
+# Use a path available to the Spark server (not just this Livebook machine).
+spark_home = System.fetch_env!("SPARK_HOME")
 resources = Path.join(spark_home, "examples/src/main/resources")
 
 SparkEx.Reader.json(session, Path.join(resources, "employees.json"))

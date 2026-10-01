@@ -49,14 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README developer instructions target Spark 4.2.0 and point to the provider
   fixture server for CDC / real-time / pending-operation tests.
 
-### Spark 4.2 acceptance coverage
+### Compatibility testing
 
 - Verify supported real-time streaming and deterministic Pending-operation
   cancellation through isolated server fixtures enabled in Spark 4.2 CI.
 - Cover observed-relation reuse, cross-session release isolation, actual gRPC
   binary metadata transport, exact Parse errors, and time-bucket/top-K edge cases.
 
-### Spark 4.2 P2 APIs and diagnostics
+### Vector search, compression and diagnostics
 
 - Add nearest-by joins with per-left-row top-K ranking and seven SQL vector
   functions with explicit Spark FLOAT degree handling.
@@ -69,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lambda variable names.
 - Expand sketch, geospatial, nested-schema, and zero-column regression coverage.
 
-### Spark 4.2 P1 APIs and fixes
+### DataFrame, catalog and streaming APIs
 
 - Add grouping ordinals, nested numeric aggregation names, `zip_with_index`,
   and `empty_dataframe`; preserve explicit column origins and lazy names.
@@ -87,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cover lifecycle isolation, observed self-joins, Arrow field metadata, empty
   grouping sets, feature flags, and aggregate NULL treatment.
 
-### Spark 4.2 foundation
+### Spark 4.2 protocol and functions
 
 - Refresh Spark Connect protobufs to v4.2.0 (source commit recorded in
   `priv/proto/SPARK_VERSION`) while retaining older-server wire compatibility.
@@ -101,7 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counting schema bytes and repeated chunks. Explicit cache options no longer
   bypass the server configuration. Older servers without the limit retain their
   existing behavior. Failed config lookups block cached uploads until the limit
-  can be read. Later P1 work makes chunk serialization incremental.
+  can be read. Chunk serialization is incremental.
 - Extend CI to Elixir 1.20 / OTP 29 and Spark 4.2, including 4.2 test exclusions
   on older servers; pin the PySpark function inventory so parity also runs in
   clean CI checkouts, with no missing-function allowance.
@@ -131,7 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rejected; longer lists remain an error.
   - `Functions.col/1`, `DataFrame.col/2`, `with_column(s)`, `drop/2`, `NA`
     subsets and fill keys, `GroupedData` shortcuts and window specs accept atom
-    column names through a shared normaliser (`SparkEx.Internal.ColumnName`)
+    column names through a shared normaliser
     and raise `ArgumentError` for `nil`/`true`/`false` instead of producing a
     column named `"nil"`. Other name-taking helpers (`Stat`, `TableArg`,
     `WriterV2.partitioned_by`) still stringify any atom. `Window.partition_by/2` on an existing `WindowSpec`
@@ -420,14 +420,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`trigger(once: true)` warning corrected**: Spark 4.x still accepts
     `:once`; the warning now marks it deprecated rather than removed. Documented
     the per-event-type `:data` shape of streaming listener events.
-
-## [0.2.0] - 2026-06-20
-
-This release is a large correctness and parity pass over the v0.1.x client,
-driven by several rounds of PySpark-parity audits. Highlights: a reattachable
-execution lifecycle, TLS/keepalive channel hardening, richer remote errors,
-and ~100 individual bug fixes across the DataFrame, function, writer, and
-streaming surfaces.
 
 ### Added
 

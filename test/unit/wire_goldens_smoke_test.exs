@@ -2,8 +2,7 @@ defmodule SparkEx.Test.WireGoldensSmokeTest do
   @moduledoc """
   Sanity tests for `SparkEx.Test.WireGoldens`.
 
-  Stream A (BUGS_PLAN_5) will add many more goldens. This file only verifies
-  the helper itself: encode → fixture round-trip + canonicalization of
+  This file verifies the helper itself: encode → fixture round-trip + canonicalization of
   lambda variable names so that goldens are stable across runs.
   """
 

@@ -67,9 +67,10 @@ if Code.ensure_loaded?(Kino) do
     end
 
     @doc """
-    Returns a `Kino.DataTable` with a random sample of rows.
+    Returns a `Kino.DataTable` with a bounded preview of rows.
 
-    Equivalent to `preview/2` but conceptually for sampling.
+    Alias for `preview/2`; this does not perform random sampling. Apply
+    `SparkEx.DataFrame.sample/2` before previewing to select rows randomly.
 
     ## Options
 

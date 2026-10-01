@@ -2051,7 +2051,7 @@ defmodule SparkEx.DataFrame do
   Single-batch results return a binary. Multi-batch results return an ordered
   list of Arrow IPC batch binaries.
 
-  Returns an `Arrow.Table` if the `:arrow` dependency is available.
+  Each binary is a standalone IPC stream; decode multi-batch results separately.
   """
   @spec to_arrow(t(), keyword()) :: {:ok, term()} | {:error, term()}
   def to_arrow(%__MODULE__{} = df, opts \\ []) do
