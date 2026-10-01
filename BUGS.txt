@@ -1,0 +1,60 @@
+# Current bug triage — 2026-10-01
+
+Checked BUGS_CLAUDE, DEEP, GEMINI, GPT (.tx), GROK, KIMI, OX, QWEN,
+ASTRA, and BUGS_TRIAGED against the current code and sibling Spark sources.
+This replaces the stale pre-fix consolidation with current dispositions.
+
+## Open
+
+No additional confirmed bugs from these reports are queued.
+
+## Fixed in this pass
+
+- OX-19: custom gRPC metadata now preserves underscores and dots while
+  lowercasing keys. Authentication and routing keys are no longer renamed,
+  dropped, or collapsed with hyphenated keys. Covered from URI parsing through
+  the gRPC metadata encoder; adversarial review found no actionable defects.
+- Existing format-gate failures in observation.ex and artifact_helpers_test.exs
+  repaired in a separate commit.
+
+Validation: tools/check.sh passed after each fix (2,735 tests passed, Dialyzer
+zero errors). All 41 channel tests also passed. Live integration tests were
+excluded: no Spark Connect server was listening on localhost:15002.
+
+## Already fixed
+
+- All T-01 through T-64 in BUGS_TRIAGED were addressed by the six merged fix
+  waves. That file contains the deduplicated mapping for the older reports.
+- ASTRA-1 through ASTRA-13 were also fixed: metadata field ordering,
+  duplicate positional names, recursive binary encoding, complex-column
+  non-finite inputs, nested non-string map keys, identifier quoting,
+  explicit name ordering, nullability validation, empty metadata schemas,
+  regex column patterns, non-finite decoding, nullable UDTs, decimal scale.
+  These were missing from the old consolidation.
+
+## Rejected reports
+
+- K-27: nested hint lists match Connect once the argument convention is aligned.
+- GROK-21: PySpark also rejects zero await-termination timeouts.
+- OX-46: doubled backticks close and reopen quoting without changing the output.
+- OX-1: Connect sends trim characters first; Spark's auxiliary constructors
+  support this order. The report used the wrong constructor as its reference.
+- K-2 / QWEN S-7: Spark's default SQL parser processes backslash escapes;
+  doubling backslashes in generated string literals is correct.
+- D-4: current PySpark permits Column/integer percentile frequency, not strings.
+- Q-14 and the remaining K-51 coercion differences: explicit Columns work;
+  literal convenience arguments do not establish a wrong-result bug. Spark
+  registers printf and format_string with the same implementation.
+- OX-5 / GROK-31 / QWEN's empty-quantile claim: the aggregate returns one row
+  even for empty input; the claimed zero-row result is not a reachable case.
+- OX-7: callback self-calls are caught and logged, not an indefinite deadlock.
+- OX-9: Explorer command results are fixed; rows_stream promises Arrow rows,
+  not command-result payloads.
+- Q-6, OX-32, OX-34: tuple probabilities, sort ordinals, and string bounds in
+  the positional JDBC overload are outside the declared API. JDBC string
+  bounds can already be passed through generic JDBC options.
+
+Other style complaints, invalid-input error preferences, Python-only calling
+conventions, and intentional API differences remain excluded. Callback reentry,
+NaiveDateTime semantics, SQL keyword-list arguments, and random seed range are
+not scheduled bugs; none warrants a redesign in this pass.

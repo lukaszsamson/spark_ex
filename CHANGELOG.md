@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Custom Spark Connect metadata preserves underscores and dots in header names,
+  so authentication and routing keys are neither renamed nor dropped.
+
 ### Spark 4.2 follow-ups
 
 - Tuple-sketch wrappers with defaults (`tuple_sketch_agg_*`, `tuple_union_agg_*`,

@@ -495,25 +495,20 @@ defmodule SparkEx.Connect.Channel do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  # gRPC metadata keys are HTTP/2 header names: lower-case ASCII
-  # alphanumerics and `-`. Underscores are accepted by some proxies but
-  # rejected by others, so collapse `_` to `-` to match the headers
-  # users typically copy from Spark/PySpark docs.
+  # gRPC metadata names allow lower-case ASCII alphanumerics, `_`, `.` and `-`.
+  # Preserve punctuation so custom authentication and routing keys stay distinct.
   defp normalize_metadata_key(key) when is_binary(key) do
-    normalized =
-      key
-      |> String.downcase()
-      |> String.replace("_", "-")
+    normalized = String.downcase(key)
 
     cond do
       normalized == "" ->
         {:error, "empty key"}
 
-      String.match?(normalized, ~r/^[a-z0-9\-]+$/) ->
+      String.match?(normalized, ~r/^[a-z0-9_.-]+$/) ->
         {:ok, normalized}
 
       true ->
-        {:error, "key must contain only [a-z0-9-] after normalization"}
+        {:error, "key must contain only [a-z0-9_.-] after normalization"}
     end
   end
 
