@@ -8,7 +8,7 @@ defmodule SparkEx.MixProject do
     [
       app: :spark_ex,
       version: @version,
-      elixir: "~> 1.15",
+      elixir: "~> 1.16",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
@@ -36,11 +36,13 @@ defmodule SparkEx.MixProject do
   defp deps do
     [
       # gRPC client + protobuf
-      {:grpc, "~> 0.9"},
-      {:protobuf, "~> 0.16.1 or ~> 0.17"},
+      {:grpc, "~> 1.0"},
+      # grpc 1.0 ships HTTP/2 adapters as optional deps; SparkEx uses gun.
+      {:gun, "~> 2.4"},
+      {:protobuf, "~> 0.17.1"},
 
       # Utilities
-      {:decimal, "~> 1.0 or ~> 2.0"},
+      {:decimal, "~> 2.0 or ~> 3.0"},
       {:nimble_options, "~> 1.1"},
       {:jason, "~> 1.4"},
 
@@ -56,6 +58,7 @@ defmodule SparkEx.MixProject do
       # Dev/test
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:grpc_server, "~> 1.0", only: :test},
       {:ex_doc, "~> 0.35", only: :dev, runtime: false}
     ]
   end

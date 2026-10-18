@@ -18,7 +18,7 @@ defmodule SparkEx.Internal.SessionSnapshot do
   @ets_table :spark_ex_session_snapshots
 
   @type snapshot :: %{
-          channel: GRPC.Channel.t(),
+          channel: SparkEx.Connect.Channel.grpc_channel(),
           session_id: String.t(),
           server_side_session_id: String.t() | nil,
           user_id: String.t() | nil,

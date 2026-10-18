@@ -21,6 +21,9 @@ defmodule SparkEx.Connect.Channel do
   # Spark Connect / PySpark default: 128 MiB for both directions.
   @default_max_message_size 128 * 1024 * 1024
 
+  # grpc 1.0 no longer exports `GRPC.Channel.t/0`.
+  @type grpc_channel :: %GRPC.Channel{}
+
   @type connect_opts :: %{
           host: String.t(),
           port: non_neg_integer(),
@@ -122,7 +125,7 @@ defmodule SparkEx.Connect.Channel do
   Explicit `extra_grpc_opts` win over the channel-level defaults built from
   `opts` (e.g. you can override `:adapter_opts`, `:cred`, or `:metadata`).
   """
-  @spec connect(connect_opts(), keyword()) :: {:ok, GRPC.Channel.t()} | {:error, term()}
+  @spec connect(connect_opts(), keyword()) :: {:ok, grpc_channel()} | {:error, term()}
   def connect(opts, extra_grpc_opts \\ []) do
     address = "#{opts.host}:#{opts.port}"
     grpc_opts = build_grpc_opts(opts)
@@ -294,7 +297,7 @@ defmodule SparkEx.Connect.Channel do
   @doc """
   Disconnects a gRPC channel.
   """
-  @spec disconnect(GRPC.Channel.t()) :: {:ok, GRPC.Channel.t()} | {:error, term()}
+  @spec disconnect(grpc_channel()) :: {:ok, grpc_channel()} | {:error, term()}
   def disconnect(channel) do
     GRPC.Stub.disconnect(channel)
   end

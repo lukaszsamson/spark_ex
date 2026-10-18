@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-18
+
+### Dependencies
+
+- Elixir 1.15 (end of life) is no longer supported; the minimum is now Elixir
+  1.16 / OTP 26, matching what protobuf 0.17 requires.
+- `grpc` requirement moved to `~> 1.0` (EEF-CVE-2026-53430 gzip
+  decompression bomb and the other grpc 0.x advisories are fixed only in 1.0).
+  grpc 1.0 starts its own client supervisor and ships its HTTP/2 adapters as
+  optional dependencies, so SparkEx now depends on `gun ~> 2.4` directly and no
+  longer starts `GRPC.Client.Supervisor` itself.
+- `decimal` requirement widened to `~> 2.0 or ~> 3.0` (decimal 1.x dropped),
+  allowing the patched 3.x line (EEF-CVE-2026-32686, EEF-CVE-2026-97853) and
+  Explorer 0.13, which requires decimal 3.
+- `protobuf` requirement raised to `~> 0.17.1` (EEF-CVE-2026-104635).
+- Lock refreshed: explorer 0.13.0, kino 0.19.1, telemetry 1.4.2, jason 1.4.5.
+
 ### Fixed
 
 - Custom Spark Connect metadata preserves underscores and dots in header names,
@@ -42,8 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the existing bounded timeouts; connecting to a closed port fails fast.
 - Streaming CDC (`StreamReader.changes/2`) is covered live against the seeded
   changelog fixture in Spark 4.2 CI, alongside the batch variant.
-- Dependencies: `protobuf` requirement raised to `~> 0.16.1 or ~> 0.17` and the
-  lock moved to 0.17.0 (GHSA-rv48-qqj5-crxg is fixed from 0.16.1); the
+- Dependencies: `protobuf` lock moved to 0.17.0 (GHSA-rv48-qqj5-crxg is fixed from 0.16.1); the
   generated protos are regenerated with the matching plugin, with no message or
   field changes. `priv/scripts/gen_proto.sh` keeps the historical output layout.
 - README developer instructions target Spark 4.2.0 and point to the provider
@@ -560,6 +576,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Function registry for built-in Spark functions
 - Livebook demo notebook
 
+[Unreleased]: https://github.com/lukaszsamson/spark_ex/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/lukaszsamson/spark_ex/releases/tag/v0.2.0
 [0.1.1]: https://github.com/lukaszsamson/spark_ex/releases/tag/v0.1.1
 [0.1.0]: https://github.com/lukaszsamson/spark_ex/releases/tag/v0.1.0

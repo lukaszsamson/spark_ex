@@ -63,7 +63,7 @@ defmodule SparkEx.Session do
   }
 
   @type t :: %__MODULE__{
-          channel: GRPC.Channel.t() | nil,
+          channel: SparkEx.Connect.Channel.grpc_channel() | nil,
           connect_opts: map() | nil,
           session_id: String.t(),
           server_side_session_id: String.t() | nil,

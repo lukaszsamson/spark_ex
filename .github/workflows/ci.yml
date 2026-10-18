@@ -14,10 +14,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - elixir: "1.15"
+          - elixir: "1.16"
             otp: "26"
-          # - elixir: "1.16"
-          #   otp: "27"
           - elixir: "1.17"
             otp: "27"
           # - elixir: "1.18"
@@ -88,8 +86,7 @@ jobs:
       fail-fast: false
       matrix:
         elixir: [
-          "1.15",
-          # "1.16",
+          "1.16",
           "1.17",
           # "1.18",
           "1.19",
@@ -106,7 +103,7 @@ jobs:
         id: versions
         run: |
           case "${{ matrix.elixir }}" in
-            1.15) echo "otp=26" >> "$GITHUB_OUTPUT" ;;
+            1.16) echo "otp=26" >> "$GITHUB_OUTPUT" ;;
             1.19) echo "otp=28" >> "$GITHUB_OUTPUT" ;;
             1.20) echo "otp=29" >> "$GITHUB_OUTPUT" ;;
             *)    echo "otp=27" >> "$GITHUB_OUTPUT" ;;

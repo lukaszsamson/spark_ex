@@ -9,8 +9,7 @@ defmodule SparkEx.Application do
 
     children = [
       {Task.Supervisor, name: SparkEx.TaskSupervisor},
-      {SparkEx.EtsTableOwner, []},
-      {GRPC.Client.Supervisor, []}
+      {SparkEx.EtsTableOwner, []}
     ]
 
     opts = [strategy: :one_for_one, name: SparkEx.Supervisor]
