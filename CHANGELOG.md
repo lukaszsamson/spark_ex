@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
-- Elixir 1.15 (end of life) is no longer supported; the minimum is now Elixir
-  1.16 / OTP 26, matching what protobuf 0.17 requires.
+- Minimum supported versions are now Elixir 1.17 / OTP 27. Elixir 1.15 and
+  OTP 26 are end of life; protobuf 0.17 requires Elixir 1.16, and cowlib 2.21
+  (pulled in by gun) uses `maybe` expressions, which need OTP 27.
 - `grpc` requirement moved to `~> 1.0` (EEF-CVE-2026-53430 gzip
   decompression bomb and the other grpc 0.x advisories are fixed only in 1.0).
   grpc 1.0 starts its own client supervisor and ships its HTTP/2 adapters as

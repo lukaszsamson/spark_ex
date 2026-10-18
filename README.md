@@ -304,7 +304,7 @@ attach to for logging, metrics, or tracing:
 
 | Requirement         | Notes                                                                 |
 | ------------------- | --------------------------------------------------------------------- |
-| Elixir >= 1.16 / OTP >= 26 |                                                                   |
+| Elixir >= 1.17 / OTP >= 27 |                                                                   |
 | Java 17 or 21       | For running the Spark Connect server                                  |
 | Spark >= 3.5 with spark-connect       | For running the Spark Connect server                |
 | Explorer (required) | Arrow IPC decoding and `to_explorer/2` (installed automatically)       |
