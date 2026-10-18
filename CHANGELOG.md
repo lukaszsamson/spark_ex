@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-18
+
+### Dependencies
+
+- Minimum supported versions are now Elixir 1.17 / OTP 27. Elixir 1.15 and
+  OTP 26 are end of life; protobuf 0.17 requires Elixir 1.16, and cowlib 2.21
+  (pulled in by gun) uses `maybe` expressions, which need OTP 27.
+- `grpc` requirement moved to `~> 1.0` (EEF-CVE-2026-53430 gzip
+  decompression bomb and the other grpc 0.x advisories are fixed only in 1.0).
+  grpc 1.0 starts its own client supervisor and ships its HTTP/2 adapters as
+  optional dependencies, so SparkEx now depends on `gun ~> 2.4` directly and no
+  longer starts `GRPC.Client.Supervisor` itself.
+- `decimal` requirement widened to `~> 2.0 or ~> 3.0` (decimal 1.x dropped),
+  allowing the patched 3.x line (EEF-CVE-2026-32686, EEF-CVE-2026-97853) and
+  Explorer 0.13, which requires decimal 3.
+- `protobuf` requirement raised to `~> 0.17.1` (EEF-CVE-2026-104635).
+- Lock refreshed: explorer 0.13.0, kino 0.19.1, telemetry 1.4.2, jason 1.4.5.
+
+### Fixed
+
+- Custom Spark Connect metadata preserves underscores and dots in header names,
+  so authentication and routing keys are neither renamed nor dropped.
+
 ### Spark 4.2 follow-ups
 
 - Tuple-sketch wrappers with defaults (`tuple_sketch_agg_*`, `tuple_union_agg_*`,
@@ -37,21 +60,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the existing bounded timeouts; connecting to a closed port fails fast.
 - Streaming CDC (`StreamReader.changes/2`) is covered live against the seeded
   changelog fixture in Spark 4.2 CI, alongside the batch variant.
-- Dependencies: `protobuf` requirement raised to `~> 0.16.1 or ~> 0.17` and the
-  lock moved to 0.17.0 (GHSA-rv48-qqj5-crxg is fixed from 0.16.1); the
+- Dependencies: `protobuf` lock moved to 0.17.0 (GHSA-rv48-qqj5-crxg is fixed from 0.16.1); the
   generated protos are regenerated with the matching plugin, with no message or
   field changes. `priv/scripts/gen_proto.sh` keeps the historical output layout.
 - README developer instructions target Spark 4.2.0 and point to the provider
   fixture server for CDC / real-time / pending-operation tests.
 
-### Spark 4.2 acceptance coverage
+### Compatibility testing
 
 - Verify supported real-time streaming and deterministic Pending-operation
   cancellation through isolated server fixtures enabled in Spark 4.2 CI.
 - Cover observed-relation reuse, cross-session release isolation, actual gRPC
   binary metadata transport, exact Parse errors, and time-bucket/top-K edge cases.
 
-### Spark 4.2 P2 APIs and diagnostics
+### Vector search, compression and diagnostics
 
 - Add nearest-by joins with per-left-row top-K ranking and seven SQL vector
   functions with explicit Spark FLOAT degree handling.
@@ -64,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lambda variable names.
 - Expand sketch, geospatial, nested-schema, and zero-column regression coverage.
 
-### Spark 4.2 P1 APIs and fixes
+### DataFrame, catalog and streaming APIs
 
 - Add grouping ordinals, nested numeric aggregation names, `zip_with_index`,
   and `empty_dataframe`; preserve explicit column origins and lazy names.
@@ -82,7 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cover lifecycle isolation, observed self-joins, Arrow field metadata, empty
   grouping sets, feature flags, and aggregate NULL treatment.
 
-### Spark 4.2 foundation
+### Spark 4.2 protocol and functions
 
 - Refresh Spark Connect protobufs to v4.2.0 (source commit recorded in
   `priv/proto/SPARK_VERSION`) while retaining older-server wire compatibility.
@@ -96,7 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counting schema bytes and repeated chunks. Explicit cache options no longer
   bypass the server configuration. Older servers without the limit retain their
   existing behavior. Failed config lookups block cached uploads until the limit
-  can be read. Later P1 work makes chunk serialization incremental.
+  can be read. Chunk serialization is incremental.
 - Extend CI to Elixir 1.20 / OTP 29 and Spark 4.2, including 4.2 test exclusions
   on older servers; pin the PySpark function inventory so parity also runs in
   clean CI checkouts, with no missing-function allowance.
@@ -126,7 +148,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rejected; longer lists remain an error.
   - `Functions.col/1`, `DataFrame.col/2`, `with_column(s)`, `drop/2`, `NA`
     subsets and fill keys, `GroupedData` shortcuts and window specs accept atom
-    column names through a shared normaliser (`SparkEx.Internal.ColumnName`)
+    column names through a shared normaliser
     and raise `ArgumentError` for `nil`/`true`/`false` instead of producing a
     column named `"nil"`. Other name-taking helpers (`Stat`, `TableArg`,
     `WriterV2.partitioned_by`) still stringify any atom. `Window.partition_by/2` on an existing `WindowSpec`
@@ -416,14 +438,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `:once`; the warning now marks it deprecated rather than removed. Documented
     the per-event-type `:data` shape of streaming listener events.
 
-## [0.2.0] - 2026-06-20
-
-This release is a large correctness and parity pass over the v0.1.x client,
-driven by several rounds of PySpark-parity audits. Highlights: a reattachable
-execution lifecycle, TLS/keepalive channel hardening, richer remote errors,
-and ~100 individual bug fixes across the DataFrame, function, writer, and
-streaming surfaces.
-
 ### Added
 
 - **Reattachable execution lifecycle.** Lazy response streaming with
@@ -563,6 +577,7 @@ streaming surfaces.
 - Function registry for built-in Spark functions
 - Livebook demo notebook
 
+[Unreleased]: https://github.com/lukaszsamson/spark_ex/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/lukaszsamson/spark_ex/releases/tag/v0.2.0
 [0.1.1]: https://github.com/lukaszsamson/spark_ex/releases/tag/v0.1.1
 [0.1.0]: https://github.com/lukaszsamson/spark_ex/releases/tag/v0.1.0

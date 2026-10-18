@@ -186,6 +186,9 @@ defmodule SparkEx.Connect.Errors do
   @error_info_type_url "type.googleapis.com/google.rpc.ErrorInfo"
   @retry_info_type_url "type.googleapis.com/google.rpc.RetryInfo"
 
+  # grpc 1.0 no longer exports `GRPC.RPCError.t/0`.
+  @type grpc_error :: %GRPC.RPCError{}
+
   # Bound the FetchErrorDetails enrichment so a slow/hanging server cannot
   # stall the failed-RPC handle_call path indefinitely. On timeout the
   # caller falls back to the base error built from inline ErrorInfo
@@ -198,7 +201,7 @@ defmodule SparkEx.Connect.Errors do
   If the error contains an `errorId` in `google.rpc.ErrorInfo` details,
   calls `FetchErrorDetails` to get the full `SparkThrowable`.
   """
-  @spec from_grpc_error(GRPC.RPCError.t(), SparkEx.Session.t()) :: SparkEx.Error.Remote.t()
+  @spec from_grpc_error(grpc_error(), SparkEx.Session.t()) :: SparkEx.Error.Remote.t()
   def from_grpc_error(%GRPC.RPCError{} = error, session) do
     error
     |> decode_grpc_error()
@@ -215,7 +218,7 @@ defmodule SparkEx.Connect.Errors do
   the struct so `enrich/2` can perform the enrichment RPC later, once, on the
   error that is actually returned to the caller (T-35).
   """
-  @spec decode_grpc_error(GRPC.RPCError.t()) :: SparkEx.Error.Remote.t()
+  @spec decode_grpc_error(grpc_error()) :: SparkEx.Error.Remote.t()
   def decode_grpc_error(%GRPC.RPCError{} = error) do
     retry_delay_ms = extract_retry_delay_ms(error)
     # Track RetryInfo *presence* separately from its retry_delay: PySpark retries

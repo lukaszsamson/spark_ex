@@ -394,22 +394,24 @@ defmodule SparkEx.Connect.ChannelTest do
       assert http2_opts.initial_connection_window_size == 256 * 1024 * 1024
     end
 
-    test "normalises metadata keys: lowercases and collapses underscores" do
-      opts = %{
-        host: "host",
-        port: 15_002,
-        use_ssl: false,
-        token: nil,
-        auth_transport: :auto,
-        extra_params: %{"X-My-Header" => "v1", "trace_id" => "t1"}
-      }
+    test "metadata keys preserve underscores, dots and distinct hyphens on the wire" do
+      assert {:ok, opts} =
+               Channel.parse_uri(
+                 "sc://localhost:15002/;X-My-Header=v1;trace_id=t1;trace-id=t2;routing.key=r1"
+               )
 
       grpc_opts = Channel.build_grpc_opts(opts)
       assert %{headers: md} = Enum.into(grpc_opts, %{})
       assert md["x-my-header"] == "v1"
-      assert md["trace-id"] == "t1"
+      assert md["trace_id"] == "t1"
+      assert md["trace-id"] == "t2"
+      assert md["routing.key"] == "r1"
       refute Map.has_key?(md, "X-My-Header")
-      refute Map.has_key?(md, "trace_id")
+
+      wire_metadata = GRPC.Transport.HTTP2.encode_metadata(md)
+      assert wire_metadata["trace_id"] == "t1"
+      assert wire_metadata["trace-id"] == "t2"
+      assert wire_metadata["routing.key"] == "r1"
     end
 
     test "drops metadata keys that contain illegal characters after normalisation" do

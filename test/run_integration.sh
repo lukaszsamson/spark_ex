@@ -11,7 +11,7 @@
 # The script:
 #   1. Starts Spark Connect server on localhost:15002 (daemon)
 #   2. Waits for it to become ready
-#   3. Runs mix test --include integration
+#   3. Runs mix test with SPARK_REMOTE for server-version gating
 #   4. Tears down the server
 
 set -euo pipefail
@@ -120,4 +120,4 @@ trap cleanup EXIT
 echo ""
 echo "=== Running integration tests ==="
 cd "$PROJECT_ROOT"
-mix test --include integration "$@"
+SPARK_REMOTE="sc://localhost:$PORT" mix test "$@"

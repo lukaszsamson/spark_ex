@@ -21,6 +21,9 @@ defmodule SparkEx.Connect.Channel do
   # Spark Connect / PySpark default: 128 MiB for both directions.
   @default_max_message_size 128 * 1024 * 1024
 
+  # grpc 1.0 no longer exports `GRPC.Channel.t/0`.
+  @type grpc_channel :: %GRPC.Channel{}
+
   @type connect_opts :: %{
           host: String.t(),
           port: non_neg_integer(),
@@ -122,7 +125,7 @@ defmodule SparkEx.Connect.Channel do
   Explicit `extra_grpc_opts` win over the channel-level defaults built from
   `opts` (e.g. you can override `:adapter_opts`, `:cred`, or `:metadata`).
   """
-  @spec connect(connect_opts(), keyword()) :: {:ok, GRPC.Channel.t()} | {:error, term()}
+  @spec connect(connect_opts(), keyword()) :: {:ok, grpc_channel()} | {:error, term()}
   def connect(opts, extra_grpc_opts \\ []) do
     address = "#{opts.host}:#{opts.port}"
     grpc_opts = build_grpc_opts(opts)
@@ -294,7 +297,7 @@ defmodule SparkEx.Connect.Channel do
   @doc """
   Disconnects a gRPC channel.
   """
-  @spec disconnect(GRPC.Channel.t()) :: {:ok, GRPC.Channel.t()} | {:error, term()}
+  @spec disconnect(grpc_channel()) :: {:ok, grpc_channel()} | {:error, term()}
   def disconnect(channel) do
     GRPC.Stub.disconnect(channel)
   end
@@ -495,25 +498,20 @@ defmodule SparkEx.Connect.Channel do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  # gRPC metadata keys are HTTP/2 header names: lower-case ASCII
-  # alphanumerics and `-`. Underscores are accepted by some proxies but
-  # rejected by others, so collapse `_` to `-` to match the headers
-  # users typically copy from Spark/PySpark docs.
+  # gRPC metadata names allow lower-case ASCII alphanumerics, `_`, `.` and `-`.
+  # Preserve punctuation so custom authentication and routing keys stay distinct.
   defp normalize_metadata_key(key) when is_binary(key) do
-    normalized =
-      key
-      |> String.downcase()
-      |> String.replace("_", "-")
+    normalized = String.downcase(key)
 
     cond do
       normalized == "" ->
         {:error, "empty key"}
 
-      String.match?(normalized, ~r/^[a-z0-9\-]+$/) ->
+      String.match?(normalized, ~r/^[a-z0-9_.-]+$/) ->
         {:ok, normalized}
 
       true ->
-        {:error, "key must contain only [a-z0-9-] after normalization"}
+        {:error, "key must contain only [a-z0-9_.-] after normalization"}
     end
   end
 

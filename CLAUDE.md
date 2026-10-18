@@ -13,7 +13,7 @@ tools/check.sh <gate>    # one of: format compile credo test dialyzer integratio
 
 `tools/check.sh` mirrors `.github/workflows/ci.yml` exactly (unit + format/credo/dialyzer + integration jobs, `MIX_ENV=test`). It uses `set -euo pipefail`, so the first failing gate halts the run with the underlying tool's exit code.
 
-Credo runs with the project's `.credo.exs` defaults (no flags, no disabled checks). The current baseline is dirty — clean it up incrementally; do not silence checks to make the gate pass.
+Credo runs with the project's `.credo.exs` defaults (no flags, no disabled checks). Do not silence checks to make the gate pass; fix the code instead.
 
 The integration gate expects `SPARK_REMOTE` (defaults to `sc://localhost:15002`); without a reachable Spark Connect server, integration tests auto-skip in `mix test` and the `integration` subcommand fails fast with a hint.
 

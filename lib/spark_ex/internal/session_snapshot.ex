@@ -6,7 +6,7 @@ defmodule SparkEx.Internal.SessionSnapshot do
   # `SparkEx.Session` so out-of-band RPCs — currently Interrupt — can run from
   # the *caller's* process while the Session GenServer is busy executing a
   # plan. Without this, `interrupt_all/tag/operation` would queue behind the
-  # very operation they are meant to cancel (see NO_SERIALIZED_RPC.md);
+  # very operation they are meant to cancel;
   # PySpark issues interrupts lock-free from any thread.
   #
   # The table is owned by `SparkEx.EtsTableOwner` (declared in its `@tables`)
@@ -18,7 +18,7 @@ defmodule SparkEx.Internal.SessionSnapshot do
   @ets_table :spark_ex_session_snapshots
 
   @type snapshot :: %{
-          channel: GRPC.Channel.t(),
+          channel: SparkEx.Connect.Channel.grpc_channel(),
           session_id: String.t(),
           server_side_session_id: String.t() | nil,
           user_id: String.t() | nil,

@@ -22,12 +22,12 @@ DataFrame readers, catalog operations, CDC, streaming/write flags, and operation
 
 - **Lazy DataFrame API** &mdash; select, filter, join, group, window, set ops,
   reshape, sampling, and more
-- **590+ Spark SQL functions** &mdash; auto-generated from a declarative
+- **Spark SQL functions** &mdash; generated from a declarative
   registry, covering math, string, date/time, array, map, conditional, window,
   and aggregate families
 - **Reader/Writer** &mdash; Parquet, CSV, JSON, ORC, text, JDBC, plus generic
   `format`/`load`/`save` and V2 DataSource writes
-- **Structured Streaming** &mdash; `DataStreamReader`, `DataStreamWriter`,
+- **Structured Streaming** &mdash; `StreamReader`, `StreamWriter`,
   `StreamingQuery`, and `StreamingQueryManager`
 - **Catalog API** &mdash; browse and manage databases, tables, functions,
   columns, and cache
@@ -69,7 +69,7 @@ and is installed automatically — you do not need to add it yourself.
 
 ```elixir
 {:ok, session} = SparkEx.connect(url: "sc://localhost:15002")
-{:ok, "4.1.1"} = SparkEx.spark_version(session)
+{:ok, version} = SparkEx.spark_version(session)
 ```
 
 ### Create and query DataFrames
@@ -171,7 +171,8 @@ explorer_df = Explorer.DataFrame.new(%{x: [1, 2, 3], y: ["a", "b", "c"]})
 {:ok, explorer_df} = DataFrame.to_explorer(df, max_rows: 1_000)
 
 # Unbounded (use with care)
-{:ok, explorer_df} = DataFrame.to_explorer(df, unsafe: true, max_rows: :infinity)
+{:ok, explorer_df} =
+  DataFrame.to_explorer(df, unsafe: true, max_rows: :infinity, max_bytes: :infinity)
 ```
 
 ### Structured streaming
@@ -242,10 +243,9 @@ DataFrame.describe(df) |> DataFrame.collect()
 ```elixir
 alias SparkEx.{MergeIntoWriter, Column}
 
-source = SparkEx.sql(session, "SELECT 2 AS id, 'Bobby' AS name")
+source = SparkEx.sql(session, "SELECT 2 AS id, 'Bobby' AS name") |> DataFrame.alias_("source")
 
-DataFrame.merge_into(source, "target_table")
-|> MergeIntoWriter.on(Column.eq(col("source.id"), col("target.id")))
+DataFrame.merge_into(source, "target_table", Column.eq(col("source.id"), col("target_table.id")))
 |> MergeIntoWriter.when_matched_update_all()
 |> MergeIntoWriter.when_not_matched_insert_all()
 |> MergeIntoWriter.merge()
@@ -267,6 +267,10 @@ SparkEx.interrupt_all(session)
 # Release server resources
 SparkEx.Session.release(session)
 ```
+
+Ordinary actions on a shared Session run sequentially. Use independent sessions
+for concurrent queries. Interrupt and operation-status RPCs run outside the
+Session mailbox, so they can inspect or cancel a blocking action.
 
 ### Livebook
 
@@ -300,7 +304,7 @@ attach to for logging, metrics, or tracing:
 
 | Requirement         | Notes                                                                 |
 | ------------------- | --------------------------------------------------------------------- |
-| Elixir >= 1.15      |                                                                       |
+| Elixir >= 1.17 / OTP >= 27 |                                                                   |
 | Java 17 or 21       | For running the Spark Connect server                                  |
 | Spark >= 3.5 with spark-connect       | For running the Spark Connect server                |
 | Explorer (required) | Arrow IPC decoding and `to_explorer/2` (installed automatically)       |
@@ -310,6 +314,13 @@ attach to for logging, metrics, or tracing:
 stubs (see [Proto regeneration](#proto-regeneration) below).
 
 ## Running tests
+
+Run the local CI gates before submitting changes:
+
+```bash
+tools/check.sh       # format, compile, Credo, unit tests, Dialyzer
+tools/check.sh all   # also run integration tests against localhost:15002
+```
 
 ### Unit tests
 
@@ -327,6 +338,9 @@ default.
 ```bash
 ./test/run_integration.sh
 ```
+
+The runner uses the local Spark 4.1.1 distribution and JDBC/Iceberg fixtures
+listed in the script; newer-server tests are excluded by version.
 
 **Manual setup:**
 
@@ -350,13 +364,13 @@ bash "$SPARK_HOME/sbin/start-connect-server.sh" \
 3. Run:
 
 ```bash
-mix test --include integration
+SPARK_REMOTE="sc://localhost:15002" mix test
 ```
 
 4. Or point at a remote server:
 
 ```bash
-SPARK_REMOTE="sc://my-spark-host:15002" mix test --include integration
+SPARK_REMOTE="sc://my-spark-host:15002" mix test
 ```
 
 Older servers (3.5, 4.0, 4.1) remain supported; 4.2-only integration tests are
@@ -364,7 +378,7 @@ excluded automatically via `min_spark` tags when the server doesn't advertise
 that version. Spark 4.2 also ships a set of provider fixtures (CDC, real-time
 streaming, pending-operation cancellation) for tests gated behind
 `SPARK_EX_TEST_PROVIDERS=1` — see
-[test/support/spark42/README.md](test/support/spark42/README.md) for how to
+[Spark 4.2 test server setup](https://github.com/lukaszsamson/spark_ex/blob/main/test/support/spark42/README.md) for how to
 prepare and launch that server.
 
 ## Proto regeneration
@@ -398,7 +412,7 @@ lib/
     data_frame/na.ex              # Null-value handling
     data_frame/stat.ex            # Statistical operations
     column.ex                     # Expression wrapper
-    functions.ex                  # 590+ auto-generated Spark SQL functions
+    functions.ex                  # Spark SQL function wrappers
     grouped_data.ex               # GroupedData (group_by + agg + pivot)
     window.ex                     # Window convenience constructors
     window_spec.ex                # WindowSpec (partition, order, frame)
@@ -424,8 +438,8 @@ lib/
 
 priv/proto/spark/connect/         # Vendored Spark Connect protos (v4.2.0)
 notebooks/spark_ex_demo.livemd    # Interactive Livebook demo
-test/unit/                        # Unit tests (~1090 tests)
-test/integration/                 # Integration tests (~625 tests)
+test/unit/                        # Unit tests
+test/integration/                 # Integration tests
 ```
 
 ### Optional plan compression

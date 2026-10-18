@@ -1,7 +1,7 @@
 # Gate assertion: invalid add_artifacts input must NOT kill the session.
 # Usage: mix run checklist/explore_16_artifacts_input_crash.exs
 #
-# Regression guard for V02_BLOCKERS [H1]: a malformed artifacts argument used to
+# Regression guard: a malformed artifacts argument used to
 # raise inside the SparkEx.Session GenServer, crashing the whole session. The
 # fix makes validation return {:error, _} (or raise in the caller) while the
 # session stays alive. If the session dies, this script prints the gate marker

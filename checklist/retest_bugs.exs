@@ -1,4 +1,4 @@
-# Retest all bugs from CHECKLIST_PROGRESS.md
+# Retest previously observed integration regressions.
 # Usage: mix run checklist/retest_bugs.exs
 
 alias SparkEx.{DataFrame, Column, Catalog, GroupedData, Window, WindowSpec, Reader}

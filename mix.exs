@@ -8,7 +8,7 @@ defmodule SparkEx.MixProject do
     [
       app: :spark_ex,
       version: @version,
-      elixir: "~> 1.15",
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
@@ -36,11 +36,13 @@ defmodule SparkEx.MixProject do
   defp deps do
     [
       # gRPC client + protobuf
-      {:grpc, "~> 0.9"},
-      {:protobuf, "~> 0.16.1 or ~> 0.17"},
+      {:grpc, "~> 1.0"},
+      # grpc 1.0 ships HTTP/2 adapters as optional deps; SparkEx uses gun.
+      {:gun, "~> 2.4"},
+      {:protobuf, "~> 0.17.1"},
 
       # Utilities
-      {:decimal, "~> 1.0 or ~> 2.0"},
+      {:decimal, "~> 2.0 or ~> 3.0"},
       {:nimble_options, "~> 1.1"},
       {:jason, "~> 1.4"},
 
@@ -56,6 +58,7 @@ defmodule SparkEx.MixProject do
       # Dev/test
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:grpc_server, "~> 1.0", only: :test},
       {:ex_doc, "~> 0.35", only: :dev, runtime: false}
     ]
   end
@@ -64,7 +67,8 @@ defmodule SparkEx.MixProject do
     [
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib priv/proto notebooks .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
+      files:
+        ~w(lib priv/proto priv/scripts docs notebooks .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end
 
@@ -72,7 +76,20 @@ defmodule SparkEx.MixProject do
     [
       main: "readme",
       source_ref: "v#{@version}",
-      extras: ["README.md", "CHANGELOG.md", "notebooks/spark_ex_demo.livemd", "LICENSE"]
+      extras: [
+        "README.md",
+        "docs/spark_42.md",
+        "CHANGELOG.md",
+        "notebooks/spark_ex_demo.livemd",
+        "LICENSE"
+      ],
+      skip_code_autolink_to: ["Spark.Connect.GetStatusResponse"],
+      # The experimental API intentionally returns a generated protobuf type.
+      # Generated modules are hidden from ExDoc; retain the precise public specs.
+      skip_undefined_reference_warnings_on: [
+        "SparkEx.get_operation_statuses/3",
+        "SparkEx.Session.get_operation_statuses/3"
+      ]
     ]
   end
 

@@ -18,10 +18,10 @@ defmodule SparkEx.Test.WireGoldens do
       # Subsequent runs assert byte-equality.
       mix test test/unit/wire_goldens_smoke_test.exs
 
-  ## Streams that should add goldens (BUGS_PLAN_5 Stream A)
+  ## Adding coverage
 
-  Each relation listed in Stream A should have at least one chain encoded
-  here so that fixes for plan-id remap don't silently change wire bytes.
+  Encode relation chains here so changes to plan-id remapping cannot silently
+  change their wire bytes.
   """
 
   alias SparkEx.Connect.PlanEncoder

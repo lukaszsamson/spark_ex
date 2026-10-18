@@ -262,6 +262,7 @@ defmodule SparkEx.Observation do
     case :ets.lookup(@table, {:obs_route, session_id, name}) do
       [{{:obs_route, ^session_id, ^name}, id}] ->
         normalized = maybe_apply_observation_aliases(id, metrics)
+
         # Last execution wins, with dict.update merge semantics: PySpark
         # Connect does `observation_result.update(...)` on every observed
         # metric batch (core.py), so re-executing the plan overwrites the

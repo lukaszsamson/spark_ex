@@ -2,7 +2,7 @@
 #
 # Checklist gate — runs every checklist/*.exs script against a live Spark Connect
 # server and fails if any script triggers a *native* panic (Explorer/polars NIF)
-# or a session crash. These are the V02_BLOCKERS-class failures; transient
+# or a session crash. Transient
 # caught `ERROR:` lines from the exploratory negative tests are expected and do
 # NOT fail the gate (they differ by Spark version and are noise, not bugs).
 #
@@ -26,8 +26,8 @@ TIMEOUT="${CHECKLIST_TIMEOUT:-240}"
 
 # Scripts intentionally excluded from the gate:
 #   repro_arrow_panic_explorer_only.exs — by design calls Explorer directly on a
-#   duplicate-column payload to demonstrate the known UPSTREAM polars panic (see
-#   ARROW_PANIC.md). SparkEx's own decode path already guards this case.
+#   duplicate-column payload to demonstrate the known upstream Polars panic.
+#   SparkEx's own decode path already guards this case.
 SKIP=(
   "repro_arrow_panic_explorer_only.exs"
 )

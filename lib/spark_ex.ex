@@ -14,9 +14,9 @@ defmodule SparkEx do
   @doc """
   Connects to a Spark Connect endpoint and starts a session process.
 
-  Validates the URI before starting the session. The underlying gRPC
-  connection is established lazily — actual connectivity errors will
-  surface on the first RPC call (e.g. `spark_version/1`).
+  Validates the URI and opens a gRPC channel before starting the session.
+  Connection errors can surface here or on the first RPC call (for example
+  `spark_version/1`). A successful connection does not verify server readiness.
 
   ## Options
 
@@ -24,17 +24,19 @@ defmodule SparkEx do
     when the `SPARK_REMOTE` environment variable is set, which is used as a
     fallback (matching PySpark's `spark.remote` precedence). An explicitly
     passed `:url` always takes priority over `SPARK_REMOTE`.
-  - `:user_id` — user identifier (default: `"spark_ex"`)
+  - `:user_id` — user identifier (default: `SPARK_USER`, then `USER`, then `"spark_ex"`)
   - `:client_type` — client type string (default: auto-generated)
   - `:session_id` — custom session UUID (default: auto-generated)
   - `:allow_arrow_batch_chunking` — allow server-side Arrow chunk splitting (default: `true`)
   - `:preferred_arrow_chunk_size` — preferred chunk size in bytes (default: `nil`)
   - `:plan_compression` — negotiate optional ZSTD plan compression (default: `false`);
     requires OTP with the `:zstd` module (OTP 28+)
+  - `:release_drain_timeout_ms` — time to wait for pending execution releases
+    during shutdown (default: `10_000`); see `SparkEx.Session.start_link/1`
 
   URI parameters `use_ssl=true` and `token=<value>` are supported in the connection string
-  (e.g. `"sc://host:port/;use_ssl=true;token=abc123"`). Providing a `token` automatically
-  enables TLS, matching Spark Connect client behavior.
+  (e.g. `"sc://host:port/;use_ssl=true;token=abc123"`). A token enables TLS for
+  non-loopback hosts; use `use_ssl=true` to require TLS on loopback hosts too.
   """
   @spec connect(keyword()) :: {:ok, pid()} | {:error, term()}
   def connect(opts) do
@@ -496,7 +498,7 @@ defmodule SparkEx do
   ## Examples
 
       # From Explorer.DataFrame
-      explorer_df = Explorer.DataFrame.new!(%{"id" => [1, 2], "name" => ["Alice", "Bob"]})
+      explorer_df = Explorer.DataFrame.new(%{"id" => [1, 2], "name" => ["Alice", "Bob"]})
       {:ok, df} = SparkEx.create_dataframe(session, explorer_df)
 
       # From list of maps
