@@ -35,7 +35,6 @@ defmodule SparkEx.MixProject do
 
   defp deps do
     [
-      {:spec_lint, "~> 0.1", only: [:dev, :test], runtime: false},
       # gRPC client + protobuf
       {:grpc, "~> 1.0"},
       # grpc 1.0 ships HTTP/2 adapters as optional deps; SparkEx uses gun.
@@ -61,7 +60,16 @@ defmodule SparkEx.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:grpc_server, "~> 1.0", only: :test},
       {:ex_doc, "~> 0.35", only: :dev, runtime: false}
-    ]
+    ] ++ spec_lint_deps()
+  end
+
+  # spec_lint needs Elixir >= 1.18; older CI matrix entries skip it.
+  defp spec_lint_deps do
+    if Version.match?(System.version(), ">= 1.18.0") do
+      [{:spec_lint, "~> 0.1", only: [:dev, :test], runtime: false}]
+    else
+      []
+    end
   end
 
   defp package do
