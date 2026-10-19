@@ -35,6 +35,7 @@ defmodule SparkEx.MixProject do
 
   defp deps do
     [
+      {:spec_lint, "~> 0.1", only: [:dev, :test], runtime: false},
       # gRPC client + protobuf
       {:grpc, "~> 1.0"},
       # grpc 1.0 ships HTTP/2 adapters as optional deps; SparkEx uses gun.

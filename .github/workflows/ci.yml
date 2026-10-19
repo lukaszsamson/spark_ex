@@ -73,6 +73,7 @@ jobs:
 
       - run: mix deps.get
       - run: mix compile
+      - run: mix spec_lint
       - run: mix format --check-formatted
       - run: mix credo
       - run: mix dialyzer

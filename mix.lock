@@ -28,6 +28,7 @@
   "protobuf": {:hex, :protobuf, "0.17.1", "5c058a4abbdf3c094bbdab142022b22950dd25214fcfdc624ae9bf0c60f9346f", [:mix], [{:jason, "~> 1.2", [hex: :jason, repo: "hexpm", optional: true]}], "hexpm", "76770ecda0ef057e540932f15b5a143ba8877875e88727f53429a7dc4dbf8b6c"},
   "ranch": {:hex, :ranch, "2.3.0", "7de7b041a9a6a5091a3aa5898d66c0564be671d87db4f9d63b1b5ee775b097df", [:make, :rebar3], [], "hexpm", "6168ec49409d982f7cfbd83dd083144f6cbe67caa4036551d2f0a3ad67c9d023"},
   "rustler_precompiled": {:hex, :rustler_precompiled, "0.10.0", "8f07ff0865cb09a6a0f75e11701e9a46e331e05f737da4e5b01374dcd25b68c0", [:mix], [{:rustler, "~> 0.28", [hex: :rustler, repo: "hexpm", optional: true]}], "hexpm", "c68c9dc732c12acfdf4a7fa06f4e6f48a641179e6be49a474c8a60809929c430"},
+  "spec_lint": {:hex, :spec_lint, "0.1.1", "e40649140dc96a32a2d4a7b98e8fbd3035d138b87154a35716f2cca76955cdae", [:mix], [], "hexpm", "67d7cc8d2e2cb29595518ee042b470a71de619ca250440e526c7987e06adeada"},
   "table": {:hex, :table, "0.1.2", "87ad1125f5b70c5dea0307aa633194083eb5182ec537efc94e96af08937e14a8", [:mix], [], "hexpm", "7e99bc7efef806315c7e65640724bf165c3061cdc5d854060f74468367065029"},
   "table_rex": {:hex, :table_rex, "4.1.0", "fbaa8b1ce154c9772012bf445bfb86b587430fb96f3b12022d3f35ee4a68c918", [:mix], [], "hexpm", "95932701df195d43bc2d1c6531178fc8338aa8f38c80f098504d529c43bc2601"},
   "telemetry": {:hex, :telemetry, "1.4.2", "a0cb522801dffb1c49fe6e30561badffc7b6d0e180db1300df759faa22062855", [:rebar3], [], "hexpm", "928f6495066506077862c0d1646609eed891a4326bee3126ba54b60af61febb1"},
